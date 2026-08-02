@@ -30,19 +30,26 @@ Laravel app in Docker. Root `.env.example` configures Docker Compose (Postgres/R
 
 ## Current status
 
-v0.1.0-foundation is merged and tagged (`v0.1.0`, on `main`/`develop`). Active sprint: **v0.2.0-customer-crm**,
-on branch `v0.2.0-customer-crm`. Delivered so far: `customers`, `customer_contacts`, and
-`customer_timeline_entries` tables; `CustomerStatus`/`ContactAccessLevel` enums; models with
-auto-logging Observers; granular Spatie permissions (`customers.view`, `customers.manage`,
-`customer_contacts.manage`, `customer_timeline.view`); Policies; Form Requests; an Actions layer;
-API Resources; `Api/V1` controllers wired into `routes/api.php`; feature tests; and a Livewire UI
-(`CustomerIndex`/`CustomerShow`) wired into `routes/web.php`. Do not start v0.3.0 work until this
-sprint's Definition of Done is complete and it has gone through merge → `develop` → `main` → tag
-`v0.2.0` (BOSS-002).
+v0.1.0-foundation is merged and tagged (`v0.1.0`, on `main`/`develop`). v0.2.0-customer-crm was fully
+built, tested, merged to `develop`/`main`, and tagged `v0.2.0` — **then the `v0.2.0-customer-crm` branch
+kept receiving commits after that tag** (the row-level multi-tenancy foundation below, added mid-sprint
+at the user's request before answering some Customer CRM design follow-ups). So: tag `v0.2.0` and
+`main`/`develop` currently point at the *pre-tenancy* state; the `v0.2.0-customer-crm` branch is ahead of
+that with tenant scaffolding not yet re-merged/re-tagged. Don't assume `git tag v0.2.0` is the full
+current state of this sprint — check `v0.2.0-customer-crm` directly.
 
-**Two latent v0.1.0 infrastructure bugs were found and fixed while building this sprint** (not new
-v0.2.0 scope — pre-existing gaps that silently broke security-critical paths since the initial
-scaffold):
+Delivered in v0.2.0 so far: `customers`, `customer_contacts`, `customer_timeline_entries`, and `tenants`
+tables; `CustomerStatus`/`ContactAccessLevel` enums; models with auto-logging Observers; row-level
+multi-tenancy (see dedicated section below); granular Spatie permissions (`customers.view`,
+`customers.manage`, `customer_contacts.manage`, `customer_timeline.view`); Policies; Form Requests; an
+Actions layer; API Resources; `Api/V1` controllers wired into `routes/api.php`; feature tests; and a
+Livewire UI (`CustomerIndex`/`CustomerShow`) wired into `routes/web.php`. Do not start v0.3.0 work until
+this sprint's Definition of Done is complete and it has gone through merge → `develop` → `main` → tag
+`v0.2.0` again (BOSS-002).
+
+**Three latent v0.1.0 infrastructure bugs were found and fixed while building this sprint** (not new
+v0.2.0 scope — pre-existing gaps that silently broke security-critical or test-correctness paths since
+the initial scaffold):
 - Sanctum's `personal_access_tokens` migration was never published, so **no API token auth ever
   actually worked** despite `auth:sanctum` already gating `/api/v1/me` in v0.1.0. Fixed by publishing
   `--tag=sanctum-migrations`.
@@ -50,9 +57,15 @@ scaffold):
   working login page at all. Fixed with a minimal `resources/views/auth/login.blade.php` bound via
   `Fortify::loginView()` in `FortifyServiceProvider`. Fortify's `home` redirect target was also
   updated from the never-created `/home` to `/customers`.
+- `phpunit.xml`'s `<env>` overrides (meant to isolate tests on in-memory sqlite) were silently losing to
+  the container's real process env (`DB_CONNECTION=pgsql` etc from docker-compose's `env_file`) because
+  that real value lands in `$_SERVER`, which `force="true"` doesn't clear — only `$_ENV`/`putenv()`. **All
+  feature tests had been quietly running against the real dev Postgres database**, not the isolated
+  sqlite config the file documents. Fixed with `tests/bootstrap.php` (referenced via phpunit.xml's
+  `bootstrap` attribute) that explicitly unsets the affected `$_SERVER` keys before Laravel boots.
 
-If you're debugging "why doesn't auth work" in older commits, this is why — check these two are
-still in place before assuming the bug is elsewhere.
+If you're debugging "why doesn't auth work" or "why do tests leave junk data in the dev DB" in older
+commits, these are why — check all three are still in place before assuming the bug is elsewhere.
 
 ## Sprint roadmap (`docs/ROADMAP.md`) — locked order, do not skip or reorder
 
@@ -170,6 +183,44 @@ curl http://localhost/api/v1/health
 First-time server setup order: `./scripts/01-setup-server.sh` (Docker/UFW/Fail2ban, host-side, run once
 per server) → `cp .env.example .env` and fill in secrets → `./scripts/02-init-laravel.sh` (scaffolds
 Laravel into `app/`, idempotent — skips if `app/artisan` already exists) → `docker compose up -d`.
+
+## Multi-tenancy (row-level, added mid-v0.2.0)
+
+BOSS App will eventually be rented out as SaaS to multiple ISP businesses. Chosen strategy: **row-level
+multi-tenancy** — one shared database, a `tenant_id` column on every tenant-owned table, isolation
+enforced automatically via an Eloquent global scope (not separate databases/schemas per tenant).
+
+- `tenants` table (`app/database/migrations/..._create_tenants_table.php`) is intentionally minimal for
+  now: `id`, `uuid`, `name`, `slug` (unique), `is_active`. Branding/settings/licensed-modules columns are
+  deferred to their own future sprint — don't add them speculatively.
+- `App\Models\Concerns\BelongsToTenant` trait: apply it to any model that belongs to a tenant. It (1)
+  registers `App\Models\Scopes\TenantScope` as a global scope, which filters every query by
+  `Auth::user()->tenant_id` whenever a user is authenticated, and (2) auto-fills `tenant_id` on
+  `creating` from the authenticated user if not already set. Currently applied to `Customer`,
+  `CustomerContact`, `CustomerTimelineEntry`. **`User` itself deliberately does NOT use this trait** —
+  scoping the user table by "the current user's tenant" would be circular during login lookups; `User`
+  just has a plain `tenant_id` column + `tenant()` relation instead.
+- **`super_admin` is tenant-scoped, not a cross-tenant platform role** (explicit decision — don't
+  reintroduce a cross-tenant bypass without asking first). Every user, including `super_admin`, has a
+  required (`NOT NULL`) `tenant_id`. A genuine cross-tenant "BOSS App platform operator" concept, if
+  ever needed, would be a new role/mechanism in its own sprint, not a reuse of `super_admin`.
+  Consequence: Spatie roles/permissions stay global entities (e.g. one `customer_service` role row
+  shared across all tenants), but the *data* a user with that role can act on is still restricted to
+  their own tenant by `TenantScope` — so authorization is effectively per-tenant in practice even though
+  role definitions aren't duplicated per tenant.
+- Because Postgres can't reorder columns via `ALTER TABLE` (no `AFTER` support), `tenant_id` was added by
+  directly editing the not-yet-deployed-anywhere `customers`/`customer_contacts`/`customer_timeline_entries`
+  migrations (to put it right after `id`) rather than bolting on a separate alter migration. `users` got
+  a proper alter-table migration instead, since its base migration is an older, more "sealed" v0.1.0 file.
+- Factories: `CustomerFactory`/`UserFactory` default `tenant_id` to a fresh `Tenant::factory()`.
+  `CustomerContactFactory`/`CustomerTimelineEntryFactory` instead derive `tenant_id` from their
+  `customer_id`'s actual tenant (`Customer::withoutGlobalScopes()->find(...)->tenant_id`) — never give
+  them an independent random tenant, or you'll create inconsistent cross-tenant test fixtures.
+- Tests creating cross-tenant fixtures must bypass the scope explicitly (`Model::withoutGlobalScopes()`)
+  when arranging data for a tenant the acting test user doesn't belong to — see
+  `tests/Feature/Tenancy/TenantIsolationTest.php` for the pattern (also the reference example for how to
+  prove new tenant-scoped models are actually isolated: plain Eloquent query, API index, and API show/update
+  via route-model-binding all naturally 404/exclude another tenant's row with zero manual `where()` calls).
 
 ## Architecture
 

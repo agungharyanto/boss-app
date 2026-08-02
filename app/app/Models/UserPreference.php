@@ -17,7 +17,15 @@ class UserPreference extends Model
         'theme_primary_color',
         'theme_text_color',
         'locale',
+        'dashboard_widgets',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'dashboard_widgets' => 'array',
+        ];
+    }
 
     public function user(): BelongsTo
     {

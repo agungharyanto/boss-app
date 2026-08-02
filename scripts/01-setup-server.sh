@@ -35,7 +35,8 @@ fi
 echo "=== [4/6] Konfigurasi UFW (RULE BOSS-010) ==="
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
-sudo ufw allow 22/tcp comment 'SSH'
+#sudo ufw allow 22/tcp comment 'SSH'
+sudo ufw allow "${SSH_PORT:-22}/tcp" comment 'SSH'
 sudo ufw allow 80/tcp comment 'HTTP'
 sudo ufw allow 443/tcp comment 'HTTPS'
 # Port database/redis/radius/genieacs SENGAJA TIDAK dibuka di sini.

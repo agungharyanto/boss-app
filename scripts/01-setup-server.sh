@@ -33,9 +33,10 @@ else
 fi
 
 echo "=== [4/6] Konfigurasi UFW (RULE BOSS-010) ==="
+# SSH_PORT bisa di-override, misal: SSH_PORT=49194 ./scripts/01-setup-server.sh
+# (server ini memakai port SSH non-default — lihat docs/DEPLOYMENT.md B2)
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
-#sudo ufw allow 22/tcp comment 'SSH'
 sudo ufw allow "${SSH_PORT:-22}/tcp" comment 'SSH'
 sudo ufw allow 80/tcp comment 'HTTP'
 sudo ufw allow 443/tcp comment 'HTTPS'

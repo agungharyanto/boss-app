@@ -79,6 +79,19 @@ cd /opt/boss-app
 ./scripts/01-setup-server.sh
 ```
 
+Script ini meng-allow port SSH di UFW lewat env var `SSH_PORT` (default `22`
+kalau tidak di-set). **Server produksi ini memakai SSH di port non-default
+49194, bukan 22** — jadi jalankan dengan:
+
+```bash
+SSH_PORT=49194 ./scripts/01-setup-server.sh
+```
+
+Jangan hardcode `22/tcp` di UFW kalau daemon SSH sudah dipindah ke port lain
+(cek `/etc/ssh/sshd_config` di server untuk port yang sebenarnya dipakai) —
+kalau port UFW tidak cocok dengan port SSH aktif, sesi SSH bisa terkunci
+begitu `ufw enable` jalan dengan `default deny incoming`.
+
 Kalau ini instalasi Docker pertama kali, **logout dan login ulang** ke SSH
 session (supaya group `docker` berlaku), baru lanjut.
 

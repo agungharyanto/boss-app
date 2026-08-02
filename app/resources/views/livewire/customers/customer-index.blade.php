@@ -2,14 +2,22 @@
     <div class="flex items-center justify-between mb-6">
         <h1 class="text-2xl font-semibold text-gray-800">Data Pelanggan</h1>
 
-        @if ($canCreate)
-            <button
-                wire:click="$set('showCreateForm', {{ $showCreateForm ? 'false' : 'true' }})"
-                class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-            >
-                {{ $showCreateForm ? 'Batal' : '+ Pelanggan Baru' }}
-            </button>
-        @endif
+        <div class="flex gap-2">
+            @if ($canRegister)
+                <a href="{{ route('web.customers.register') }}" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+                    Registrasi Pelanggan
+                </a>
+            @endif
+
+            @if ($canCreate)
+                <button
+                    wire:click="$set('showCreateForm', {{ $showCreateForm ? 'false' : 'true' }})"
+                    class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                >
+                    {{ $showCreateForm ? 'Batal' : '+ Pelanggan Baru' }}
+                </button>
+            @endif
+        </div>
     </div>
 
     @if ($showCreateForm)

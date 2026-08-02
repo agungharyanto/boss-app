@@ -69,6 +69,7 @@ class CustomerIndex extends Component
         return view('livewire.customers.customer-index', [
             'customers' => $customers,
             'canCreate' => auth()->user()->can('create', Customer::class),
+            'canRegister' => auth()->user()->can('register-customer'),
         ]);
     }
 }

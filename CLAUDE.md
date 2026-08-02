@@ -13,6 +13,9 @@ outside `app/` — `docker/`, `scripts/`, `docs/`, root `.env` — is deployment
 Laravel app in Docker. Root `.env.example` configures Docker Compose (Postgres/Redis container creds,
 `APP_URL`); `app/.env.example` is the standard Laravel env file inside the container.
 
+Other docs: `docs/API.md` (endpoint reference — update it whenever `routes/api.php` changes),
+`CHANGELOG.md` (one section per tagged version, written when the sprint closes).
+
 ## Tech stack
 
 | Layer       | Choice                                |
@@ -161,6 +164,10 @@ docker compose ps                     # all should be Up/healthy
 # Migrations / seeding
 docker compose exec boss-app php artisan migrate
 docker compose exec boss-app php artisan db:seed --class=RolesAndPermissionsSeeder
+
+# Dev-only: one demo tenant + one user per role, all password "password",
+# for manually logging into the Livewire UI as e.g. customer_service@boss.local
+docker compose exec boss-app php artisan db:seed --class=DemoUsersSeeder
 
 # Tests (PHPUnit, sqlite in-memory per phpunit.xml)
 docker compose exec boss-app php artisan test

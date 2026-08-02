@@ -31,6 +31,7 @@ class RolesAndPermissionsSeeder extends Seeder
         }
 
         $this->seedCustomerCrmPermissions($roles);
+        $this->seedRegistrationPermissions();
     }
 
     /**
@@ -61,5 +62,21 @@ class RolesAndPermissionsSeeder extends Seeder
 
         Role::findByName('customer_service', 'web')->givePermissionTo($managePermissions);
         Role::findByName('super_admin', 'web')->givePermissionTo($managePermissions);
+    }
+
+    /**
+     * Permission modul Registration & Referral (v0.3.0). Hanya role yang
+     * benar-benar melakukan registrasi pelanggan di lapangan/kantor yang
+     * dapat permission ini: admin (super_admin), sales (sales_internal),
+     * teknisi, dan freelance (sales_freelance) — bukan role administratif
+     * lain seperti billing/finance/noc.
+     */
+    private function seedRegistrationPermissions(): void
+    {
+        Permission::firstOrCreate(['name' => 'register-customer', 'guard_name' => 'web']);
+
+        foreach (['super_admin', 'sales_internal', 'teknisi', 'sales_freelance'] as $role) {
+            Role::findByName($role, 'web')->givePermissionTo('register-customer');
+        }
     }
 }

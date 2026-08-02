@@ -22,11 +22,25 @@
         @livewireStyles
     </head>
     <body>
-        <div class="flex justify-end p-3">
-            <x-language-switcher />
-        </div>
+        @auth
+            <div class="flex">
+                <x-sidebar />
 
-        {{ $slot }}
+                <div class="flex-1 min-w-0">
+                    <div class="flex justify-end p-3">
+                        <x-language-switcher />
+                    </div>
+
+                    {{ $slot }}
+                </div>
+            </div>
+        @else
+            <div class="flex justify-end p-3">
+                <x-language-switcher />
+            </div>
+
+            {{ $slot }}
+        @endauth
 
         @livewireScripts
     </body>

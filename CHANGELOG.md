@@ -3,7 +3,42 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## v0.2.0 — Customer CRM (in progress)
+## v0.3.1 — Personalization & Navigation
+
+- **Theme customization**: primary & text color custom per user, disimpan di
+  `user_preferences`, di-apply lewat CSS variables (Tailwind v4 `@theme`),
+  live preview instan via Alpine sebelum disimpan.
+- **Language switcher**: localization Laravel (`lang/id.json`, `lang/en.json`),
+  middleware `SetLocale` (resolusi: session → preferensi user → default
+  config), persist per user setelah login.
+- **Sidebar cluster-dropdown**: grouping menu collapsible per cluster, state
+  collapse tersimpan di `localStorage`, highlight active route.
+- **Dashboard widget selector**: halaman `/dashboard` baru dengan 4 widget
+  (Total Pelanggan, Pelanggan Terbaru, Status Registrasi, Agent Referral
+  Teratas), visibility widget dikonfigurasi per user dan tersimpan di
+  `user_preferences.dashboard_widgets`.
+- Stack tetap Laravel + Blade + Livewire + Alpine.js + Tailwind — tidak ada
+  penambahan framework frontend baru (bukan React/Next.js).
+
+## v0.3.0 — Registration & Referral
+
+- Tabel `agents` (tipe `sales`/`teknisi`/`freelance`/`admin`, opsional
+  ter-link ke akun `users`) dan `commission_ledger` (status
+  `pending`/`eligible`/`approved`/`paid`/`rejected`).
+- Kolom tambahan di `customers`: `referred_by_agent_id`, `registration_status`
+  (`registered`/`installed`/`active`), `registration_channel`, plus `nik`,
+  `latitude`/`longitude`, `package`.
+- `RegistrationService`: registrasi pelanggan transaksional — buat baris
+  `commission_ledger` status `pending` otomatis kalau ada agent yang
+  mereferensikan, tidak membuat apa pun kalau registrasi tanpa referral.
+- Livewire `RegisterCustomer` (`/customers/register`) — dropdown agent
+  referral auto-terisi & readonly untuk role sales/teknisi/freelance, manual
+  untuk admin.
+- Permission `register-customer` di-assign ke role existing (`super_admin`,
+  `sales_internal`, `teknisi`, `sales_freelance`) — tidak ada role baru.
+- `AgentSeeder`: 3 agent dummy untuk testing.
+
+## v0.2.0 — Customer CRM
 
 - Data pelanggan (`customers`): profil, alamat, telepon utama, status
   lifecycle (`prospek`/`aktif`/`suspend`/`non_aktif`/`blacklist`) dengan

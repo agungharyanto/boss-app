@@ -30,12 +30,29 @@ Laravel app in Docker. Root `.env.example` configures Docker Compose (Postgres/R
 
 ## Current status
 
-Active sprint: **v0.1.0-foundation**, on branch `v0.1.0-foundation` (pushed to GitHub). This sprint is
-done and verified: `/api/v1/health` returns healthy, migrations run cleanly, base roles are seeded
-(`RolesAndPermissionsSeeder`), and the branch has been pushed upstream. Per BOSS-002, do not start
-v0.2.0 work until this sprint has gone through merge → `develop` → `main` → tag `v0.1.0` (see
-"Bagian C" in `docs/DEPLOYMENT.md`) — if that hasn't happened yet, treat v0.1.0-foundation as still open
-and keep changes scoped to it.
+v0.1.0-foundation is merged and tagged (`v0.1.0`, on `main`/`develop`). Active sprint: **v0.2.0-customer-crm**,
+on branch `v0.2.0-customer-crm`. Delivered so far: `customers`, `customer_contacts`, and
+`customer_timeline_entries` tables; `CustomerStatus`/`ContactAccessLevel` enums; models with
+auto-logging Observers; granular Spatie permissions (`customers.view`, `customers.manage`,
+`customer_contacts.manage`, `customer_timeline.view`); Policies; Form Requests; an Actions layer;
+API Resources; `Api/V1` controllers wired into `routes/api.php`; feature tests; and a Livewire UI
+(`CustomerIndex`/`CustomerShow`) wired into `routes/web.php`. Do not start v0.3.0 work until this
+sprint's Definition of Done is complete and it has gone through merge → `develop` → `main` → tag
+`v0.2.0` (BOSS-002).
+
+**Two latent v0.1.0 infrastructure bugs were found and fixed while building this sprint** (not new
+v0.2.0 scope — pre-existing gaps that silently broke security-critical paths since the initial
+scaffold):
+- Sanctum's `personal_access_tokens` migration was never published, so **no API token auth ever
+  actually worked** despite `auth:sanctum` already gating `/api/v1/me` in v0.1.0. Fixed by publishing
+  `--tag=sanctum-migrations`.
+- Fortify had no `LoginViewResponse` bound, so **`/login` 500'd for every request** — there was no
+  working login page at all. Fixed with a minimal `resources/views/auth/login.blade.php` bound via
+  `Fortify::loginView()` in `FortifyServiceProvider`. Fortify's `home` redirect target was also
+  updated from the never-created `/home` to `/customers`.
+
+If you're debugging "why doesn't auth work" in older commits, this is why — check these two are
+still in place before assuming the bug is elsewhere.
 
 ## Sprint roadmap (`docs/ROADMAP.md`) — locked order, do not skip or reorder
 
@@ -166,8 +183,45 @@ bridge network; `boss-app`'s `app/` directory is bind-mounted read-write, nginx 
 registration/password actions), Spatie `laravel-permission` (`HasRoles` trait on `User`) handles
 role/permission checks, Sanctum issues API tokens (`HasApiTokens` trait on `User`). Base roles are
 seeded by `database/seeders/RolesAndPermissionsSeeder.php` — `super_admin`, `noc`, `customer_service`,
-`teknisi`, `billing`, `sales_internal`, `sales_freelance`, `finance` — with permissions added
-incrementally as each module sprint lands.
+`teknisi`, `billing`, `sales_internal`, `sales_freelance`, `finance`.
+
+**Permission pattern per module** (established in v0.2.0 Customer CRM, follow this for future
+modules): the seeder's own comment says permission detail is added "per modul ditambahkan bertahap" —
+each module adds a small set of granular permission strings (e.g. `customers.view`, `customers.manage`)
+seeded in `RolesAndPermissionsSeeder::seed<Module>Permissions()`, assigned to whichever roles need
+them. Policies (`App\Policies\*`) check these via `$user->can('module.action')` rather than hardcoding
+role names — this stays correct as the permission-to-role mapping evolves without touching Policy code.
+Keep the copy in `stubs/laravel-app/database/seeders/RolesAndPermissionsSeeder.php` in sync (BOSS-011
+reproducibility — see "Stubs pattern" below).
+
+**API response envelope helper**: `App\Http\Controllers\Concerns\ApiResponds` (a trait, `use` it in any
+`Api/V1` controller) provides `$this->success($data, $message, $meta, $status)` matching the
+`{success, message, data, meta}` shape from `HealthController` — don't hand-roll the envelope per
+controller.
+
+**Livewire UI**: Livewire was *not* actually installed until v0.2.0 (v0.1.0's README described the
+target stack as "Blade + Livewire + Alpine + Tailwind" but only Tailwind was ever scaffolded — don't
+assume README/CLAUDE.md stack descriptions were fully wired just because they're mentioned). It's
+`livewire/livewire` (currently a v4.x release) via Composer; Alpine.js ships bundled with Livewire, no
+separate npm package needed. Full-page Livewire components live in `app/Livewire/<Module>/`, paired
+with a view in `resources/views/livewire/<module>/`, generated with
+`php artisan make:livewire <Name> --class` (the `--class` flag matters — without it, Livewire 4
+defaults to single-file components with emoji-prefixed filenames, which doesn't match this repo's
+existing class/view separation convention). They're wrapped by `resources/views/layouts/app.blade.php`
+automatically. **Route name collisions**: API resources (`routes/api.php`) and web pages
+(`routes/web.php`) must not share a route name — `Route::apiResource('customers', ...)` already claims
+`customers.index`/`customers.show`/etc., so web-facing Livewire page routes are named with a `web.`
+prefix (`Route::name('web.')->group(...)` in `routes/web.php`) to avoid silently overwriting the API's
+route name (whichever file's routes are registered later in `bootstrap/app.php` — `api` after `web` —
+wins the name, so this breaks `route()` calls in Blade with no error, just a wrong URL).
+
+**Frontend build**: the `boss-app` PHP container has no Node.js (keeps the image lean — RULE BOSS-007).
+Compile Tailwind/Livewire assets with a throwaway Node container, same pattern as
+`scripts/02-init-laravel.sh`'s throwaway Composer container:
+`docker run --rm -v "$(pwd)/app":/app -w /app node:22-alpine sh -c "npm install && npm run build"`.
+`scripts/deploy.sh` runs this on every deploy; do this manually after `git pull` in dev too, or Blade
+changes to Livewire views won't show any Tailwind styling (Livewire's own JS still works either way —
+it's served from the package directly, not through the Vite build).
 
 **API structure**: versioned under `routes/api.php` → `Route::prefix('v1')`. Controllers for a version
 live under `App\Http\Controllers\Api\V1\...`. Authenticated routes use `auth:sanctum` middleware.

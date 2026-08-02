@@ -121,6 +121,20 @@ docker compose run --rm boss-app php artisan key:generate --show
 
 Copy hasilnya (`base64:...`) ke `.env` pada baris `APP_KEY=`.
 
+### B4.5. Build asset frontend (Tailwind/Livewire)
+
+Container `boss-app` sengaja tidak berisi Node.js (RULE BOSS-007 — image tetap
+ramping, cukup PHP). Compile CSS/JS pakai container Node sementara, sama seperti
+pola composer di `02-init-laravel.sh`:
+
+```bash
+docker run --rm -v "$(pwd)/app":/app -w /app node:22-alpine sh -c "npm install && npm run build"
+```
+
+Tanpa langkah ini, halaman Livewire (mis. `/customers`) tetap berfungsi tapi
+tampil tanpa styling Tailwind. `scripts/deploy.sh` sudah menjalankan ini
+otomatis untuk deploy berikutnya.
+
 ### B5. Nyalakan semua service
 
 ```bash

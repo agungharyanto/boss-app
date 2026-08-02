@@ -1,5 +1,5 @@
 <div class="p-6 max-w-4xl mx-auto space-y-6">
-    <a href="{{ route('web.customers.index') }}" class="text-sm text-blue-600 hover:underline">&larr; Kembali ke daftar pelanggan</a>
+    <a href="{{ route('web.customers.index') }}" class="text-sm text-primary hover:underline">&larr; Kembali ke daftar pelanggan</a>
 
     {{-- Profil --}}
     <div class="p-4 border border-gray-200 rounded-md">
@@ -39,7 +39,7 @@
             </dl>
 
             @if ($canManage)
-                <button wire:click="startEditingProfile" class="mt-3 text-sm text-blue-600 hover:underline">
+                <button wire:click="startEditingProfile" class="mt-3 text-sm text-primary hover:underline">
                     Edit profil
                 </button>
             @endif
@@ -61,7 +61,7 @@
                             <option value="{{ $status->value }}">{{ $status->label() }}</option>
                         @endforeach
                     </select>
-                    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Ubah</button>
+                    <button type="submit" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90">Ubah</button>
                 </form>
                 @error('selectedStatus') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             @endif
@@ -73,7 +73,7 @@
         <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold text-gray-700">Kontak Keluarga</h2>
             @if ($canManage)
-                <button wire:click="openContactForm" class="text-sm text-blue-600 hover:underline">+ Tambah kontak</button>
+                <button wire:click="openContactForm" class="text-sm text-primary hover:underline">+ Tambah kontak</button>
             @endif
         </div>
 
@@ -137,7 +137,7 @@
                     </div>
                     @if ($canManage)
                         <div class="flex gap-3">
-                            <button wire:click="openContactForm({{ $contact->id }})" class="text-blue-600 hover:underline">Edit</button>
+                            <button wire:click="openContactForm({{ $contact->id }})" class="text-primary hover:underline">Edit</button>
                             <button wire:click="deleteContact({{ $contact->id }})" wire:confirm="Hapus kontak ini?" class="text-red-600 hover:underline">Hapus</button>
                         </div>
                     @endif

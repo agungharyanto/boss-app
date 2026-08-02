@@ -1,5 +1,5 @@
 <div class="p-6 max-w-2xl mx-auto">
-    <a href="{{ route('web.customers.index') }}" class="text-sm text-blue-600 hover:underline">&larr; Kembali ke daftar pelanggan</a>
+    <a href="{{ route('web.customers.index') }}" class="text-sm text-primary hover:underline">&larr; Kembali ke daftar pelanggan</a>
 
     <h1 class="text-2xl font-semibold text-gray-800 mt-2 mb-6">Registrasi Pelanggan Baru</h1>
 
@@ -66,7 +66,7 @@
             @endif
         </div>
 
-        <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+        <button type="submit" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90">
             Daftarkan Pelanggan
         </button>
     </form>

@@ -12,7 +12,7 @@
             @if ($canCreate)
                 <button
                     wire:click="$set('showCreateForm', {{ $showCreateForm ? 'false' : 'true' }})"
-                    class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                    class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90"
                 >
                     {{ $showCreateForm ? 'Batal' : '+ Pelanggan Baru' }}
                 </button>
@@ -76,7 +76,7 @@
                             <span class="px-2 py-1 text-xs rounded-full bg-gray-100">{{ $customer->status->label() }}</span>
                         </td>
                         <td class="px-4 py-2 text-right">
-                            <a href="{{ route('web.customers.show', $customer) }}" class="text-blue-600 hover:underline">
+                            <a href="{{ route('web.customers.show', $customer) }}" class="text-primary hover:underline">
                                 Detail
                             </a>
                         </td>

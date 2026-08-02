@@ -4,6 +4,7 @@ use App\Http\Middleware\SetLocale;
 use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
+use App\Livewire\Dashboard;
 use App\Livewire\Settings\ThemeSettings;
 use Illuminate\Support\Facades\Route;
 
@@ -25,6 +26,8 @@ Route::get('/lang/{locale}', function (string $locale) {
 })->name('lang.switch');
 
 Route::middleware('auth')->name('web.')->group(function () {
+    Route::get('/dashboard', Dashboard::class)->name('dashboard');
+
     Route::get('/customers', CustomerIndex::class)->name('customers.index');
     Route::get('/customers/register', RegisterCustomer::class)->name('customers.register');
     Route::get('/customers/{customer}', CustomerShow::class)->name('customers.show');

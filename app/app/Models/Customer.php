@@ -27,6 +27,10 @@ class Customer extends Model
         'referred_by_agent_id',
         'registration_status',
         'registration_channel',
+        'nik',
+        'latitude',
+        'longitude',
+        'package',
     ];
 
     protected function casts(): array
@@ -35,6 +39,8 @@ class Customer extends Model
             'status' => CustomerStatus::class,
             'registration_status' => RegistrationStatus::class,
             'registration_channel' => RegistrationChannel::class,
+            'latitude' => 'decimal:7',
+            'longitude' => 'decimal:7',
         ];
     }
 

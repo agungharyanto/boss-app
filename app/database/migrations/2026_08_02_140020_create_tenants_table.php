@@ -11,18 +11,13 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('customers', function (Blueprint $table) {
+        Schema::create('tenants', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('tenant_id')->constrained()->cascadeOnDelete();
+            $table->uuid()->unique();
             $table->string('name');
-            $table->text('address');
-            $table->string('phone_number');
-            $table->string('status')->default('prospek');
+            $table->string('slug')->unique();
+            $table->boolean('is_active')->default(true);
             $table->timestamps();
-
-            $table->index('tenant_id');
-            $table->index('phone_number');
-            $table->index('status');
         });
     }
 
@@ -31,6 +26,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('customers');
+        Schema::dropIfExists('tenants');
     }
 };

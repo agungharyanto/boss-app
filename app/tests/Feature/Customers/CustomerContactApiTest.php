@@ -31,7 +31,7 @@ class CustomerContactApiTest extends TestCase
     public function test_customer_service_can_add_contact(): void
     {
         $user = $this->userWithRole('customer_service');
-        $customer = Customer::factory()->create();
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id]);
 
         $response = $this->actingAs($user)->postJson("/api/v1/customers/{$customer->id}/contacts", [
             'name' => 'Siti Aminah',
@@ -50,7 +50,7 @@ class CustomerContactApiTest extends TestCase
     public function test_view_only_role_cannot_add_contact(): void
     {
         $user = $this->userWithRole('sales_internal');
-        $customer = Customer::factory()->create();
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id]);
 
         $this->actingAs($user)->postJson("/api/v1/customers/{$customer->id}/contacts", [
             'name' => 'Siti Aminah',
@@ -62,7 +62,7 @@ class CustomerContactApiTest extends TestCase
     public function test_marking_a_new_contact_as_authorized_unmarks_the_previous_one(): void
     {
         $user = $this->userWithRole('customer_service');
-        $customer = Customer::factory()->create();
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id]);
         $first = CustomerContact::factory()->authorized()->create(['customer_id' => $customer->id]);
 
         $response = $this->actingAs($user)->postJson("/api/v1/customers/{$customer->id}/contacts", [
@@ -87,7 +87,7 @@ class CustomerContactApiTest extends TestCase
     public function test_switching_authorized_contact_via_update_also_enforces_single_invariant(): void
     {
         $user = $this->userWithRole('customer_service');
-        $customer = Customer::factory()->create();
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id]);
         $first = CustomerContact::factory()->authorized()->create(['customer_id' => $customer->id]);
         $second = CustomerContact::factory()->create(['customer_id' => $customer->id, 'is_authorized_contact' => false]);
 
@@ -102,8 +102,8 @@ class CustomerContactApiTest extends TestCase
     public function test_contact_from_another_customer_is_not_accessible_via_wrong_customer_id(): void
     {
         $user = $this->userWithRole('customer_service');
-        $customerA = Customer::factory()->create();
-        $customerB = Customer::factory()->create();
+        $customerA = Customer::factory()->create(['tenant_id' => $user->tenant_id]);
+        $customerB = Customer::factory()->create(['tenant_id' => $user->tenant_id]);
         $contact = CustomerContact::factory()->create(['customer_id' => $customerB->id]);
 
         $this->actingAs($user)
@@ -114,7 +114,7 @@ class CustomerContactApiTest extends TestCase
     public function test_customer_service_can_delete_contact(): void
     {
         $user = $this->userWithRole('customer_service');
-        $customer = Customer::factory()->create();
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id]);
         $contact = CustomerContact::factory()->create(['customer_id' => $customer->id]);
 
         $this->actingAs($user)

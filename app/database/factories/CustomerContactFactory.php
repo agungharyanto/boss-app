@@ -21,6 +21,8 @@ class CustomerContactFactory extends Factory
     {
         return [
             'customer_id' => Customer::factory(),
+            // Must match the parent customer's tenant, not an independent random tenant.
+            'tenant_id' => fn (array $attributes) => Customer::withoutGlobalScopes()->find($attributes['customer_id'])?->tenant_id,
             'name' => $this->faker->name(),
             'phone_number' => $this->faker->numerify('08##########'),
             'relationship' => $this->faker->randomElement(['Suami', 'Istri', 'Anak', 'Orang Tua', 'Saudara']),

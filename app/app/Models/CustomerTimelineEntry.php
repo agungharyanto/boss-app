@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CustomerTimelineEntryFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -10,11 +11,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class CustomerTimelineEntry extends Model
 {
     /** @use HasFactory<CustomerTimelineEntryFactory> */
-    use HasFactory;
+    use BelongsToTenant, HasFactory;
 
     const UPDATED_AT = null;
 
     protected $fillable = [
+        'tenant_id',
         'customer_id',
         'event_type',
         'description',

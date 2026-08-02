@@ -13,6 +13,7 @@ return new class extends Migration
     {
         Schema::create('customer_timeline_entries', function (Blueprint $table) {
             $table->id();
+            $table->foreignId('tenant_id')->constrained()->cascadeOnDelete();
             $table->foreignId('customer_id')->constrained()->cascadeOnDelete();
             $table->string('event_type');
             $table->text('description');
@@ -20,6 +21,7 @@ return new class extends Migration
             $table->foreignId('actor_id')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('created_at')->useCurrent();
 
+            $table->index('tenant_id');
             $table->index(['customer_id', 'created_at']);
         });
     }

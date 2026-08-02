@@ -20,6 +20,7 @@ class CustomerTimelineEntryFactory extends Factory
     {
         return [
             'customer_id' => Customer::factory(),
+            'tenant_id' => fn (array $attributes) => Customer::withoutGlobalScopes()->find($attributes['customer_id'])?->tenant_id,
             'event_type' => 'profile_updated',
             'description' => $this->faker->sentence(),
             'changes' => null,

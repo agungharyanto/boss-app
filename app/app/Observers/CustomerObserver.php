@@ -17,6 +17,7 @@ class CustomerObserver
     public function created(Customer $customer): void
     {
         CustomerTimelineEntry::create([
+            'tenant_id' => $customer->tenant_id,
             'customer_id' => $customer->id,
             'event_type' => 'customer_created',
             'description' => "Pelanggan baru dibuat dengan status {$customer->status->label()}",
@@ -40,6 +41,7 @@ class CustomerObserver
             $to = $customer->status;
 
             CustomerTimelineEntry::create([
+                'tenant_id' => $customer->tenant_id,
                 'customer_id' => $customer->id,
                 'event_type' => 'status_changed',
                 'description' => "Status diubah dari {$from->label()} ke {$to->label()}",
@@ -60,6 +62,7 @@ class CustomerObserver
             }
 
             CustomerTimelineEntry::create([
+                'tenant_id' => $customer->tenant_id,
                 'customer_id' => $customer->id,
                 'event_type' => 'profile_updated',
                 'description' => 'Profil pelanggan diperbarui: '.implode(', ', $changedProfileFields),

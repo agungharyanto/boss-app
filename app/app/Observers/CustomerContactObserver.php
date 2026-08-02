@@ -25,6 +25,7 @@ class CustomerContactObserver
     public function created(CustomerContact $customerContact): void
     {
         CustomerTimelineEntry::create([
+            'tenant_id' => $customerContact->tenant_id,
             'customer_id' => $customerContact->customer_id,
             'event_type' => 'contact_created',
             'description' => "Kontak {$customerContact->name} ditambahkan ({$customerContact->access_level->label()})",
@@ -53,6 +54,7 @@ class CustomerContactObserver
         }
 
         CustomerTimelineEntry::create([
+            'tenant_id' => $customerContact->tenant_id,
             'customer_id' => $customerContact->customer_id,
             'event_type' => 'contact_updated',
             'description' => "Kontak {$customerContact->name} diperbarui: ".implode(', ', $changedFields),
@@ -67,6 +69,7 @@ class CustomerContactObserver
     public function deleted(CustomerContact $customerContact): void
     {
         CustomerTimelineEntry::create([
+            'tenant_id' => $customerContact->tenant_id,
             'customer_id' => $customerContact->customer_id,
             'event_type' => 'contact_deleted',
             'description' => "Kontak {$customerContact->name} dihapus",

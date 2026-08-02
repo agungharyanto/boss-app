@@ -60,7 +60,7 @@ class CustomerApiTest extends TestCase
     public function test_view_only_role_can_list_and_view_customers(): void
     {
         $user = $this->userWithRole('billing');
-        $customer = Customer::factory()->create();
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id]);
 
         $this->actingAs($user)->getJson('/api/v1/customers')->assertOk();
         $this->actingAs($user)->getJson("/api/v1/customers/{$customer->id}")->assertOk();
@@ -74,7 +74,7 @@ class CustomerApiTest extends TestCase
     public function test_customer_service_can_update_customer_profile(): void
     {
         $user = $this->userWithRole('customer_service');
-        $customer = Customer::factory()->create(['name' => 'Old Name']);
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id, 'name' => 'Old Name']);
 
         $response = $this->actingAs($user)->putJson("/api/v1/customers/{$customer->id}", [
             'name' => 'New Name',
@@ -88,7 +88,7 @@ class CustomerApiTest extends TestCase
     public function test_view_only_role_cannot_update_customer(): void
     {
         $user = $this->userWithRole('teknisi');
-        $customer = Customer::factory()->create();
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id]);
 
         $this->actingAs($user)
             ->putJson("/api/v1/customers/{$customer->id}", ['name' => 'Hacked'])

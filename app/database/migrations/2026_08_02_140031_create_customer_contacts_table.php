@@ -14,6 +14,7 @@ return new class extends Migration
     {
         Schema::create('customer_contacts', function (Blueprint $table) {
             $table->id();
+            $table->foreignId('tenant_id')->constrained()->cascadeOnDelete();
             $table->foreignId('customer_id')->constrained()->cascadeOnDelete();
             $table->string('name');
             $table->string('phone_number');
@@ -24,6 +25,8 @@ return new class extends Migration
             $table->boolean('can_receive_notifications')->default(true);
             $table->boolean('is_authorized_contact')->default(false);
             $table->timestamps();
+
+            $table->index('tenant_id');
         });
 
         // Hanya satu kontak per pelanggan yang boleh ditandai authorized (partial unique index,

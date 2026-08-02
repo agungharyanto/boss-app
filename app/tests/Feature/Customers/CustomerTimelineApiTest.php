@@ -48,7 +48,7 @@ class CustomerTimelineApiTest extends TestCase
     public function test_view_only_role_can_read_timeline(): void
     {
         $user = $this->userWithRole('finance');
-        $customer = Customer::factory()->create();
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id]);
 
         $this->actingAs($user)
             ->getJson("/api/v1/customers/{$customer->id}/timeline")
@@ -66,7 +66,7 @@ class CustomerTimelineApiTest extends TestCase
     public function test_profile_update_is_recorded_with_before_and_after_values(): void
     {
         $user = $this->userWithRole('customer_service');
-        $customer = Customer::factory()->create(['name' => 'Nama Lama']);
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id, 'name' => 'Nama Lama']);
 
         $this->actingAs($user)->putJson("/api/v1/customers/{$customer->id}", [
             'name' => 'Nama Baru',

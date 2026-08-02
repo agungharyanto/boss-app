@@ -4,6 +4,7 @@ namespace Database\Factories;
 
 use App\Enums\CustomerStatus;
 use App\Models\Customer;
+use App\Models\Tenant;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -19,6 +20,7 @@ class CustomerFactory extends Factory
     public function definition(): array
     {
         return [
+            'tenant_id' => Tenant::factory(),
             'name' => $this->faker->name(),
             'address' => $this->faker->address(),
             'phone_number' => $this->faker->numerify('08##########'),

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ContactAccessLevel;
+use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CustomerContactFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -11,9 +12,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class CustomerContact extends Model
 {
     /** @use HasFactory<CustomerContactFactory> */
-    use HasFactory;
+    use BelongsToTenant, HasFactory;
 
     protected $fillable = [
+        'tenant_id',
         'customer_id',
         'name',
         'phone_number',

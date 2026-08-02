@@ -31,7 +31,7 @@ class CustomerStatusTransitionTest extends TestCase
     public function test_valid_transition_prospek_to_aktif_succeeds(): void
     {
         $user = $this->customerServiceUser();
-        $customer = Customer::factory()->create(['status' => CustomerStatus::Prospek]);
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id, 'status' => CustomerStatus::Prospek]);
 
         $response = $this->actingAs($user)->patchJson("/api/v1/customers/{$customer->id}/status", [
             'status' => 'aktif',
@@ -45,7 +45,7 @@ class CustomerStatusTransitionTest extends TestCase
     public function test_invalid_transition_prospek_to_suspend_is_rejected(): void
     {
         $user = $this->customerServiceUser();
-        $customer = Customer::factory()->create(['status' => CustomerStatus::Prospek]);
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id, 'status' => CustomerStatus::Prospek]);
 
         $response = $this->actingAs($user)->patchJson("/api/v1/customers/{$customer->id}/status", [
             'status' => 'suspend',
@@ -59,7 +59,7 @@ class CustomerStatusTransitionTest extends TestCase
     public function test_any_status_can_transition_to_blacklist(): void
     {
         $user = $this->customerServiceUser();
-        $customer = Customer::factory()->create(['status' => CustomerStatus::Aktif]);
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id, 'status' => CustomerStatus::Aktif]);
 
         $this->actingAs($user)
             ->patchJson("/api/v1/customers/{$customer->id}/status", ['status' => 'blacklist'])
@@ -70,7 +70,7 @@ class CustomerStatusTransitionTest extends TestCase
     public function test_blacklist_is_terminal_and_rejects_any_further_transition(): void
     {
         $user = $this->customerServiceUser();
-        $customer = Customer::factory()->create(['status' => CustomerStatus::Blacklist]);
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id, 'status' => CustomerStatus::Blacklist]);
 
         $response = $this->actingAs($user)->patchJson("/api/v1/customers/{$customer->id}/status", [
             'status' => 'aktif',
@@ -83,7 +83,7 @@ class CustomerStatusTransitionTest extends TestCase
     public function test_aktif_suspend_non_aktif_can_move_freely_between_each_other(): void
     {
         $user = $this->customerServiceUser();
-        $customer = Customer::factory()->create(['status' => CustomerStatus::Aktif]);
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id, 'status' => CustomerStatus::Aktif]);
 
         $this->actingAs($user)
             ->patchJson("/api/v1/customers/{$customer->id}/status", ['status' => 'suspend'])
@@ -101,7 +101,7 @@ class CustomerStatusTransitionTest extends TestCase
     public function test_status_change_is_recorded_in_timeline(): void
     {
         $user = $this->customerServiceUser();
-        $customer = Customer::factory()->create(['status' => CustomerStatus::Prospek]);
+        $customer = Customer::factory()->create(['tenant_id' => $user->tenant_id, 'status' => CustomerStatus::Prospek]);
 
         $this->actingAs($user)->patchJson("/api/v1/customers/{$customer->id}/status", ['status' => 'aktif']);
 

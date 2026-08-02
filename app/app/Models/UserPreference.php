@@ -16,6 +16,7 @@ class UserPreference extends Model
         'user_id',
         'theme_primary_color',
         'theme_text_color',
+        'locale',
     ];
 
     public function user(): BelongsTo

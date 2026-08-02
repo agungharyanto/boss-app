@@ -24,6 +24,13 @@
 
 <aside class="w-64 shrink-0 bg-gray-50 border-r border-gray-200 min-h-screen p-4" aria-label="{{ __('Navigasi utama') }}">
     <nav class="space-y-2">
+        <a
+            href="{{ route('web.dashboard') }}"
+            class="block px-3 py-2 text-sm font-semibold rounded-md {{ request()->routeIs('web.dashboard') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100' }}"
+        >
+            {{ __('Dashboard') }}
+        </a>
+
         @foreach ($clusters as $cluster)
             <div x-data="{ open: localStorage.getItem('sidebar-cluster-{{ $cluster['id'] }}') !== 'false' }">
                 <button

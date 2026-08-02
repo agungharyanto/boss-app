@@ -22,6 +22,10 @@
         @livewireStyles
     </head>
     <body>
+        <div class="flex justify-end p-3">
+            <x-language-switcher />
+        </div>
+
         {{ $slot }}
 
         @livewireScripts

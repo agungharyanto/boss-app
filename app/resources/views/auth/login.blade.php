@@ -8,6 +8,10 @@
     </head>
     <body class="bg-gray-100 min-h-screen flex items-center justify-center">
         <div class="w-full max-w-sm p-6 bg-white rounded-md shadow">
+            <div class="flex justify-end mb-2">
+                <x-language-switcher />
+            </div>
+
             <h1 class="text-xl font-semibold text-gray-800 mb-4">{{ config('app.name') }}</h1>
 
             @if ($errors->any())

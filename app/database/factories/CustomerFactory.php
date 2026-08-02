@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Enums\CustomerStatus;
+use App\Enums\RegistrationStatus;
 use App\Models\Customer;
 use App\Models\Tenant;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -25,6 +26,7 @@ class CustomerFactory extends Factory
             'address' => $this->faker->address(),
             'phone_number' => $this->faker->numerify('08##########'),
             'status' => CustomerStatus::Prospek,
+            'registration_status' => RegistrationStatus::Registered,
         ];
     }
 

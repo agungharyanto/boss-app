@@ -3,10 +3,13 @@
 namespace App\Models;
 
 use App\Enums\CustomerStatus;
+use App\Enums\RegistrationChannel;
+use App\Enums\RegistrationStatus;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CustomerFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
@@ -21,12 +24,17 @@ class Customer extends Model
         'address',
         'phone_number',
         'status',
+        'referred_by_agent_id',
+        'registration_status',
+        'registration_channel',
     ];
 
     protected function casts(): array
     {
         return [
             'status' => CustomerStatus::class,
+            'registration_status' => RegistrationStatus::class,
+            'registration_channel' => RegistrationChannel::class,
         ];
     }
 
@@ -43,5 +51,15 @@ class Customer extends Model
     public function timelineEntries(): HasMany
     {
         return $this->hasMany(CustomerTimelineEntry::class)->latest('created_at');
+    }
+
+    public function referredBy(): BelongsTo
+    {
+        return $this->belongsTo(Agent::class, 'referred_by_agent_id');
+    }
+
+    public function commissionLedgerEntries(): HasMany
+    {
+        return $this->hasMany(CommissionLedger::class);
     }
 }

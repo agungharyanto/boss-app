@@ -5,6 +5,7 @@
 | v0.1.0  | Foundation               | Repo, Docker, Laravel, PostgreSQL, Redis, Nginx, login, role, UFW/Fail2ban, backup |
 | v0.2.0  | Customer CRM             | Data pelanggan, kontak keluarga, authorized contact, customer timeline |
 | v0.3.0  | Registration & Referral  | Registrasi multi-channel, sales freelance, referral, komisi pending |
+| v0.3.1  | UI/UX & Personalization  | Theme custom (primary color, text color, bukan cuma light/dark), language switcher (ID/EN), dashboard widget selector per user |
 | v0.4.0  | Communication (Baileys)  | WhatsApp gateway, notifikasi group, routing area, OTP |
 | v0.5.0  | Installation             | Work order teknisi, scan MAC/serial, ODP/PON, foto instalasi |
 | v0.6.0  | FreeRADIUS               | Akun PPPoE via RADIUS, profile bandwidth, accounting, CoA/disconnect |

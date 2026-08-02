@@ -1,0 +1,32 @@
+# Secrets — jangan pernah masuk git
+.env
+.env.*
+!.env.example
+docker/nginx/certs/*.pem
+docker/nginx/certs/*.key
+
+# Laravel
+app/vendor/
+app/node_modules/
+app/storage/*.key
+app/storage/framework/cache/*
+app/storage/framework/sessions/*
+app/storage/framework/views/*
+app/storage/logs/*
+!app/storage/framework/cache/.gitkeep
+!app/storage/framework/sessions/.gitkeep
+!app/storage/framework/views/.gitkeep
+!app/storage/logs/.gitkeep
+app/bootstrap/cache/*.php
+app/public/hot
+app/public/storage
+
+# Backup hasil
+backups/*.sql.gz
+!backups/.gitkeep
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

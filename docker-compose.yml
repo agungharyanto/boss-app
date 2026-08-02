@@ -1,0 +1,111 @@
+name: boss-app
+
+services:
+  boss-nginx:
+    image: nginx:1.27-alpine
+    container_name: boss-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      # - "443:443"   # aktifkan setelah TLS terpasang (lihat docs/DEPLOYMENT.md)
+    volumes:
+      - ./app:/var/www/html:ro
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - boss-app
+    networks:
+      - boss-network
+
+  boss-app:
+    build:
+      context: ./docker/php
+    container_name: boss-app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - ./app:/var/www/html
+    env_file:
+      - .env
+    depends_on:
+      boss-postgresql:
+        condition: service_healthy
+      boss-redis:
+        condition: service_healthy
+    networks:
+      - boss-network
+
+  boss-worker:
+    build:
+      context: ./docker/php
+    container_name: boss-worker
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: php artisan queue:work --sleep=3 --tries=3 --max-time=3600
+    volumes:
+      - ./app:/var/www/html
+    env_file:
+      - .env
+    depends_on:
+      - boss-app
+    networks:
+      - boss-network
+
+  boss-scheduler:
+    build:
+      context: ./docker/php
+    container_name: boss-scheduler
+    restart: unless-stopped
+    working_dir: /var/www/html
+    entrypoint: ["sh", "-c", "while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"]
+    volumes:
+      - ./app:/var/www/html
+    env_file:
+      - .env
+    depends_on:
+      - boss-app
+    networks:
+      - boss-network
+
+  boss-postgresql:
+    image: postgres:16-alpine
+    container_name: boss-postgresql
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - boss_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - boss-network
+    # Port 5432 SENGAJA TIDAK di-expose ke host (RULE BOSS-010)
+
+  boss-redis:
+    image: redis:7-alpine
+    container_name: boss-redis
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - boss_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - boss-network
+    # Port 6379 SENGAJA TIDAK di-expose ke host (RULE BOSS-010)
+
+networks:
+  boss-network:
+    driver: bridge
+
+volumes:
+  boss_postgres_data:
+  boss_redis_data:

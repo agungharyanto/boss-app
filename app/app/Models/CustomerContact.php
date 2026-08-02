@@ -3,13 +3,14 @@
 namespace App\Models;
 
 use App\Enums\ContactAccessLevel;
+use Database\Factories\CustomerContactFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class CustomerContact extends Model
 {
-    /** @use HasFactory<\Database\Factories\CustomerContactFactory> */
+    /** @use HasFactory<CustomerContactFactory> */
     use HasFactory;
 
     protected $fillable = [

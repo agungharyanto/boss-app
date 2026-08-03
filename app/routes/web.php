@@ -4,6 +4,9 @@ use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
+use App\Livewire\Resellers\PackagePricingIndex;
+use App\Livewire\Resellers\ResellerIndex;
+use App\Livewire\Resellers\ResellerShow;
 use App\Livewire\Settings\ThemeSettings;
 use App\Services\LocaleService;
 use Illuminate\Support\Facades\Route;
@@ -28,9 +31,19 @@ Route::get('/lang/{locale}', function (string $locale, LocaleService $service) {
 Route::middleware('auth')->name('web.')->group(function () {
     Route::get('/dashboard', Dashboard::class)->name('dashboard');
 
-    Route::get('/customers', CustomerIndex::class)->name('customers.index');
-    Route::get('/customers/register', RegisterCustomer::class)->name('customers.register');
-    Route::get('/customers/{customer}', CustomerShow::class)->name('customers.show');
+    // reseller.context: see routes/api.php's identical group for why —
+    // Customer/ResellerPackagePricing listings need "which reseller am I"
+    // resolved before rendering.
+    Route::middleware('reseller.context')->group(function () {
+        Route::get('/customers', CustomerIndex::class)->name('customers.index');
+        Route::get('/customers/register', RegisterCustomer::class)->name('customers.register');
+        Route::get('/customers/{customer}', CustomerShow::class)->name('customers.show');
+
+        Route::get('/reseller-package-pricing', PackagePricingIndex::class)->name('reseller-package-pricing.index');
+    });
+
+    Route::get('/resellers', ResellerIndex::class)->name('resellers.index');
+    Route::get('/resellers/{reseller}', ResellerShow::class)->name('resellers.show');
 
     Route::get('/settings/theme', ThemeSettings::class)->name('settings.theme');
 });

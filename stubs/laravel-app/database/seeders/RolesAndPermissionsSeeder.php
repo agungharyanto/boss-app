@@ -32,6 +32,7 @@ class RolesAndPermissionsSeeder extends Seeder
 
         $this->seedCustomerCrmPermissions($roles);
         $this->seedRegistrationPermissions();
+        $this->seedResellerPermissions();
     }
 
     /**
@@ -78,5 +79,25 @@ class RolesAndPermissionsSeeder extends Seeder
         foreach (['super_admin', 'sales_internal', 'teknisi', 'sales_freelance'] as $role) {
             Role::findByName($role, 'web')->givePermissionTo('register-customer');
         }
+    }
+
+    /**
+     * Permission modul Multi-Tenant Reseller (v0.3.2). Reseller sendiri
+     * hanya boleh dikelola (create/update/delete + kelola staff) oleh
+     * super_admin — reseller owner/staff diotorisasi lewat keanggotaan
+     * reseller_users mereka sendiri (lihat ResellerPolicy/CustomerPolicy/
+     * ResellerPackagePricingPolicy), bukan lewat permission Spatie ini,
+     * karena mereka adalah user eksternal (bisnis reseller), bukan staff
+     * internal ISP dengan salah satu dari 8 role di atas.
+     */
+    private function seedResellerPermissions(): void
+    {
+        $permissions = ['resellers.view', 'resellers.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
     }
 }

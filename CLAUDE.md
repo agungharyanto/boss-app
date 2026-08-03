@@ -70,6 +70,22 @@ the initial scaffold):
 If you're debugging "why doesn't auth work" or "why do tests leave junk data in the dev DB" in older
 commits, these are why — check all three are still in place before assuming the bug is elsewhere.
 
+**A fourth infrastructure bug (same root cause class) was found while building v0.3.2**: root `.env`
+(the file Docker Compose loads as `env_file` for `boss-app`/`boss-worker`/`boss-scheduler` — not
+`app/.env`) had `APP_ENV=production` even though `app/.env` said `local`, and the container's real
+process env wins over `.env`, same precedence issue as the phpunit bug above. Consequence: this dev/sprint
+VM (`45.123.142.242`, the single server `docs/DEPLOYMENT.md` describes — there is no separate staging vs
+production deployment yet) resolved `app()->environment()` as `production` the entire time, silently
+disabling every `app()->environment('local')`-gated code path (e.g. dev-only seeders) and forcing a
+confirmation prompt on every `artisan migrate`. Fixed by changing this server's root `.env` (gitignored,
+not `.env.example`) to `APP_ENV=local`, then recreating `boss-app`/`boss-worker`/`boss-scheduler` so the
+new `env_file` value is actually re-read (editing `.env` alone does not affect already-running
+containers). **`root .env.example`'s `APP_ENV=production` default is intentionally correct and must NOT
+be changed** — it's the documented template value for a genuine future production deploy. **Reminder for
+whoever runs the actual go-live for this server**: flip this same server's root `.env` back to
+`APP_ENV=production` at that point — this VM is planned to become production in place, not be replaced
+by a separate prod server, so nothing will do this flip automatically.
+
 ## Sprint roadmap (`docs/ROADMAP.md`) — locked order, do not skip or reorder
 
 | Version | Name                     | Contents                                                              |

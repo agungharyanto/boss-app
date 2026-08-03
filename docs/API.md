@@ -220,3 +220,80 @@ user belum pernah menyimpan pilihan) dan `available` (katalog lengkap widget:
 
 Body: `widgets` (wajib, array — boleh kosong untuk menyembunyikan semua
 widget). Setiap value harus salah satu dari `App\Enums\DashboardWidget`.
+
+---
+
+## Multi-Tenant Reseller (v0.3.2)
+
+Konteks reseller ("saya beroperasi sebagai reseller mana") di-resolve
+otomatis oleh middleware `reseller.context`
+(`App\Http\Middleware\ResolveResellerContext`) berdasarkan keanggotaan aktif
+user di `reseller_users`: 0 keanggotaan → null (ISP admin/staff internal,
+lihat semua data), 1 keanggotaan → reseller itu, 2+ keanggotaan → pakai yang
+pertama + log warning (multi-reseller switcher belum ada — backlog). Context
+ini disimpan di `App\Support\ResellerContext` (container-bound singleton,
+bukan session), dipakai `App\Models\Scopes\ResellerScope` untuk otomatis
+memfilter query `customers`/`reseller-package-pricing` ke reseller milik
+user yang login — tanpa `where()` manual di controller, sama seperti pola
+`TenantScope` untuk multi-tenancy.
+
+### `GET/POST /resellers` · `GET/PUT/DELETE /resellers/{reseller}`
+
+Admin-only (permission `resellers.manage` untuk create/update/delete,
+`resellers.view` untuk read — hanya `super_admin` yang punya keduanya).
+Business logic di `App\Services\ResellerService`. `slug` auto-generate dari
+`name` kalau tidak dikirim. `PUT` juga bisa mengubah `status` (`active`/
+`suspended`).
+
+### `GET/POST /resellers/{reseller}/users` · `DELETE /resellers/{reseller}/users/{user}`
+
+Kelola staff reseller — diizinkan untuk admin **dan** reseller owner aktif
+milik reseller tersebut (bukan staff biasa). `POST` body: `user_id` (harus
+user di tenant yang sama), `role` (`owner`/`staff`). `DELETE` **tidak**
+menghapus baris `reseller_users` — hanya mengubah `status` jadi `inactive`
+(soft-detach, riwayat keanggotaan tetap ada).
+
+### `GET/POST /reseller-package-pricing` · `GET/PUT/DELETE /reseller-package-pricing/{pricing}`
+
+Reseller owner/staff mengelola pricing package milik reseller sendiri;
+`reseller_id` **selalu** diambil dari context yang ter-resolve (body
+`reseller_id` diabaikan untuk mereka, sama seperti pola atribusi agent di
+`POST /registrations`). ISP admin (tanpa context) **wajib** mengirim
+`reseller_id` eksplisit di `POST` — divalidasi harus reseller di tenant yang
+sama. `GET` (index) untuk admin bisa difilter opsional lewat query
+`?reseller_id=`; tanpa filter, admin melihat pricing lintas-reseller.
+
+Tidak ada `base_package_id`/katalog `packages` di v0.3.2 — field itu belum
+ada di codebase manapun. Setiap baris `reseller_package_pricing` adalah
+entitas independen; `is_custom` murni flag kategorisasi manual (bundle vs
+package biasa), bukan diturunkan dari suatu base package.
+
+```json
+{
+  "success": true,
+  "message": "Package pricing berhasil dibuat",
+  "data": {
+    "id": 1,
+    "reseller_id": 3,
+    "reseller_name": "Reseller Demo A",
+    "name": "Paket 20 Mbps",
+    "description": null,
+    "price": 150000.0,
+    "is_custom": false,
+    "status": "active",
+    "status_label": "Active",
+    "created_at": "2026-08-03T04:00:00+00:00",
+    "updated_at": "2026-08-03T04:00:00+00:00"
+  },
+  "meta": []
+}
+```
+
+### Dampak ke `customers`
+
+`POST /customers` dan `POST /registrations` sekarang menerima `reseller_id`
+opsional di body — hanya dipakai kalau caller **tidak** punya context
+reseller aktif (ISP admin yang eksplisit menugaskan customer ke reseller
+tertentu). Untuk reseller owner/staff, `reseller_id` selalu diambil dari
+context, mengabaikan apa pun yang dikirim di body. `CustomerResource`
+sekarang menyertakan `reseller_id`/`reseller_name`.

@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\CustomerStatus;
 use App\Enums\RegistrationChannel;
 use App\Enums\RegistrationStatus;
+use App\Models\Concerns\BelongsToResellerScope;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CustomerFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -16,10 +17,11 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 class Customer extends Model
 {
     /** @use HasFactory<CustomerFactory> */
-    use BelongsToTenant, HasFactory;
+    use BelongsToResellerScope, BelongsToTenant, HasFactory;
 
     protected $fillable = [
         'tenant_id',
+        'reseller_id',
         'name',
         'address',
         'phone_number',
@@ -62,6 +64,11 @@ class Customer extends Model
     public function referredBy(): BelongsTo
     {
         return $this->belongsTo(Agent::class, 'referred_by_agent_id');
+    }
+
+    public function reseller(): BelongsTo
+    {
+        return $this->belongsTo(Reseller::class);
     }
 
     public function commissionLedgerEntries(): HasMany

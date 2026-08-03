@@ -6,6 +6,7 @@ use App\Models\Customer;
 use App\Models\CustomerContact;
 use App\Observers\CustomerContactObserver;
 use App\Observers\CustomerObserver;
+use App\Support\ResellerContext;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -15,7 +16,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Per-request singleton, defaults to "no reseller" until
+        // ResolveResellerContext middleware (or a test) sets one.
+        $this->app->singleton(ResellerContext::class, fn () => new ResellerContext);
     }
 
     /**

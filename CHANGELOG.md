@@ -3,6 +3,80 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.3.2 — Multi-Tenant Reseller
+
+- Tabel baru `resellers` (child dari `tenant` — punya `tenant_id`, pakai
+  trait `BelongsToTenant` yang sama seperti `Customer`/`Agent`), `slug`
+  unique per tenant, `status` (`active`/`suspended`), soft delete.
+- Tabel pivot `reseller_users` (`reseller_id`+`user_id`, `role`
+  `owner`/`staff`, `status` `active`/`inactive`) — reseller bisa punya
+  banyak staff. "Detach" staff (`DELETE /resellers/{id}/users/{user}`)
+  sengaja soft: hanya mengubah `status` jadi `inactive`, tidak menghapus
+  baris, supaya riwayat keanggotaan tetap ada.
+- Tabel baru `reseller_package_pricing` — pricing package yang dibuat
+  reseller sendiri untuk dijual ke customer-nya. **Tanpa `base_package_id`**:
+  tidak ada tabel katalog `packages` ISP di codebase manapun sejauh ini,
+  jadi setiap baris independen; `is_custom` murni flag kategorisasi manual.
+- `customers.reseller_id` (nullable, `ON DELETE SET NULL`) — customer bisa
+  milik reseller atau jadi direct customer ISP (`reseller_id` null).
+- **Reseller context resolution**: middleware baru `ResolveResellerContext`
+  (alias `reseller.context`) menentukan "user ini beroperasi sebagai
+  reseller yang mana" dari keanggotaan `reseller_users` aktifnya, disimpan
+  di `App\Support\ResellerContext` (container-bound singleton per-request,
+  sengaja bukan session — lebih mudah di-test). `App\Models\Scopes\ResellerScope`
+  (dipasang lewat trait opsional `BelongsToResellerScope` di `Customer` dan
+  `ResellerPackagePricing`) otomatis memfilter query ke reseller itu **hanya
+  kalau context ter-resolve** — user ISP admin/staff internal (tanpa
+  keanggotaan reseller apa pun) tetap melihat semua data, sama seperti pola
+  `TenantScope` untuk multi-tenancy. Middleware ini didaftarkan dengan
+  prioritas eksplisit di depan `SubstituteBindings` (lihat `bootstrap/app.php`)
+  supaya scope sudah aktif *sebelum* route-model-binding jalan — tanpa itu,
+  akses ke package-pricing/customer milik reseller lain menghasilkan 403
+  (baru ditolak di Policy) alih-alih 404 (ditolak dari resolusi binding-nya
+  sendiri, isolasi yang lebih ketat, konsisten dengan `TenantIsolationTest`).
+- Permission baru `resellers.view`/`resellers.manage`, hanya diberikan ke
+  `super_admin` — reseller owner/staff diotorisasi lewat keanggotaan
+  `reseller_users` mereka sendiri (`ResellerPolicy`, `CustomerPolicy`,
+  `ResellerPackagePricingPolicy`), bukan lewat role/permission Spatie, karena
+  mereka user eksternal (bisnis reseller), bukan staff internal ISP.
+- **REST API (BOSS-006)**: `GET/POST /api/v1/resellers`,
+  `GET/PUT/DELETE /api/v1/resellers/{reseller}`,
+  `GET/POST /api/v1/resellers/{reseller}/users`,
+  `DELETE /api/v1/resellers/{reseller}/users/{user}`,
+  `GET/POST /api/v1/reseller-package-pricing`,
+  `GET/PUT/DELETE /api/v1/reseller-package-pricing/{pricing}`. Business
+  logic di `ResellerService`/`ResellerPackagePricingService`, dipakai bareng
+  API controller dan komponen Livewire (`Resellers\ResellerIndex`,
+  `Resellers\ResellerShow`, `Resellers\PackagePricingIndex`) — masuk sidebar
+  cluster baru "Operasional". Lihat `docs/API.md`.
+- **Scope disesuaikan dari rencana awal setelah inspeksi codebase** (lihat
+  `docs/ROADMAP.md` untuk catatan dependency lengkap): tidak ada tabel
+  `subscriptions` atau katalog `packages` ISP di codebase manapun sebelum
+  sprint ini — keduanya baru direncanakan lahir di v0.3.4 (Invoicing Core).
+  Bagian skema yang bergantung padanya (`subscriptions.reseller_id`,
+  `subscriptions.reseller_package_pricing_id`, `reseller_package_pricing.base_package_id`)
+  sengaja **tidak** dibuat di v0.3.2 — dicatat sebagai dependency wajib untuk
+  v0.3.4 saat `subscriptions` benar-benar lahir, supaya v0.3.2 tetap sesuai
+  RULE BOSS-003 (stay in scope) dan tidak diam-diam melahirkan desain
+  `subscriptions` darurat yang bisa tabrakan dengan desain resmi nanti.
+- **Bug infrastruktur ke-4 ditemukan & diperbaiki** (pola sama dengan 3 bug
+  v0.1.0 yang sudah didokumentasikan di `CLAUDE.md`): root `.env` (dipakai
+  Docker Compose sebagai `env_file`) punya `APP_ENV=production` padahal
+  `app/.env` bilang `local`, dan process env container menang atas `.env` —
+  server dev/sprint ini (`45.123.142.242`, satu-satunya server yang
+  didokumentasikan di `docs/DEPLOYMENT.md`, direncanakan jadi production
+  in-place saat go-live, bukan diganti server terpisah) diam-diam selalu
+  `app()->environment() === 'production'` sejak awal. Diperbaiki dengan
+  mengubah root `.env` (gitignored, bukan `.env.example`) jadi
+  `APP_ENV=local` dan me-recreate container `boss-app`/`boss-worker`/
+  `boss-scheduler`. Detail lengkap + reminder untuk flip balik ke
+  `production` saat go-live sungguhan: lihat `CLAUDE.md`.
+- Tests: 90/90 passing (84 existing + 6 file test baru mencakup CRUD
+  reseller, staff management, package pricing CRUD, dan isolasi scope
+  reseller — lihat `tests/Feature/Api/ResellerApiTest.php`,
+  `tests/Feature/Api/ResellerPackagePricingApiTest.php`,
+  `tests/Feature/Resellers/ResellerScopeIsolationTest.php`).
+
 ## v0.3.1 — Personalization & Navigation
 
 - **Theme customization**: primary & text color custom per user, disimpan di

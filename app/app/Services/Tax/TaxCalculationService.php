@@ -35,10 +35,16 @@ class TaxCalculationService
     {
         $date ??= now();
 
+        // whereDate() (not a plain where() string comparison) — a 'date'
+        // cast column can be stored with a time suffix depending on driver
+        // (e.g. SQLite keeps "2026-08-01 00:00:00" as-is; Postgres's native
+        // DATE type doesn't), so a raw string comparison against
+        // toDateString() silently mismatches on the exact boundary date.
+        // whereDate() extracts the date part on both sides regardless.
         $components = TaxComponent::query()
             ->where('is_active', true)
-            ->where('effective_from', '<=', $date->toDateString())
-            ->where(fn (Builder $q) => $q->whereNull('effective_to')->orWhere('effective_to', '>=', $date->toDateString()))
+            ->whereDate('effective_from', '<=', $date->toDateString())
+            ->where(fn (Builder $q) => $q->whereNull('effective_to')->orWhereDate('effective_to', '>=', $date->toDateString()))
             ->get();
 
         // Already keyed by tax_component `code`, not id — see

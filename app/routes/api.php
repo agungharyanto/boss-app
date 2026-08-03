@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\CustomerController;
 use App\Http\Controllers\Api\V1\CustomerTimelineController;
 use App\Http\Controllers\Api\V1\DashboardWidgetSettingController;
 use App\Http\Controllers\Api\V1\HealthController;
+use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\LocaleSettingController;
 use App\Http\Controllers\Api\V1\RegistrationController;
 use App\Http\Controllers\Api\V1\RemittanceSummaryController;
@@ -12,6 +13,7 @@ use App\Http\Controllers\Api\V1\ResellerController;
 use App\Http\Controllers\Api\V1\ResellerPackagePricingController;
 use App\Http\Controllers\Api\V1\ResellerTaxPolicyController;
 use App\Http\Controllers\Api\V1\ResellerUserController;
+use App\Http\Controllers\Api\V1\SubscriptionController;
 use App\Http\Controllers\Api\V1\TaxComponentController;
 use App\Http\Controllers\Api\V1\TaxLedgerController;
 use App\Http\Controllers\Api\V1\ThemeSettingsController;
@@ -50,6 +52,20 @@ Route::prefix('v1')->group(function () {
             Route::post('reseller-tax-policies', [ResellerTaxPolicyController::class, 'store']);
             Route::get('reseller-tax-policies/{reseller_tax_policy}', [ResellerTaxPolicyController::class, 'show']);
             Route::put('reseller-tax-policies/{reseller_tax_policy}', [ResellerTaxPolicyController::class, 'update']);
+
+            Route::get('subscriptions', [SubscriptionController::class, 'index']);
+            Route::post('subscriptions', [SubscriptionController::class, 'store']);
+            Route::get('subscriptions/{subscription}', [SubscriptionController::class, 'show']);
+            Route::patch('subscriptions/{subscription}/suspend', [SubscriptionController::class, 'suspend']);
+            Route::patch('subscriptions/{subscription}/reactivate', [SubscriptionController::class, 'reactivate']);
+            Route::patch('subscriptions/{subscription}/cancel', [SubscriptionController::class, 'cancel']);
+
+            Route::get('invoices', [InvoiceController::class, 'index']);
+            Route::get('invoices/{invoice}', [InvoiceController::class, 'show']);
+            Route::post('invoices/generate', [InvoiceController::class, 'generate']);
+            Route::patch('invoices/{invoice}/pending', [InvoiceController::class, 'markPending']);
+            Route::patch('invoices/{invoice}/paid', [InvoiceController::class, 'markPaid']);
+            Route::patch('invoices/{invoice}/cancel', [InvoiceController::class, 'cancel']);
         });
 
         // Admin-only tax engine catalog/reporting — no reseller.context needed.

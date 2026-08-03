@@ -3,6 +3,85 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.3.4 — Invoicing Core
+
+- Tabel baru `subscriptions` — plan berlangganan per customer.
+  `reseller_id`/`reseller_package_pricing_id` **ada sejak migration pertama**
+  (dependency wajib dari v0.3.2/v0.3.3, bukan retrofit): `reseller_id`
+  didenormalisasi dari `customers.reseller_id` saat dibuat,
+  `reseller_package_pricing_id` nullable (null untuk direct-retail — harga
+  di-set manual di `monthly_amount`, karena tidak ada katalog `packages` ISP
+  di codebase manapun). `billing_cycle_day` (1–31) jadi acuan tanggal jatuh
+  tempo bulanan.
+- Tabel baru `invoices` + `invoice_line_items`. Nomor invoice **per-reseller**
+  (`INV/{kode_reseller}/{tahun}/{bulan}/{sequence 6 digit}`, `INV/DIRECT/...`
+  untuk direct-retail — keputusan dikonfirmasi eksplisit sebelum migration
+  ditulis) via `InvoiceNumberService` + tabel `invoice_number_sequences`
+  (partial unique index Postgres, pola sama dengan `reseller_tax_policies`).
+  `resellers.invoice_code` (kolom baru) auto-derive dari slug kalau admin
+  tidak set manual.
+- **State machine invoice** (`App\Enums\InvoiceStatus`, method
+  `canTransitionTo()` mirip `CustomerStatus`): `draft → pending →
+  (paid | overdue) → paid`; semua state non-terminal bisa `cancelled`;
+  `paid`/`cancelled` terminal. Transisi tidak valid melempar
+  `App\Exceptions\InvalidInvoiceStatusTransitionException` (pola sama
+  dengan `InvalidStatusTransitionException` milik `Customer` di v0.2.0),
+  bukan raw exception generik.
+- **`InvoiceService::generateForPeriod()` memenuhi kontrak wajib v0.3.3**:
+  memanggil `TaxCalculationService::calculateForAmount()` lalu
+  `::writeLedgerEntry()` — `grand_total` invoice selalu dari
+  `$breakdown->grandTotal`, tidak pernah dihitung ulang manual.
+  Idempoten terhadap subscription+periode yang sama (guard di dalam
+  transaction, unique constraint DB sebagai backstop terakhir).
+- **Command terjadwal baru** (`boss-scheduler`, daily): `GenerateDueInvoices`
+  (generate invoice untuk subscription aktif yang jatuh tempo H-7 — angka 7
+  dikonfirmasi eksplisit sebagai keputusan, bukan hardcode diam-diam, via
+  flag `--lead-days`) langsung auto-issue ke `pending`; `MarkOverdueInvoices`
+  (ubah `pending` yang `due_date`-nya lewat jadi `overdue`).
+- **Keputusan arsitektur yang dikonfirmasi eksplisit sebelum migration**
+  (sesuai instruksi sprint): nomor invoice per-reseller (bukan sequence
+  global), due date dari `billing_cycle_day` + generate H-7, overdue via job
+  otomatis harian.
+- **Known limitation, sengaja di-defer** (bukan silent gap — lihat
+  `docs/ROADMAP.md`): tidak ada proration. Subscription yang mulai/berhenti
+  di tengah periode billing tetap ditagih penuh satu periode.
+- **Dua bug nyata ditemukan & diperbaiki selama development**:
+  1. `InvoiceService::generateForPeriod()` awalnya mengembalikan
+     `$invoice->fresh()` — method itu membuat instance BARU dari database,
+     me-reset properti `wasRecentlyCreated` Eloquent ke `false` walau baris
+     baru saja dibuat. Ini membuat `GenerateDueInvoices` gagal mendeteksi
+     invoice yang baru dibuat dan tidak memanggil `markPending()` (invoice
+     tertinggal di status `draft`). Fix: pakai `->load()`, bukan `->fresh()`.
+  2. **Bug lintas-driver yang meluas** (juga mempengaruhi kode v0.3.3 yang
+     sudah ter-tag): kolom ber-cast `'date'` bisa tersimpan dengan sufiks
+     waktu di SQLite (dipakai test suite) meski tidak di Postgres (dev/prod),
+     membuat `->where('kolom', '<=', $tanggal->toDateString())` gagal cocok
+     tepat di tanggal yang sama persis. Fix: `->whereDate(...)` di seluruh
+     `TaxCalculationService`, `ResellerTaxPolicyService`,
+     `RemittanceSummaryService`, `InvoiceService`, `MarkOverdueInvoices`,
+     `TaxLedgerController`, `RemittanceSummaryController`. Detail lengkap +
+     alasan supaya tidak terulang di sprint berikutnya: lihat `CLAUDE.md`
+     bagian "Cross-database date comparison gotcha".
+- **REST API**: `GET/POST /api/v1/subscriptions` +
+  `PATCH .../suspend|reactivate|cancel`, `GET /api/v1/invoices` +
+  `POST /api/v1/invoices/generate` + `PATCH .../pending|paid|cancel`.
+  Permission baru `subscriptions.*`/`invoices.*` — **beda dari pola
+  super_admin-only ketat di v0.3.2/v0.3.3**: role `billing` (ada sejak
+  v0.1.0, belum pernah dapat permission apa pun) juga diberi akses, karena
+  operasional invoice adalah pekerjaan harian staff billing, bukan
+  keputusan level admin seperti konfigurasi reseller/kebijakan pajak.
+  Reseller owner/staff tetap read-only lewat keanggotaan `reseller_users`
+  (`SubscriptionPolicy`/`InvoicePolicy`), sama seperti modul lain.
+- **Livewire UI**: `Billing\SubscriptionIndex` (CRUD + tombol Generate
+  Invoice Now/suspend/reactivate/cancel), `Billing\InvoiceIndex` (filter
+  status + tombol transisi sesuai state machine). Masuk cluster sidebar
+  "Billing & Finance" yang sudah ada dari v0.3.3.
+- Tests: 125/125 passing (119 existing + 6 file test baru mencakup generate
+  invoice normal, generate dengan burden reseller `split`/`reseller_borne`,
+  state machine lengkap, validasi no-duplicate per subscription+periode, dan
+  command terjadwal — lihat `tests/Feature/Api/SubscriptionInvoiceApiTest.php`,
+  `tests/Feature/Billing/`.
+
 ## v0.3.3 — Regulatory Tax Engine
 
 - Tabel baru `tax_components` — katalog pajak/pungutan dinamis (`code`

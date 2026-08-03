@@ -34,6 +34,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedRegistrationPermissions();
         $this->seedResellerPermissions();
         $this->seedTaxEnginePermissions();
+        $this->seedInvoicingPermissions();
     }
 
     /**
@@ -129,5 +130,34 @@ class RolesAndPermissionsSeeder extends Seeder
         }
 
         Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+    }
+
+    /**
+     * Permission modul Invoicing Core (v0.3.4). Beda dari pola
+     * super_admin-only yang ketat di reseller/tax-engine: `billing` role
+     * (ada sejak v0.1.0, belum pernah dapat permission apa pun sampai
+     * sprint ini) juga diberi akses — generate/lihat/ubah status invoice
+     * adalah pekerjaan operasional harian staff billing, beda konteks
+     * dengan konfigurasi reseller/kebijakan pajak yang memang keputusan
+     * level admin. Reseller owner/staff tetap diotorisasi lewat
+     * keanggotaan reseller_users mereka sendiri (lihat SubscriptionPolicy/
+     * InvoicePolicy), read-only, bukan lewat permission Spatie ini.
+     */
+    private function seedInvoicingPermissions(): void
+    {
+        $permissions = [
+            'subscriptions.view',
+            'subscriptions.manage',
+            'invoices.view',
+            'invoices.manage',
+        ];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        foreach (['super_admin', 'billing'] as $role) {
+            Role::findByName($role, 'web')->givePermissionTo($permissions);
+        }
     }
 }

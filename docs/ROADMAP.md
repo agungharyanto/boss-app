@@ -8,7 +8,7 @@
 | v0.3.1  | UI/UX           | Personalization & Navigation  | Theme custom (primary/text color), language switcher, dashboard widget selector, sidebar cluster-dropdown | Selesai |
 | v0.3.2  | Operasional     | Multi-Tenant Reseller         | Tabel resellers (child dari tenant), reseller_id menyebar, guard/role reseller, reseller_package_pricing | Selesai |
 | v0.3.3  | Billing & Finance | Regulatory Tax Engine        | tax_components dinamis (nama bebas, persen/nominal, on/off, versi-per-tanggal), reseller_tax_policies, reseller_tax_ledger, komdigi_remittance_summary | Selesai |
-| v0.3.4  | Billing & Finance | Invoicing Core               | Subscription plan per customer, generate invoice bulanan, invoice line items, status invoice   | Backlog |
+| v0.3.4  | Billing & Finance | Invoicing Core               | Subscription plan per customer, generate invoice bulanan, invoice line items, status invoice   | Selesai |
 | v0.3.5  | Billing & Finance | Payment Gateway (Xendit)     | Integrasi Xendit (VA/QRIS/invoice), webhook handler + signature verification, idempotency, reconciliation | Backlog |
 | v0.4.0  | Komunikasi      | Communication (Baileys)       | WhatsApp gateway, notifikasi group, routing area, OTP                                         | Backlog |
 | v0.5.0  | Operasional     | Installation                  | Work order teknisi, scan MAC/serial, ODP/PON, foto instalasi                                  | Backlog |
@@ -42,3 +42,25 @@ menyentuh `subscriptions` sama sekali karena tabel itu belum ada di titik ini
 CLAUDE.md bagian "Tax engine integration contract (v0.3.4)". Tidak perlu
 migration tambahan untuk ini — `reseller_tax_ledger.reference_type`/
 `reference_id` sudah polymorphic generic sejak v0.3.3, tinggal diisi.
+Dipenuhi di v0.3.4 — lihat `InvoiceService::generateForPeriod()`.
+
+**Known limitation dari v0.3.4 (sengaja di-defer, bukan silent gap)**: tidak
+ada proration. Subscription yang mulai/berhenti di tengah periode billing
+tetap ditagih penuh satu periode. Kalau proration dibutuhkan, itu scope
+sprint terpisah (kandidat: v0.3.5 atau versi Billing & Finance sesudahnya),
+bukan retrofit diam-diam ke `InvoiceService::generateForPeriod()`.
+
+**Dependency untuk v0.3.5 (Payment Gateway)**: `Invoice.status` sudah punya
+state machine lengkap (`draft → pending → paid/overdue`, semua bisa
+`cancelled`) via `InvoiceService`/`App\Enums\InvoiceStatus` — webhook
+payment gateway v0.3.5 tinggal memanggil `InvoiceService::markPaid()`,
+jangan `update(['status' => ...])` manual (melewati validasi transisi).
+
+**Catatan teknis penting untuk SEMUA sprint berikutnya yang menambah query
+tanggal** (ditemukan sebagai bug nyata saat membangun v0.3.4, mempengaruhi
+kode v0.3.3 yang sudah ter-tag juga — lihat CLAUDE.md bagian "Cross-database
+date comparison gotcha" untuk detail lengkap): jangan pernah
+`->where('kolom_date', '<=', $tanggal->toDateString())` untuk kolom ber-cast
+`'date'` — pakai `->whereDate(...)` selalu. SQLite (dipakai test suite) bisa
+menyimpan kolom `date` dengan sufiks waktu, sehingga perbandingan string
+biasa gagal persis di titik tanggal yang sama persis.

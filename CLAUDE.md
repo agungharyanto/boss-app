@@ -164,13 +164,18 @@ All Laravel/composer/artisan commands run **inside the `boss-app` container**, n
 has no PHP toolchain by design — see `scripts/02-init-laravel.sh`).
 
 ```bash
-# Bring the stack up (nginx, app, worker, scheduler, postgres, redis)
+# Bring the stack up (nginx, app, worker, boss-whatsapp-worker, scheduler,
+# whatsapp-gateway, postgres, redis)
 docker compose up -d --build
 docker compose ps                     # all should be Up/healthy
 
 # Migrations / seeding
 docker compose exec boss-app php artisan migrate
 docker compose exec boss-app php artisan db:seed --class=RolesAndPermissionsSeeder
+
+# One default WhatsApp template per event_type, per existing tenant
+# (v0.4.0) — safe to re-run, never overwrites an admin-edited template.
+docker compose exec boss-app php artisan db:seed --class=WhatsappMessageTemplateSeeder
 
 # Dev-only: one demo tenant + one user per role, all password "password",
 # for manually logging into the Livewire UI as e.g. customer_service@boss.local
@@ -377,11 +382,157 @@ same posture as `payment_webhook_logs` (one Xendit account serves the whole ISP)
 form never re-renders a saved secret/token back to the browser (masked placeholder only); an empty submit
 leaves the previously-saved value untouched — see `PaymentGatewaySettingsService::update()`.
 
+## WhatsApp Gateway (Baileys, v0.4.0)
+
+**Topology (final, don't reintroduce a different shape without asking first)**: one WhatsApp number per
+reseller, plus one "direct" session for a customer with no reseller (`customer.reseller_id` null) —
+consistent with the "direct row" pattern already used in `reseller_tax_ledger`/
+`komdigi_remittance_summary`. `session_key` (a plain string, used as the Redis queue name suffix, the Node
+service's in-memory map key, and the `auth_state/{session_key}/` folder name) is `(string) reseller_id`, or
+the literal `"direct"` when `reseller_id` is null — see `App\Models\WhatsappSession::sessionKeyFor()`.
+
+**Two-service split**: `whatsapp-gateway/` (root-level, Node.js, `@whiskeysockets/baileys`) is a
+multi-session Baileys manager exposing a small internal HTTP API (`POST /sessions/{key}/send`,
+`GET /sessions/{key}/qr`, `GET /sessions/{key}/health`, `GET /sessions`) — it knows nothing about
+customers/invoices, only `session_key` + phone number + message text. It runs as its own `whatsapp-gateway`
+Docker container, **no host port published** (BOSS-010) — only reachable from `boss-app`/
+`boss-whatsapp-worker` over `boss-network`. Laravel's side lives entirely under
+`App\Services\Whatsapp\*`/`App\Jobs\SendWhatsappMessageJob`.
+
+**HMAC-SHA256, not a static token** — unlike Xendit's webhook (`hash_equals` against a stored token),
+every request between Laravel and the Node service is signed: `App\Support\WhatsappHmac::sign()` HMACs
+`"{timestamp}.{body}"` with the shared secret (`WHATSAPP_GATEWAY_HMAC_SECRET`, infra-level like `APP_KEY`,
+**not** a business credential — must match byte-for-byte in both `.env` files, root and
+`whatsapp-gateway/.env`), and `verify()` rejects anything outside a 5 minute tolerance window even with a
+byte-correct signature (replay protection). Node's `src/hmac.js` is a deliberate line-for-line mirror of
+the PHP version — keep them in sync if this ever changes.
+
+**Auth state persistence**: `whatsapp-gateway/auth_state/{session_key}/` (bind-mounted volume) — a Baileys
+session survives container restarts (`SessionManager.restoreAll()` re-attaches every persisted session on
+boot). A genuine WhatsApp-side logout wipes that session's folder and starts a fresh pairing (new QR) only
+when explicitly asked (`getOrRefreshQr()`), never automatically on every disconnect — a merely transient
+disconnect instead reconnects on its own using the same saved creds.
+
+**Outbound-only this sprint** — no inbound/2-way handling at all (planned future integration point:
+Chatwoot, one shared number for all CS, tracked as backlog in `docs/ROADMAP.md`, not started).
+
+**Template resolution**: `App\Services\Whatsapp\WhatsappTemplateService::resolve()` — a reseller's own
+active override (`whatsapp_message_templates.reseller_id` = that reseller) wins; otherwise falls back to
+the tenant's default ISP-level template (`reseller_id` null) for the same `event_type`. Both `resolve()`
+and every query in this module use `withoutGlobalScopes()` explicitly and pass `tenant_id` manually — this
+runs from queued jobs and scheduled commands with no authenticated user, where `BelongsToTenant`'s
+`TenantScope` (which only filters `if (Auth::check())`) wouldn't help anyway.
+
+**Four fixed trigger types** (`App\Enums\WhatsappEventType`) — **no fifth type without asking first**:
+`invoice_due_reminder` (H-5 and H-0 only — **explicitly no overdue reminder**, once an invoice passes
+H-0 unpaid there is no further WhatsApp nudge for it, enforced almost for free by
+`whatsapp:send-due-reminders` only ever querying `InvoiceStatus::Pending`, never `Overdue`),
+`payment_received` (hooked into `InvoiceService::markPaid()` — fires for **both** legitimate callers, the
+v0.3.4 manual PATCH endpoint and `PaymentService::handleWebhook()`, same as every other `markPaid()`
+consumer), `customer_registered` (hooked into `RegistrationService::register()`, dispatched **after**
+`DB::transaction()` returns so a rolled-back registration never notifies), `customer_suspended_reminder`
+(daily for as long as `customer.status` stays `CustomerStatus::Suspend` — value `"suspend"`, not
+`"suspended"` — no manual stop flag, it just stops the moment the scheduled query no longer matches that
+customer).
+
+**Known gap, accepted as-is (confirmed explicitly before the first migration ran)**: `RegistrationService::register()`
+never sets `customer.reseller_id` (not in its `$data` shape, no auto-fill anywhere in that flow) — so
+`customer_registered` always resolves to the `"direct"` session, never a reseller's, even for a
+reseller-attributed customer. This is v0.3.0's existing registration behavior, deliberately untouched;
+fixing it (if ever needed) is new scope for its own sprint, not a v0.4.0 retrofit.
+
+**`{payment_link}` is generated on demand, not read from a stored column** — no `invoice_url`/`payment_link`
+field is persisted anywhere ahead of time (a `Payment` row for the invoice-being-reminded-about may not
+exist yet at reminder time). `WhatsappGatewayService::buildAndQueue()` calls
+`PaymentService::createPaymentFor($invoice, 'XENDIT_INVOICE')` right when rendering an
+`invoice_due_reminder`, lazily resolved via `app(PaymentService::class)` (**not** constructor-injected —
+`PaymentService` depends on `InvoiceService`, which depends on `WhatsappGatewayService`; a constructor
+dependency here is a circular resolution loop that exhausts memory building the container graph before any
+code runs — this bit the test suite once already, don't reintroduce it). Failure (channel not enabled,
+Xendit API error, etc.) is caught and logged — the reminder still sends without a link rather than never
+sending at all.
+
+**Per-session queue naming + the worker that actually drains it**: every send goes through
+`App\Jobs\SendWhatsappMessageJob`, dispatched onto queue `whatsapp-{session_key}` (never the shared
+`default` queue) — a disconnected/rate-limited reseller's backlog can't block another reseller's queue.
+Because these queue names are dynamic (one per reseller, created whenever an admin sets up a new session),
+a normal static `queue:work --queue=...` flag can't enumerate them ahead of time. `boss-whatsapp-worker`
+(separate container from `boss-worker`) solves this the same way `boss-scheduler` solves polling: its
+entrypoint loops `php artisan queue:work --queue=$(php artisan whatsapp:queue-names) --max-time=300`,
+restarting every 5 minutes so a newly created reseller session's queue is picked up automatically, no
+manual restart needed. `SendWhatsappMessageJob` itself applies the global rate-limit delay
+(`WhatsappGatewaySettings::current()`, random 5-10s by default) via a plain `sleep()` before attempting the
+send, and retries up to 3 times with 30s/2min/5min backoff via explicit `$this->release()` calls (not
+exception-based retry) so both the HTTP-non-2xx path and the thrown-exception path behave identically.
+
+**`session_key` `"direct"` is only unique while this deployment serves a single ISP tenant** — same
+operating assumption already documented for `payment_gateway_settings` (one Xendit account for "the whole
+ISP", not per-tenant). `App\Services\Whatsapp\WhatsappSessionService::resolveSessionByKey()` picks the one
+existing `reseller_id IS NULL` session for the literal key `"direct"` — correct today, but would need a
+tenant-qualified key instead of the bare literal if this ever becomes genuine multi-tenant SaaS with
+several ISPs sharing one `whatsapp-gateway` container. A non-null `session_key` (a reseller id) doesn't
+have this problem — `resellers.id` is a platform-wide primary key, not per-tenant, so it resolves
+unambiguously on its own.
+
+**Authorization mirrors the reseller/tax-engine pattern, not Spatie permissions, for reseller-owned
+resources**: `WhatsappSessionPolicy`/`WhatsappMessageTemplatePolicy`/`WhatsappMessageLogPolicy` check
+`whatsapp_gateway.view`/`.manage` (super_admin, seeded in
+`RolesAndPermissionsSeeder::seedWhatsappGatewayPermissions()`) for full/ISP-admin **view** access, or **any
+active `reseller_users` membership** (owner **or** staff — unlike `ResellerTaxPolicyPolicy`, this module
+does **not** restrict staff to read-only) for a reseller's own session/templates/queue. The platform-level
+rate limit config (`whatsapp_gateway_settings.view`/`.manage`, `WhatsappGatewaySettingsPolicy`) is a fully
+separate, stricter, super_admin-only permission pair — no reseller ever gets a say in the global rate
+limit (tracked as backlog: "rate limit setting per-reseller", `docs/ROADMAP.md`).
+
+**`WhatsappSessionPolicy::manage()` is ownership-exclusive, not permission-additive** (tightened during the
+session-creation bugfix, confirmed explicitly — don't revert to "admin can manage everything"): for the
+`reseller_id`-null direct session, only `whatsapp_gateway.manage` grants manage rights; for a reseller-owned
+session, only that reseller's own `reseller_users` membership does — an ISP admin can always *see* every
+session's status (`view` still checks the permission first) but can never create/refresh-QR a reseller's
+session, only their own direct one. `App\Services\Whatsapp\WhatsappSessionService::createSession()` is the
+one place a brand-new `whatsapp_sessions` row gets inserted (there is no seeder/factory path in production
+— every session starts from a user clicking "Hubungkan Nomor" in `App\Livewire\Whatsapp\WhatsappGatewayIndex`);
+it inserts the row then immediately calls `refreshQrCode()` once to kick off the Node-side Baileys
+`connect()` — the actual QR arrives asynchronously via the `connection.update` webhook, so the UI polls
+(`wire:poll.3s`, plain re-render — no repeated Node HTTP calls) rather than expecting a QR back from the
+create call itself.
+
+**Three infrastructure gaps found and fixed post-implementation (same class of bug as the `APP_ENV`/phpunit
+entries above — a new sprint's `.env.example` addition never automatically reaches a server's real,
+gitignored `.env`)**, all on this dev VM:
+1. `whatsapp-gateway`/`boss-whatsapp-worker` containers were never actually built/started — every command
+   during development ran via `docker compose exec boss-app ...` against already-running containers,
+   `docker compose up -d --build` for the two new services was never run. `docker ps -a` showed neither
+   container existing at all (not crash-looping — simply never created).
+2. `whatsapp-gateway/Dockerfile`'s `npm install` failed (`spawn git ENOENT`) — `node:22-alpine` has no
+   `git` binary, and a transitive Baileys dependency resolves from a git URL. Fixed with `RUN apk add
+   --no-cache git` before `npm install`.
+3. Root `.env` (the real one this server's containers read, gitignored) had no `WHATSAPP_GATEWAY_URL`/
+   `WHATSAPP_GATEWAY_HMAC_SECRET` at all — only `.env.example` got these keys during development, the
+   already-existing real `.env` was never told about them. `WhatsappSessionService::refreshQrCode()`
+   correctly logged `"services.whatsapp_gateway.url not configured"` and bailed out (not a silent
+   swallow), but the result was indistinguishable from a deeper bug until this log line was actually
+   checked. Fixed by adding both keys to this VM's real `.env`, then **recreating** (not just restarting)
+   `boss-app`/`boss-worker`/`boss-whatsapp-worker`/`boss-scheduler` — editing `.env` alone doesn't refresh
+   an already-running container's `env_file`, same lesson as the `APP_ENV` bug entry earlier in this file.
+
+After all three fixes, the full loop was verified working end-to-end: `createSession()` inserts the row →
+Node generates a QR asynchronously → `connection.update` webhook lands back on
+`/api/v1/whatsapp/webhook/session-status` → `whatsapp_sessions.qr_code_data` gets a genuine base64 PNG
+(verified by decoding the data URI, not just checking it's a non-empty string). **A real WhatsApp-app phone
+scan was never performed** (no physical device access in this environment) — everything up to and
+including QR delivery to the browser is confirmed working; the final "scan → connected" hop relies on the
+same `applyStatus()` code path already covered by `WhatsappSessionWebhookTest`, but hasn't been observed
+against a real Baileys/WhatsApp handshake.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,
-serves requests) + `boss-worker` (`queue:work`) + `boss-scheduler` (loops `schedule:run` every 60s) →
-`boss-postgresql` + `boss-redis` (no host ports exposed, per BOSS-010). All share the `boss-network`
+serves requests) + `boss-worker` (`queue:work`, default queue) + `boss-whatsapp-worker` (`queue:work` on
+dynamic `whatsapp-*` queues, v0.4.0) + `boss-scheduler` (loops `schedule:run` every 60s) →
+`boss-postgresql` + `boss-redis` + `whatsapp-gateway` (Node.js Baileys service, v0.4.0, internal-only, no
+host port) (no host ports exposed for any of these except `boss-nginx`, per BOSS-010). All share the
+`boss-network`
 bridge network; `boss-app`'s `app/` directory is bind-mounted read-write, nginx mounts it read-only.
 
 **Auth/authz stack** (RULE BOSS-005 layering): Laravel Fortify handles authentication (see

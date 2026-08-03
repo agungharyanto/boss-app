@@ -3,10 +3,12 @@
 namespace App\Services;
 
 use App\Enums\InvoiceStatus;
+use App\Enums\WhatsappEventType;
 use App\Exceptions\InvalidInvoiceStatusTransitionException;
 use App\Models\Invoice;
 use App\Models\Subscription;
 use App\Services\Tax\TaxCalculationService;
+use App\Services\Whatsapp\WhatsappGatewayService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -15,6 +17,7 @@ class InvoiceService
     public function __construct(
         private readonly TaxCalculationService $taxService,
         private readonly InvoiceNumberService $numberService,
+        private readonly WhatsappGatewayService $whatsappService,
     ) {}
 
     /**
@@ -133,8 +136,17 @@ class InvoiceService
     {
         $invoice = $this->transition($invoice, InvoiceStatus::Paid);
         $invoice->update(['paid_at' => now()]);
+        $invoice = $invoice->fresh();
 
-        return $invoice->fresh();
+        // v0.4.0 WhatsApp Gateway contract: both callers of markPaid() (the
+        // v0.3.4 manual PATCH endpoint and PaymentService::handleWebhook())
+        // must trigger this the same way — signature is unchanged
+        // deliberately, see docs/ROADMAP.md.
+        if ($invoice->customer !== null) {
+            $this->whatsappService->buildAndQueue(WhatsappEventType::PaymentReceived, $invoice->customer, $invoice);
+        }
+
+        return $invoice;
     }
 
     public function markOverdue(Invoice $invoice): Invoice

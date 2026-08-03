@@ -18,6 +18,11 @@ use App\Http\Controllers\Api\V1\SubscriptionController;
 use App\Http\Controllers\Api\V1\TaxComponentController;
 use App\Http\Controllers\Api\V1\TaxLedgerController;
 use App\Http\Controllers\Api\V1\ThemeSettingsController;
+use App\Http\Controllers\Api\V1\WhatsappGatewaySettingsController;
+use App\Http\Controllers\Api\V1\WhatsappMessageLogController;
+use App\Http\Controllers\Api\V1\WhatsappMessageTemplateController;
+use App\Http\Controllers\Api\V1\WhatsappSessionController;
+use App\Http\Controllers\Api\V1\WhatsappWebhookController;
 use App\Http\Controllers\Api\V1\XenditWebhookController;
 use Illuminate\Support\Facades\Route;
 
@@ -29,6 +34,12 @@ Route::prefix('v1')->group(function () {
     // Rate-limited defensively (Xendit itself won't hammer this, but any
     // public unauthenticated endpoint is a target) — see BOSS-005.
     Route::post('webhooks/xendit', [XenditWebhookController::class, 'handle'])
+        ->middleware('throttle:60,1');
+
+    // Public — no Sanctum (the Node whatsapp-gateway service can't log in),
+    // HMAC-SHA256 signature verification inside
+    // WhatsappSessionService::updateStatusFromWebhook stands in for auth.
+    Route::post('whatsapp/webhook/session-status', [WhatsappWebhookController::class, 'sessionStatus'])
         ->middleware('throttle:60,1');
 
     Route::middleware('auth:sanctum')->group(function () {
@@ -78,6 +89,17 @@ Route::prefix('v1')->group(function () {
 
             Route::get('invoices/{invoice}/payments', [PaymentController::class, 'index']);
             Route::post('invoices/{invoice}/payments', [PaymentController::class, 'store']);
+
+            Route::get('whatsapp/sessions', [WhatsappSessionController::class, 'index']);
+            Route::get('whatsapp/sessions/{session}', [WhatsappSessionController::class, 'show']);
+            Route::post('whatsapp/sessions/{session}/refresh-qr', [WhatsappSessionController::class, 'refreshQr']);
+
+            Route::get('whatsapp/templates', [WhatsappMessageTemplateController::class, 'index']);
+            Route::put('whatsapp/templates/{eventType}', [WhatsappMessageTemplateController::class, 'update']);
+            Route::delete('whatsapp/templates/{eventType}', [WhatsappMessageTemplateController::class, 'resetToDefault']);
+
+            Route::get('whatsapp/message-logs', [WhatsappMessageLogController::class, 'index']);
+            Route::post('whatsapp/message-logs/{log}/retry', [WhatsappMessageLogController::class, 'retry']);
         });
 
         // Admin-only tax engine catalog/reporting — no reseller.context needed.
@@ -101,6 +123,8 @@ Route::prefix('v1')->group(function () {
         Route::put('settings/locale', [LocaleSettingController::class, 'update']);
         Route::get('settings/dashboard-widgets', [DashboardWidgetSettingController::class, 'show']);
         Route::put('settings/dashboard-widgets', [DashboardWidgetSettingController::class, 'update']);
+        Route::get('settings/whatsapp-gateway', [WhatsappGatewaySettingsController::class, 'show']);
+        Route::put('settings/whatsapp-gateway', [WhatsappGatewaySettingsController::class, 'update']);
 
         // Admin-only reseller management — no reseller.context needed here,
         // ISP admins always act with an explicit {reseller} route param.

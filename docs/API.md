@@ -297,3 +297,61 @@ reseller aktif (ISP admin yang eksplisit menugaskan customer ke reseller
 tertentu). Untuk reseller owner/staff, `reseller_id` selalu diambil dari
 context, mengabaikan apa pun yang dikirim di body. `CustomerResource`
 sekarang menyertakan `reseller_id`/`reseller_name`.
+
+---
+
+## Payment Gateway (Xendit, v0.3.5)
+
+> Catatan: endpoint `invoices` (CRUD, generate, transisi status) dari v0.3.4
+> belum punya bagian tersendiri di dokumen ini — gap dokumentasi lama, bukan
+> baru. Bagian ini hanya mencakup endpoint payment/webhook yang ditambahkan
+> di v0.3.5.
+
+Permission: sama seperti invoice induknya (`invoice.view` untuk baca,
+`invoice.manage` untuk membuat payment attempt). Nested di bawah
+`/invoices/{invoice}`, di dalam grup middleware `reseller.context`.
+
+### `GET /invoices/{invoice}/payments`
+
+Daftar `Payment` (attempt pembayaran) milik satu invoice.
+
+### `POST /invoices/{invoice}/payments`
+
+Body: `channel_type` (wajib — salah satu `code` yang ada di katalog
+`payment_gateway_channels`, mis. `BRI_VA`/`QRIS`/`XENDIT_INVOICE`; **bukan**
+lagi 3 nilai tetap — lihat "Fase H Amendment" di `docs/ROADMAP.md`). Channel
+harus `enabled` (diatur admin lewat halaman Pengaturan > Payment Gateway,
+`/settings/payment-gateway`, tidak ada endpoint API terpisah untuk ini di
+sprint ini) — channel yang ada di katalog tapi disabled ditolak dengan pesan
+jelas, bukan `422` biasa. Memanggil Xendit
+(`App\Services\Payment\XenditGatewayService`) untuk membuat instrumen
+pembayaran, pakai `invoice.invoice_number` sebagai `external_id` (bukan `id`
+numerik). Ditolak (`422`/exception) kalau invoice sudah `paid`/`cancelled`,
+atau kalau channel-nya kategori `ewallet`/`retail_outlet`/`credit_card`
+(terdaftar di katalog untuk UI tapi belum ada integrasi API Xendit-nya).
+**Tidak** langsung menandai invoice lunas — itu hanya terjadi lewat webhook
+di bawah (atau lewat endpoint manual `PATCH /invoices/{invoice}/paid` yang
+sudah ada sejak v0.3.4, dipertahankan apa adanya per keputusan eksplisit,
+lihat CLAUDE.md).
+
+### `POST /webhooks/xendit`
+
+**Publik** (di luar `auth:sanctum`, throttle `60,1`) — dipanggil Xendit,
+bukan client BOSS App. Autentikasi lewat header `x-callback-token`
+dibandingkan (`hash_equals`) terhadap token yang tersimpan di
+`payment_gateway_settings` (diatur lewat halaman Pengaturan > Payment
+Gateway, bukan lagi `XENDIT_CALLBACK_TOKEN` di `.env` — lihat "Fase H
+Amendment" di `docs/ROADMAP.md`) — bukan HMAC.
+Selalu balas `200` apa pun hasil pemrosesan internalnya (signature invalid,
+duplicate event, amount mismatch, invoice tidak ditemukan, atau berhasil
+diterapkan) supaya Xendit berhenti retry; hasil sebenarnya cuma bisa dilihat
+lewat `payment_webhook_logs`/laporan rekonsiliasi, bukan dari response
+webhook itu sendiri.
+
+Validasi berurutan sebelum invoice ditandai lunas: signature → idempotency
+(`xendit_event_id` unik) → `payload.amount` harus **persis sama** dengan
+`invoice.grand_total` (bukan `>=`, tidak ada partial payment di sprint ini).
+Kalau semua lolos, baru `App\Services\InvoiceService::markPaid()` dipanggil.
+
+Sandbox-only di sprint ini — `XenditGatewayService` menolak beroperasi kalau
+`XENDIT_IS_PRODUCTION=true` sementara `APP_ENV` server bukan `production`.

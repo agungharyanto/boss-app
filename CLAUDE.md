@@ -307,6 +307,76 @@ format. Fixed in `TaxCalculationService`, `ResellerTaxPolicyService`, `Remittanc
 building v0.3.4 — check any *new* date-range query you write against this same gotcha, in this codebase
 or elsewhere with the same driver-precision mismatch between SQLite tests and Postgres dev/prod.
 
+## Payment gateway (Xendit, v0.3.5) — sandbox posture and integration notes
+
+**Sandbox only** — `config('services.xendit.is_production')` (env `XENDIT_IS_PRODUCTION`) must stay `false`
+on this server until an explicit, deliberate go-live decision for payments specifically (separate from the
+server's own `APP_ENV` go-live, which is a different concern — see the `APP_ENV` bug entry above).
+`App\Services\Payment\XenditGatewayService`'s constructor **refuses to run at all**
+(`RuntimeException`) if `is_production=true` while Laravel's own `app()->environment()` isn't
+`'production'` — a deliberate guard against exactly the "sandbox testing but production key/flag
+confused" scenario BOSS-005 worries about. `is_production` itself stays a root `.env`/`config('services.xendit.*')`
+value (it's an environment-safety flag, not a per-request credential) — but the actual secret/token below
+is **not** read from there anymore as of Fase H.
+
+**Credential source changed mid-sprint (Fase H, before first commit): `.env` → encrypted DB row, not a
+later "fix"** — `XENDIT_SECRET_KEY`/`XENDIT_CALLBACK_TOKEN` were the runtime source for Fase A-G, but this
+was amended (confirmed by Agung) to move to an admin-editable settings row instead, so channels/credentials
+can be changed without a redeploy. `App\Services\Payment\PaymentGatewaySettingsService` is now the **only**
+allowed reader/writer of `payment_gateway_settings` (a platform-level singleton row, id=1, encrypted
+`xendit_secret_key`/`xendit_webhook_token` columns) — `XenditGatewayService` and
+`PaymentService::verifySignature()` both depend on it, never on `config('services.xendit.secret_key'/
+'callback_token')` directly anymore. `config('services.xendit.*')`'s `secret_key`/`callback_token` keys
+still exist (still populated from root `.env`) but are read exactly once more, by the manual command
+`php artisan payment-gateway:import-env` — a one-time transition helper, never auto-run from a
+migration/seeder. Don't reintroduce a direct `config()`/`env()` read of these two values in request-time
+code — that would silently bypass the admin UI's ability to rotate credentials without a deploy.
+
+**`invoice_number` (not the numeric `id`) is Xendit's `external_id`** — `PaymentService::createPaymentFor()`
+and `::handleWebhook()` both key off it. Any future code that creates a Xendit payment object or parses a
+webhook must do the same; matching by numeric `Invoice::id` would still work by coincidence in dev but
+breaks the intended human-readable reconciliation trail this format exists for.
+
+**Two legitimate callers of `InvoiceService::markPaid()` now exist, not one** — confirmed explicitly by
+Agung when this tension was flagged during v0.3.5: the pre-existing manual `PATCH
+/api/v1/invoices/{invoice}/paid` endpoint (v0.3.4, no payment verification at all — an admin can mark any
+non-terminal invoice paid by hand) was deliberately **kept**, alongside the new fully-verified
+`PaymentService::handleWebhook()` path (signature + idempotency + exact amount match, v0.3.5). Don't
+"clean this up" by removing the manual endpoint without asking first — if a future sprint wants stricter
+audit trail parity for manually-recorded payments (e.g. requiring a `payments` row for those too, not just
+a bare status flip), that's new scope requiring its own confirmation, not an assumed cleanup.
+
+**Webhook signature verification is a static shared-token comparison, not HMAC** — Xendit's actual
+callback verification mechanism is comparing the `x-callback-token` request header against the token shown
+in the Xendit dashboard (`hash_equals()`, timing-safe), not a computed signature over the payload. Don't
+"upgrade" this to HMAC-style verification without checking Xendit's docs first — it would silently reject
+every real webhook.
+
+**`payments`/`payment_webhook_logs` schema is deliberately generic** — `payments.channel_type` is a plain
+`varchar`, not one table per channel. It was originally also a fixed 3-case backed enum
+(`App\Enums\PaymentChannelType`: `virtual_account`/`qris`/`invoice`) for Fase A-G, but Fase H (same sprint,
+before first commit) replaced that with a dynamic admin-managed catalog table `payment_gateway_channels`
+(`code`/`label`/`category`/`enabled`, no hard FK from `payments.channel_type` — validated in
+`PaymentService` instead) so channels can be turned on/off from the UI without a migration/redeploy. The
+old enum is deleted; `channel_type` now stores a `payment_gateway_channels.code` value (e.g. `BRI_VA`,
+`QRIS`, `XENDIT_INVOICE`). **Scope boundary to remember**: the catalog also lists `ewallet`/
+`retail_outlet`/`credit_card` category channels (OVO, DANA, Alfamart, credit card, etc. — for the
+settings-page checklist, matching the MikRadius-style reference UI) but `PaymentService::createPaymentFor()`
+only actually calls Xendit for `bank_transfer_va`/`qris`/`invoice` categories — the other three exist in the
+catalog/checklist only, and deliberately throw a clear "belum didukung" error if selected, since their
+Xendit API integration was never built this sprint. Adding real support for one of those categories later
+needs a new `XenditGatewayService` method + a new `match()` arm in `createPaymentFor()`, still no new
+migration for the catalog itself.
+
+**`payment_gateway_settings`/`payment_gateway_channels` are platform-level, not tenant/reseller-scoped** —
+same posture as `payment_webhook_logs` (one Xendit account serves the whole ISP). Only
+`payment_gateway_settings.manage`/`.view` permissions (super_admin-only, see
+`RolesAndPermissionsSeeder::seedPaymentGatewaySettingsPermissions()`) gate the settings UI
+(`App\Livewire\Settings\PaymentGatewaySettings`, `/settings/payment-gateway`) — deliberately stricter than
+`invoices.*` (which `billing` role also has), since this page holds the actual Xendit secret. The settings
+form never re-renders a saved secret/token back to the browser (masked placeholder only); an empty submit
+leaves the previously-saved value untouched — see `PaymentGatewaySettingsService::update()`.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

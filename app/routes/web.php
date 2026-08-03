@@ -1,6 +1,7 @@
 <?php
 
 use App\Livewire\Billing\InvoiceIndex;
+use App\Livewire\Billing\ReconciliationReport;
 use App\Livewire\Billing\SubscriptionIndex;
 use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
@@ -9,6 +10,7 @@ use App\Livewire\Dashboard;
 use App\Livewire\Resellers\PackagePricingIndex;
 use App\Livewire\Resellers\ResellerIndex;
 use App\Livewire\Resellers\ResellerShow;
+use App\Livewire\Settings\PaymentGatewaySettings;
 use App\Livewire\Settings\ThemeSettings;
 use App\Livewire\Tax\ResellerTaxPolicyIndex;
 use App\Livewire\Tax\TaxComponentIndex;
@@ -47,6 +49,7 @@ Route::middleware('auth')->name('web.')->group(function () {
         Route::get('/reseller-tax-policies', ResellerTaxPolicyIndex::class)->name('reseller-tax-policies.index');
         Route::get('/subscriptions', SubscriptionIndex::class)->name('subscriptions.index');
         Route::get('/invoices', InvoiceIndex::class)->name('invoices.index');
+        Route::get('/payment-reconciliation', ReconciliationReport::class)->name('payment-reconciliation.index');
     });
 
     Route::get('/resellers', ResellerIndex::class)->name('resellers.index');
@@ -55,4 +58,5 @@ Route::middleware('auth')->name('web.')->group(function () {
     Route::get('/tax-components', TaxComponentIndex::class)->name('tax-components.index');
 
     Route::get('/settings/theme', ThemeSettings::class)->name('settings.theme');
+    Route::get('/settings/payment-gateway', PaymentGatewaySettings::class)->name('settings.payment-gateway');
 });

@@ -35,6 +35,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedResellerPermissions();
         $this->seedTaxEnginePermissions();
         $this->seedInvoicingPermissions();
+        $this->seedPaymentGatewaySettingsPermissions();
     }
 
     /**
@@ -159,5 +160,24 @@ class RolesAndPermissionsSeeder extends Seeder
         foreach (['super_admin', 'billing'] as $role) {
             Role::findByName($role, 'web')->givePermissionTo($permissions);
         }
+    }
+
+    /**
+     * Permission modul Payment Gateway Settings (v0.3.5 Fase H). Strictly
+     * super_admin-only — same posture as resellers.* / tax_components.* — this
+     * holds the actual Xendit API secret/webhook token, a security-critical
+     * credential, not an operational-billing concern like invoices.*.
+     * `billing` role can create/view payments (invoices.*) but must NOT be
+     * able to see/change which channels are enabled or rotate credentials.
+     */
+    private function seedPaymentGatewaySettingsPermissions(): void
+    {
+        $permissions = ['payment_gateway_settings.view', 'payment_gateway_settings.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
     }
 }

@@ -12,6 +12,19 @@
             ]),
         ],
         [
+            'id' => 'operasional',
+            'label' => __('Operasional'),
+            'active' => request()->routeIs('web.resellers.*') || request()->routeIs('web.reseller-package-pricing.*'),
+            'links' => array_filter([
+                auth()->user()->can('viewAny', \App\Models\Reseller::class)
+                    ? ['route' => 'web.resellers.index', 'label' => __('Reseller')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\ResellerPackagePricing::class)
+                    ? ['route' => 'web.reseller-package-pricing.index', 'label' => __('Package Pricing')]
+                    : null,
+            ]),
+        ],
+        [
             'id' => 'pengaturan',
             'label' => __('Pengaturan'),
             'active' => request()->routeIs('web.settings.*'),

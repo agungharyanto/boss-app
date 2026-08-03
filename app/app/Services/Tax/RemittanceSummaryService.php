@@ -23,9 +23,14 @@ class RemittanceSummaryService
      */
     public function generateForPeriod(Carbon $periodStart, Carbon $periodEnd): void
     {
+        // whereDate() throughout this method (not plain where() string
+        // comparisons) — see TaxCalculationService::calculateForAmount for
+        // why a 'date' cast column can't be safely compared against a
+        // toDateString() value with a raw where()/array-match across
+        // drivers.
         $groups = ResellerTaxLedger::query()
-            ->where('transaction_date', '>=', $periodStart->toDateString())
-            ->where('transaction_date', '<=', $periodEnd->toDateString())
+            ->whereDate('transaction_date', '>=', $periodStart->toDateString())
+            ->whereDate('transaction_date', '<=', $periodEnd->toDateString())
             ->where('status', '!=', TaxLedgerStatus::Voided->value)
             ->get()
             ->groupBy(fn (ResellerTaxLedger $entry) => $entry->reseller_id.'|'.$entry->tax_component_id);
@@ -34,15 +39,17 @@ class RemittanceSummaryService
             /** @var Collection<int, ResellerTaxLedger> $group */
             $first = $group->first();
 
-            $matchAttributes = [
-                'tenant_id' => $first->tenant_id,
-                'period_start' => $periodStart->toDateString(),
-                'period_end' => $periodEnd->toDateString(),
-                'reseller_id' => $first->reseller_id,
-                'tax_component_id' => $first->tax_component_id,
-            ];
-
-            $existing = KomdigiRemittanceSummary::query()->where($matchAttributes)->first();
+            $existing = KomdigiRemittanceSummary::query()
+                ->where('tenant_id', $first->tenant_id)
+                ->whereDate('period_start', $periodStart->toDateString())
+                ->whereDate('period_end', $periodEnd->toDateString())
+                ->where('tax_component_id', $first->tax_component_id)
+                ->when(
+                    $first->reseller_id === null,
+                    fn ($q) => $q->whereNull('reseller_id'),
+                    fn ($q) => $q->where('reseller_id', $first->reseller_id),
+                )
+                ->first();
 
             if ($existing !== null && $existing->status !== RemittanceStatus::Draft) {
                 throw new RuntimeException(
@@ -52,7 +59,7 @@ class RemittanceSummaryService
                 );
             }
 
-            KomdigiRemittanceSummary::updateOrCreate($matchAttributes, [
+            $attributes = [
                 'total_base_amount' => round($group->sum('base_amount'), 2),
                 'total_tax_amount' => round($group->sum('tax_amount'), 2),
                 'total_customer_borne' => round($group->sum('customer_borne_amount'), 2),
@@ -60,7 +67,20 @@ class RemittanceSummaryService
                 'transaction_count' => $group->count(),
                 'status' => RemittanceStatus::Draft,
                 'generated_at' => now(),
-            ]);
+            ];
+
+            if ($existing !== null) {
+                $existing->update($attributes);
+            } else {
+                KomdigiRemittanceSummary::create([
+                    'tenant_id' => $first->tenant_id,
+                    'period_start' => $periodStart->toDateString(),
+                    'period_end' => $periodEnd->toDateString(),
+                    'reseller_id' => $first->reseller_id,
+                    'tax_component_id' => $first->tax_component_id,
+                    ...$attributes,
+                ]);
+            }
         }
     }
 

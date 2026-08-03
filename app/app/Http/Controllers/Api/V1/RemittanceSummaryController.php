@@ -26,8 +26,8 @@ class RemittanceSummaryController extends Controller
         $summaries = KomdigiRemittanceSummary::query()
             ->with(['reseller', 'taxComponent'])
             ->when($request->filled('reseller_id'), fn ($q) => $q->where('reseller_id', $request->integer('reseller_id')))
-            ->when($request->filled('period_start'), fn ($q) => $q->where('period_start', $request->date('period_start')->toDateString()))
-            ->when($request->filled('period_end'), fn ($q) => $q->where('period_end', $request->date('period_end')->toDateString()))
+            ->when($request->filled('period_start'), fn ($q) => $q->whereDate('period_start', $request->date('period_start')->toDateString()))
+            ->when($request->filled('period_end'), fn ($q) => $q->whereDate('period_end', $request->date('period_end')->toDateString()))
             ->latest('period_start')
             ->paginate($request->integer('per_page', 15));
 

@@ -26,8 +26,8 @@ class TaxLedgerController extends Controller
         $entries = ResellerTaxLedger::query()
             ->with(['reseller', 'taxComponent'])
             ->when($request->filled('reseller_id'), fn ($q) => $q->where('reseller_id', $request->integer('reseller_id')))
-            ->when($request->filled('date_from'), fn ($q) => $q->where('transaction_date', '>=', $request->date('date_from')->toDateString()))
-            ->when($request->filled('date_to'), fn ($q) => $q->where('transaction_date', '<=', $request->date('date_to')->toDateString()))
+            ->when($request->filled('date_from'), fn ($q) => $q->whereDate('transaction_date', '>=', $request->date('date_from')->toDateString()))
+            ->when($request->filled('date_to'), fn ($q) => $q->whereDate('transaction_date', '<=', $request->date('date_to')->toDateString()))
             ->latest('transaction_date')
             ->paginate($request->integer('per_page', 15));
 

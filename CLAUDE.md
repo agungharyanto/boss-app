@@ -281,6 +281,32 @@ Why this shape, so it isn't "fixed" by accident in a later sprint:
   constraint (see the migration) specifically so v0.3.4 needs zero schema changes to start populating
   them with `App\Models\Invoice::class`/`$invoice->id`.
 
+**This contract has been fulfilled** — `App\Services\InvoiceService::generateForPeriod()` (v0.3.4) is the
+first real caller, following the exact sequence above.
+
+## Cross-database date comparison gotcha (found building v0.3.4, affects v0.3.3 code too)
+
+A `'date'`-cast column (e.g. `tax_components.effective_from`, `invoices.period_start`) can be **stored**
+with a time suffix depending on driver — SQLite (what the test suite runs on, per `phpunit.xml`) keeps
+whatever Eloquent's date mutator serialized, which turned out to be `"2026-08-01 00:00:00"`, not a bare
+`"2026-08-01"`; Postgres's native `DATE` type strips time regardless of what's sent. A plain
+`->where('effective_from', '<=', $date->toDateString())` does a **raw string comparison** against
+whatever's actually stored — under SQLite this silently gives the wrong answer exactly when the compared
+date matches the stored date's calendar day (e.g. a subscription whose `started_at` equals a tax
+component's `effective_from` down to the same day resolved **zero** tax, because
+`"2026-08-01 00:00:00" <= "2026-08-01"` is false as a string comparison, the trailing suffix making it
+lexicographically "greater"). It went undetected through all of v0.3.3's own tests because none of them
+happened to compare against an exactly-matching boundary date — v0.3.4's invoice generation flow does,
+constantly (a subscription's first period naturally starts on the same day a tax rate went into effect).
+
+**Always use `->whereDate($column, $operator, $value)` instead of a plain `->where(...)` for any
+comparison between a `'date'`-cast column and a `toDateString()`/plain-date value** — `whereDate()` wraps
+both sides with the driver's own date-extraction SQL, making the comparison correct regardless of stored
+format. Fixed in `TaxCalculationService`, `ResellerTaxPolicyService`, `RemittanceSummaryService`,
+`InvoiceService`, `MarkOverdueInvoices`, `TaxLedgerController`, `RemittanceSummaryController` while
+building v0.3.4 — check any *new* date-range query you write against this same gotcha, in this codebase
+or elsewhere with the same driver-precision mismatch between SQLite tests and Postgres dev/prod.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

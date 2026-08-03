@@ -27,13 +27,22 @@
         [
             'id' => 'billing-finance',
             'label' => __('Billing & Finance'),
-            'active' => request()->routeIs('web.tax-components.*') || request()->routeIs('web.reseller-tax-policies.*'),
+            'active' => request()->routeIs('web.tax-components.*')
+                || request()->routeIs('web.reseller-tax-policies.*')
+                || request()->routeIs('web.subscriptions.*')
+                || request()->routeIs('web.invoices.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\TaxComponent::class)
                     ? ['route' => 'web.tax-components.index', 'label' => __('Tax Components')]
                     : null,
                 auth()->user()->can('viewAny', \App\Models\ResellerTaxPolicy::class)
                     ? ['route' => 'web.reseller-tax-policies.index', 'label' => __('Reseller Tax Policy')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\Subscription::class)
+                    ? ['route' => 'web.subscriptions.index', 'label' => __('Subscriptions')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\Invoice::class)
+                    ? ['route' => 'web.invoices.index', 'label' => __('Invoices')]
                     : null,
             ]),
         ],

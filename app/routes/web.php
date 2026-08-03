@@ -8,6 +8,8 @@ use App\Livewire\Resellers\PackagePricingIndex;
 use App\Livewire\Resellers\ResellerIndex;
 use App\Livewire\Resellers\ResellerShow;
 use App\Livewire\Settings\ThemeSettings;
+use App\Livewire\Tax\ResellerTaxPolicyIndex;
+use App\Livewire\Tax\TaxComponentIndex;
 use App\Services\LocaleService;
 use Illuminate\Support\Facades\Route;
 
@@ -40,10 +42,13 @@ Route::middleware('auth')->name('web.')->group(function () {
         Route::get('/customers/{customer}', CustomerShow::class)->name('customers.show');
 
         Route::get('/reseller-package-pricing', PackagePricingIndex::class)->name('reseller-package-pricing.index');
+        Route::get('/reseller-tax-policies', ResellerTaxPolicyIndex::class)->name('reseller-tax-policies.index');
     });
 
     Route::get('/resellers', ResellerIndex::class)->name('resellers.index');
     Route::get('/resellers/{reseller}', ResellerShow::class)->name('resellers.show');
+
+    Route::get('/tax-components', TaxComponentIndex::class)->name('tax-components.index');
 
     Route::get('/settings/theme', ThemeSettings::class)->name('settings.theme');
 });

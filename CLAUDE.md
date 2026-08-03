@@ -86,23 +86,14 @@ whoever runs the actual go-live for this server**: flip this same server's root 
 `APP_ENV=production` at that point — this VM is planned to become production in place, not be replaced
 by a separate prod server, so nothing will do this flip automatically.
 
-## Sprint roadmap (`docs/ROADMAP.md`) — locked order, do not skip or reorder
+## Sprint roadmap — locked order, do not skip or reorder
 
-| Version | Name                     | Contents                                                              |
-|---------|--------------------------|------------------------------------------------------------------------|
-| v0.1.0  | Foundation               | Repo, Docker, Laravel, PostgreSQL, Redis, Nginx, login, roles, UFW/Fail2ban, backup |
-| v0.2.0  | Customer CRM             | Customer data, family contacts, authorized contact, customer timeline |
-| v0.3.0  | Registration & Referral  | Multi-channel registration, freelance sales, referral, pending commission |
-| v0.4.0  | Communication (Baileys)  | WhatsApp gateway, group notifications, area routing, OTP              |
-| v0.5.0  | Installation             | Technician work orders, MAC/serial scan, ODP/PON, install photos      |
-| v0.6.0  | FreeRADIUS               | PPPoE accounts via RADIUS, bandwidth profiles, accounting, CoA/disconnect |
-| v0.7.0  | GenieACS                 | ONT binding, SSID/password, RX power, reboot, provisioning            |
-| v0.8.0  | LibreNMS & Graph         | Device monitoring, graphs, alerts, network dashboard                  |
-| v0.9.0  | Commission               | Eligibility, approval, payment, clawback                               |
-| v0.10.0 | Outage Engine            | ONT down detection, area correlation, incident, maintenance            |
-
-Each version must be fully complete (full Definition-of-Done, see below) before moving to the next — no
-jumping ahead.
+**`docs/ROADMAP.md` is the single source of truth for the sprint list, cluster grouping, and status** —
+don't duplicate it here (a stale copy previously lived in this file and drifted out of sync; don't
+reintroduce that). Each version must be fully complete (full Definition-of-Done, see below) before moving
+to the next — no jumping ahead. `docs/ROADMAP.md` also carries forward cross-sprint dependency notes (e.g.
+what a later sprint's migrations/contracts must include because an earlier sprint deferred them) — check
+it, not just this file, before starting a new sprint.
 
 ## Sprint-based development — read this before doing anything
 
@@ -244,6 +235,51 @@ enforced automatically via an Eloquent global scope (not separate databases/sche
   `tests/Feature/Tenancy/TenantIsolationTest.php` for the pattern (also the reference example for how to
   prove new tenant-scoped models are actually isolated: plain Eloquent query, API index, and API show/update
   via route-model-binding all naturally 404/exclude another tenant's row with zero manual `where()` calls).
+
+## Tax engine integration contract (v0.3.4)
+
+v0.3.3 (Regulatory Tax Engine) built the tax calculation/ledger foundation deliberately **without** any
+automatic hook into invoicing — invoicing itself doesn't exist yet (that's v0.3.4, Invoicing Core). When
+`InvoiceService` is built in v0.3.4, every invoice generation **must** call the tax engine in this exact
+sequence — this is a stable, already-tested contract, not a suggestion:
+
+```php
+use App\Services\Tax\TaxCalculationService;
+
+// 1. Calculate the breakdown for this invoice's base amount.
+$breakdown = $taxCalculationService->calculateForAmount(
+    $customer->reseller,   // ?Reseller — null for a direct ISP customer
+    $invoiceBaseAmount,    // float
+    $invoice->created_at,  // ?Carbon — which tax_components/policies are effective as of this date
+);
+
+// 2. Persist it — one reseller_tax_ledger row per TaxBreakdown component.
+$ledgerRows = $taxCalculationService->writeLedgerEntry(
+    $breakdown,
+    $customer->reseller,
+    Invoice::class,        // reference_type — reseller_tax_ledger.reference_type is a plain
+    $invoice->id,           // reference_id  — string/unsignedBigInteger, no FK constraint, no migration needed
+    $invoice->created_at,   // transaction_date
+    'system',                // source — 'system' for real invoices, 'seeded' is testing-only
+);
+
+// 3. $breakdown->grandTotal (base + tax) is what the customer is actually billed.
+```
+
+Why this shape, so it isn't "fixed" by accident in a later sprint:
+- `calculateForAmount` resolves active `tax_components`/`reseller_tax_policies` via the caller's
+  `Auth::user()->tenant_id` (`TenantScope`, same convention as every other tenant-scoped query in this
+  codebase) — so this must run inside an authenticated request/job context for the correct tenant, or a
+  queued job must `Auth::login()` first.
+- `writeLedgerEntry` deliberately does **not** depend on `Auth` — it derives `tenant_id` from `$reseller`
+  or from the breakdown's own `tax_component_id` — so it stays correct even if invoice generation runs in
+  a queued job with no authenticated request (e.g. a monthly billing cron).
+- Policy↔component resolution is keyed by `tax_components.code` (the stable identifier), not the specific
+  effective-dated row id — a reseller's burden/split agreement survives a tax rate change untouched. See
+  `App\Services\Tax\ResellerTaxPolicyService::getActivePolicies()`.
+- `reseller_tax_ledger.reference_type`/`reference_id` are already generic/polymorphic with **no** FK
+  constraint (see the migration) specifically so v0.3.4 needs zero schema changes to start populating
+  them with `App\Models\Invoice::class`/`$invoice->id`.
 
 ## Architecture
 

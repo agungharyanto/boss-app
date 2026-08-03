@@ -25,6 +25,19 @@
             ]),
         ],
         [
+            'id' => 'billing-finance',
+            'label' => __('Billing & Finance'),
+            'active' => request()->routeIs('web.tax-components.*') || request()->routeIs('web.reseller-tax-policies.*'),
+            'links' => array_filter([
+                auth()->user()->can('viewAny', \App\Models\TaxComponent::class)
+                    ? ['route' => 'web.tax-components.index', 'label' => __('Tax Components')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\ResellerTaxPolicy::class)
+                    ? ['route' => 'web.reseller-tax-policies.index', 'label' => __('Reseller Tax Policy')]
+                    : null,
+            ]),
+        ],
+        [
             'id' => 'pengaturan',
             'label' => __('Pengaturan'),
             'active' => request()->routeIs('web.settings.*'),

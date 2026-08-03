@@ -1,5 +1,7 @@
 <?php
 
+use App\Livewire\Billing\InvoiceIndex;
+use App\Livewire\Billing\SubscriptionIndex;
 use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
@@ -43,6 +45,8 @@ Route::middleware('auth')->name('web.')->group(function () {
 
         Route::get('/reseller-package-pricing', PackagePricingIndex::class)->name('reseller-package-pricing.index');
         Route::get('/reseller-tax-policies', ResellerTaxPolicyIndex::class)->name('reseller-tax-policies.index');
+        Route::get('/subscriptions', SubscriptionIndex::class)->name('subscriptions.index');
+        Route::get('/invoices', InvoiceIndex::class)->name('invoices.index');
     });
 
     Route::get('/resellers', ResellerIndex::class)->name('resellers.index');

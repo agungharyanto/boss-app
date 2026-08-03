@@ -21,6 +21,7 @@ class Reseller extends Model
         'tenant_id',
         'name',
         'slug',
+        'invoice_code',
         'email',
         'phone',
         'address',
@@ -39,6 +40,11 @@ class Reseller extends Model
     {
         static::creating(function (self $reseller) {
             $reseller->slug ??= Str::slug($reseller->name);
+            // Auto-derived fallback for invoice numbering (v0.3.4) — admin
+            // can override via ResellerService::updateReseller(). Uppercase
+            // alnum-only prefix from the slug, capped at 12 chars so
+            // "INV/{code}/2026/08/000123" stays a reasonable length.
+            $reseller->invoice_code ??= strtoupper(substr(preg_replace('/[^a-z0-9]/i', '', $reseller->slug), 0, 12));
         });
     }
 
@@ -50,6 +56,16 @@ class Reseller extends Model
     public function packagePricing(): HasMany
     {
         return $this->hasMany(ResellerPackagePricing::class);
+    }
+
+    public function subscriptions(): HasMany
+    {
+        return $this->hasMany(Subscription::class);
+    }
+
+    public function invoices(): HasMany
+    {
+        return $this->hasMany(Invoice::class);
     }
 
     public function users(): BelongsToMany

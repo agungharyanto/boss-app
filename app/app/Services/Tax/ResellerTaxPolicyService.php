@@ -108,10 +108,13 @@ class ResellerTaxPolicyService
 
     private function activePoliciesQueryForDate(?Reseller $reseller, Carbon $date): Builder
     {
+        // whereDate() — see TaxCalculationService::calculateForAmount for
+        // why a plain where() string comparison against a 'date' cast
+        // column isn't safe across drivers.
         return $this->policiesQuery($reseller, null)
             ->where('is_active', true)
-            ->where('effective_from', '<=', $date->toDateString())
-            ->where(fn (Builder $q) => $q->whereNull('effective_to')->orWhere('effective_to', '>=', $date->toDateString()));
+            ->whereDate('effective_from', '<=', $date->toDateString())
+            ->where(fn (Builder $q) => $q->whereNull('effective_to')->orWhereDate('effective_to', '>=', $date->toDateString()));
     }
 
     private function policiesQuery(?Reseller $reseller, ?TaxComponent $component): Builder

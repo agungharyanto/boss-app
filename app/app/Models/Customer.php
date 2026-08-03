@@ -75,4 +75,14 @@ class Customer extends Model
     {
         return $this->hasMany(CommissionLedger::class);
     }
+
+    public function subscriptions(): HasMany
+    {
+        return $this->hasMany(Subscription::class);
+    }
+
+    public function invoices(): HasMany
+    {
+        return $this->hasMany(Invoice::class);
+    }
 }

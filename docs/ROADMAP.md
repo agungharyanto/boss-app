@@ -9,7 +9,7 @@
 | v0.3.2  | Operasional     | Multi-Tenant Reseller         | Tabel resellers (child dari tenant), reseller_id menyebar, guard/role reseller, reseller_package_pricing | Selesai |
 | v0.3.3  | Billing & Finance | Regulatory Tax Engine        | tax_components dinamis (nama bebas, persen/nominal, on/off, versi-per-tanggal), reseller_tax_policies, reseller_tax_ledger, komdigi_remittance_summary | Selesai |
 | v0.3.4  | Billing & Finance | Invoicing Core               | Subscription plan per customer, generate invoice bulanan, invoice line items, status invoice   | Selesai |
-| v0.3.5  | Billing & Finance | Payment Gateway (Xendit)     | Integrasi Xendit (VA/QRIS/invoice), webhook handler + signature verification, idempotency, reconciliation | Backlog |
+| v0.3.5  | Billing & Finance | Payment Gateway (Xendit)     | Integrasi Xendit (VA/QRIS/invoice), webhook handler + signature verification, idempotency, reconciliation | Selesai |
 | v0.4.0  | Komunikasi      | Communication (Baileys)       | WhatsApp gateway, notifikasi group, routing area, OTP                                         | Backlog |
 | v0.5.0  | Operasional     | Installation                  | Work order teknisi, scan MAC/serial, ODP/PON, foto instalasi                                  | Backlog |
 | v0.6.0  | Network         | FreeRADIUS                    | Akun PPPoE via RADIUS, profile bandwidth, accounting (radacct), CoA/disconnect                | Backlog |
@@ -64,3 +64,47 @@ date comparison gotcha" untuk detail lengkap): jangan pernah
 `'date'` — pakai `->whereDate(...)` selalu. SQLite (dipakai test suite) bisa
 menyimpan kolom `date` dengan sufiks waktu, sehingga perbandingan string
 biasa gagal persis di titik tanggal yang sama persis.
+
+**Keputusan v0.3.5 yang perlu diketahui sprint berikutnya**: endpoint manual
+`PATCH /api/v1/invoices/{invoice}/paid` (dari v0.3.4) **sengaja dipertahankan**
+meski v0.3.5 membangun jalur otomatis via `PaymentService::handleWebhook()` —
+dikonfirmasi eksplisit oleh Agung, bukan oversight. Konsekuensinya:
+`InvoiceService::markPaid()` punya DUA jalur pemanggil yang sah (manual admin
+tanpa verifikasi pembayaran, dan webhook Xendit dengan verifikasi penuh),
+bukan cuma satu — kalau sprint berikutnya butuh audit trail lebih ketat
+untuk pembayaran manual (mis. mewajibkan `payments` row juga dibuat utk
+pembayaran manual, bukan cuma `update(['status'=>'paid'])` polos), itu
+scope baru yang perlu dikonfirmasi eksplisit, dicatat sebagai backlog di
+sini, bukan retrofit diam-diam.
+
+**Out-of-scope v0.3.5, di-declare eksplisit sebagai backlog** (jangan
+diasumsikan otomatis ada): WhatsApp payment notification (Baileys, nunggu
+v0.4.0), auto-refund otomatis, retry payment flow (UI/service), partial
+payment/cicilan, proration subscription (masih deferred dari v0.3.4 juga).
+
+**Amendment v0.3.5 Fase H (dikonfirmasi Agung sebelum commit pertama, jadi
+masuk branch yang sama, bukan sprint baru)**: UI Pengaturan > Payment
+Gateway ditambahkan (ala referensi MikRadius) — mengubah dua kontrak inti
+dari catatan lama di atas:
+- `payments.channel_type` **bukan lagi** enum tetap `App\Enums\PaymentChannelType`
+  (3 case: virtual_account/qris/invoice) — enum itu sudah dihapus. Sekarang
+  varchar yang mereferensi `code` di katalog baru `payment_gateway_channels`
+  (`code`/`label`/`category`/`enabled`, admin-managed lewat UI, tanpa hard FK
+  — divalidasi di `PaymentService`). Menambah channel baru sekarang murni
+  data (row baru di katalog), TAPI integrasi Xendit-nya (method baru di
+  `XenditGatewayService` + arm baru di `PaymentService::createPaymentFor()`
+  match-nya) tetap perlu kode — katalog v0.3.5 sudah memuat channel ewallet/
+  retail_outlet/credit_card (OVO, DANA, Alfamart, dst) untuk checklist UI,
+  TAPI belum ada integrasi API-nya (hanya bank_transfer_va/qris/invoice yang
+  benar-benar bisa dipakai `createPaymentFor()`). Jangan asumsikan channel
+  yang di-enable di checklist otomatis bisa dipakai — cek dulu.
+- Kredensial Xendit (`XENDIT_SECRET_KEY`/`XENDIT_CALLBACK_TOKEN`) **pindah
+  sumber runtime** dari `.env` ke `payment_gateway_settings` (DB, encrypted,
+  singleton row id=1) via `PaymentGatewaySettingsService`. `.env` cuma
+  dipakai sekali lagi lewat command manual `payment-gateway:import-env`
+  untuk migrasi kredensial Fase A-G yang sempat di-set. Permission
+  `payment_gateway_settings.*` super_admin-only (lebih ketat dari
+  `invoices.*` yang juga dipegang `billing`), karena halaman ini memegang
+  secret asli.
+
+Detail lengkap ada di CLAUDE.md bagian "Payment gateway (Xendit, v0.3.5)".

@@ -59,4 +59,9 @@ class Subscription extends Model
     {
         return $this->hasMany(Invoice::class);
     }
+
+    public function workOrders(): HasMany
+    {
+        return $this->hasMany(WorkOrder::class);
+    }
 }

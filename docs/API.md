@@ -413,3 +413,84 @@ Autentikasi lewat HMAC-SHA256 (`App\Support\WhatsappHmac`, header
 `X-Whatsapp-Signature`/`X-Whatsapp-Timestamp`, toleransi 5 menit) — beda
 dari static-token Xendit. Selalu balas `200` apa pun hasilnya, sama seperti
 `/webhooks/xendit`.
+
+## Installation / Work Order (v0.5.0)
+
+Semua endpoint di bawah ada di dalam grup middleware `reseller.context` —
+scoping otomatis lewat `BelongsToResellerScope` pada model
+`Odp`/`Technician`/`WorkOrder`: reseller (owner/staff, via `reseller_users`
+membership) hanya melihat ODP/teknisi/work order miliknya sendiri; ISP admin
+(permission `odps.*`/`technicians.*`/`work_orders.*`) melihat semuanya
+termasuk yang direct (tanpa reseller).
+
+### `GET/POST /odps` · `GET /odps/{odp}` · `PUT /odps/{odp}` · `DELETE /odps/{odp}`
+
+CRUD katalog ODP. `POST` otomatis men-generate `total_ports` baris
+`odp_ports` (status `available`) lewat `Odp::provisionPorts()` — tanpa ini
+ODP baru tidak akan pernah punya port yang bisa dicari
+`OdpLocatorService`. `reseller_id` di body hanya dipakai kalau caller tidak
+punya reseller context aktif (ISP admin membuat ODP untuk reseller
+tertentu, atau kosong = ODP direct).
+
+### `GET/POST /technicians` · `GET /technicians/{technician}`
+
+CRUD dasar data teknisi (`user_id` wajib menunjuk `users` row yang sudah
+ada — tidak ada pembuatan user baru dari endpoint ini).
+
+### `GET /work-orders` · `GET /work-orders/{work_order}`
+
+Daftar/detail work order, filter `?status=`.
+
+### `POST /work-orders`
+
+Body: `subscription_id`. Pembuatan manual oleh admin/CS — jalur yang sama
+persis dengan trigger otomatis di bawah, cuma subscription-nya dipilih
+eksplisit lewat body, bukan lewat parameter route.
+
+### `POST /subscriptions/{subscription}/work-order`
+
+Trigger otomatis dari flow sales/subscription. Keduanya memanggil
+`WorkOrderService::createFromSubscription()`: cari port ODP terdekat yang
+available lewat `OdpLocatorService` (Haversine, di-scope ke reseller yang
+sama dengan subscription atau direct) — kalau ketemu, port di-reserve dan
+status jadi `pending_verification`; kalau tidak, status jadi
+`odp_unavailable`.
+
+### `POST /work-orders/{work_order}/verify`
+
+Body: `equipment_ready` (boolean). Transisi ke `ready` hanya kalau
+`equipment_ready=true` DAN port ODP sudah ter-reserve — kalau false, flag
+tersimpan tapi status tetap `pending_verification` (bukan error).
+
+### `POST /work-orders/{work_order}/assign`
+
+Body: `technician_id`. Transisi ke `assigned`.
+
+### `POST /work-orders/{work_order}/start`
+
+Transisi ke `in_progress`.
+
+### `POST /work-orders/{work_order}/photos`
+
+Multipart: `type` (`odp`/`ont_device`/`signal_strength`/`house_front`) +
+`file` (image, max 10MB). Satu foto per jenis per work order — upload ulang
+jenis yang sama mengganti file lama (dihapus dari disk), bukan menambah
+baris baru. Disimpan di disk `local` (private, `storage/app/private/` di
+Laravel 12 — bukan `storage/app/public`, tidak bisa diakses publik).
+
+### `POST /work-orders/{work_order}/devices`
+
+Body: `device_type` (`ont`/`router`/`ap`), `mac_address`, `serial_number`.
+Bisa dipanggil berkali-kali (tidak ada batas jumlah device per work order).
+
+### `POST /work-orders/{work_order}/complete`
+
+Transisi ke `completed`, port ODP jadi `used`. **Ditolak** (422,
+`IncompleteWorkOrderException`) kalau belum ada keempat jenis foto atau
+belum ada minimal 1 device tercatat — dicek SETELAH legalitas transisi
+status sendiri (state machine tetap prioritas pertama).
+
+### `POST /work-orders/{work_order}/cancel`
+
+Transisi ke `cancelled` dari status non-terminal manapun. Port ODP yang
+sempat `reserved`/`used` dikembalikan ke `available`.

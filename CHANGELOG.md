@@ -3,6 +3,50 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.5.0 — Installation (Work Order Teknisi)
+
+- Tabel baru `odps` — inventory ODP (`code` unik per tenant, `latitude`/
+  `longitude`, `total_ports`), `reseller_id` nullable (null = milik ISP A
+  langsung), index `(latitude, longitude)` untuk query lokasi.
+- Tabel baru `odp_ports` — satu baris per port fisik ODP (`port_number`,
+  `status`: `available`/`reserved`/`used`/`damaged`, `subscription_id`
+  nullable), unique `(odp_id, port_number)`. `Odp::provisionPorts()`
+  auto-generate port 1..`total_ports` saat ODP dibuat lewat API (bukan
+  model event — sengaja, supaya tidak collision dengan factory test).
+- Tabel baru `technicians` — data teknisi (`user_id`, `name`, `phone`,
+  `status`), `reseller_id` nullable sama pola dengan modul lain.
+- Tabel baru `work_orders` — `reseller_id` didenormalisasi dari
+  subscription, `status` state machine 8 nilai (`pending_odp_check` ->
+  `pending_verification`/`odp_unavailable` -> `ready` -> `assigned` ->
+  `in_progress` -> `completed`, `cancelled` dari status non-terminal
+  manapun), `equipment_ready` placeholder manual (modul stok riil belum
+  ada).
+- Tabel baru `work_order_devices` (device_type ont/router/ap, mac_address,
+  serial_number) dan `work_order_photos` (4 jenis wajib: odp/ont_device/
+  signal_strength/house_front, unique 1 foto per jenis per WO).
+- `App\Services\Installation\OdpLocatorService::findNearestAvailable()` —
+  Haversine formula raw SQL (tanpa PostGIS), diverifikasi jalan identik di
+  SQLite (test) dan Postgres, scoped ke reseller yang sama dengan customer
+  (atau direct), hanya port `available`.
+- `App\Services\Installation\WorkOrderService` — `createFromSubscription()`
+  (cari & reserve port terdekat, atau `odp_unavailable` kalau tidak ada),
+  `verify()`, `assignTechnician()`, `start()`, `complete()` (validasi
+  legalitas transisi LEBIH DULU, baru validasi 4 foto + minimal 1 device
+  lengkap; port -> `used`), `cancel()` (port kembali `available`).
+  `App\Services\Installation\WorkOrderPhotoService::store()` — satu foto
+  per jenis, replace file lama kalau upload ulang.
+- REST API lengkap: `GET/POST /odps`, `GET/POST /technicians`,
+  `GET/POST /work-orders` + `POST /subscriptions/{id}/work-order` +
+  `verify`/`assign`/`start`/`photos`/`devices`/`complete`/`cancel`, semua
+  scoped `reseller.context` + `OdpPolicy`/`TechnicianPolicy`/
+  `WorkOrderPolicy` (permission `odps.*`/`technicians.*`/`work_orders.*`
+  super_admin-only, reseller owner/staff lewat `reseller_users`
+  membership).
+### Deferred
+- Modul stok/inventory barang riil (equipment_ready tetap manual)
+- Notifikasi WhatsApp otomatis untuk event work order
+- Komponen UI scan kamera html5-qrcode (endpoint API sudah siap)
+
 ## v0.4.0 — WhatsApp Gateway (Baileys, multi-sesi per reseller)
 
 - Tabel baru `whatsapp_sessions` — satu sesi WhatsApp per reseller (`reseller_id`

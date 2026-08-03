@@ -30,7 +30,8 @@
             'active' => request()->routeIs('web.tax-components.*')
                 || request()->routeIs('web.reseller-tax-policies.*')
                 || request()->routeIs('web.subscriptions.*')
-                || request()->routeIs('web.invoices.*'),
+                || request()->routeIs('web.invoices.*')
+                || request()->routeIs('web.payment-reconciliation.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\TaxComponent::class)
                     ? ['route' => 'web.tax-components.index', 'label' => __('Tax Components')]
@@ -44,15 +45,21 @@
                 auth()->user()->can('viewAny', \App\Models\Invoice::class)
                     ? ['route' => 'web.invoices.index', 'label' => __('Invoices')]
                     : null,
+                auth()->user()->can('viewAny', \App\Models\Invoice::class)
+                    ? ['route' => 'web.payment-reconciliation.index', 'label' => __('Payment Reconciliation')]
+                    : null,
             ]),
         ],
         [
             'id' => 'pengaturan',
             'label' => __('Pengaturan'),
             'active' => request()->routeIs('web.settings.*'),
-            'links' => [
+            'links' => array_filter([
                 ['route' => 'web.settings.theme', 'label' => __('Tema')],
-            ],
+                auth()->user()->can('view', \App\Models\PaymentGatewaySettings::class)
+                    ? ['route' => 'web.settings.payment-gateway', 'label' => __('Payment Gateway')]
+                    : null,
+            ]),
         ],
     ];
 @endphp

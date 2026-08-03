@@ -3,6 +3,120 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.3.5 — Payment Gateway (Xendit)
+
+- Tabel baru `payments` — satu baris per attempt/instance pembayaran
+  (`tenant_id`, `invoice_id`, `xendit_reference_id`, `channel_type`, `amount`,
+  `status`, `paid_at`, `raw_response` jsonb), tenant-scoped via
+  `BelongsToTenant`.
+- Tabel baru `payment_webhook_logs` — audit trail platform-wide (sengaja
+  TANPA `tenant_id`/FK), `xendit_event_id` UNIQUE sebagai backstop
+  idempotency, `payload` jsonb, `signature_valid`, `processed_at`,
+  `processing_result`.
+- Enum baru: `App\Enums\PaymentStatus` (`pending`, `paid`, `failed`,
+  `expired`), `App\Enums\WebhookProcessingResult` (`applied`, `duplicate`,
+  `rejected_signature`, `rejected_amount_mismatch`, dan satu tambahan
+  `rejected_invoice_not_found` di luar daftar awal — kegagalan yang genuinely
+  berbeda dari amount-mismatch, kolomnya string biasa jadi aman ditambah).
+  (`App\Enums\PaymentChannelType`, 3 case tetap, sempat ada di Fase A-G —
+  **dihapus lagi di Fase H**, lihat bawah.)
+- `App\Services\Payment\XenditGatewayService` — wrapper HTTP murni ke
+  `https://api.xendit.co` (Basic Auth pakai secret key), tidak tahu apa-apa
+  soal `Invoice`. Constructor menolak beroperasi (`RuntimeException`) kalau
+  `XENDIT_IS_PRODUCTION=true` tapi `APP_ENV` bukan `production` — guard
+  eksplisit supaya sandbox key tidak bisa "ke-upgrade" diam-diam.
+- `App\Services\Payment\PaymentService` — `createPaymentFor()` (invoice +
+  channel → panggil gateway sesuai channel → simpan `Payment`) dan
+  `handleWebhook()` dengan urutan tetap: (1) verifikasi `x-callback-token`
+  lebih dulu, tolak sebelum payload disentuh sama sekali kalau invalid;
+  (2) dalam DB transaction, cek idempotency by `xendit_event_id`
+  (`lockForUpdate`); (3) exact match `payload.amount` vs
+  `invoice.grand_total` (bukan `>=`); (4) baru panggil
+  `InvoiceService::markPaid()`. `invoice_number` (BUKAN `id` numerik) dipakai
+  sebagai Xendit `external_id` di semua channel.
+- Webhook endpoint publik `POST /api/v1/webhooks/xendit` (di luar
+  `auth:sanctum`, throttle 60/menit) — SELALU balas HTTP 200 apa pun hasil
+  internalnya (applied/duplicate/rejected/error) supaya Xendit berhenti
+  retry; error internal ditangkap dan dicatat, tidak pernah bocor ke
+  response.
+- REST API baru: `GET/POST /api/v1/invoices/{invoice}/payments` (list +
+  create payment attempt), permission `invoice.manage`/`invoice.view`
+  existing dari v0.3.4, di dalam grup `reseller.context`.
+- Livewire `Billing\ReconciliationReport` (`/payment-reconciliation`) —
+  laporan read-only: invoice berstatus `paid` dicocokkan dengan `Payment`
+  ber-status `paid` miliknya (baris tanpa match ditandai "ANOMALY"), plus
+  daftar `PaymentWebhookLog` yang hasilnya bukan `applied`. **Tidak ada
+  tombol perbaikan otomatis** — sengaja murni laporan/audit.
+- **Keputusan arsitektur yang dikonfirmasi eksplisit oleh Agung**: endpoint
+  manual `PATCH /api/v1/invoices/{invoice}/paid` (dari v0.3.4) **dipertahankan
+  apa adanya**, meski tidak melalui verifikasi pembayaran sama sekali.
+  Konsekuensi: `InvoiceService::markPaid()` sekarang punya dua jalur
+  pemanggil yang sah — endpoint admin manual (tanpa verifikasi) dan webhook
+  Xendit (dengan verifikasi penuh: signature + idempotency + exact amount
+  match). Jangan "bersihkan" ini secara sepihak di sprint berikutnya; lihat
+  `docs/ROADMAP.md` dan CLAUDE.md untuk detail.
+- Config: `XENDIT_IS_PRODUCTION` tetap di root `.env`/`config('services.xendit.*')`
+  (guard sandbox, lihat di bawah) — `XENDIT_SECRET_KEY`/`XENDIT_CALLBACK_TOKEN`
+  di root `.env` HANYA dipakai untuk migrasi awal (lihat Fase H), bukan lagi
+  sumber runtime. Tidak pernah hardcoded atau ter-commit.
+
+### Fase H (amendment, sebelum commit pertama — bukan sprint baru)
+
+Penambahan scope dikonfirmasi Agung sebelum branch ini di-commit: UI
+Pengaturan Payment Gateway ala referensi MikRadius. Mengubah dua kontrak inti
+dari Fase A-G di atas (bukan cuma penambahan):
+
+- Tabel baru `payment_gateway_channels` — katalog channel Xendit yang bisa
+  diatur admin (`code` unique, `label`, `category` enum
+  `App\Enums\PaymentGatewayChannelCategory`, `enabled`). Diseed lewat
+  `PaymentGatewayChannelSeeder` (18 channel: 9 bank VA, credit card, 2 retail
+  outlet, 4 e-wallet, QRIS, Xendit Invoice — semua `enabled=false` sampai
+  admin mengaktifkan lewat UI).
+- Tabel baru `payment_gateway_settings` — singleton platform-level (id=1,
+  dijaga oleh service, bukan constraint DB) menyimpan `xendit_secret_key`/
+  `xendit_webhook_token` (cast `encrypted`), `is_configured`, `updated_by`.
+- **`payments.channel_type` bukan lagi enum tetap** — `App\Enums\PaymentChannelType`
+  dihapus. Sekarang varchar yang mereferensi `payment_gateway_channels.code`
+  (tanpa hard FK, divalidasi di `PaymentService`). Migration
+  `remap_legacy_payment_channel_types` membackfill baris lama Fase A-G
+  (`virtual_account`→`BRI_VA`, `qris`→`QRIS`, `invoice`→`XENDIT_INVOICE`) agar
+  tetap valid di bawah vocabulary baru — kolomnya sendiri sudah varchar sejak
+  awal, jadi ini murni migrasi data, bukan alter tipe kolom.
+- `App\Services\Payment\PaymentGatewaySettingsService` — satu-satunya
+  pembaca/penulis `payment_gateway_settings`/`payment_gateway_channels` yang
+  sah: `getSecretKey()`/`getWebhookToken()` (di-cache), `update()` (transaction,
+  blank submit tidak menghapus value tersimpan, invalidate cache setelah
+  commit), `isChannelEnabled()`/`enabledChannels()`.
+- `XenditGatewayService`/`PaymentService::verifySignature()` **direfactor**
+  untuk membaca secret/token dari service di atas, bukan lagi
+  `config('services.xendit.secret_key'/'callback_token')`. `PaymentService::createPaymentFor()`
+  sekarang menolak channel yang ada di katalog tapi `enabled=false`, dan
+  channel kategori `ewallet`/`retail_outlet`/`credit_card` (ada di katalog
+  untuk checklist UI, TAPI belum ada integrasi API Xendit-nya — hanya
+  `bank_transfer_va`/`qris`/`invoice` yang benar-benar bisa dipakai sprint
+  ini).
+- Livewire `Settings\PaymentGatewaySettings` (`/settings/payment-gateway`,
+  permission `payment_gateway_settings.manage`/`.view`, super_admin-only —
+  lebih ketat dari `invoices.*`) — field API Secret/Webhook Token masked,
+  tidak pernah render nilai asli (placeholder "tersimpan, diubah: {tanggal}"),
+  submit kosong tidak mengubah value tersimpan, checklist channel per
+  kategori, validasi minimal 1 channel aktif.
+- Command manual `php artisan payment-gateway:import-env` — sekali jalan,
+  mengimpor `XENDIT_SECRET_KEY`/`XENDIT_CALLBACK_TOKEN` lama dari `.env` ke
+  `payment_gateway_settings`. Tidak dijalankan otomatis dari migration/seeder.
+- Tests tambahan: `PaymentGatewaySettingsServiceTest` (roundtrip encrypted,
+  cache invalidation, singleton, sync channel), `PaymentGatewaySettingsLivewireTest`
+  (masked placeholder, blank-submit tidak menghapus, validasi minimal 1
+  channel, non-admin forbidden), plus 1 test baru di `PaymentServiceSafetyTest`
+  (channel disabled ditolak). Total 149/149 test suite passing.
+
+- **Di luar scope, sengaja di-declare sebagai backlog**: notifikasi
+  pembayaran via WhatsApp/Baileys (nunggu v0.4.0), auto-refund otomatis,
+  retry payment flow (UI maupun service), partial payment/cicilan, proration
+  subscription (masih deferred dari v0.3.4), dan integrasi Xendit API nyata
+  untuk channel ewallet/retail_outlet/credit_card (baru terdaftar di katalog,
+  belum bisa dipakai membuat payment).
+
 ## v0.3.4 — Invoicing Core
 
 - Tabel baru `subscriptions` — plan berlangganan per customer.

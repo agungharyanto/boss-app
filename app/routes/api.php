@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\DashboardWidgetSettingController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\LocaleSettingController;
+use App\Http\Controllers\Api\V1\PaymentController;
 use App\Http\Controllers\Api\V1\RegistrationController;
 use App\Http\Controllers\Api\V1\RemittanceSummaryController;
 use App\Http\Controllers\Api\V1\ResellerController;
@@ -17,10 +18,18 @@ use App\Http\Controllers\Api\V1\SubscriptionController;
 use App\Http\Controllers\Api\V1\TaxComponentController;
 use App\Http\Controllers\Api\V1\TaxLedgerController;
 use App\Http\Controllers\Api\V1\ThemeSettingsController;
+use App\Http\Controllers\Api\V1\XenditWebhookController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
     Route::get('/health', [HealthController::class, 'index']);
+
+    // Public — no Sanctum (Xendit can't log in), signature verification
+    // inside PaymentService::handleWebhook stands in for auth entirely.
+    // Rate-limited defensively (Xendit itself won't hammer this, but any
+    // public unauthenticated endpoint is a target) — see BOSS-005.
+    Route::post('webhooks/xendit', [XenditWebhookController::class, 'handle'])
+        ->middleware('throttle:60,1');
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/me', function () {
@@ -66,6 +75,9 @@ Route::prefix('v1')->group(function () {
             Route::patch('invoices/{invoice}/pending', [InvoiceController::class, 'markPending']);
             Route::patch('invoices/{invoice}/paid', [InvoiceController::class, 'markPaid']);
             Route::patch('invoices/{invoice}/cancel', [InvoiceController::class, 'cancel']);
+
+            Route::get('invoices/{invoice}/payments', [PaymentController::class, 'index']);
+            Route::post('invoices/{invoice}/payments', [PaymentController::class, 'store']);
         });
 
         // Admin-only tax engine catalog/reporting — no reseller.context needed.

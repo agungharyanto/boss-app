@@ -67,4 +67,9 @@ class Invoice extends Model
     {
         return $this->hasMany(InvoiceLineItem::class);
     }
+
+    public function payments(): HasMany
+    {
+        return $this->hasMany(Payment::class);
+    }
 }

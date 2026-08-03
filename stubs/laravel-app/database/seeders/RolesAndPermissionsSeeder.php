@@ -36,6 +36,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedTaxEnginePermissions();
         $this->seedInvoicingPermissions();
         $this->seedPaymentGatewaySettingsPermissions();
+        $this->seedWhatsappGatewayPermissions();
     }
 
     /**
@@ -173,6 +174,33 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedPaymentGatewaySettingsPermissions(): void
     {
         $permissions = ['payment_gateway_settings.view', 'payment_gateway_settings.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+    }
+
+    /**
+     * Permission modul WhatsApp Gateway (v0.4.0). Two separate namespaces,
+     * both super_admin-only, same posture as payment_gateway_settings.*:
+     * whatsapp_gateway.* covers the ISP-admin overview (all sessions +
+     * default templates + combined queue), whatsapp_gateway_settings.*
+     * covers the platform-wide rate-limit policy. Reseller owner/staff
+     * access their OWN reseller's session/templates/queue instead via
+     * reseller_users membership (see WhatsappSessionPolicy /
+     * WhatsappMessageTemplatePolicy / WhatsappMessageLogPolicy), never via
+     * these Spatie permissions — same pattern as resellers.* / tax engine.
+     */
+    private function seedWhatsappGatewayPermissions(): void
+    {
+        $permissions = [
+            'whatsapp_gateway.view',
+            'whatsapp_gateway.manage',
+            'whatsapp_gateway_settings.view',
+            'whatsapp_gateway_settings.manage',
+        ];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

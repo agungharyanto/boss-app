@@ -52,4 +52,14 @@ return [
         'is_production' => env('XENDIT_IS_PRODUCTION', false),
     ],
 
+    // v0.4.0 WhatsApp Gateway — internal HTTP API to the whatsapp-gateway
+    // Node.js container (never exposed publicly, BOSS-010). hmac_secret is
+    // an infra-level shared secret (APP_KEY-class, not a business
+    // credential) — must match whatsapp-gateway's own copy exactly, see
+    // App\Support\WhatsappHmac.
+    'whatsapp_gateway' => [
+        'url' => env('WHATSAPP_GATEWAY_URL'),
+        'hmac_secret' => env('WHATSAPP_GATEWAY_HMAC_SECRET'),
+    ],
+
 ];

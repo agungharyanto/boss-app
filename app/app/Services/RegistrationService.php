@@ -6,13 +6,19 @@ use App\Enums\CommissionStatus;
 use App\Enums\CustomerStatus;
 use App\Enums\RegistrationChannel;
 use App\Enums\RegistrationStatus;
+use App\Enums\WhatsappEventType;
 use App\Models\Agent;
 use App\Models\CommissionLedger;
 use App\Models\Customer;
+use App\Services\Whatsapp\WhatsappGatewayService;
 use Illuminate\Support\Facades\DB;
 
 class RegistrationService
 {
+    public function __construct(
+        private readonly WhatsappGatewayService $whatsappService,
+    ) {}
+
     /**
      * Registers a new customer, optionally attributed to a referring agent.
      *
@@ -26,7 +32,7 @@ class RegistrationService
      */
     public function register(array $data, ?Agent $registeredBy = null): Customer
     {
-        return DB::transaction(function () use ($data, $registeredBy) {
+        $customer = DB::transaction(function () use ($data, $registeredBy) {
             $customer = Customer::create([
                 ...$data,
                 'status' => CustomerStatus::Prospek,
@@ -48,5 +54,14 @@ class RegistrationService
 
             return $customer;
         });
+
+        // v0.4.0 WhatsApp Gateway hook — outside the transaction above so a
+        // notification never fires for a registration that ends up rolled
+        // back. This flow never sets customer.reseller_id (confirmed,
+        // accepted as-is — see docs/ROADMAP.md), so session_key always
+        // resolves to "direct" here.
+        $this->whatsappService->buildAndQueue(WhatsappEventType::CustomerRegistered, $customer);
+
+        return $customer;
     }
 }

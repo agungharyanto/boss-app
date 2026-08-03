@@ -10,7 +10,7 @@
 | v0.3.3  | Billing & Finance | Regulatory Tax Engine        | tax_components dinamis (nama bebas, persen/nominal, on/off, versi-per-tanggal), reseller_tax_policies, reseller_tax_ledger, komdigi_remittance_summary | Selesai |
 | v0.3.4  | Billing & Finance | Invoicing Core               | Subscription plan per customer, generate invoice bulanan, invoice line items, status invoice   | Selesai |
 | v0.3.5  | Billing & Finance | Payment Gateway (Xendit)     | Integrasi Xendit (VA/QRIS/invoice), webhook handler + signature verification, idempotency, reconciliation | Selesai |
-| v0.4.0  | Komunikasi      | Communication (Baileys)       | WhatsApp gateway, notifikasi group, routing area, OTP                                         | Backlog |
+| v0.4.0  | Komunikasi      | Communication (Baileys)       | WhatsApp gateway multi-sesi per reseller, template pesan, reminder invoice/suspend, reconciliation session | Selesai |
 | v0.5.0  | Operasional     | Installation                  | Work order teknisi, scan MAC/serial, ODP/PON, foto instalasi                                  | Backlog |
 | v0.6.0  | Network         | FreeRADIUS                    | Akun PPPoE via RADIUS, profile bandwidth, accounting (radacct), CoA/disconnect                | Backlog |
 | v0.6.1  | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
@@ -108,3 +108,70 @@ dari catatan lama di atas:
   secret asli.
 
 Detail lengkap ada di CLAUDE.md bagian "Payment gateway (Xendit, v0.3.5)".
+
+## v0.4.0 — WhatsApp Gateway (Baileys, multi-sesi per reseller)
+
+Deferred item dari v0.3.5 (WhatsApp payment notification) selesai di sprint
+ini via hook `InvoiceService::markPaid()` -> `WhatsappGatewayService::buildAndQueue('payment_received', ...)`.
+
+**Keputusan arsitektur final (jangan diasumsikan lain tanpa konfirmasi
+ulang)**: satu nomor WhatsApp per reseller + satu sesi "direct" untuk
+customer tanpa reseller; Node.js `whatsapp-gateway` container terpisah,
+multi-session (Baileys, key = `session_key` = reseller_id sebagai string
+atau literal `"direct"`); komunikasi Laravel<->Node via HTTP internal +
+HMAC-SHA256 (bukan static token seperti Xendit) dengan timestamp + toleransi
+5 menit; auth state per sesi di volume `whatsapp-gateway/auth_state/{session_key}/`;
+outbound-only sprint ini (two-way/Chatwoot dideferred); template pesan bisa
+di-override per reseller per event_type, fallback ke default ISP-level;
+pengiriman lewat queue Redis bernama `whatsapp-{session_key}` (bukan satu
+queue global) supaya sesi reseller yang disconnect tidak menghambat reseller
+lain; rate limit (delay antar pesan, batch size, jeda antar batch, jadwal
+batch harian) global untuk semua sesi, dikelola admin ISP.
+
+**Gap yang ditemukan & keputusan yang diambil saat membangun (dikonfirmasi
+Agung sebelum migration dijalankan)**:
+- Flow registrasi pelanggan (`RegistrationService::register()`, v0.3.0)
+  **tidak pernah mengisi `customer.reseller_id`** — jadi notifikasi
+  `customer_registered` SELALU resolve ke sesi `"direct"`, tidak pernah ke
+  sesi reseller manapun, walau secara bisnis ada reseller yang menaungi.
+  Diterima apa adanya untuk sprint ini (bukan bug baru — behavior registrasi
+  v0.3.0 tidak diubah, di luar scope v0.4.0). Kalau ini perlu diperbaiki
+  (registrasi bisa atribusi reseller), itu scope baru untuk sprint terpisah.
+- Tidak ada kolom `invoice_url`/`payment_link` tersimpan di mana pun
+  (`payments.raw_response` jsonb ada tapi dari channel VA/QRIS tidak
+  memilikinya, dan invoice belum tentu punya `Payment` row saat reminder
+  dikirim). `{payment_link}` di template `invoice_due_reminder` di-generate
+  **on-demand** saat `buildAndQueue()` dipanggil, lewat
+  `PaymentService::createPaymentFor($invoice, 'XENDIT_INVOICE')` — kalau
+  gagal (channel belum aktif, dsb), reminder tetap terkirim tanpa link
+  (di-log sebagai warning, tidak pernah membatalkan pengiriman).
+- `app/.env.example` (template dev non-Docker) masih `QUEUE_CONNECTION=database`
+  sementara root `.env.example` (template Docker Compose yang sungguhan
+  dipakai container) sudah benar `redis` sejak v0.1.0 — **bukan bug baru**,
+  hanya `app/.env.example`-nya yang diselaraskan supaya konsisten dengan
+  tech stack yang didokumentasikan; tidak ada perubahan pada deployment
+  sungguhan.
+- `whatsapp-{session_key}` adalah queue name dinamis (satu per reseller +
+  "direct") yang tidak bisa dienumerasi statis di flag `--queue=` biasa.
+  Container terpisah `boss-whatsapp-worker` menjalankan
+  `whatsapp:queue-names` (artisan command baru) untuk membangun daftar queue
+  saat ini, lalu restart `queue:work` tiap 5 menit (`--max-time=300`) supaya
+  sesi reseller baru otomatis ikut terdengar tanpa restart manual — pola
+  polling-restart yang sama dengan `boss-scheduler`.
+- Literal session_key `"direct"` hanya unik selama deployment ini melayani
+  SATU tenant ISP (asumsi operasional saat ini, sama seperti
+  `payment_gateway_settings` — lihat CLAUDE.md). Kalau ini benar-benar jadi
+  SaaS multi-tenant dengan banyak ISP berbagi satu `whatsapp-gateway`
+  container, `"direct"` perlu diganti jadi key yang mengandung tenant_id —
+  dicatat sebagai known limitation, bukan dikerjakan sekarang.
+
+**Out-of-scope v0.4.0, di-declare eksplisit sebagai backlog**: two-way
+messaging + integrasi Chatwoot (1 nomor gabungan WA + CS), overdue reminder
+berulang (sengaja TIDAK ada — sekali lewat H-0 tanpa bayar, tidak ada
+notifikasi WA lanjutan untuk invoice itu), notifikasi work order
+teknisi/outage alert (nunggu modul teknisi/monitoring), rate limit
+per-reseller (sprint ini rate limit global saja), auto-refund/retry payment
+flow/partial payment/proration subscription (tetap deferred dari v0.3.4/
+v0.3.5, belum masuk scope manapun).
+
+Detail lengkap ada di CLAUDE.md bagian "WhatsApp Gateway (Baileys, v0.4.0)".

@@ -19,6 +19,14 @@ tag dibuat (RULE BOSS-013).
   `user_preferences.dashboard_widgets`.
 - Stack tetap Laravel + Blade + Livewire + Alpine.js + Tailwind — tidak ada
   penambahan framework frontend baru (bukan React/Next.js).
+- **REST API (BOSS-006 gap closure)**: `POST /api/v1/registrations`,
+  `GET /api/v1/referrals` (v0.3.0), dan `GET`/`PUT
+  /api/v1/settings/{theme,locale,dashboard-widgets}` (v0.3.1) — sebelumnya
+  kedua modul ini hanya punya UI Livewire tanpa REST API, melanggar aturan
+  API-first. Business logic diekstrak/reuse lewat Service class
+  (`ThemeSettingsService`, `LocaleService`, `DashboardWidgetService`,
+  `RegistrationService`) yang dipakai bareng oleh controller API dan
+  komponen Livewire. Lihat `docs/API.md`.
 
 ## v0.3.0 — Registration & Referral
 

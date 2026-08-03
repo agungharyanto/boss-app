@@ -1,11 +1,11 @@
 <?php
 
-use App\Http\Middleware\SetLocale;
 use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
 use App\Livewire\Settings\ThemeSettings;
+use App\Services\LocaleService;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -13,13 +13,13 @@ Route::get('/', function () {
 });
 
 // Public — guests can switch language too, not just logged-in users.
-Route::get('/lang/{locale}', function (string $locale) {
-    abort_unless(in_array($locale, SetLocale::SUPPORTED, true), 404);
+Route::get('/lang/{locale}', function (string $locale, LocaleService $service) {
+    abort_unless($service->isSupported($locale), 404);
 
     session(['locale' => $locale]);
 
     if (auth()->check()) {
-        auth()->user()->preference()->updateOrCreate([], ['locale' => $locale]);
+        $service->update(auth()->user(), $locale);
     }
 
     return redirect()->back();

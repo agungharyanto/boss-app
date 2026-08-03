@@ -2,33 +2,31 @@
 
 namespace App\Livewire\Settings;
 
+use App\Services\ThemeSettingsService;
 use Livewire\Attributes\Validate;
 use Livewire\Component;
 
 class ThemeSettings extends Component
 {
     #[Validate('required|regex:/^#[0-9a-fA-F]{6}$/')]
-    public string $primaryColor = '#2563eb';
+    public string $primaryColor = ThemeSettingsService::DEFAULT_PRIMARY_COLOR;
 
     #[Validate('required|regex:/^#[0-9a-fA-F]{6}$/')]
-    public string $textColor = '#1f2937';
+    public string $textColor = ThemeSettingsService::DEFAULT_TEXT_COLOR;
 
-    public function mount(): void
+    public function mount(ThemeSettingsService $service): void
     {
-        $preference = auth()->user()->preference;
+        $saved = $service->get(auth()->user());
 
-        $this->primaryColor = $preference?->theme_primary_color ?? $this->primaryColor;
-        $this->textColor = $preference?->theme_text_color ?? $this->textColor;
+        $this->primaryColor = $saved['primary_color'];
+        $this->textColor = $saved['text_color'];
     }
 
-    public function save(): void
+    public function save(ThemeSettingsService $service): void
     {
         $this->validate();
 
-        auth()->user()->preference()->updateOrCreate([], [
-            'theme_primary_color' => $this->primaryColor,
-            'theme_text_color' => $this->textColor,
-        ]);
+        $service->update(auth()->user(), $this->primaryColor, $this->textColor);
 
         session()->flash('status', 'Tema berhasil disimpan.');
     }

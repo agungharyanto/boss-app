@@ -127,3 +127,96 @@ Log otomatis (via Model Observer) untuk setiap perubahan status, profil, dan
 kontak. `event_type` yang mungkin muncul: `customer_created`,
 `status_changed`, `profile_updated`, `contact_created`, `contact_updated`,
 `contact_deleted`. Setiap entry immutable (tidak ada endpoint update/delete).
+
+---
+
+## Registration & Referral
+
+Permission: `register-customer` (`super_admin`, `sales_internal`, `teknisi`,
+`sales_freelance`). Business logic ada di `App\Services\RegistrationService`,
+dipakai bareng oleh endpoint ini dan Livewire `RegisterCustomer`.
+
+### `POST /registrations`
+
+Body: `name`, `address`, `phone_number` (wajib), `nik`, `latitude`,
+`longitude`, `package` (opsional), `referred_by_agent_id` (opsional, harus
+`id` agent milik tenant yang sama).
+
+Aturan atribusi agent: kalau user yang login sudah terhubung ke sebuah
+`Agent` (`agents.user_id`), registrasi **selalu** diatribusikan ke agent itu
+— `referred_by_agent_id` di body diabaikan. Kalau user tidak terhubung ke
+agent manapun (mis. `super_admin` mendaftarkan langsung), `referred_by_agent_id`
+dipakai kalau dikirim, atau `registration_channel` jadi `admin` tanpa
+referral kalau tidak.
+
+Setiap registrasi dengan agent otomatis membuat satu baris `commission_ledger`
+berstatus `pending` (`amount` masih null — diisi di sprint v0.9.0 Commission).
+Response `201` berisi `CustomerResource` seperti `POST /customers`.
+
+### `GET /referrals`
+
+Daftar customer yang direferensikan oleh agent milik user yang login, plus
+status commission masing-masing. `404` kalau user yang login tidak terhubung
+ke `Agent` manapun (`agents.user_id`). Tidak ada konsep kode referral yang
+di-generate/divalidasi di codebase ini — atribusi agent murni lewat link
+`agents.user_id`, bukan kode.
+
+```json
+{
+  "success": true,
+  "message": "Daftar referral Anda",
+  "data": [
+    {
+      "customer_id": 1,
+      "customer_name": "Rina Kusuma",
+      "registration_status": "registered",
+      "registration_status_label": "Registered",
+      "commission_status": "pending",
+      "commission_status_label": "Pending",
+      "commission_amount": null,
+      "registered_at": "2026-08-02T16:10:00+00:00"
+    }
+  ],
+  "meta": []
+}
+```
+
+---
+
+## Settings (personalisasi per user)
+
+Semua endpoint di bawah ini hanya butuh `auth:sanctum` — tidak ada permission
+tambahan, karena setiap user mengatur preferensinya sendiri saja. Logic ada
+di `App\Services\ThemeSettingsService` / `LocaleService` /
+`DashboardWidgetService`, dipakai bareng oleh endpoint ini dan komponen
+Livewire yang sesuai (`Settings\ThemeSettings`, `lang.switch` route,
+`Dashboard\WidgetSelector`).
+
+### `GET /settings/theme`
+
+Mengembalikan `primary_color`/`text_color` milik user, atau default
+(`#2563eb` / `#1f2937`) kalau belum pernah disimpan.
+
+### `PUT /settings/theme`
+
+Body: `primary_color`, `text_color` (wajib, format hex 6-digit `#rrggbb`).
+
+### `GET /settings/locale`
+
+Mengembalikan `locale` milik user (fallback ke `config('app.locale')`) dan
+`supported` (daftar locale yang valid: `id`, `en`).
+
+### `PUT /settings/locale`
+
+Body: `locale` (wajib, salah satu dari `supported`).
+
+### `GET /settings/dashboard-widgets`
+
+Mengembalikan `active` (daftar value widget yang aktif — semua widget kalau
+user belum pernah menyimpan pilihan) dan `available` (katalog lengkap widget:
+`value` + `label`).
+
+### `PUT /settings/dashboard-widgets`
+
+Body: `widgets` (wajib, array — boleh kosong untuk menyembunyikan semua
+widget). Setiap value harus salah satu dari `App\Enums\DashboardWidget`.

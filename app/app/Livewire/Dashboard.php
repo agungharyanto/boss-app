@@ -2,7 +2,7 @@
 
 namespace App\Livewire;
 
-use App\Enums\DashboardWidget;
+use App\Services\DashboardWidgetService;
 use Livewire\Attributes\On;
 use Livewire\Component;
 
@@ -14,28 +14,10 @@ class Dashboard extends Component
         // Re-rendering is enough — activeWidgets() re-reads the fresh preference.
     }
 
-    public function render()
+    public function render(DashboardWidgetService $service)
     {
         return view('livewire.dashboard', [
-            'activeWidgets' => $this->activeWidgets(),
+            'activeWidgets' => $service->activeWidgets(auth()->user()),
         ]);
-    }
-
-    /**
-     * @return list<DashboardWidget>
-     */
-    private function activeWidgets(): array
-    {
-        $saved = auth()->user()->preference?->dashboard_widgets;
-
-        if ($saved === null) {
-            return DashboardWidget::defaults();
-        }
-
-        return collect($saved)
-            ->map(fn (string $value) => DashboardWidget::tryFrom($value))
-            ->filter()
-            ->values()
-            ->all();
     }
 }

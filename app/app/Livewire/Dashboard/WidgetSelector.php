@@ -3,6 +3,7 @@
 namespace App\Livewire\Dashboard;
 
 use App\Enums\DashboardWidget;
+use App\Services\DashboardWidgetService;
 use Livewire\Component;
 
 class WidgetSelector extends Component
@@ -10,19 +11,16 @@ class WidgetSelector extends Component
     /** @var array<string, bool> */
     public array $selected = [];
 
-    public function mount(): void
+    public function mount(DashboardWidgetService $service): void
     {
-        $saved = auth()->user()->preference?->dashboard_widgets;
-        $active = $saved !== null
-            ? collect($saved)
-            : collect(DashboardWidget::defaults())->map(fn (DashboardWidget $w) => $w->value);
+        $active = collect($service->activeWidgetValues(auth()->user()));
 
         foreach (DashboardWidget::cases() as $widget) {
             $this->selected[$widget->value] = $active->contains($widget->value);
         }
     }
 
-    public function save(): void
+    public function save(DashboardWidgetService $service): void
     {
         $activeWidgets = collect($this->selected)
             ->filter()
@@ -30,9 +28,7 @@ class WidgetSelector extends Component
             ->values()
             ->all();
 
-        auth()->user()->preference()->updateOrCreate([], [
-            'dashboard_widgets' => $activeWidgets,
-        ]);
+        $service->update(auth()->user(), $activeWidgets);
 
         $this->dispatch('widgets-updated');
     }

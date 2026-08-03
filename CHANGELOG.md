@@ -3,6 +3,77 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.3.3 — Regulatory Tax Engine
+
+- Tabel baru `tax_components` — katalog pajak/pungutan dinamis (`code`
+  stable identifier mis. `PPN`/`BHP_USO`/`PPH_BADAN`, `name` boleh di-rename
+  admin, `type` `percentage`/`fixed`, `rate`), effective-dated
+  (`effective_from`/`effective_to`) — perubahan tarif **tidak pernah**
+  mengubah baris lama, selalu insert baris baru dengan `effective_from`
+  baru lewat `TaxComponentService::updateRate()`, menutup baris lama di
+  `effective_to`. Riwayat tarif jadi audit trail permanen.
+- Tabel baru `reseller_tax_policies` — siapa menanggung pajak apa
+  (`burden`: `customer_borne`/`reseller_borne`/`split`, `split_ratio` %
+  ditanggung customer kalau `split`), per reseller **atau** direct-retail
+  (`reseller_id` nullable). Partial unique index Postgres (bukan constraint
+  biasa — `reseller_id` nullable butuh dua index terpisah, `WHERE reseller_id
+  IS [NOT] NULL`) mencegah duplikasi policy aktif untuk kombinasi
+  tenant+reseller+component+effective_from yang sama.
+- Tabel baru `reseller_tax_ledger` — baris pajak per transaksi, snapshot
+  `rate_applied`/`burden_applied` saat kalkulasi (tidak berubah walau
+  `tax_components`/`reseller_tax_policies` di-update kemudian — audit
+  trail). `reference_type`/`reference_id` polymorphic generic **tanpa** FK
+  constraint (akan diisi `App\Models\Invoice` dst mulai v0.3.4 — lihat
+  kontrak integrasi di `CLAUDE.md`). `source` (`seeded`/`system`) membedakan
+  data uji coba dari data asli nanti.
+- Tabel baru `komdigi_remittance_summary` — agregat bulanan per
+  reseller×tax_component (termasuk baris direct-retail terpisah, sama pola
+  partial-unique-index dengan `reseller_tax_policies`), dibuat via
+  `RemittanceSummaryService::generateForPeriod()`.
+- **Service layer (BOSS-006)**: `TaxComponentService` (create, updateRate
+  effective-dated, toggleActive), `ResellerTaxPolicyService` (setPolicy
+  dengan validasi split_ratio 0–100, getActivePolicies dengan fallback
+  reseller-specific → direct-retail), `TaxCalculationService`
+  (calculateForAmount → `App\DataTransferObjects\TaxBreakdown`,
+  writeLedgerEntry — **kontrak stabil untuk v0.3.4**, lihat CLAUDE.md),
+  `RemittanceSummaryService` (generateForPeriod, finalize).
+- **Keputusan desain kunci**: policy↔component di-resolve lewat `code`
+  (stable identifier), bukan `tax_component_id` mentah — supaya kesepakatan
+  burden-sharing reseller tidak perlu di-set ulang setiap kali pemerintah
+  mengubah tarif pajak (`updateRate()` selalu insert baris baru dengan id
+  berbeda, code sama). Ditemukan sebagai bug saat testing (`calculateForAmount`
+  mengembalikan tax=0 untuk periode setelah rate change), diperbaiki di
+  `ResellerTaxPolicyService::getActivePolicies()`.
+- **Bug tersembunyi lain yang ditemukan+diperbaiki**: `Illuminate\Database\Eloquent\Collection::merge()`
+  di-override Laravel untuk merge berbasis primary key model, mengabaikan
+  key kustom dari `keyBy()` — `getActivePolicies()` awalnya salah
+  men-dedupe policy reseller-specific vs direct-retail karena ini. Fix:
+  `->toBase()` sebelum `merge()` untuk kembali ke `Illuminate\Support\Collection`
+  biasa yang merge berbasis key array, bukan primary key model.
+- **REST API**: `GET/POST/PUT /api/v1/tax-components` +
+  `POST .../update-rate` (admin-only), `GET/POST/PUT /api/v1/reseller-tax-policies`
+  (admin + reseller owner scoped via `ResellerContext`, staff read-only),
+  `GET /api/v1/tax-ledger`, `GET /api/v1/remittance-summary` +
+  `POST .../generate` (admin-only, keduanya — ledger/summary detail belum
+  diekspos ke reseller di sprint ini). Permission baru `tax_components.*`,
+  `reseller_tax_policies.*`, `tax_ledger.view`, `remittance_summary.*` —
+  hanya `super_admin`, mengikuti pola ketat `resellers.*` di v0.3.2 (role
+  `billing`/`finance` TIDAK otomatis dapat akses).
+- **Livewire UI**: `Tax\TaxComponentIndex` (CRUD + tombol "Update Rate"
+  effective-dating), `Tax\ResellerTaxPolicyIndex` (admin pilih reseller
+  manapun/direct-retail, reseller owner ter-scope otomatis ke reseller
+  miliknya). Sidebar cluster baru "Billing & Finance".
+- **Scope disesuaikan dari rencana awal** (fondasi tax engine saja, TANPA
+  hook otomatis ke invoicing — invoicing core baru di v0.3.4): semua data
+  transaksi diuji via `TaxEngineDummyDataSeeder` (local-only,
+  `source='seeded'`), bukan trigger dari invoice sungguhan.
+- Tests: 113/113 passing (105 existing + 8 file test baru mencakup
+  kalkulasi percentage/fixed, split ratio, remittance aggregation,
+  effective dating, dan otorisasi reseller owner/staff — lihat
+  `tests/Feature/Api/TaxComponentApiTest.php`,
+  `tests/Feature/Api/ResellerTaxPolicyApiTest.php`,
+  `tests/Feature/Tax/`).
+
 ## v0.3.2 — Multi-Tenant Reseller
 
 - Tabel baru `resellers` (child dari `tenant` — punya `tenant_id`, pakai

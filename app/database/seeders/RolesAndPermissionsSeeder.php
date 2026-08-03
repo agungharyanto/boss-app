@@ -33,6 +33,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedCustomerCrmPermissions($roles);
         $this->seedRegistrationPermissions();
         $this->seedResellerPermissions();
+        $this->seedTaxEnginePermissions();
     }
 
     /**
@@ -93,6 +94,35 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedResellerPermissions(): void
     {
         $permissions = ['resellers.view', 'resellers.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+    }
+
+    /**
+     * Permission modul Regulatory Tax Engine (v0.3.3). Sama seperti
+     * resellers.* di v0.3.2: hanya super_admin yang dapat permission ini
+     * ("admin-only untuk semua action" per TaxComponentPolicy, "admin: full
+     * akses" per ResellerTaxPolicyPolicy) — meski role billing/finance ada,
+     * mereka TIDAK otomatis dapat akses tax engine, mengikuti pola ketat
+     * yang sama dengan reseller management. Reseller owner/staff
+     * diotorisasi lewat keanggotaan reseller_users mereka sendiri (lihat
+     * ResellerTaxPolicyPolicy), bukan lewat permission Spatie ini.
+     */
+    private function seedTaxEnginePermissions(): void
+    {
+        $permissions = [
+            'tax_components.view',
+            'tax_components.manage',
+            'reseller_tax_policies.view',
+            'reseller_tax_policies.manage',
+            'tax_ledger.view',
+            'remittance_summary.view',
+            'remittance_summary.manage',
+        ];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

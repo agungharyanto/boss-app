@@ -7,7 +7,7 @@
 | v0.3.0  | Operasional     | Registration & Referral       | Registrasi multi-channel, agent, referral, komisi pending                                     | Selesai |
 | v0.3.1  | UI/UX           | Personalization & Navigation  | Theme custom (primary/text color), language switcher, dashboard widget selector, sidebar cluster-dropdown | Selesai |
 | v0.3.2  | Operasional     | Multi-Tenant Reseller         | Tabel resellers (child dari tenant), reseller_id menyebar, guard/role reseller, reseller_package_pricing | Selesai |
-| v0.3.3  | Billing & Finance | Regulatory Tax Engine        | tax_components dinamis (nama bebas, persen/nominal, on/off, versi-per-tanggal), reseller_tax_policies, reseller_tax_ledger, komdigi_remittance_summary | Backlog |
+| v0.3.3  | Billing & Finance | Regulatory Tax Engine        | tax_components dinamis (nama bebas, persen/nominal, on/off, versi-per-tanggal), reseller_tax_policies, reseller_tax_ledger, komdigi_remittance_summary | Selesai |
 | v0.3.4  | Billing & Finance | Invoicing Core               | Subscription plan per customer, generate invoice bulanan, invoice line items, status invoice   | Backlog |
 | v0.3.5  | Billing & Finance | Payment Gateway (Xendit)     | Integrasi Xendit (VA/QRIS/invoice), webhook handler + signature verification, idempotency, reconciliation | Backlog |
 | v0.4.0  | Komunikasi      | Communication (Baileys)       | WhatsApp gateway, notifikasi group, routing area, OTP                                         | Backlog |
@@ -33,3 +33,12 @@ dibuat, sama seperti pola yang sudah dipakai di `customers`) dan
 ditambahkan belakangan lewat migration alter terpisah. v0.3.2 sengaja tidak
 menyentuh `subscriptions` sama sekali karena tabel itu belum ada di titik ini
 (lihat `CHANGELOG.md` v0.3.2 untuk detail keputusan ini).
+
+**Dependency wajib untuk v0.3.4** (dicatat saat v0.3.3 selesai): saat
+`InvoiceService` dibuat, setiap invoice **harus** memanggil
+`TaxCalculationService::calculateForAmount()` lalu
+`TaxCalculationService::writeLedgerEntry()` — kontrak integrasi lengkap
+(urutan panggilan, tipe parameter, contoh kode) didokumentasikan di
+CLAUDE.md bagian "Tax engine integration contract (v0.3.4)". Tidak perlu
+migration tambahan untuk ini — `reseller_tax_ledger.reference_type`/
+`reference_id` sudah polymorphic generic sejak v0.3.3, tinggal diisi.

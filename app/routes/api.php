@@ -7,9 +7,13 @@ use App\Http\Controllers\Api\V1\DashboardWidgetSettingController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\LocaleSettingController;
 use App\Http\Controllers\Api\V1\RegistrationController;
+use App\Http\Controllers\Api\V1\RemittanceSummaryController;
 use App\Http\Controllers\Api\V1\ResellerController;
 use App\Http\Controllers\Api\V1\ResellerPackagePricingController;
+use App\Http\Controllers\Api\V1\ResellerTaxPolicyController;
 use App\Http\Controllers\Api\V1\ResellerUserController;
+use App\Http\Controllers\Api\V1\TaxComponentController;
+use App\Http\Controllers\Api\V1\TaxLedgerController;
 use App\Http\Controllers\Api\V1\ThemeSettingsController;
 use Illuminate\Support\Facades\Route;
 
@@ -41,7 +45,24 @@ Route::prefix('v1')->group(function () {
             Route::get('reseller-package-pricing/{pricing}', [ResellerPackagePricingController::class, 'show']);
             Route::put('reseller-package-pricing/{pricing}', [ResellerPackagePricingController::class, 'update']);
             Route::delete('reseller-package-pricing/{pricing}', [ResellerPackagePricingController::class, 'destroy']);
+
+            Route::get('reseller-tax-policies', [ResellerTaxPolicyController::class, 'index']);
+            Route::post('reseller-tax-policies', [ResellerTaxPolicyController::class, 'store']);
+            Route::get('reseller-tax-policies/{reseller_tax_policy}', [ResellerTaxPolicyController::class, 'show']);
+            Route::put('reseller-tax-policies/{reseller_tax_policy}', [ResellerTaxPolicyController::class, 'update']);
         });
+
+        // Admin-only tax engine catalog/reporting — no reseller.context needed.
+        Route::get('tax-components', [TaxComponentController::class, 'index']);
+        Route::post('tax-components', [TaxComponentController::class, 'store']);
+        Route::get('tax-components/{tax_component}', [TaxComponentController::class, 'show']);
+        Route::put('tax-components/{tax_component}', [TaxComponentController::class, 'update']);
+        Route::post('tax-components/{tax_component}/update-rate', [TaxComponentController::class, 'updateRate']);
+
+        Route::get('tax-ledger', [TaxLedgerController::class, 'index']);
+
+        Route::get('remittance-summary', [RemittanceSummaryController::class, 'index']);
+        Route::post('remittance-summary/generate', [RemittanceSummaryController::class, 'generate']);
 
         Route::post('registrations', [RegistrationController::class, 'store']);
         Route::get('referrals', [RegistrationController::class, 'referrals']);

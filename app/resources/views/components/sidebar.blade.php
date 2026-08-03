@@ -51,6 +51,16 @@
             ]),
         ],
         [
+            'id' => 'komunikasi',
+            'label' => __('Komunikasi'),
+            'active' => request()->routeIs('web.whatsapp-gateway.*'),
+            'links' => array_filter([
+                auth()->user()->can('viewAny', \App\Models\WhatsappSession::class)
+                    ? ['route' => 'web.whatsapp-gateway.index', 'label' => __('WhatsApp Gateway')]
+                    : null,
+            ]),
+        ],
+        [
             'id' => 'pengaturan',
             'label' => __('Pengaturan'),
             'active' => request()->routeIs('web.settings.*'),

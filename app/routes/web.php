@@ -14,6 +14,7 @@ use App\Livewire\Settings\PaymentGatewaySettings;
 use App\Livewire\Settings\ThemeSettings;
 use App\Livewire\Tax\ResellerTaxPolicyIndex;
 use App\Livewire\Tax\TaxComponentIndex;
+use App\Livewire\Whatsapp\WhatsappGatewayIndex;
 use App\Services\LocaleService;
 use Illuminate\Support\Facades\Route;
 
@@ -50,6 +51,7 @@ Route::middleware('auth')->name('web.')->group(function () {
         Route::get('/subscriptions', SubscriptionIndex::class)->name('subscriptions.index');
         Route::get('/invoices', InvoiceIndex::class)->name('invoices.index');
         Route::get('/payment-reconciliation', ReconciliationReport::class)->name('payment-reconciliation.index');
+        Route::get('/whatsapp-gateway', WhatsappGatewayIndex::class)->name('whatsapp-gateway.index');
     });
 
     Route::get('/resellers', ResellerIndex::class)->name('resellers.index');

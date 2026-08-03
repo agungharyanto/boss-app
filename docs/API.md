@@ -355,3 +355,61 @@ Kalau semua lolos, baru `App\Services\InvoiceService::markPaid()` dipanggil.
 
 Sandbox-only di sprint ini — `XenditGatewayService` menolak beroperasi kalau
 `XENDIT_IS_PRODUCTION=true` sementara `APP_ENV` server bukan `production`.
+
+## WhatsApp Gateway (Baileys, v0.4.0)
+
+Semua endpoint di bawah (kecuali webhook) ada di dalam grup middleware
+`reseller.context` — scoping otomatis lewat `BelongsToResellerScope` pada
+model `WhatsappSession`/`WhatsappMessageTemplate`/`WhatsappMessageLog`:
+reseller (owner/staff, via `reseller_users` membership) hanya melihat
+sesi/template/antrian miliknya sendiri; ISP admin (permission
+`whatsapp_gateway.view`/`.manage`) melihat semuanya termasuk sesi "direct".
+
+### `GET /whatsapp/sessions` · `GET /whatsapp/sessions/{session}`
+
+Daftar/detail sesi WhatsApp. `status`: `qr_pending`/`connected`/
+`disconnected`/`logged_out`.
+
+### `POST /whatsapp/sessions/{session}/refresh-qr`
+
+Minta QR code baru dari Node gateway (`GET /sessions/{key}/qr` di sisi
+Node, HMAC-signed). Kalau sesi berstatus `logged_out`, Node menghapus
+`auth_state` sesi itu dulu sebelum membuat pairing baru.
+
+### `GET /whatsapp/templates` · `PUT /whatsapp/templates/{eventType}` · `DELETE /whatsapp/templates/{eventType}`
+
+`{eventType}`: salah satu dari `invoice_due_reminder`/`payment_received`/
+`customer_registered`/`customer_suspended_reminder`. `PUT` meng-upsert
+template milik scope acting user (reseller override kalau ada context,
+default ISP-level kalau admin tanpa context). `DELETE` (reseller-only)
+mereset ke default ISP-level (hapus baris override).
+
+Variabel template: `{customer_name}`, `{customer_id}`, `{invoice_number}`,
+`{due_date}`, `{total_amount}`, `{package_name}`, `{company_name}`,
+`{payment_link}` (khusus `invoice_due_reminder`, di-generate on-demand
+lewat `PaymentService::createPaymentFor()` channel `XENDIT_INVOICE` — bisa
+kosong kalau channel itu belum aktif). Variabel yang tidak berlaku untuk
+suatu `event_type` dikosongkan, bukan dibiarkan sebagai placeholder mentah.
+
+### `GET /whatsapp/message-logs` · `POST /whatsapp/message-logs/{log}/retry`
+
+Antrian pesan (`status`: `queued`/`sent`/`failed`/`delivered`), filter
+`?status=`/`?reseller_id=` (khusus admin). `retry` hanya berlaku untuk log
+berstatus `failed` — reset ke `queued`, `attempts` di-nol-kan, dispatch
+ulang ke queue `whatsapp-{session_key}`.
+
+### `GET /settings/whatsapp-gateway` · `PUT /settings/whatsapp-gateway`
+
+Admin-only (`whatsapp_gateway_settings.view`/`.manage`, di luar grup
+`reseller.context`) — rate limit global: delay antar pesan, batch size, jeda
+antar batch, jadwal batch reminder harian (`daily_schedule_times`).
+
+### `POST /whatsapp/webhook/session-status`
+
+**Publik** (di luar `auth:sanctum`, throttle `60,1`) — dipanggil
+`whatsapp-gateway` (Node), bukan client BOSS App, setiap event
+`connection.update` (QR baru/connected/disconnected/logged_out).
+Autentikasi lewat HMAC-SHA256 (`App\Support\WhatsappHmac`, header
+`X-Whatsapp-Signature`/`X-Whatsapp-Timestamp`, toleransi 5 menit) — beda
+dari static-token Xendit. Selalu balas `200` apa pun hasilnya, sama seperti
+`/webhooks/xendit`.

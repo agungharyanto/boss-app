@@ -24,7 +24,7 @@ class RegistrationServiceTest extends TestCase
 
         $agent = Agent::factory()->create(['tenant_id' => $tenant->id]);
 
-        $customer = (new RegistrationService)->register([
+        $customer = app(RegistrationService::class)->register([
             'name' => 'Pelanggan Via Sales',
             'address' => 'Jl. Sales No. 1',
             'phone_number' => '081377777001',
@@ -47,7 +47,7 @@ class RegistrationServiceTest extends TestCase
         $user = User::factory()->create(['tenant_id' => $tenant->id]);
         $this->actingAs($user);
 
-        $customer = (new RegistrationService)->register([
+        $customer = app(RegistrationService::class)->register([
             'name' => 'Pelanggan Tanpa Referral',
             'address' => 'Jl. Admin No. 1',
             'phone_number' => '081377777002',

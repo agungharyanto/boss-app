@@ -51,6 +51,29 @@ services:
     networks:
       - boss-network
 
+  boss-whatsapp-worker:
+    build:
+      context: ./docker/php
+    container_name: boss-whatsapp-worker
+    restart: unless-stopped
+    working_dir: /var/www/html
+    # Separate from boss-worker: whatsapp-{session_key} is a dynamic queue
+    # name (one per reseller + "direct"), which a static --queue= flag can't
+    # enumerate ahead of time. --max-time=300 makes queue:work exit every 5
+    # minutes so the loop re-runs `whatsapp:queue-names` and restarts with
+    # any newly created reseller session's queue included — same
+    # polling-restart style as boss-scheduler below, no manual restart
+    # needed when a reseller's WhatsApp session is set up.
+    entrypoint: ["sh", "-c", "while true; do php artisan queue:work --queue=$(php artisan whatsapp:queue-names) --sleep=3 --tries=3 --max-time=300; done"]
+    volumes:
+      - ./app:/var/www/html
+    env_file:
+      - .env
+    depends_on:
+      - boss-app
+    networks:
+      - boss-network
+
   boss-scheduler:
     build:
       context: ./docker/php
@@ -66,6 +89,22 @@ services:
       - boss-app
     networks:
       - boss-network
+
+  whatsapp-gateway:
+    build:
+      context: ./whatsapp-gateway
+    container_name: whatsapp-gateway
+    restart: unless-stopped
+    volumes:
+      - ./whatsapp-gateway/auth_state:/app/auth_state
+    env_file:
+      - ./whatsapp-gateway/.env
+    networks:
+      - boss-network
+    # No host port published — internal-only, reached by boss-app/
+    # boss-whatsapp-worker via the boss-network service name (RULE
+    # BOSS-010). boss-nginx does NOT proxy to this service either; it has
+    # no public HTTP surface at all.
 
   boss-postgresql:
     image: postgres:16-alpine

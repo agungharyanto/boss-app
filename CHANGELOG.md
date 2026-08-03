@@ -3,6 +3,80 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.4.0 — WhatsApp Gateway (Baileys, multi-sesi per reseller)
+
+- Tabel baru `whatsapp_sessions` — satu sesi WhatsApp per reseller (`reseller_id`
+  nullable, null = sesi "direct" ISP), `status` (`qr_pending`/`connected`/
+  `disconnected`/`logged_out`), `qr_code_data`, `last_connected_at`/
+  `last_disconnected_at`. Partial unique index terpisah untuk
+  `reseller_id IS NOT NULL` (satu sesi per reseller) dan `reseller_id IS NULL`
+  (maksimal satu sesi direct per tenant).
+- Tabel baru `whatsapp_message_templates` — template per `event_type` (4 jenis:
+  `invoice_due_reminder`, `payment_received`, `customer_registered`,
+  `customer_suspended_reminder`), `reseller_id` nullable (null = default
+  ISP-level), `is_active`. Partial unique index sama polanya dengan sessions.
+- Tabel baru `whatsapp_message_logs` — audit trail tiap pesan (`customer_id`,
+  `invoice_id` nullable, `phone_number`, `event_type`, `rendered_content`,
+  `status`, `failed_reason`, `attempts`), index dedup `(invoice_id, event_type,
+  created_at)` dan `(customer_id, event_type, created_at)` untuk guard
+  reminder harian.
+- Tabel baru `whatsapp_gateway_settings` — singleton platform-level (rate
+  limit delay/batch size/jeda batch/jadwal harian), posisi sama seperti
+  `payment_gateway_settings`.
+- `App\Support\WhatsappHmac` — HMAC-SHA256 signing/verification internal
+  Laravel<->Node, timestamp + toleransi 5 menit (beda dari verifikasi
+  static-token Xendit).
+- `App\Services\Whatsapp\WhatsappGatewayService::buildAndQueue()` — resolve
+  template (override reseller > default ISP), render variabel, simpan log,
+  dispatch `SendWhatsappMessageJob` ke queue `whatsapp-{session_key}`.
+  `App\Services\Whatsapp\WhatsappTemplateService::resolve()`/`render()`.
+  `App\Services\Whatsapp\WhatsappSessionService` — verifikasi webhook +
+  reconciliation hourly dari Node gateway.
+- `App\Jobs\SendWhatsappMessageJob` — rate limit delay (random 5-10 detik),
+  retry max 3x dengan backoff 30s/2menit/5menit, POST HMAC-signed ke Node
+  service.
+- 3 scheduled command baru: `whatsapp:send-due-reminders` (H-5 & H-0, dedup
+  harian, self-gate terhadap `daily_schedule_times`), `whatsapp:send-suspended-reminders`
+  (harian selama status masih suspend, berhenti otomatis), `whatsapp:check-session-health`
+  (hourly, reconcile status sesi dari Node gateway).
+- Hook terintegrasi ke `InvoiceService::markPaid()` (event `payment_received`,
+  signature TIDAK diubah) dan `RegistrationService::register()` (event
+  `customer_registered`, di luar `DB::transaction()`).
+- Endpoint publik `POST /api/v1/whatsapp/webhook/session-status` (HMAC
+  verified, always 200) + REST API sessions/templates/message-logs/settings
+  (scoped via `BelongsToResellerScope` + `WhatsappSessionPolicy`/
+  `WhatsappMessageTemplatePolicy`/`WhatsappMessageLogPolicy`/
+  `WhatsappGatewaySettingsPolicy`).
+- Node.js service baru `whatsapp-gateway/` (container `whatsapp-gateway`,
+  internal-only, tanpa host port) — multi-session Baileys
+  (`@whiskeysockets/baileys`), auth state per sesi di volume
+  `whatsapp-gateway/auth_state/{session_key}/`, endpoint
+  `/sessions/{key}/send|qr|health` + `/sessions` (list), webhook balik ke
+  Laravel di setiap `connection.update`.
+- Container baru `boss-whatsapp-worker` — `queue:work` dengan daftar queue
+  dinamis dari `whatsapp:queue-names` (artisan command baru), restart tiap 5
+  menit (pola sama dengan `boss-scheduler`) supaya sesi reseller baru
+  otomatis ikut terdengar.
+- Livewire `Whatsapp\WhatsappGatewayIndex` (`/whatsapp-gateway`, cluster
+  sidebar baru "Komunikasi") — reseller: tab Konfigurasi (QR)/Template/
+  Antrian scoped ke reseller sendiri; ISP admin: tab Overview semua sesi +
+  Template default + Antrian gabungan + Rate Limit settings.
+- Permission baru: `whatsapp_gateway.view`/`.manage`,
+  `whatsapp_gateway_settings.view`/`.manage` (super_admin-only — reseller
+  owner/staff diotorisasi lewat `reseller_users` membership, bukan Spatie
+  permission, sama pola dengan reseller/tax engine).
+- `payment_gateway:import-env`-style one-time command:
+  `payment-gateway:import-env` tidak berubah; tambahan `WHATSAPP_GATEWAY_URL`/
+  `WHATSAPP_GATEWAY_HMAC_SECRET` di `.env.example` (root + `app/`) dan
+  `config('services.whatsapp_gateway.*')`.
+### Deferred
+- Two-way messaging + integrasi Chatwoot
+- Overdue reminder berulang (sengaja tidak ada sama sekali)
+- Notifikasi work order teknisi / outage alert
+- Rate limit setting per-reseller (sprint ini global saja)
+- Auto-refund, retry payment flow, partial payment/cicilan, proration
+  subscription (tetap deferred dari v0.3.4/v0.3.5)
+
 ## v0.3.5 — Payment Gateway (Xendit)
 
 - Tabel baru `payments` — satu baris per attempt/instance pembayaran

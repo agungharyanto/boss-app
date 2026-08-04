@@ -1,0 +1,33 @@
+port 1194
+proto udp
+dev tun
+topology subnet
+
+ca /etc/openvpn/pki-data/pki/ca.crt
+cert /etc/openvpn/pki-data/pki/issued/server.crt
+key /etc/openvpn/pki-data/pki/private/server.key
+# EC certs (see entrypoint.sh's EASYRSA_ALGO=ec) don't need a slow
+# Diffie-Hellman param file — "dh none" avoids the classic
+# multi-minute `openvpn --genkey dh2048.pem` first-boot delay.
+dh none
+tls-crypt /etc/openvpn/pki-data/pki/ta.key
+crl-verify /etc/openvpn/pki-data/pki/crl.pem
+
+server __VPN_SUBNET_NETWORK__ __VPN_SUBNET_NETMASK__
+client-config-dir /etc/openvpn/ccd
+ifconfig-pool-persist /etc/openvpn/ipp.txt
+
+# Hub-and-spoke isolation (v0.6.2 locked decision): every NAS client is
+# pushed exactly ONE route — to FreeRADIUS, and nothing else on
+# boss-network (boss-postgresql/boss-redis/etc. stay unreachable). Per-NAS
+# static internal_ip assignment itself comes from client-config-dir
+# (ifconfig-push in ccd/<username>, written by VpnProvisioningService), not
+# from OpenVPN's own dynamic pool.
+push "route __FREERADIUS_IP__ 255.255.255.255"
+
+keepalive 10 60
+persist-key
+persist-tun
+
+verb 3
+explicit-exit-notify 1

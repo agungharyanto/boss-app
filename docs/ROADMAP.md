@@ -12,8 +12,8 @@
 | v0.3.5  | Billing & Finance | Payment Gateway (Xendit)     | Integrasi Xendit (VA/QRIS/invoice), webhook handler + signature verification, idempotency, reconciliation | Selesai |
 | v0.4.0  | Komunikasi      | Communication (Baileys)       | WhatsApp gateway multi-sesi per reseller, template pesan, reminder invoice/suspend, reconciliation session | Selesai |
 | v0.5.0  | Operasional     | Installation                  | Work order teknisi (ODP locator Haversine, state machine, scan device, 4 foto wajib)          | Selesai |
-| v0.6.1  | Network         | FreeRADIUS Core & NAS Management | Container FreeRADIUS terpisah + rlm_sql ke `radius_db` (Postgres terpisah), tabel `nas` (port RADIUS unik per-NAS sejak migration pertama), NasService CRUD + test koneksi Mikrotik API | Aktif |
-| v0.6.2  | Network         | VPN Server Node #1 (OpenVPN)  | Hub-and-spoke: VPN node sebagai concentrator/relay, FreeRADIUS diakses di satu IP internal tetap dari sisi Mikrotik                          | Backlog |
+| v0.6.1  | Network         | FreeRADIUS Core & NAS Management | Container FreeRADIUS terpisah + rlm_sql ke `radius_db` (Postgres terpisah), tabel `nas` (port RADIUS unik per-NAS sejak migration pertama), NasService CRUD + test koneksi Mikrotik API | Selesai |
+| v0.6.2  | Network         | VPN Server Node #1 (OpenVPN)  | Hub-and-spoke: VPN node sebagai concentrator/relay, FreeRADIUS diakses di satu IP internal tetap dari sisi Mikrotik                          | Aktif |
 | v0.6.3  | Network         | Multi-Protokol VPN & Script Generator | WireGuard, L2TP/IPsec (SSTP di-skip), Script Generator (VPN + RADIUS script siap-paste ke terminal Mikrotik)                    | Backlog |
 | v0.6.4  | Network         | VPN Pool & Failover           | Schema `vpn_servers` siap N>1 node + health-check + auto-switch failover (N=1 node aktif sekarang, backend siap tanpa retrofit) | Backlog |
 | v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator + CoA/disconnect (port 3799) untuk isolir instan                     | Backlog |

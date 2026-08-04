@@ -522,7 +522,7 @@ Ping ke Mikrotik API NAS ini (bukan RADIUS, bukan ICMP) lewat
 menyimpan `status` (`online`/`offline`) + `last_ping_at`. **Ditolak** (422,
 `NasNotProvisionedException`) kalau `mikrotik_ip` masih kosong.
 
-## VPN Server Node #1 (OpenVPN, v0.6.2)
+## VPN Multi-Protokol (OpenVPN v0.6.2, WireGuard/L2TP-IPsec v0.6.3)
 
 Endpoint di bawah juga ada di dalam grup middleware `reseller.context`.
 `vpn_accounts` tidak punya `reseller_id`/`tenant_id` sendiri — otorisasi
@@ -532,24 +532,81 @@ diturunkan dari NAS pemiliknya (`NasPolicy::manage` terhadap
 
 ### `POST /nas/{nas}/vpn-account`
 
-Provisioning akun VPN baru untuk sebuah NAS: alokasikan `internal_ip` dari
-`vpn_ip_pool` milik `vpn_servers` yang aktif (race-condition-safe lewat
-`lockForUpdate()`), jalankan `easyrsa build-client-full` terhadap PKI
-bersama, simpan `cert_serial`, tulis file client-config-dir
-(`ifconfig-push`). **Ditolak** (422) kalau NAS sudah punya akun VPN aktif
-untuk protokol yang sama, pool IP habis (`VpnIpPoolExhaustedException`),
-atau PKI container `openvpn` belum pernah bootstrap
-(`VpnProvisioningException`). Tidak mengisi `nas.mikrotik_ip` — itu langkah
-manual terpisah setelah NAS benar-benar connect lewat tunnel dan
-`POST /nas/{nas}/test-connection` berhasil (script generator otomatis
-Mikrotik baru v0.6.3).
+Body opsional: `protocol` (`openvpn` default, `wireguard`, atau
+`l2tp_ipsec`). Provisioning akun VPN baru untuk sebuah NAS: alokasikan
+`internal_ip` dari `vpn_ip_pool` milik `vpn_servers` protokol yang sesuai
+dan aktif (race-condition-safe lewat `lockForUpdate()`), lalu jalankan
+langkah spesifik protokol:
+- **openvpn** — `easyrsa build-client-full` terhadap PKI bersama, simpan
+  `cert_serial`, tulis file client-config-dir (`ifconfig-push`).
+- **wireguard** — generate keypair (`wg genkey`/`wg pubkey` dari
+  `boss-app`), simpan `public_key`, tulis file peer ke volume bersama
+  (container `wireguard` menerapkannya lewat reconcile loop tiap ~10
+  detik, lihat CLAUDE.md). Response menyertakan `wireguard_private_key`
+  **HANYA SEKALI** saat ini — BOSS App tidak pernah menyimpannya, tidak
+  bisa diambil ulang lewat endpoint manapun setelah ini.
+- **l2tp_ipsec** — generate password acak, simpan ter-enkripsi di
+  `vpn_accounts.password`, regenerate seluruh file `chap-secrets` dari DB.
+
+**Ditolak** (422) kalau NAS sudah punya akun VPN aktif untuk protokol yang
+sama, pool IP habis (`VpnIpPoolExhaustedException`), atau prasyarat
+protokol belum siap (`VpnProvisioningException` — mis. PKI `openvpn` belum
+bootstrap). Tidak mengisi `nas.mikrotik_ip` — itu langkah manual terpisah
+setelah NAS benar-benar connect lewat tunnel dan
+`POST /nas/{nas}/test-connection` berhasil.
 
 ### `POST /vpn-accounts/{vpn_account}/revoke`
 
-Revoke sertifikat (`easyrsa revoke` + `gen-crl`), bebaskan `internal_ip`
-kembali ke pool, hapus file client-config-dir. **Tidak** me-restart/reload
-daemon `openvpn` — CRL dibaca ulang otomatis oleh OpenVPN di setiap koneksi
-baru/renegosiasi TLS, jadi revoke langsung efektif untuk percobaan koneksi
-berikutnya tanpa restart. Sesi yang SUDAH terkoneksi tidak langsung
-diputus paksa oleh endpoint ini (perlu OpenVPN management interface, belum
-dibangun sprint ini) — known limitation, dicatat sebagai backlog.
+Deprovisioning spesifik protokol (revoke sertifikat + `gen-crl` untuk
+OpenVPN, hapus file peer untuk WireGuard, hapus baris dari `chap-secrets`
+untuk L2TP/IPsec), lalu bebaskan `internal_ip` kembali ke pool. **Tidak**
+ada satu pun jalur yang me-restart/reload daemon-nya — OpenVPN membaca CRL
+ulang otomatis per koneksi baru, `chap-secrets` dibaca `pppd` fresh per
+percobaan (di-spawn baru oleh `xl2tpd` tiap kali), WireGuard reconcile loop
+mengambil perubahan di siklus berikutnya (maks ~10 detik, bukan instan).
+Sesi yang SUDAH terkoneksi (OpenVPN atau L2TP) tidak langsung diputus paksa
+oleh endpoint ini — known limitation, dicatat sebagai backlog.
+
+## Manajemen NAS (v0.6.3, halaman web, bukan REST API)
+
+`GET /nas` (`web.nas.index`, `App\Livewire\Network\NasIndex`) — UI list +
+create/edit NAS yang v0.6.1 sengaja tidak dibangun (API-only sprint itu).
+Field form: nama, reseller (admin only — reseller owner/staff otomatis
+terikat ke reseller miliknya, field disembunyikan), zona waktu, IP router
+(bisa diisi manual, terkunci read-only begitu NAS punya `vpn_accounts`
+aktif), port/username/password API (password masked, blank submit tidak
+menghapus nilai tersimpan), secret RADIUS (masked, wajib diisi saat create),
+deskripsi. Auth/Accounting Port ditampilkan read-only (1812/1813, sama
+seperti keputusan port default v0.6.3 di atas). Tombol "Tes Koneksi"
+memakai `RouterOsGateway` yang sama dengan endpoint REST
+`POST /nas/{nas}/test-connection` (v0.6.1) tapi terhadap nilai form yang
+sedang diketik, bukan nilai tersimpan — lihat CLAUDE.md untuk detail kenapa
+`NasService::testConnection()` sendiri tidak langsung dipakai di sini.
+REST API `/api/v1/nas` (v0.6.1) tetap ada dan tidak berubah — halaman ini
+cuma UI tambahan, bukan pengganti.
+
+## Script Generator (v0.6.3, halaman web, bukan REST API)
+
+`GET /vpn-script-generator` (`web.vpn-script-generator.index`,
+`App\Livewire\Network\VpnScriptGenerator`) — bukan endpoint REST, halaman
+Livewire biasa di dalam layout web utama. 2 tab:
+
+- **VPN Script**: pilih NAS + versi RouterOS (6/7) + protokol (WireGuard
+  disable otomatis kalau RouterOS 6.x dipilih — fitur itu cuma ada di
+  RouterOS 7+). Kalau NAS belum punya akun aktif untuk protokol itu,
+  provisioning otomatis dijalankan lewat `VpnScriptService` (memanggil
+  `VpnProvisioningService` yang sama dengan endpoint API di atas) sebelum
+  script digenerate. Untuk WireGuard, generate ulang HANYA berhasil kalau
+  akunnya baru saja diprovisioning di request yang sama (private key tidak
+  pernah disimpan) — kalau sudah ada akun aktif dari sebelumnya, harus
+  revoke dulu lewat API baru generate ulang.
+- **RADIUS Script**: generate `/radius add` + user API Mikrotik baru
+  (permission terbatas). Memakai port default FreeRADIUS (1812/1813),
+  BUKAN `nas.auth_port`/`acct_port` — lihat CLAUDE.md untuk alasannya.
+  Setiap generate juga me-rotate `nas.api_username`/`api_password`.
+
+Script yang dihasilkan idempotent (hapus interface/route/rule lama dulu)
+dan mengisolasi routing (routing-mark untuk OpenVPN/L2TP, `allowed-address`
+bawaan untuk WireGuard) — NAS tidak pernah dapat default route lewat
+tunnel. **Belum diuji terhadap perangkat Mikrotik sungguhan** (tidak ada
+di environment ini).

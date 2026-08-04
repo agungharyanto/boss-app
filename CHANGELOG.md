@@ -3,6 +3,395 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.6.3 — Multi-Protokol VPN (WireGuard, L2TP/IPsec) & Script Generator Mikrotik
+
+- **2 keputusan arsitektur diselesaikan bersama Agung sebelum implementasi**
+  (lihat `docs/ROADMAP.md`): (A) WireGuard & L2TP/IPsec di container Docker
+  terpisah dari `openvpn`, konsekuensinya `vpn_servers.protocol_support`
+  (json) diganti kolom `protocol` polos — sekarang satu baris per (host,
+  protocol); (B) tab RADIUS Script Generator sementara pakai port default
+  FreeRADIUS (1812/1813), bukan `nas.auth_port`/`acct_port`, sampai v0.6.5.
+- Container Docker baru `wireguard` (alpine + wireguard-tools 1.0.20210914,
+  host port UDP 51820) dan `l2tp` (alpine + strongSwan 5.9.13 + xl2tpd
+  1.3.18, host port UDP 500/4500/1701) — strongSwan dipilih atas libreswan
+  karena rilis Alpine-nya lebih rutin dan lebih umum jadi referensi setup
+  L2TP/IPsec PSK.
+- Migration alter `vpn_servers` (protocol_support json -> protocol string,
+  backfill data existing row v0.6.2 otomatis) + kolom baru
+  `vpn_accounts.public_key` (WireGuard, bukan secret — tidak perlu
+  encrypted).
+- `App\Services\Network\VpnProvisioningService::provision()`/`revoke()`
+  di-refactor bercabang per protokol:
+  - **WireGuard**: keypair digenerate di `boss-app` (`wg genkey`/`wg
+    pubkey` via Process facade — murni kripto, tidak butuh live interface).
+    Peer changes TIDAK bisa dijalankan langsung dari `boss-app` (beda
+    network namespace) — dipakai pola **reconcile loop** (idiom sama
+    `boss-scheduler`/`boss-whatsapp-worker`): `boss-app` menulis file
+    `[Peer]` per-NAS ke volume bersama, container `wireguard` menggabung +
+    `wg syncconf` tiap 10 detik. Private key HANYA dikembalikan sekali
+    lewat properti PHP transient (`VpnAccount::$wireguardPrivateKey`,
+    BUKAN kolom Eloquent) — tidak pernah disimpan di DB.
+  - **L2TP/IPsec**: PSK IPsec satu untuk seluruh node (infra-level, env
+    `L2TP_IPSEC_PSK`), auth per-NAS di layer PPP (`chap-secrets`, akhirnya
+    memakai kolom `vpn_accounts.password` yang sejak v0.6.2 sudah
+    disiapkan tapi belum terpakai). `chap-secrets` di-**regenerate
+    seluruhnya** dari DB tiap provision()/revoke() (bukan append/remove
+    baris) — `pppd` di-spawn `xl2tpd` fresh per percobaan koneksi, jadi
+    perubahan langsung efektif tanpa reload.
+- `App\Services\Network\MikrotikScriptGenerator` (pure templating, tanpa
+  I/O) + `App\Services\Network\VpnScriptService` (orkestrasi — provisioning
+  kalau belum ada akun, baca material yang tersedia per protokol, panggil
+  generator). Script idempotent (hapus interface lama dulu) dan isolasi
+  routing (routing-mark + rule untuk OpenVPN/L2TP; `allowed-address`
+  WireGuard sendiri sudah cukup) — NAS tidak pernah dapat default route
+  lewat tunnel.
+- UI baru **Script Generator** (`App\Livewire\Network\VpnScriptGenerator`,
+  `/vpn-script-generator`, cluster sidebar "Network" baru) — 2 tab (VPN
+  Script, RADIUS Script), reseller-scoped via `NasPolicy`. Generate RADIUS
+  Script juga meng-**(re)generate `nas.api_username`/`api_password`** —
+  menutup celah dengan `NasService::testConnection()` (v0.6.1) yang
+  butuh kredensial API Mikrotik yang benar-benar valid.
+
+Bug nyata ditemukan & diperbaiki lewat verifikasi end-to-end sungguhan
+(provisioning WireGuard/L2TP asli, peer terbukti muncul/hilang di `wg show`
+setelah reconcile loop, `chap-secrets`/`ipsec.conf` terbukti ter-render
+benar di dalam container):
+- `wg`/`wg genkey`/`wg pubkey` dipanggil dari `boss-app` tapi
+  `wireguard-tools` cuma ter-install di image `openvpn`— lupa ditambah ke
+  `docker/php/Dockerfile`. Kali ini paket baru ditaruh di layer `apk add`
+  **terpisah setelah** layer `docker-php-ext-install sockets` yang lambat,
+  supaya tidak mengulang kesalahan cache-invalidation v0.6.1/v0.6.2 (±7
+  menit kompilasi ulang percuma).
+- `Process::fake()` di test butuh pattern `wg genkey`/`wg pubkey` juga
+  diawali `*` (gotcha yang sama dengan `easyrsa` v0.6.2).
+- Bug kecil di test sendiri (bukan implementasi): asumsi awal `/29` CIDR
+  menghasilkan 4 alamat usable, ternyata 5 (`CidrRange` v0.6.2 memang benar
+  — perhitungan manual di test yang salah).
+- `provision()`'s final `->fresh()` re-query diam-diam membuang properti
+  PHP transient `$account->wireguardPrivateKey` (instance model baru dari
+  DB tidak mungkin membawa properti non-kolom) — ditemukan lewat test
+  sendiri, diperbaiki dengan tidak memanggil `->fresh()` di akhir
+  `provision()` (semua `issue*Credentials()` sudah memutasi instance yang
+  sama via `->update()`, jadi tidak ada data basi).
+
+Out-of-scope v0.6.3, di-declare eksplisit sebagai backlog: multi-node pool +
+health-check + failover + `VpnServerController` (v0.6.4 — baris
+`vpn_servers` WireGuard/L2TP sprint ini dibuat manual lewat `tinker`, sama
+seperti OpenVPN di v0.6.2), dynamic virtual server + CoA + port unik
+per-NAS sungguhan (v0.6.5 — RADIUS Script masih port default sampai saat
+itu), force-disconnect sesi WireGuard/L2TP yang sudah aktif saat revoke
+(WireGuard: peer hilang max ~10 detik setelah revoke, bukan instan; L2TP:
+sesi PPP yang sudah jalan tidak diputus paksa), verifikasi koneksi sungguhan
+dari NAS Mikrotik asli (tidak ada perangkat fisik/virtual di environment
+ini — sama seperti gap WhatsApp QR-scan v0.4.0).
+
+Detail lengkap ada di CLAUDE.md bagian "Multi-Protocol VPN & Script
+Generator (v0.6.3)".
+
+**Amendment (gap ditemukan setelah verifikasi awal, ditutup di sesi yang
+sama sebelum v0.6.3 di-tag)**: dropdown "Pilih NAS" di Script Generator
+ternyata kosong pada percobaan pertama — didiagnosis dulu sebelum
+diasumsikan bug: bukan bug query, tapi memang belum ada satu pun NAS asli
+untuk tenant demo (`super_admin@boss.local`) — 4 baris `nas` yang sempat
+ada semuanya sisa data pollution dari sesi verifikasi tinker v0.6.1-v0.6.3
+di tenant palsu yang tidak terhubung user manapun (sudah dibersihkan). Akar
+masalahnya: **UI manajemen NAS memang belum pernah dibangun** — v0.6.1
+sengaja API-only. Ditambahkan sebagai prasyarat Script Generator, bukan
+scope baru:
+- `App\Livewire\Network\NasIndex` (`/nas`, cluster sidebar "Network" di
+  atas Script Generator) — list + create/edit, pola admin-vs-reseller sama
+  `WhatsappGatewayIndex` (v0.4.0). `mikrotik_ip` sekarang bisa diisi manual
+  lewat UI ini (koreksi dari pembatasan `StoreNasRequest`/v0.6.1 yang
+  sebelumnya melarangnya sama sekali) — otomatis terkunci (read-only)
+  begitu NAS punya `vpn_accounts` aktif, TANPA membangun mekanisme
+  auto-sync `internal_ip` -> `mikrotik_ip` yang sungguhan (itu tetap gap
+  terpisah yang sudah tercatat, UI ini cuma mencegah admin bentrok dengan
+  auto-management yang belum ada).
+- Tombol "Tes Koneksi" di form create/edit — memakai `RouterOsGateway`
+  yang sama dengan `NasService::testConnection()` (v0.6.1, tidak ditulis
+  ulang), tapi dipanggil dengan nilai form YANG SEDANG DIKETIK (belum
+  tentu tersimpan) lewat instance `Nas` transient — `NasService`'s method
+  sendiri tidak bisa dipakai langsung untuk NAS baru karena butuh row yang
+  sudah persisted. Untuk NAS yang sudah tersimpan, `status`/`last_ping_at`
+  tetap ter-update ke row asli setelah tes.
+- Diverifikasi nyata (bukan asumsi): NAS yang dibuat lewat UI baru ini
+  langsung muncul di query dropdown Script Generator tanpa cache apa pun
+  (query yang sama, tidak ada layer cache di antaranya).
+- 12 test baru (`NasIndexLivewireTest`): render, create, validasi
+  (radius_secret wajib), blank-submit tidak menghapus secret tersimpan,
+  mikrotik_ip terkunci, reseller-scoping (create + isolasi lihat/edit),
+  tes koneksi sukses/gagal + tidak persist untuk NAS baru.
+
+**Amendment kedua (3 perbaikan dari hasil testing manual via UI, ditutup
+sebelum tag)**:
+- **Bug nyata**: `MikrotikScriptGenerator` selalu memakai mekanisme
+  `/routing table` + `routing-table=` (RouterOS 7-only) untuk isolasi
+  routing OpenVPN/L2TP, walau diklaim "RouterOS-generic v6.x dan v7.x" —
+  `/routing table` tidak ada sama sekali di RouterOS 6.x (didesain ulang
+  total di v7). Diperbaiki: bercabang per versi — v6 pakai `routing-mark=`
+  langsung di `/ip route add` + `/ip firewall mangle` (gaya lama, sesuai
+  referensi MixRadius), v7 tetap `/routing table`+`routing-table=`+
+  `/routing rule`. `dst-address` sendiri sudah benar ada di kedua jalur
+  sejak awal (diverifikasi, bukan bug). Semua script (protokol apa pun)
+  sekarang juga menghapus keempat interface client (ovpn/sstp/l2tp/pptp)
+  + WireGuard di awal, bukan cuma interface protokol yang sedang
+  digenerate.
+- **Bug nyata (akar masalah nas-11), ditemukan lewat investigasi langsung
+  ke volume PKI**: `chmod -R 0777` di entrypoint `openvpn` cuma jalan
+  SEKALI saat boot. Setiap invokasi `easyrsa` berikutnya (dari `boss-app`,
+  berjalan sebagai `www-data` di request HTTP asli) menulis ulang
+  `pki/index.txt`/`serial`/`index.txt.attr` dengan permission ketat
+  bawaan OpenSSL — request berikutnya oleh user/proses lain gagal
+  *Permission denied* setelah sempat mencetak progress dots OpenSSL
+  (".....+++...."), yang sebelumnya ikut ter-dump mentah ke pesan error
+  API. Diperbaiki: `VpnProvisioningService` sekarang menangkap stdout/
+  stderr terpisah, membersihkan pesan error (buang noise progress dots,
+  ambil baris terakhir yang relevan, log FULL output ke Laravel log), dan
+  me-restore permission 0777 setelah SETIAP invokasi easyrsa (sukses
+  maupun gagal) — bukan cuma sekali di boot. **Diverifikasi nyata**:
+  provisioning OpenVPN sebagai `www-data` sungguhan (`docker compose exec
+  --user www-data`, bukan root seperti sesi tinker sebelumnya) berhasil
+  dua kali berturut-turut tanpa chmod manual di antaranya; NAS asli milik
+  user (`nas-11`) yang tadinya gagal sekarang berhasil generate cert
+  (`cert_serial` terisi, file `.crt` tersimpan dengan pemilik `www-data`).
+- **Bug nyata tambahan, ditemukan saat menguji tombol revoke-lalu-generate-
+  ulang**: `vpn_accounts.internal_ip` punya unique constraint GLOBAL
+  (termasuk baris yang sudah revoked) sejak v0.6.2 — begitu satu IP pernah
+  dipakai, IP itu tidak bisa dipakai ulang selamanya walau sudah
+  dibebaskan di `vpn_ip_pool`, karena baris lama (revoked) masih menempati
+  nilai itu di index unique. Migration baru menggantinya dengan partial
+  unique index (`WHERE status = 'active'`) — pola sama dengan
+  `whatsapp_sessions` (v0.4.0) — supaya IP yang sudah revoked benar-benar
+  bisa dipakai ulang.
+- Tombol **"Cabut & Generate Ulang"** ditambahkan di Script Generator —
+  muncul otomatis saat generate gagal karena NAS sudah punya akun aktif
+  untuk protokol yang dipilih (kondisi ini reachable untuk WireGuard,
+  karena private key lama sudah hilang). Satu klik: revoke akun lama →
+  provision baru → generate script, dengan `wire:confirm` sebagai
+  peringatan aksi destruktif (koneksi lama terputus).
+
+**Amendment ketiga (4 perbaikan dari hasil test langsung di router Mikrotik
+asli, ditutup sebelum tag)**:
+- **Bug nyata, dilaporkan dari perangkat asli**: `navigator.clipboard.writeText()`
+  gagal senyap di tombol "Salin" Script Generator karena server ini masih HTTP
+  polos (bukan `localhost`, jadi bukan secure context browser) — Clipboard API
+  memang tidak tersedia sama sekali di kondisi ini, bukan bug logic. Diperbaiki
+  dengan fallback `document.execCommand('copy')` lewat textarea sementara,
+  dipilih otomatis berdasar `window.isSecureContext`. **Diverifikasi nyata**
+  lewat Playwright headless browser sungguhan yang login & klik tombol di
+  server dev ini sendiri (bukan localhost HTTPS) — dikonfirmasi
+  `isSecureContext=false`, `navigator.clipboard` memang undefined, dan
+  `document.execCommand('copy')` benar-benar terpanggil (di-hook langsung,
+  bukan diasumsikan) dengan UI feedback "Tersalin!" tampil.
+- **Bug nyata, dari log strongSwan router asli (`NO-PROPOSAL-CHOSEN`)**:
+  `ipsec.conf.template` cuma menawarkan `aes256/aes128/3des-sha1-modp1024`
+  dengan strict mode (`!`) — RouterOS 7 klien asli menawarkan proposal ESP
+  yang tidak persis cocok (termasuk NULL-encryption/HMAC-SHA1, ditemukan dari
+  referensi traffic MixRadius yang berhasil konek). Diperbaiki: proposal
+  ESP/IKE diperluas (tambah `modp2048`, tambah `null-sha1` di ESP) dan strict
+  mode (`!`) dilepas supaya strongSwan juga mencocokkan default bawaannya
+  sendiri kalau penawaran RouterOS tidak persis sama. **Batasan verifikasi
+  jujur**: dikonfirmasi config valid & strongSwan start bersih tanpa error
+  fatal (`ipsec statusall` menunjukkan connection ter-load benar), TAPI
+  `NO-PROPOSAL-CHOSEN` benar-benar hilang + IPsec SA established + l2tp-client
+  "connected" di RouterOS 7 asli **belum bisa dikonfirmasi dari environment
+  ini** (tidak ada akses perangkat Mikrotik fisik/virtual) — perlu tes ulang
+  langsung oleh Agung di router asli.
+- **Perubahan mekanisme, dari laporan reboot-prompt yang menggantung**: paste
+  script panjang (terutama OpenVPN yang berisi private key PEM) langsung ke
+  terminal interaktif RouterOS ditemukan bisa memicu prompt konfirmasi tak
+  terkait ("Save changes? [y/N]") di tengah paste, memutus sisa perintah.
+  Diganti dengan mekanisme **fetch+import**: UI sekarang menampilkan satu
+  baris pendek (`/tool fetch ... ;/import file-name=...;/file remove ...`)
+  alih-alih script penuh untuk di-paste. `App\Services\Network\
+  ScriptDownloadTokenService` menyimpan script lengkap di cache (Redis)
+  dengan token acak 48-karakter, TTL 10 menit, **sekali pakai**
+  (`Cache::pull` — atomic get-and-delete). Endpoint baru
+  `GET /vpn-script-generator/download/{token}.rsc`
+  (`VpnScriptDownloadController`) sengaja TANPA middleware auth — `/tool
+  fetch` RouterOS tidak mengirim cookie/token, keamanan bertumpu pada token
+  itu sendiri (entropi tinggi + TTL pendek + sekali pakai), bukan permanent
+  public URL. Skema URL (`http`/`https`) diambil dari request yang sedang
+  berjalan (`request()->getSchemeAndHttpHost()`), BUKAN hardcode — server
+  ini masih HTTP polos, otomatis berubah ke `https` sendiri begitu TLS
+  terpasang, tanpa ubah kode. Pola yang sama dipakai untuk SEMUA jenis
+  script (VPN maupun RADIUS), bukan cuma OpenVPN, demi konsistensi UX. Script
+  lengkap tetap bisa dilihat lewat `<details>` collapsible di bawah
+  one-liner (transparansi/audit), hanya bukan target copy-paste utama lagi.
+  **Diverifikasi nyata** end-to-end: Playwright browser sungguhan
+  men-generate one-liner asli (`mode=http` terkonfirmasi, bukan hardcode
+  https), lalu `curl` langsung ke endpoint download membuktikan isi script
+  yang diunduh benar dan fetch KEDUA ke token yang sama mengembalikan 404
+  (sekali-pakai benar-benar berfungsi). **Batasan verifikasi jujur**: yang
+  BISA dikonfirmasi dari sini adalah server-side (isi script benar, token
+  sekali pakai, tidak hardcode https). Bahwa prompt `[y/N]` benar-benar tidak
+  lagi menggantung proses saat `/tool fetch` + `/import` dijalankan di
+  RouterOS asli **belum bisa dikonfirmasi dari environment ini** — perlu tes
+  langsung oleh Agung di router asli.
+- **Bug nyata, kontras tombol**: tombol "Cabut & Generate Ulang" pakai
+  `bg-red-600 text-white` — ternyata SATU-SATUNYA tempat di seluruh app yang
+  memakai pola filled-button untuk aksi destruktif (pola dominan app-wide
+  adalah `text-red-600 hover:underline`, dipakai di 6+ tempat lain — lihat
+  `nas-index.blade.php`, `customer-show.blade.php`, dll). Akar masalah
+  ganda: (1) Tailwind CSS bundle belum di-rebuild sejak view ini dibuat, jadi
+  `bg-red-600` memang tidak ada sama sekali di CSS terkompilasi (bukan typo
+  class), (2) bahkan setelah rebuild, class itu tetap tidak konsisten dengan
+  pola app. Diperbaiki dengan pindah ke pola `text-red-600 hover:underline`
+  yang sudah established, sekaligus rebuild Tailwind bundle
+  (`app-BrUlYJCB.css`) untuk semua view v0.6.3 yang belum pernah di-rebuild
+  sejak dibuat (termasuk `nas-index.blade.php`). **Diverifikasi nyata**:
+  Playwright mengambil `getComputedStyle` warna tombol "Hapus" (pola yang
+  sama) di halaman NAS sungguhan — hasilnya `oklch(0.637 0.237 25.331)`,
+  merah Tailwind `red-600` asli, bukan putih/transparan.
+- 4 test baru (`VpnScriptDownloadTest`): download token valid, token sekali
+  pakai (fetch kedua 404), token tidak dikenal 404, `mode=http` bukan
+  hardcode https. `VpnScriptGeneratorLivewireTest` diperbarui untuk
+  memverifikasi `fetchCommand` (one-liner) terisi, bukan cuma
+  `generatedScript`.
+
+**Amendment keempat (regresi 500 di tombol "Cabut & Generate Ulang",
+ditemukan lewat pemakaian nyata setelah Amendment ketiga, ditutup sebelum
+tag)**: klik tombol untuk NAS dengan protokol WireGuard menghasilkan 500
+generik. **Akar masalah ditemukan dari `storage/logs/laravel.log` asli**
+(bukan tebakan): `mkdir(): Permission denied` di
+`VpnProvisioningService::issueWireGuardCredentials()` saat menulis fragment
+peer ke `/vpn-wg-data/peers`. Investigasi lanjutan (`stat` langsung dari
+dalam container) menemukan `/etc/wireguard` (mount point volume
+`vpn_wg_data`) sendiri berpermission `700 root:root` — bawaan default paket
+`wireguard-tools` Alpine (dirancang untuk mengamankan private key di setup
+single-user), ikut terbawa ke volume Docker saat pertama kali dibuat.
+Entrypoint `wireguard` cuma pernah `chmod` anak-anaknya (`peers/` dan kedua
+file key), tidak pernah direktori volume itu sendiri — `www-data` sama
+sekali tidak bisa traverse masuk ke `/etc/wireguard`, jadi
+`File::isDirectory()`/`makeDirectory()` gagal EACCES sebelum sempat
+menyentuh `peers/` yang sebenarnya sudah permisif. Diperbaiki dengan
+`chmod 0755 "$WG_DIR"` tambahan di `docker/wireguard/entrypoint.sh`. Volume
+`vpn_l2tp_secrets` diperiksa juga (kekhawatiran kelas bug yang sama) —
+ternyata aman, `755` sejak awal karena dibuat murni oleh `mkdir -p` tanpa
+paket yang menyuntik permission ketat. **Diverifikasi nyata, ulang persis
+skenario yang dilaporkan**: rebuild container `wireguard`, lalu Playwright
+browser sungguhan login → pilih NAS `test-x86-bajastu` (nas-11, yang
+memang sudah punya akun WireGuard aktif) → protokol WireGuard → Generate →
+tombol "Cabut & Generate Ulang" muncul → klik → confirm popup asli → hasil
+one-liner fetch+import baru tampil, TANPA 500. Dikonfirmasi juga di DB
+(akun lama berubah `revoked`, akun baru `active`) dan di log (tidak ada
+entri error/warning baru selama window itu).
+
+**Amendment kelima (verifikasi mendalam terhadap NAS Mikrotik produksi asli
+`test-x86-bajastu`, RouterOS 7.11, via `RouterOsApiGateway` — bukan simulasi,
+ditutup sebelum tag)**: 3 laporan baru dari test langsung ke router asli
+setelah Amendment ketiga/keempat (fetch+import). Untuk pertama kalinya di
+sprint ini, seluruh siklus test→diagnosis→perbaikan→verifikasi ulang
+dilakukan otonom lewat API langsung ke router produksi (bukan minta admin
+tes manual berulang), dengan `/system/script` sebagai pengganti paste
+terminal manual dan `tcpdump`/`tshark` di level container maupun host untuk
+bukti paket nyata.
+
+1. **OpenVPN — bug nyata, syntax error saat import certificate+private key**:
+   `MikrotikScriptGenerator::openVpnScript()` sejak awal meng-embed konten
+   PEM certificate/key sebagai teks mentah di badan script `.rsc` (awalnya
+   dimaksudkan cuma sebagai komentar instruksional untuk upload manual, tapi
+   fetch+import Amendment ketiga mengeksekusi SELURUH isi file sebagai
+   command RouterOS) — baris PEM mentah bukan syntax command yang valid,
+   `/import` gagal begitu certificate/key sungguhan terlibat. Diperbaiki
+   dengan mendesain ulang, bukan sekadar membetulkan escaping: setiap file
+   (`ca.crt`/`client.crt`/`client.key`) sekarang punya token
+   download-sekali-pakai sendiri (mekanisme sama dengan
+   `ScriptDownloadTokenService`), diambil via `/tool fetch` terpisah tepat
+   sebelum `/certificate import` — tanpa langkah manual tambahan buat admin,
+   dan PEM tidak pernah lagi terlihat di browser (private key kini "shown
+   once" sama seperti WireGuard). **Diverifikasi nyata**: script dijalankan
+   via API di router asli, tuntas tanpa syntax error, kedua certificate
+   berhasil ter-import (`private-key=true` pada client cert), file sementara
+   di router bersih terhapus.
+   - **Bonus temuan saat verifikasi konektivitas nyata (di luar scope
+     laporan awal, tapi memblokir hal yang sedang diverifikasi)**: server
+     OpenVPN mewajibkan `tls-crypt`, padahal fitur itu baru ada di RouterOS
+     mulai 7.17rc3 — router produksi ini (dan kemungkinan besar mayoritas
+     RouterOS 7.x yang sudah deployed) masih di bawah versi itu, membuat
+     server secara struktural TIDAK MUNGKIN cocok dengan client manapun yang
+     lebih lama. Dilepas dari `docker/openvpn/server.conf.template` (kembali
+     ke TLS berbasis certificate murni, tanpa lapisan HMAC tambahan
+     tls-crypt/tls-auth — tls-auth juga tidak dipakai karena RouterOS's
+     `/interface ovpn-client add` tidak punya parameter inline untuknya).
+     Setelah dilepas, real TLS handshake sukses (`VERIFY OK`) — tapi
+     ditemukan gejala baru (reconnect loop dengan `ECONNREFUSED` di sisi
+     server) yang **belum diselesaikan**, di luar cakupan laporan asli;
+     dihentikan investigasinya di titik ini untuk fokus ke 2 bug yang
+     eksplisit dilaporkan.
+2. **WireGuard — 2 bug nyata ditemukan berurutan, keduanya sekarang
+   terverifikasi teratasi total secara end-to-end**:
+   - Bug pertama: `allowed-address` pada peer RouterOS **tidak otomatis
+     mengisi routing table** — bertentangan dengan asumsi lama di CLAUDE.md
+     ("allowed-address sudah cukup jadi isolasi routing"). Dibuktikan
+     langsung via `/ip route print`: satu-satunya rute ke IP internal
+     FreeRADIUS adalah rute lama milik interface OpenVPN, tidak aktif.
+     Diperbaiki dengan menambahkan `/ip route add` eksplisit di
+     `wireGuardScript()`, sama seperti OpenVPN/L2TP.
+   - Bug kedua, jauh lebih dalam — ditemukan lewat binary-search sistematis
+     (bukan tebakan) setelah bug pertama ternyata belum cukup: ping masih
+     100% gagal walau rute sudah benar dan handshake WireGuard sukses.
+     Serangkaian tes isolasi (`allowed-address` permisif vs sempit,
+     kombinasi sisi client/server, address `/24` vs `/32`) mempersempit
+     masalah ke satu variabel: `AllowedIPs` di **sisi server** — hanya
+     `0.0.0.0/0` yang berhasil, subnet manapun lain (termasuk yang secara
+     teori seharusnya cocok) gagal. `rx` byte counter naik (paket
+     terenkripsi diterima & valid secara kriptografi) tapi `tx` statis dan
+     0 paket pernah muncul di `wg0` — bukti paket dibuang SETELAH decrypt.
+     Root cause sebenarnya: **NAT rule di router produksi ini sendiri**
+     (`"NAT KE ANTEN"`, `src-address-list=!NO-NAT`, tanpa batasan interface
+     keluar) ikut menerapkan source-NAT ke traffic tunnel WireGuard kita
+     karena subnet VPN (`172.23.194.0/24`/`172.23.195.0/24`/`172.23.196.0/24`)
+     tidak terdaftar di address-list `NO-NAT` router — source paket berubah
+     dari `172.23.195.2` jadi alamat publik NAT router SEBELUM sempat
+     dienkripsi, sehingga tidak pernah cocok `AllowedIPs` server manapun
+     selain yang benar-benar permisif. **Bukan bug di kode/config BOSS App
+     sama sekali** — diperbaiki di firewall router (ketiga subnet VPN
+     ditambahkan ke `address-list NO-NAT` via API, atas persetujuan
+     eksplisit sebelum mengubah konfigurasi produksi). **Diverifikasi nyata,
+     end-to-end, dengan config production penuh** (bukan test permisif):
+     script digenerate lewat `VpnScriptService` resmi, `allowed-address=/32`
+     seperti semestinya — hasil 6/6 paket ping diterima, 0% packet loss,
+     RTT ~6ms.
+3. **L2TP/IPsec — `NO-PROPOSAL-CHOSEN` benar-benar teratasi, tapi
+   ditandai sebagai known limitation, bukan selesai**: root cause SEBENARNYA
+   bukan soal cipher/hash/lifetime yang diduga sebelumnya (Amendment
+   ketiga) — ditemukan lewat log internal `charon` sendiri, yang sebelumnya
+   tidak pernah bisa dibaca sama sekali (charon default log ke syslog,
+   container ini tidak punya syslog daemon; ditambahkan `syslogd` permanen
+   di entrypoint untuk observability). Log itu menunjukkan
+   `"no IKE config found for 172.28.0.13...144.79.52.0"` — charon menolak
+   SEBELUM sempat mengevaluasi satu pun proposal cipher, karena `left=` di
+   `ipsec.conf` di-pin ke IP publik server sementara Docker men-DNAT paket
+   masuk menjadi IP internal container sebelum sampai ke charon, jadi
+   definisi `conn` tidak pernah cocok apa pun. Diperbaiki dengan
+   `left=%any` — pola standar untuk IPsec responder di belakang
+   NAT/port-forward container. **Diverifikasi nyata**: IKE_SA + CHILD_SA
+   established dan STABIL 1+ menit dengan DPD (Dead Peer Detection) sukses
+   bolak-balik berkali-kali — `NO-PROPOSAL-CHOSEN` tuntas hilang. Perbaikan
+   `address-list NO-NAT` (poin 2) juga dicoba terhadap L2TP dengan hipotesis
+   akar masalah yang sama — **tidak berdampak**, dikonfirmasi lewat capture
+   ulang di level host.
+   **Tapi**: lapisan L2TP/PPP di ATAS IPsec yang sudah established itu tidak
+   pernah benar-benar terlindungi. `tcpdump` di level **host** (interface
+   publik server, bukan di dalam container — sesuai saran eksplisit
+   sebelum dicoba, untuk menyingkirkan kemungkinan Docker bridge/NAT
+   sebagai penyebab) membuktikan RouterOS mengirim paket kontrol L2TP
+   (port 1701, `SCCRQ`) sebagai **UDP polos, bukan terbungkus ESP** — 0
+   paket ESP ditemukan di seluruh capture, meski IKE Phase 1 dan Phase 2
+   (Quick Mode) sukses negosiasi tepat sebelumnya. Docker networking
+   (bridge vs host mode) dan NAT eksplisit disingkirkan sebagai penyebab —
+   paket sampai utuh identik di level host maupun container. Root cause
+   sebenarnya ada di bagaimana mode sederhana RouterOS
+   `l2tp-client use-ipsec=yes` menerapkan (atau gagal menerapkan) Security
+   Policy Database-nya sendiri secara internal untuk melindungi trafik
+   L2TP — di luar kendali/kemampuan diagnosis dari sisi server BOSS App.
+   **Keputusan eksplisit**: L2TP/IPsec ditandai sebagai *known limitation*
+   dan sprint v0.6.3 tetap ditutup — OpenVPN dan WireGuard sudah fully
+   functional dan terverifikasi nyata di router produksi yang sama, L2TP
+   tidak memblokir keduanya. Detail arsitektur lengkap ada di
+   `docs/ROADMAP.md`.
+
 ## v0.6.2 — VPN Server Node #1 (OpenVPN) & Hub-and-Spoke Routing ke FreeRADIUS
 
 - Container Docker baru `openvpn` — dibangun sendiri dari `alpine:3.20` +

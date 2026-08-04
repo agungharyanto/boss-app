@@ -1,0 +1,80 @@
+config setup
+	charondebug="ike 2, knl 2, cfg 2, dmn 2, mgr 2"
+	uniqueids=no
+
+# L2TP-over-IPsec transport mode, PSK auth — classic Mikrotik-compatible
+# setup (RouterOS's l2tp-client `use-ipsec=yes ipsec-secret=...` expects
+# exactly this shape, not IKEv2/tunnel mode).
+conn L2TP-PSK
+	authby=secret
+	pfs=no
+	auto=add
+	keyingtries=3
+	dpddelay=30
+	dpdtimeout=120
+	dpdaction=clear
+	rekey=no
+	ikelifetime=1d
+	keylife=1h
+	type=transport
+	# left=%any, NOT the public IP — the actual REAL root cause of the
+	# reported disconnect (found via charon's own internal log, which had
+	# never been captured/read before this: charon logs to syslog by
+	# default, invisible in this syslog-less container until a filelog{}
+	# stanza was added to strongswan.conf to redirect it). The log showed
+	# "no IKE config found for 172.28.0.13...144.79.52.0, sending
+	# NO_PROPOSAL_CHOSEN" — meaning strongSwan rejected the connection
+	# before ever evaluating a single cipher/hash/lifetime combination:
+	# Docker's port-1500-forwarding (`docker-compose.yml` publishing this
+	# container's 500/udp) DNATs the packet's destination address from the
+	# public IP to this container's own internal boss-network address
+	# (172.28.0.13) before it ever reaches charon — so a `conn` pinned to
+	# the public IP via left=__PUBLIC_IP__ can NEVER match, regardless of
+	# what proposal is offered. Every earlier "fix" in this file (esp=,
+	# ike=, ikelifetime=) was diagnosing the wrong layer — the proposals
+	# were never actually reached at all. left=%any is the standard fix
+	# for exactly this class of "IPsec responder behind NAT/port-forward"
+	# deployment.
+	left=%any
+	leftprotoport=17/1701
+	right=%any
+	rightprotoport=17/%any
+	# Proposal set widened TWICE now against a real RouterOS 7.11 device —
+	# both times against real logged evidence, not guesses:
+	#
+	# Round 1 (esp=/Phase 2): fixed a NO-PROPOSAL-CHOSEN at the ESP/quick-
+	# mode stage. Confirmed correct in round 2's real test — the router's
+	# own debug log dumped its literal ESP offer (AES-CBC-256/HMAC-SHA1,
+	# AES-CBC-128/HMAC-SHA1, NULL-enc/HMAC-SHA1) and it matches esp= below
+	# byte-for-byte. Round 1 did NOT actually fix the reported disconnect,
+	# though — round 2 found NO-PROPOSAL-CHOSEN was STILL happening, just
+	# one layer up, at Phase 1 (IKE SA), which round 1 never touched with
+	# real evidence (ike= was guessed from a different reference setup,
+	# never confirmed against this router's actual offer).
+	#
+	# Round 2 (ike=/Phase 1), first attempt: RouterOS's simplified
+	# l2tp-client `use-ipsec=yes ipsec-secret=...` mode has no exposed
+	# config to read its exact Phase 1 proposal from (unlike the full
+	# /ip ipsec profile menu) — widening ike= to more sha1/sha256
+	# combinations changed nothing, still NO-PROPOSAL-CHOSEN.
+	#
+	# Round 2, second attempt — HAND-DECODED the router's own raw ISAKMP SA
+	# payload from its debug log (charondebug bumped to see it). First pass
+	# at this decode misread the RFC 2409 Appendix A attribute-class table
+	# from memory — swapped Hash Algorithm (class 2) and Authentication
+	# Method (class 3), concluding the router wanted MD5 when it doesn't.
+	# Re-verified the table against the actual RFC text before decoding
+	# again: class 1=Encryption, 2=Hash, 3=Auth-Method, 4=Group-Desc,
+	# 11=Life-Type, 12=Life-Duration, 14=Key-Length. Correct decode of all
+	# 4 transforms: AES-CBC (256 or 128 key), **SHA1** (not MD5), **PSK**
+	# (not DSS-signatures — same misread), modp2048 or modp1024,
+	# **life-duration=86400s (1 day)**. Cipher/hash/group all already
+	# matched ike= below even before this correction — the ONE genuine
+	# mismatch was lifetime: this file had ikelifetime=8h (28800s) against
+	# the router's proposed 86400s. strongSwan's classic ipsec.conf/starter
+	# stack (what `conn` syntax uses, not the modern swanctl/vici config)
+	# matches lifetime as part of the transform, so a differing value is
+	# itself a real cause of NO-PROPOSAL-CHOSEN, not just a cosmetic
+	# preference — fixed by setting ikelifetime=1d to match exactly.
+	ike=aes256-sha256-modp2048,aes256-sha1-modp2048,aes256-sha1-modp1024,aes128-sha256-modp2048,aes128-sha1-modp2048,aes128-sha1-modp1024,3des-sha1-modp1024
+	esp=aes256-sha1,aes128-sha1,null-sha1

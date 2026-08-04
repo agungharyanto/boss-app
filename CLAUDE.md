@@ -762,6 +762,295 @@ interface). `nas.mikrotik_ip` is still not auto-filled by this sprint's provisio
 was explicit that connecting `internal_ip` to `nas.mikrotik_ip` is a manual/separate step this sprint, not
 automated until v0.6.3's script generator closes the loop.
 
+## Multi-Protocol VPN & Script Generator (v0.6.3)
+
+**Two architecture decisions were resolved explicitly with Agung before any migration/container was
+written** (see `docs/ROADMAP.md` for the full text) — don't re-litigate either without new confirmation:
+1. WireGuard and L2TP/IPsec each get their own container, separate from `openvpn` — matches this repo's
+   single-responsibility container pattern (`freeradius-db` separate from `freeradius`, `whatsapp-gateway`
+   separate from `boss-app`). WireGuard needs a kernel netlink interface type + `NET_ADMIN`; L2TP/IPsec
+   needs strongSwan (IKE/IPsec) + xl2tpd + pppd + `/dev/ppp` — three genuinely distinct stacks.
+2. The Script Generator's RADIUS tab uses FreeRADIUS's default port (1812/1813), not `nas.auth_port`/
+   `acct_port`, until the dynamic per-NAS virtual server ships in v0.6.5 — see `MikrotikScriptGenerator::radiusScript()`'s
+   own docblock for the "must regenerate after v0.6.5" note baked into the generated script's own comments.
+
+**Decision 1's schema consequence**: `vpn_servers.protocol_support` (a json array from v0.6.2, implying one
+row could represent several simultaneously-running protocols) was **replaced** with a plain `protocol`
+column — one `vpn_servers` row now represents exactly one (host, protocol) pair, because `status`/
+`current_clients` is fundamentally a per-daemon concept once protocols run in separate containers. A new
+migration (`2026_08_04_120000_alter_vpn_servers_protocol_column.php`, NOT an edit to the already-tagged
+v0.6.2 migration) backfills the existing row automatically. `App\Enums\VpnProtocol` (`OpenVpn`/`WireGuard`/
+`L2tpIpsec`) is now cast on both `vpn_servers.protocol` and `vpn_accounts.protocol`.
+
+**Built from `alpine:3.20` + the distro's own packages for both new containers, not community images** —
+same reasoning as `docker/freeradius` and `docker/openvpn`: `wireguard-tools` 1.0.20210914 and `strongswan`
+5.9.13 / `xl2tpd` 1.3.18 are Alpine's own current packages. **strongSwan chosen over libreswan** specifically
+for L2TP/IPsec PSK: more frequent Alpine releases (5.9.13 vs libreswan's 5.0) and far more common as the
+reference implementation for exactly this "L2TP-over-IPsec, PSK auth" shape (the one Mikrotik's
+`l2tp-client use-ipsec=yes` expects).
+
+**WireGuard provisioning is NOT the same shared-volume-plus-easyrsa pattern as OpenVPN (v0.6.2) — a
+genuinely different mechanism, not a copy-paste** — `wg set`/netlink peer changes only affect the process's
+own network namespace, so running them from `boss-app` would silently do nothing to the real `wg0` interface
+(they're different containers, different namespaces). What DOES work from `boss-app`: keypair generation
+(`wg genkey`/`wg pubkey`, pure crypto via the `Process` facade, no interface involved) — needed
+`wireguard-tools` added to `docker/php/Dockerfile` too (found missing during real end-to-end verification,
+not caught by mocked tests — see gaps below). What doesn't: applying the peer to the live interface. Solved
+with a **reconcile loop** in the `wireguard` container's entrypoint — the same polling-restart idiom already
+used by `boss-scheduler`/`boss-whatsapp-worker` (`while true; do ...; sleep 10; done`): `boss-app` writes one
+`[Peer]` fragment file per NAS to the shared `vpn_wg_data` volume, and the loop merges them into a full
+config and applies it with `wg syncconf` (reconciles without disrupting peers that didn't change, unlike
+`wg setconf` which replaces the whole peer set). **Real, verified consequence**: revoking a WireGuard peer
+takes up to ~10 seconds (the loop's poll interval) to actually disappear from the live interface — confirmed
+by timing it directly (`wg show wg0` before/after a real revoke) — unlike OpenVPN's CRL, which is checked
+live per connection attempt with no such window.
+
+**The WireGuard private key is a genuine declared PHP property on `VpnAccount`
+(`public ?string $wireguardPrivateKey`), not an Eloquent attribute** — deliberately bypasses Eloquent's
+magic `__get`/`__set` entirely, so it can never accidentally get written to the database by a later
+`->save()`/`->update()` call, and never survives a `->fresh()`/reload or a fetch of the same account later.
+This is the *only* place the private key exists outside whatever the admin does with the generated script —
+same "shown once" posture as OpenVPN's exported `.ovpn`, just made structurally explicit here because
+WireGuard has no CA/PKI to defer key custody to. **Real bug found and fixed via this exact property**:
+`VpnProvisioningService::provision()`'s original final `return $account->fresh();` silently discarded this
+transient property (a fresh DB re-query can't possibly carry a non-column value) — caught by
+`VpnProvisioningMultiProtocolTest`, fixed by returning the in-memory `$account` directly (every
+`issue*Credentials()` method already mutates it in place via `->update()`, so nothing is stale).
+
+**L2TP/IPsec auth is two layers, only one of which is per-NAS**: the IPsec/PSK layer uses ONE shared secret
+for the whole node (`L2TP_IPSEC_PSK`, an infra-level env secret like `WHATSAPP_GATEWAY_HMAC_SECRET` —
+NOT per-NAS), while the PPP layer underneath is per-NAS username/password via `chap-secrets` — finally
+putting `vpn_accounts.password` (encrypted, present since v0.6.2 but unused until now) to actual use.
+`chap-secrets` is **rewritten wholesale** from the DB's active `l2tp_ipsec` accounts on every
+provision()/revoke() (not a line-by-line append/remove) — `xl2tpd` spawns a fresh `pppd` process per
+incoming call rather than running one long-lived resident process, so a rewritten file takes effect on the
+very next connection attempt with zero reload — verified for real (provisioned a real account, confirmed
+the exact line appeared in the file from BOTH containers' mount points via the shared `vpn_l2tp_secrets`
+volume, revoked it, confirmed the file went back to empty).
+
+**Script isolation strategy mirrors the server-side hub-and-spoke approach, expressed as RouterOS commands
+on the NAS**: OpenVPN and L2TP client scripts use `add-default-route=no` plus a dedicated `routing-mark`
+table + rule so ONLY traffic to FreeRADIUS's internal IP crosses the tunnel — normal NAS production routing
+is untouched. WireGuard doesn't need this: its own `allowed-address` field (set to FreeRADIUS's single IP,
+not `0.0.0.0/0`) already scopes exactly what routes through the tunnel on the client side, protocol-native.
+Every generated script is idempotent (removes any pre-existing same-named interface/route/rule before
+adding fresh ones) — **not verified against a real Mikrotik device** (none available in this environment),
+same caveat already on record for the v0.4.0 WhatsApp QR-scan gap.
+
+**Generating a RADIUS script also rotates `nas.api_username`/`api_password`** — `VpnScriptService::generateRadiusScript()`
+deliberately closes the loop with `NasService::testConnection()` (v0.6.1), which needs real, currently-valid
+Mikrotik API credentials to succeed at all. Every call rotates the password; the previous one becomes
+invalid the moment the newly generated script actually runs on the router (the script itself removes and
+recreates the `boss-api` user).
+
+**Three real gaps found and fixed while building/verifying this sprint** (same class as prior sprints' gaps
+— caught by actually running things, not just reading code):
+1. `wireguard-tools` (needed for `wg genkey`/`wg pubkey` from `boss-app`) was only installed in the
+   `wireguard` container's own image — missing from `docker/php/Dockerfile` entirely. First real
+   provisioning attempt failed with `wg: not found`. Fixed by adding the package to `docker/php/Dockerfile`
+   in **its own layer, placed after** the slow `ext-sockets` compile — a deliberate fix to the exact
+   Dockerfile-layering mistake made twice already (v0.6.1, v0.6.2): adding a new package to the *same*
+   `apk add` layer as something upstream of a slow compiled step invalidates that step's cache too.
+2. `Process::fake()`'s pattern-matching gotcha (documented in v0.6.2's own CLAUDE.md section — patterns
+   need a leading `*` because `getCommandline()` quotes every argument) applied identically to the new
+   `wg genkey`/`wg pubkey` fakes — caught immediately this time because the earlier gotcha was already
+   fresh in mind, not rediscovered the hard way again.
+3. A `/29` CIDR test assertion (`test_slash_29_yields_4_usable_addresses`, written in v0.6.2) asserted the
+   wrong count — `App\Support\CidrRange`'s actual (correct) output is 5 usable addresses for a `/29`
+   (8 total − network − broadcast − the reserved `.1` gateway = 5, matching the same formula already
+   verified correct for `/24` = 253). The test's own arithmetic was wrong, not the implementation — caught
+   when `VpnProvisioningMultiProtocolTest`'s pool-exhaustion test (built against the real 5-address count)
+   disagreed with the older test's stale assumption of 4.
+
+**Out-of-scope v0.6.3, explicitly deferred to later v0.6.x sub-versions** (see `docs/ROADMAP.md`): multi-node
+`vpn_servers` pool/health-check/failover + a `VpnServerController` REST API (v0.6.4 — this sprint's
+WireGuard/L2TP `vpn_servers` rows were created by hand via `tinker`, same as OpenVPN's row in v0.6.2), a
+dynamic per-NAS FreeRADIUS virtual server + CoA + genuinely-unique RADIUS ports (v0.6.5 — the Script
+Generator's RADIUS tab stays on FreeRADIUS's default port until then), force-disconnecting an
+already-connected WireGuard/L2TP session on revoke (WireGuard: peer disappears within ~10s, not instantly;
+L2TP: an in-progress PPP session isn't forcibly torn down), and a real Mikrotik device connection test (no
+physical/virtual NAS available in this environment — everything up to script generation and server-side
+peer/secret state is confirmed working for real).
+
+**Gap closed in the same sprint, before tagging: NAS management UI (`App\Livewire\Network\NasIndex`,
+`/nas`)** — v0.6.1 was deliberately API-only; the first real attempt to use the Script Generator surfaced an
+empty "Pilih NAS" dropdown. **Diagnosed before assuming a bug**: the query itself was correct — there were
+simply zero legitimate `nas` rows for the real demo tenant (`super_admin@boss.local`, tenant "ISP Demo").
+The 4 rows that did exist were leftover pollution from this sprint's own `tinker`-based end-to-end
+verification sessions (v0.6.1-v0.6.3), sitting under throwaway `Tenant::factory()`-created tenants that no
+real login belongs to — a consequence of `tinker` writing to the real dev Postgres connection, not the
+isolated sqlite test connection (the same class of mistake already made once with stray `VpnServer` rows
+during v0.6.2 verification). Cleaned up; the real fix was building the missing UI, not a code change to the
+dropdown query.
+
+**`nas.mikrotik_ip` is now editable through this UI** — a deliberate loosening of `StoreNasRequest`'s
+original v0.6.1 stance (which refused it entirely, stricter than the actual v0.6.1 instruction, which only
+said "don't make it required"). The field auto-locks (disabled, read-only) once the NAS has any active
+`vpn_accounts` row — signaling "this is meant to be VPN-managed now" — but this UI does **not** build the
+actual `internal_ip` → `mikrotik_ip` write-through (still the same documented gap from v0.6.2/v0.6.3: nothing
+anywhere copies a VPN account's `internal_ip` onto `nas.mikrotik_ip`). Locking the field only prevents an
+admin from fighting a sync mechanism that doesn't exist yet, not a claim that one does.
+
+**"Tes Koneksi" reuses `RouterOsGateway` (the same interface `NasService::testConnection()` uses), not
+`NasService::testConnection()` itself** — the button must test whatever is *currently typed in the form*,
+which may not be saved yet (and for a brand-new NAS, there's no persisted row at all for `testConnection()`
+to `->update()` onto, since that method requires an already-existing row). `NasIndex::testConnection()`
+builds a transient, unsaved `Nas` instance from the live form fields and pings through the same gateway
+binding directly; for an NAS that *is* already saved (editing an existing row), `status`/`last_ping_at` are
+still persisted onto the real row afterward — only the ping itself uses the possibly-unsaved form values.
+
+**Gap closed in the same sprint, before tagging: 3 real bugs found via manual UI testing.**
+
+1. **`MikrotikScriptGenerator` always used the RouterOS-7-only `/routing table`/`routing-table=` mechanism**
+   regardless of the selected `$routerOsVersion`, even though the OpenVPN/L2TP script headers claimed
+   "RouterOS-generic v6.x dan v7.x" — `/routing table` doesn't exist at all on RouterOS 6.x (a v7 routing-
+   subsystem redesign; v6 uses `routing-mark=` directly on `/ip route add` paired with an
+   `/ip firewall mangle ... action=mark-routing` rule). Fixed by branching on `$routerOsVersion` — v6 gets
+   the mangle+routing-mark shape (matching the MixRadius reference pattern the sprint kickoff cited), v7
+   keeps the existing `/routing table`+rule shape. `dst-address=` on `/ip route add` was independently
+   verified to already be present in both branches — that specific worry turned out not to be a real bug.
+   Every generated script (any protocol) now also removes all 4 PPP-based client interface types
+   (ovpn-client/sstp-client/l2tp-client/pptp-client) plus WireGuard up front, not just the one being
+   configured — found necessary because switching protocols on the same NAS left the previous one's
+   interface orphaned.
+2. **Root cause of a real reported failure (NAS "nas-11"), found by inspecting the live PKI volume, not
+   guessed**: `docker/openvpn/entrypoint.sh`'s `chmod -R 0777 "$PKI_DIR"` only runs ONCE, at first boot.
+   Every `easyrsa` invocation after that (from `boss-app`, running as `www-data` for a real HTTP request)
+   rewrites `pki/index.txt`/`serial`/`index.txt.attr` with OpenSSL's own restrictive default permissions —
+   the next call (by any user) can then hit `Permission denied` partway through, after already printing a
+   wall of RSA/EC key-generation progress dots (`.....+++....`) that were, before this fix, dumped raw and
+   unfiltered into the exception message shown to the API/UI caller. **This specific instance was traced to
+   this session's own testing methodology**: manual verification via `docker compose exec` (which always
+   runs as root, unlike real traffic) left root-owned 600 files that a subsequent real `www-data` request
+   from the actual UI then couldn't write to — root-owned files can only be `chmod`'d by root, so this isn't
+   fully self-healing across a root/www-data mismatch, only across consecutive `www-data` runs (the actual,
+   consistent identity of every real production request). Fixed: `VpnProvisioningService` now (a) captures
+   stdout/stderr separately and logs the full untouched output+exit code to the Laravel log for debugging,
+   (b) strips the cosmetic progress-dot noise and surfaces just the last few meaningful lines (capped at 500
+   chars) in the exception message, and (c) re-applies `chmod -R 0777` on the PKI dir after every single
+   `easyrsa` invocation (success or failure), not just at container boot. **Verified for real, not just in
+   mocked tests**: two consecutive OpenVPN provisions run explicitly as `www-data`
+   (`docker compose exec --user www-data`) succeeded back-to-back with no manual chmod in between; the
+   user's own actual `nas-11` NAS, which had failed before this fix, was confirmed to have a populated
+   `cert_serial` and a `www-data`-owned `.crt` file on disk afterward.
+3. **`vpn_accounts.internal_ip`'s plain global `unique()` constraint (v0.6.2) applied to REVOKED rows too**
+   — once an address was ever assigned, even to a now-revoked account, it could never be reused, despite
+   `vpn_ip_pool` correctly marking it `available` again. Found while testing the new "Cabut & Generate Ulang"
+   button (a revoke immediately followed by a re-provision onto the same, just-freed pool entry). Fixed with
+   a new migration (`2026_08_04_130000_...`, not an edit to the already-tagged v0.6.2 migration) replacing
+   the plain unique index with a partial one scoped to `WHERE status = 'active'` — same technique already
+   used for `whatsapp_sessions` (v0.4.0) for an analogous "unique among a subset of rows" requirement.
+
+**"Cabut & Generate Ulang" button** (`VpnScriptGenerator::revokeAndRegenerate()`) — appears only when
+generation was blocked by an existing active `vpn_account` for the selected NAS+protocol AND the acting user
+is authorized to manage that NAS (checked independently of *why* generation failed, so it never appears for
+the unrelated "WireGuard needs RouterOS 7" error). Gated behind `wire:confirm` — revoking discards the old
+account's private key/session permanently and drops the NAS's current tunnel if it was ever connected.
+
+**Gap closed in the same sprint, before tagging: 4 more real bugs, this time from Agung's own testing
+against a real Mikrotik router** (the first time this module was exercised against actual hardware rather
+than server-side-only verification) — see CHANGELOG.md's "Amendment ketiga" for the compact version, this is
+the full detail:
+
+1. **Clipboard copy button silently did nothing** — `navigator.clipboard.writeText()` was the only copy
+   mechanism, but this server has no TLS yet (`APP_URL=http://45.123.142.242`), and the Clipboard API is
+   simply unavailable outside a secure context (HTTPS, or `localhost` specifically) — not a bug in the call
+   itself, the API object doesn't meaningfully exist there. Fixed with a `document.execCommand('copy')`
+   fallback (hidden `<textarea>`, select, copy, remove), chosen at click-time via `window.isSecureContext`.
+   **Verified for real, not just reasoned about**: a headless Playwright browser logged into this exact dev
+   server over plain HTTP (via the `boss-nginx` container, not `localhost` — Chromium treats `localhost`
+   as secure even over HTTP, which would have hidden this exact bug) confirmed `isSecureContext === false`
+   and `navigator.clipboard === undefined` for real, then confirmed `document.execCommand('copy')` was
+   actually invoked (hooked directly, not inferred) when the "Salin" button was clicked, with the
+   "Tersalin!" feedback appearing afterward.
+2. **strongSwan rejected real RouterOS 7 L2TP/IPsec clients with `NO-PROPOSAL-CHOSEN`** — the
+   `docker/l2tp/ipsec.conf.template` `ike=`/`esp=` lines only offered `aes256/aes128/3des-sha1-modp1024`
+   in **strict mode** (trailing `!`, meaning "reject anything not in this exact list"). A real RouterOS 7
+   client's actual IPsec proposal (captured from a working MixRadius-style reference setup) includes
+   AES-CBC-256/HMAC-SHA1, AES-CBC-128/HMAC-SHA1, and — notably — a NULL-encryption/HMAC-SHA1 fallback,
+   which wasn't offered at all. Fixed: `esp=` now includes `null-sha1`, `ike=` adds `modp2048` alongside
+   `modp1024`, and the trailing `!` is dropped from both lines so strongSwan also matches against its own
+   built-in default proposals when RouterOS's exact offer doesn't line up byte-for-byte — deliberately less
+   strict, per Agung's explicit instruction not to over-restrict to one cipher. **Honest verification
+   limit**: confirmed from this environment only that the config parses cleanly and `ipsec statusall` shows
+   the `L2TP-PSK` connection loaded with no fatal errors after a full container rebuild — there is no real
+   or virtual Mikrotik device available here, so whether `NO-PROPOSAL-CHOSEN` is actually gone and a real
+   RouterOS 7 IPsec SA + `l2tp-client` "connected" state is achieved **has not been confirmed** and needs
+   Agung's own hardware retest.
+3. **Long scripts pasted into RouterOS's interactive terminal could trigger an unrelated confirmation
+   prompt mid-paste** — reported as a `[y/N]` "save changes"-style prompt appearing partway through pasting
+   the OpenVPN script (the one embedding a PEM private key), after which the rest of the script never ran
+   ("interrupted"). Research into RouterOS's `/certificate import` confirmed a *different*, adjacent gotcha
+   (RouterOS 7.13+ silently fails, doesn't hang, to import a private key if `passphrase=` isn't given
+   explicitly — already correctly handled: `MikrotikScriptGenerator::openVpnScript()` always passes
+   `passphrase=""`), but the reported symptom is most consistent with a known class of terminal-paste issue:
+   very large pasted blobs processed character-by-character by an interactive CLI can occasionally be
+   misinterpreted mid-stream. Fixed by replacing "paste the whole script" with **fetch+import**: the UI now
+   shows one short line —
+   `/tool fetch url="..." mode=http dst-path="boss-vpn-setup.rsc";/import file-name="boss-vpn-setup.rsc";/file remove [find name="boss-vpn-setup.rsc"];`
+   (a genuine non-interactive script execution, never touching the interactive-paste code path at all) —
+   instead of the full script. New `App\Services\Network\ScriptDownloadTokenService`: `store()` puts the
+   full script in cache (Redis) under a `Str::random(48)` token with a 10-minute TTL;
+   `retrieveAndInvalidate()` uses `Cache::pull()` (atomic get-and-delete) so a token can be fetched exactly
+   once, ever — the script contains private keys/PSKs/passwords, so this is deliberately NOT a permanent
+   public URL, just a short-lived one-time handoff. New unauthenticated route
+   `GET /vpn-script-generator/download/{token}.rsc` → `VpnScriptDownloadController::show()` — deliberately
+   outside any `auth`/`sanctum` middleware, since RouterOS's `/tool fetch` sends no session cookie or API
+   token; the token itself (high entropy + short TTL + single-use) is the security boundary instead,
+   `throttle:30,1` is just abuse-rate hygiene on top. The `http`/`https` scheme in the one-liner is read
+   from the live request (`request()->getSchemeAndHttpHost()`), never hardcoded — this server is still
+   plain HTTP today (checked before writing any of this, not assumed), so hardcoding `https` would have
+   produced a one-liner that silently can't connect; this now flips to `https` on its own the moment TLS is
+   actually added, no code change needed. Applied identically to **all** script types (VPN and RADIUS both,
+   via a shared `VpnScriptGenerator::publishDownloadableScript()` private method), not just OpenVPN, for UX
+   consistency. The full script is still viewable in a collapsed `<details>` block below the one-liner for
+   audit purposes — it's just no longer the primary copy target. **Verified for real, end-to-end**: a
+   headless Playwright browser generated a real RADIUS script through the live UI and read the actual
+   rendered one-liner (confirming `mode=http`, not a hardcoded `https`); a separate `curl` against that
+   exact URL confirmed the downloaded content matches the real script, and a second `curl` against the same
+   URL confirmed a 404 (single-use genuinely enforced, not just asserted in an isolated test). **Honest
+   verification limit**: this proves the server side is correct — it does NOT prove the originally-reported
+   `[y/N]` hang is resolved on a real router, since `/tool fetch`+`/import`'s actual non-interactive
+   behavior can only be confirmed on real RouterOS hardware, which isn't available here. Needs Agung's own
+   retest.
+4. **"Cabut & Generate Ulang" button was invisible** — styled `bg-red-600 text-white`, which turned out to
+   be the *only* filled-button danger style anywhere in the app; every other destructive action
+   (`nas-index.blade.php`'s "Hapus", `customer-show.blade.php`'s "Hapus kontak", etc. — 6+ instances) uses a
+   plain `text-red-600 hover:underline` text-link style instead. Two compounding causes: the Tailwind CSS
+   bundle hadn't been rebuilt since any of v0.6.3's new Blade views were added (`app-BgK2W_ZW.css`, dated
+   before the views existed — confirmed via `grep`, `bg-red-600` was genuinely absent from the compiled
+   output, not a class-name typo), and even after rebuilding, a one-off filled-button pattern would still
+   have been visually inconsistent with the rest of the app. Fixed by rebuilding the CSS bundle AND
+   switching this button to the app's established `text-red-600 hover:underline` pattern, so both causes are
+   closed at once — this also fixes the same latent staleness for `nas-index.blade.php` and any other
+   v0.6.3 view compiled before this rebuild. **Verified for real**: Playwright read the actual
+   `getComputedStyle(...).color` of the "Hapus" button (same class, on a real rendered `/nas` page) —
+   `oklch(0.637 0.237 25.331)`, genuine Tailwind `red-600`, not white/transparent.
+
+**Gap closed in the same sprint, before tagging: a real 500 regression introduced by fix #4's own testing
+session** — clicking the now-visible "Cabut & Generate Ulang" button for a NAS with an active WireGuard
+account threw a generic 500. **Root cause found from `storage/logs/laravel.log` itself, not guessed**:
+`mkdir(): Permission denied` inside `VpnProvisioningService::issueWireGuardCredentials()`, writing a peer
+fragment to `/vpn-wg-data/peers`. A direct `stat` from inside the container found `/etc/wireguard` (the
+`vpn_wg_data` volume's mount point) itself sitting at `0700 root:root` — Alpine's `wireguard-tools` package
+ships that directory locked down by default (it's designed to also hold a private key directly, in a
+single-user setup), and that permission carried straight into the named Docker volume the first time it was
+populated. `docker/wireguard/entrypoint.sh` only ever `chmod`'d the *children* (`peers/` → `0777`, the two
+key files → `0644`) — it never widened `$WG_DIR` itself, so `www-data` couldn't even traverse into it to
+reach the already-permissive `peers/` directory; `File::isDirectory()`/`makeDirectory()` failed with EACCES
+before getting anywhere near it. This is the same *class* of shared-volume-permission bug as the OpenVPN
+PKI/nas-11 fix earlier in this file, but a different root cause (a pre-existing restrictive default baked
+into the base package, not permissions regressing after each operation) — checked `vpn_l2tp_secrets` for the
+same class of issue while here and confirmed it's fine (`0755`, created fresh by a plain `mkdir -p` with no
+package pre-seeding a restrictive mode). Fixed with one added line,
+`chmod 0755 "$WG_DIR"`, in the entrypoint. **Verified for real, reproducing the exact reported scenario**:
+rebuilt the `wireguard` container, then a real Playwright browser logged in, selected NAS `test-x86-bajastu`
+(nas-11, which genuinely already had an active WireGuard account), selected WireGuard, clicked Generate,
+clicked the now-appeared "Cabut & Generate Ulang" button, accepted the real `wire:confirm` dialog, and
+confirmed the fetch+import one-liner rendered successfully with no 500 — cross-checked against the database
+(old account flipped to `revoked`, a new one `active`) and the Laravel log (zero new error/warning entries
+during that window).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,
@@ -770,12 +1059,15 @@ dynamic `whatsapp-*` queues, v0.4.0) + `boss-scheduler` (loops `schedule:run` ev
 `boss-postgresql` + `boss-redis` + `whatsapp-gateway` (Node.js Baileys service, v0.4.0, internal-only, no
 host port) + `freeradius` (FreeRADIUS 3.2, v0.6.1, internal-only, no host port, static
 `boss-network` IP `172.28.0.10`) + `freeradius-db` (Postgres 16, `radius_db` — a SEPARATE Postgres instance
-from `boss-postgresql`, per BOSS-009) + `openvpn` (OpenVPN 2.6, v0.6.2, the one exception besides
-`boss-nginx` with a published host port — UDP 1194, real Mikrotik NAS devices dial in from outside
-`boss-network` entirely) (no host ports exposed for any of the rest, per BOSS-010). All share the
-`boss-network` bridge network (fixed IPAM subnet `172.28.0.0/24` since v0.6.2); `boss-app`'s `app/`
-directory is bind-mounted read-write, nginx mounts it read-only. `boss-app` also shares two named volumes
-(`vpn_pki`, `vpn_ccd`) with `openvpn` — see "VPN Server Node #1 (v0.6.2)" above for why.
+from `boss-postgresql`, per BOSS-009) + `openvpn` (OpenVPN 2.6, v0.6.2), `wireguard` (WireGuard 1.0, v0.6.3),
+`l2tp` (strongSwan 5.9 + xl2tpd 1.3, v0.6.3) — the four VPN protocol containers besides `boss-nginx` are the
+ones with published host ports (UDP 1194/51820/500+4500+1701 respectively — real Mikrotik NAS devices dial
+in from outside `boss-network` entirely, BOSS-010 exception by design; no other container exposes a host
+port). All share the `boss-network` bridge network (fixed IPAM subnet `172.28.0.0/24` since v0.6.2);
+`boss-app`'s `app/` directory is bind-mounted read-write, nginx mounts it read-only. `boss-app` also shares
+named volumes with each VPN container (`vpn_pki`/`vpn_ccd` with `openvpn`, `vpn_wg_data` with `wireguard`,
+`vpn_l2tp_secrets` with `l2tp`) — see "VPN Server Node #1 (v0.6.2)" and "Multi-Protocol VPN & Script
+Generator (v0.6.3)" above for why.
 
 **Auth/authz stack** (RULE BOSS-005 layering): Laravel Fortify handles authentication (see
 `app/app/Providers/FortifyServiceProvider.php` and `app/app/Actions/Fortify/*` for the customized

@@ -13,8 +13,8 @@
 | v0.4.0  | Komunikasi      | Communication (Baileys)       | WhatsApp gateway multi-sesi per reseller, template pesan, reminder invoice/suspend, reconciliation session | Selesai |
 | v0.5.0  | Operasional     | Installation                  | Work order teknisi (ODP locator Haversine, state machine, scan device, 4 foto wajib)          | Selesai |
 | v0.6.1  | Network         | FreeRADIUS Core & NAS Management | Container FreeRADIUS terpisah + rlm_sql ke `radius_db` (Postgres terpisah), tabel `nas` (port RADIUS unik per-NAS sejak migration pertama), NasService CRUD + test koneksi Mikrotik API | Selesai |
-| v0.6.2  | Network         | VPN Server Node #1 (OpenVPN)  | Hub-and-spoke: VPN node sebagai concentrator/relay, FreeRADIUS diakses di satu IP internal tetap dari sisi Mikrotik                          | Aktif |
-| v0.6.3  | Network         | Multi-Protokol VPN & Script Generator | WireGuard, L2TP/IPsec (SSTP di-skip), Script Generator (VPN + RADIUS script siap-paste ke terminal Mikrotik)                    | Backlog |
+| v0.6.2  | Network         | VPN Server Node #1 (OpenVPN)  | Hub-and-spoke: VPN node sebagai concentrator/relay, FreeRADIUS diakses di satu IP internal tetap dari sisi Mikrotik                          | Selesai |
+| v0.6.3  | Network         | Multi-Protokol VPN & Script Generator | WireGuard, L2TP/IPsec (SSTP di-skip; L2TP/IPsec sendiri berstatus known limitation, lihat catatan di bawah), Script Generator (VPN + RADIUS script siap-paste ke terminal Mikrotik) | Selesai |
 | v0.6.4  | Network         | VPN Pool & Failover           | Schema `vpn_servers` siap N>1 node + health-check + auto-switch failover (N=1 node aktif sekarang, backend siap tanpa retrofit) | Backlog |
 | v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator + CoA/disconnect (port 3799) untuk isolir instan                     | Backlog |
 | v0.7.0  | Network         | GenieACS                      | Binding ONT, SSID/password, RX power, reboot, provisioning                                    | Backlog |
@@ -53,6 +53,53 @@ dinegosiasi ulang tanpa konfirmasi eksplisit baru, BOSS-003):
   `auth_port`/`acct_port`/`coa_port` sejak migration pertama walau dynamic
   virtual server + port allocator baru dibangun di v0.6.5 — supaya tidak
   retrofit.
+
+**2 keputusan arsitektur diselesaikan bersama Agung saat v0.6.3 dimulai**
+(sebelum migration/container ditulis, sesuai instruksi eksplisit):
+- **Topologi container**: WireGuard dan L2TP/IPsec masing-masing container
+  Docker terpisah dari `openvpn` (bukan satu container multi-protokol) —
+  konsisten pola single-responsibility repo ini. Konsekuensi skema:
+  `vpn_servers.protocol_support` (json array, v0.6.2) **diganti** kolom
+  `protocol` (string/enum) polos — sekarang **satu baris per (host,
+  protocol)**, bukan satu baris menaungi banyak protokol. Migration alter
+  (bukan edit migration v0.6.2 yang sudah ter-tag) + backfill data
+  otomatis.
+- **Port RADIUS di Script Generator**: tab RADIUS Script SEMENTARA
+  memakai port default FreeRADIUS (1812/1813), BUKAN `nas.auth_port`/
+  `acct_port` (walau kolom itu sudah ada sejak v0.6.1) — karena FreeRADIUS
+  baru benar-benar dengar di port unik per-NAS setelah dynamic virtual
+  server (v0.6.5). Script yang digenerate v0.6.3 WAJIB digenerate ulang
+  setelah v0.6.5 shipped.
+
+**Known limitation ditutup sebagai v0.6.3, bukan dianggap gagal — L2TP/IPsec
+tidak benar-benar bisa dipakai produksi saat ini**, ditemukan lewat sesi
+verifikasi mendalam terhadap NAS Mikrotik produksi asli (`test-x86-bajastu`,
+RouterOS 7.11) via `RouterOsApiGateway`, bukan simulasi. Kronologi singkat
+(detail teknis lengkap + evidence di CHANGELOG.md "Amendment kelima" dan
+CLAUDE.md): `NO-PROPOSAL-CHOSEN` yang awalnya dilaporkan **berhasil
+diselesaikan tuntas** — root cause sebenarnya adalah `left=` di
+`ipsec.conf` yang di-pin ke IP publik server, padahal Docker men-DNAT paket
+masuk ke IP internal container sebelum sampai ke charon, sehingga `conn`
+tidak pernah cocok apa pun proposal yang ditawarkan; diperbaiki dengan
+`left=%any` dan dikonfirmasi via log `charon` sendiri (baru bisa dibaca
+setelah `syslogd` ditambahkan ke container — sebelumnya log charon hilang
+begitu saja, tidak ke mana pun): IKE_SA + CHILD_SA established dan stabil
+1+ menit dengan DPD berhasil bolak-balik berkali-kali. **Tapi** lapisan
+L2TP/PPP di atas IPsec yang sudah established itu tidak pernah benar-benar
+terlindungi — capture paket di level host (`tcpdump` pada interface publik
+server, bukan di dalam container) membuktikan RouterOS mengirim paket
+kontrol L2TP (port 1701, `SCCRQ`) sebagai UDP polos, bukan terbungkus ESP,
+bahkan setelah IPsec SA berhasil established — 0 paket ESP ditemukan di
+seluruh capture, meski IKE Phase 1+2 sukses negosiasi. Root cause ini ada
+di bagaimana mode sederhana RouterOS `l2tp-client use-ipsec=yes` menerapkan
+(atau gagal menerapkan) Security Policy Database-nya sendiri secara
+internal — bukan sesuatu yang bisa didiagnosis atau diperbaiki lebih lanjut
+dari sisi server BOSS App; kemungkinan butuh dukungan resmi MikroTik atau
+riset RouterOS yang lebih dalam. **Ditandai sebagai known limitation, scope
+v0.6.3 tetap ditutup** — OpenVPN dan WireGuard sudah fully functional dan
+terverifikasi nyata di router produksi yang sama (lihat CHANGELOG.md), jadi
+sprint ini tidak diblokir oleh L2TP. Backlog: revisit L2TP/IPsec di sprint
+Network mendatang kalau ada temuan baru atau dukungan MikroTik.
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

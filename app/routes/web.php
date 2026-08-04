@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\VpnScriptDownloadController;
 use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
 use App\Livewire\Billing\SubscriptionIndex;
@@ -7,6 +8,8 @@ use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
+use App\Livewire\Network\NasIndex;
+use App\Livewire\Network\VpnScriptGenerator;
 use App\Livewire\Resellers\PackagePricingIndex;
 use App\Livewire\Resellers\ResellerIndex;
 use App\Livewire\Resellers\ResellerShow;
@@ -21,6 +24,15 @@ use Illuminate\Support\Facades\Route;
 Route::get('/', function () {
     return view('welcome');
 });
+
+// Deliberately unauthenticated — fetched by RouterOS's /tool fetch, which
+// carries no session/API credentials. See ScriptDownloadTokenService for why
+// a bare high-entropy, single-use, short-TTL token is the security boundary
+// here instead. throttle:30,1 is just abuse-rate hygiene, not the real
+// protection.
+Route::get('/vpn-script-generator/download/{token}.rsc', [VpnScriptDownloadController::class, 'show'])
+    ->middleware('throttle:30,1')
+    ->name('vpn-script-generator.download');
 
 // Public — guests can switch language too, not just logged-in users.
 Route::get('/lang/{locale}', function (string $locale, LocaleService $service) {
@@ -52,6 +64,8 @@ Route::middleware('auth')->name('web.')->group(function () {
         Route::get('/invoices', InvoiceIndex::class)->name('invoices.index');
         Route::get('/payment-reconciliation', ReconciliationReport::class)->name('payment-reconciliation.index');
         Route::get('/whatsapp-gateway', WhatsappGatewayIndex::class)->name('whatsapp-gateway.index');
+        Route::get('/nas', NasIndex::class)->name('nas.index');
+        Route::get('/vpn-script-generator', VpnScriptGenerator::class)->name('vpn-script-generator.index');
     });
 
     Route::get('/resellers', ResellerIndex::class)->name('resellers.index');

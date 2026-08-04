@@ -61,6 +61,19 @@
             ]),
         ],
         [
+            'id' => 'network',
+            'label' => __('Network'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*'),
+            'links' => array_filter([
+                auth()->user()->can('viewAny', \App\Models\Nas::class)
+                    ? ['route' => 'web.nas.index', 'label' => __('NAS')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\Nas::class)
+                    ? ['route' => 'web.vpn-script-generator.index', 'label' => __('Script Generator')]
+                    : null,
+            ]),
+        ],
+        [
             'id' => 'pengaturan',
             'label' => __('Pengaturan'),
             'active' => request()->routeIs('web.settings.*'),

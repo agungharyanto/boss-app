@@ -3,6 +3,105 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.6.4 — Multi-Node VPN Pool & Auto-Switch Failover
+
+- **Keputusan arsitektur dikonfirmasi bersama Agung sebelum implementasi**:
+  pool **3 node VPN nyata** (bukan cuma skema siap N>1 tapi 1 baris
+  terisi seperti rencana awal v0.6.2) untuk OpenVPN dan WireGuard —
+  masing-masing protokol 3 container terpisah (`openvpn-node1/2/3`,
+  `wireguard-node1/2/3`), sesuai pola single-responsibility container
+  yang sudah dikunci sejak v0.6.3. L2TP TIDAK ikut pool (known
+  limitation belum selesai, tetap 1 node). **Ketiga node per protokol
+  berbagi trust domain yang sama** — OpenVPN: volume PKI (`vpn_pki`)
+  di-mount ke ketiga node, satu CA, cert yang diterbitkan sekali valid
+  di node manapun. WireGuard: server keypair + direktori peer
+  (`vpn_wg_data`) di-mount ke ketiga node, pubkey server identik di
+  semua node — diverifikasi nyata: `wireguard-node2` langsung memakai
+  pubkey persis sama dengan node1 begitu container pertama kali boot.
+  Ini yang membuat auto-switch script cukup ganti `connect-to`/
+  `endpoint-port` tanpa re-import credential apa pun.
+- Migration baru `vpn_servers.port` (per-node, sebelumnya port
+  OpenVPN/WireGuard adalah satu config global) + `VpnServersSeeder`
+  idempoten mengisi 4 baris node baru (bukan seed dummy — baris nyata
+  untuk container yang benar-benar hidup).
+- `VpnProvisioningService`: node BARU dipilih berdasarkan load
+  distribution (`status=online` DAN `current_clients < max_clients`,
+  diurutkan dari yang paling longgar, `lockForUpdate()` race-condition-
+  safe) — TAPI `internal_ip` tetap selalu dialokasikan dari "pool
+  owner" (node1, baris ber-id terendah per protokol) supaya konsisten
+  dengan CCD OpenVPN yang cuma pernah ditulis ke node1 dan direktori
+  peer WireGuard yang shared. `VpnServer::poolOwnerFor()` — konvensi
+  baru, didokumentasikan lengkap di CLAUDE.md.
+- **Health-check terjadwal nyata** (`VpnCheckNodeHealth`,
+  `->everyMinute()`): tiap node openvpn/wireguard menulis heartbeat
+  timestamp ke volume shared setiap ~10 detik (OpenVPN: loop baru;
+  WireGuard: numpang di reconcile loop yang sudah ada); command
+  membaca heartbeat, update `status` (online/full/offline). **Bug nyata
+  ditemukan & diperbaiki lewat uji jalan otomatis, bukan cuma baca
+  kode**: `boss-scheduler` (container yang benar-benar mengeksekusi
+  `schedule:run`) TIDAK mount volume `vpn_pki`/`vpn_wg_data` sama
+  sekali — health-check yang berjalan lewat scheduler akan SELALU
+  menandai semua node offline meski sehat, sampai volume itu
+  ditambahkan ke service `boss-scheduler` di docker-compose.yml.
+  Diverifikasi nyata: `boss-scheduler` dibiarkan jalan otonom 2 siklus
+  penuh (2 menit), status tetap `online` konsisten, tidak flapping.
+- **Auto-switch scheduler Mikrotik** (`MikrotikScriptGenerator`) —
+  ditambahkan ke tab VPN Script setelah konfigurasi utama: cek
+  FreeRADIUS tiap 30 detik lewat tunnel, kalau gagal pindah port ke
+  node lain (siklus sekuensial, port dialokasikan berurutan oleh
+  `VpnServersSeeder`). **3 bug nyata ditemukan berturut-turut lewat
+  deploy sungguhan ke `test-x86-bajastu`** (bukan diasumsikan benar dari
+  membaca dokumentasi RouterOS saja), semua bermuara pada bagaimana
+  `/import` memproses file `.rsc`, berbeda dari mengirim command yang
+  sama langsung lewat API:
+  1. `/system scheduler add ... on-event={...multi-baris...}` — blok
+     curly-brace TIDAK PERNAH benar-benar tersimpan sebagai isi
+     `on-event` (dikonfirmasi kosong lewat query `.proplist=on-event`
+     langsung, bukan cuma tampilan terpotong). Diperbaiki dengan pola
+     yang SUDAH TERBUKTI dipakai scheduler bawaan router ini sendiri
+     (`schedule-script-speed` dkk): `on-event` menunjuk ke NAMA script
+     terpisah, bukan kode inline.
+  2. Script terpisah itu sendiri (`/system script add ... source={...}`)
+     mengalami masalah PERSIS SAMA — `source` juga kosong. Diperbaiki
+     dengan mengubah `source=` jadi SATU BARIS string (dipisah `;`,
+     pola sama one-liner fetch+import yang sudah dipakai di seluruh
+     modul ini), bukan blok multi-baris.
+  3. Setelah `source` akhirnya terisi, SETIAP referensi `$variable` di
+     dalamnya ternyata di-expand kosong oleh `/import` (RouterOS
+     meng-evaluasi `"$var"` di dalam string terkutip terhadap scope
+     SAAT IMPORT dijalankan, bukan scope runtime script itu sendiri) —
+     dibuktikan dengan mengirim string identik langsung lewat API
+     (bukan file `.rsc`), yang tersimpan sempurna tanpa masalah apa
+     pun. Diperbaiki dengan menulis backslash literal di depan setiap
+     `$` (`\$var`, bukan `$var`) — dikonfirmasi langsung ke router
+     bahwa `/import` lalu menyimpannya sebagai `$var` literal.
+- **Verifikasi failover nyata, end-to-end, bukan simulasi**: setelah
+  ketiga bug di atas teratasi, `docker compose stop wireguard-node2`
+  (node yang sedang dipakai `test-x86-bajastu`) — dalam ~60 detik
+  (2 siklus scheduler 30 detik), `endpoint-port` peer WireGuard di
+  router **berpindah otomatis** dari port node yang mati ke port node
+  berikutnya, handshake baru terbentuk, dan `/ping` ke FreeRADIUS lewat
+  tunnel baru berhasil 4/4 paket (0% packet loss) — tanpa satu pun
+  intervensi manual. Node yang dimatikan dihidupkan kembali setelahnya.
+- Bonus fix kecil tapi nyata: `File::get()` untuk WireGuard server
+  public key membawa trailing newline dari `wg pubkey` yang bisa
+  merusak parsing quoted-string di script yang digenerate — sekarang
+  di-`trim()`.
+- Dropdown protokol Script Generator: L2TP/IPsec tetap tampil (tidak
+  disembunyikan) dengan label eksplisit "(known limitation)" + catatan
+  detail di UI, bukannya dibiarkan seolah setara OpenVPN/WireGuard.
+
+**Catatan verifikasi tertunda, bukan bug atau sprint belum selesai**:
+implementasi dan fungsinya sudah terbukti nyata sepenuhnya lewat API
+langsung ke `test-x86-bajastu` (load-distribution, health-check,
+auto-switch failover end-to-end semua dikonfirmasi bekerja) — tapi
+**jalur UI Livewire (Script Generator, tombol-tombol terkait) untuk
+skenario multi-node/failover ini belum pernah dicoba manual oleh Agung
+lewat browser**. Agung akan menyiapkan router Mikrotik terpisah khusus
+untuk testing UI menyeluruh nanti. Detail arsitektur lengkap ada di
+`docs/ROADMAP.md` dan CLAUDE.md bagian "Multi-Node VPN Pool & Auto-Switch
+Failover (v0.6.4)".
+
 ## v0.6.3 — Multi-Protokol VPN (WireGuard, L2TP/IPsec) & Script Generator Mikrotik
 
 - **2 keputusan arsitektur diselesaikan bersama Agung sebelum implementasi**

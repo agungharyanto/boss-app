@@ -178,6 +178,79 @@ class MikrotikScriptGeneratorTest extends TestCase
         $this->assertStringNotContainsString('0.0.0.0/0', $script);
     }
 
+    public function test_openvpn_script_has_no_autoswitch_block_when_only_one_node_online(): void
+    {
+        $account = $this->vpnAccount(['username' => 'nas-42', 'protocol' => VpnProtocol::OpenVpn]);
+
+        $script = $this->generator->openVpnScript(
+            $account, '7', '45.123.142.242', 1194, '172.28.0.10',
+            'ca-url', 'cert-url', 'key-url', 'https', [1194],
+        );
+
+        $this->assertStringNotContainsString('/system scheduler add', $script);
+        $this->assertStringContainsString('cuma 1 node online', $script);
+    }
+
+    public function test_openvpn_script_autoswitch_block_cycles_through_every_online_node_port(): void
+    {
+        $account = $this->vpnAccount(['username' => 'nas-42', 'protocol' => VpnProtocol::OpenVpn]);
+
+        $script = $this->generator->openVpnScript(
+            $account, '7', '45.123.142.242', 1194, '172.28.0.10',
+            'ca-url', 'cert-url', 'key-url', 'https', [1194, 1195, 1196],
+        );
+
+        // 3 real bugs found deploying this to test-x86-bajastu, in order:
+        // (1) `on-event={...}` inline never persisted (empty on a live
+        // .proplist query) — fixed by pointing on-event at a separate
+        // script's NAME instead, matching this router's own pre-existing
+        // schedulers. (2) That script's OWN `source={...}` (same
+        // curly-brace multi-line block) ALSO never persisted — fixed by
+        // making source= a single-line, semicolon-separated quoted STRING
+        // instead (interface names left unquoted throughout so that outer
+        // string never needs nested-quote escaping). (3) Once source= held
+        // real content, every single $variable inside it had been silently
+        // expanded to empty at /import time (RouterOS evaluates
+        // "$var"-in-a-quoted-string against whatever's in scope AT IMPORT,
+        // not the script's own later runtime) — confirmed by sending the
+        // exact same string directly over the API instead of a .rsc file,
+        // where it stored perfectly literally with no such expansion.
+        // Fixed by writing a literal backslash before every $ (\$var, not
+        // just $var) — confirmed directly against the router that /import
+        // then stores it as a literal $var too.
+        $this->assertStringContainsString('/system script add name=boss-vpn-autoswitch-openvpn-script source=', $script);
+        $this->assertStringContainsString('/system scheduler add name=boss-vpn-autoswitch-openvpn interval=30s on-event="boss-vpn-autoswitch-openvpn-script"', $script);
+        $this->assertStringContainsString(':local currentPort [/interface ovpn-client get [find name=boss-vpn-openvpn] port];', $script);
+        $this->assertStringContainsString(':local pingOk [:ping 172.28.0.10 interface=boss-vpn-openvpn count=3];', $script);
+        // Wraps at the max port back to the min port (1194..1196). Every
+        // $variable reference below must carry its literal backslash.
+        $this->assertStringContainsString(':if (\$nextPort > 1196) do={:set nextPort 1194};', $script);
+        $this->assertStringContainsString('/interface ovpn-client set [find name=boss-vpn-openvpn] port=\$nextPort disabled=yes;', $script);
+        $this->assertStringContainsString('/interface ovpn-client set [find name=boss-vpn-openvpn] disabled=no', $script);
+        // No unescaped/embedded double-quote inside the outer source="..."
+        // string — the whole one-liner must be quote-free internally.
+        $this->assertMatchesRegularExpression('/source="[^"]*"/', $script);
+    }
+
+    public function test_wireguard_script_autoswitch_block_uses_endpoint_port_not_disabled_toggle(): void
+    {
+        $account = $this->vpnAccount(['username' => 'nas-42', 'protocol' => VpnProtocol::WireGuard, 'internal_ip' => '172.23.195.10']);
+
+        $script = $this->generator->wireGuardScript(
+            $account, '45.123.142.242', 51820, '172.28.0.10', 'SERVERPUB==', 'CLIENTPRIV==',
+            [51820, 51821, 51822],
+        );
+
+        $this->assertStringContainsString('/system scheduler add name=boss-vpn-autoswitch-wireguard interval=30s on-event="boss-vpn-autoswitch-wireguard-script"', $script);
+        $this->assertStringContainsString(':local currentPort [/interface wireguard peers get [find interface=boss-vpn-wireguard] endpoint-port];', $script);
+        $this->assertStringContainsString('/interface wireguard peers set [find interface=boss-vpn-wireguard] endpoint-port=\$nextPort', $script);
+        // WireGuard's autoswitch never needs OpenVPN's disable/re-enable
+        // toggle — the one-liner must close its do={...} block immediately
+        // after the endpoint-port change.
+        $this->assertStringContainsString('endpoint-port=\$nextPort}', $script);
+        $this->assertMatchesRegularExpression('/source="[^"]*"/', $script);
+    }
+
     public function test_radius_script_uses_default_freeradius_ports_not_nas_specific_ports(): void
     {
         $nas = $this->nas([

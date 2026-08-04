@@ -8,16 +8,27 @@ PEERS_DIR="$WG_DIR/peers"
 : "${WG_SUBNET_NETWORK_ADDR:?WG_SUBNET_NETWORK_ADDR must be set}" # e.g. 172.23.195.1
 : "${WG_SUBNET_CIDR:?WG_SUBNET_CIDR must be set}"                  # e.g. 172.23.195.0/24
 : "${FREERADIUS_INTERNAL_IP:?FREERADIUS_INTERNAL_IP must be set}"
+: "${NODE_HOSTNAME:?NODE_HOSTNAME must be set}"
 
 mkdir -p "$PEERS_DIR"
 
 # Server keypair persists on the shared vpn_wg_data volume (also mounted
 # into boss-app) — generated once, unlike wg0 itself which is re-created
 # fresh every container start (network namespace state, not volume state).
-if [ ! -f "$WG_DIR/server_private.key" ]; then
-    echo ">> [entrypoint] Generating WireGuard server keypair (first boot for this volume)..."
-    wg genkey | tee "$WG_DIR/server_private.key" | wg pubkey > "$WG_DIR/server_public.key"
-fi
+#
+# v0.6.4: this volume is now ALSO shared with sibling nodes (wireguard-
+# node2/node3, see docker-compose.yml) so all 3 nodes present the
+# IDENTICAL public key — flock (not just docker-compose's depends_on,
+# which only waits for "container started", not "keygen finished")
+# guards against a genuine first-boot race if two sibling containers
+# both reach this check before either has written the file yet.
+(
+    flock -x 200
+    if [ ! -f "$WG_DIR/server_private.key" ]; then
+        echo ">> [entrypoint] Generating WireGuard server keypair (first boot for this volume)..."
+        wg genkey | tee "$WG_DIR/server_private.key" | wg pubkey > "$WG_DIR/server_public.key"
+    fi
+) 200>"$WG_DIR/.keygen.lock"
 
 # boss-app (php-fpm workers run as www-data, different UID) needs to read
 # server_public.key (to embed in generated Mikrotik scripts) and read/write
@@ -72,6 +83,13 @@ echo ">> [entrypoint] wg0 up (pubkey $(cat "$WG_DIR/server_public.key")). Enteri
 # $PEERS_DIR, and this loop merges them into a full config and applies it
 # with `wg syncconf`, which reconciles WITHOUT disrupting peers that didn't
 # change (unlike `wg setconf`, which would replace the whole peer set).
+#
+# v0.6.4 health-check: piggybacks on this SAME loop rather than a separate
+# background job — writes this node's own timestamp to the shared volume
+# every cycle, one file per sibling node (named after NODE_HOSTNAME) so
+# VpnCheckNodeHealth (boss-app, reading the same shared volume) can tell
+# node1/node2/node3 apart. Same "communicate via the shared volume you
+# already have" reasoning as openvpn/entrypoint.sh's own heartbeat.
 while true; do
     {
         echo "[Interface]"
@@ -82,6 +100,8 @@ while true; do
     } > /tmp/wg0-full.conf
 
     wg syncconf wg0 <(wg-quick strip /tmp/wg0-full.conf) 2>&1 || echo ">> [reconcile] syncconf failed, will retry next cycle"
+
+    date +%s > "$WG_DIR/heartbeat-${NODE_HOSTNAME}"
 
     sleep 10
 done

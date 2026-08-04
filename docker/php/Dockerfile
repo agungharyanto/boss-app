@@ -50,6 +50,16 @@ RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
     && docker-php-ext-enable redis \
     && apk del .build-deps
 
+# wireguard-tools: v0.6.3 — VpnProvisioningService runs `wg genkey`/`wg
+# pubkey` (Process facade) from here for WireGuard client keypair
+# generation — pure crypto, no live network interface needed, so (unlike
+# `wg set`/peer changes, which only affect the wireguard container's own
+# network namespace) this part CAN run from boss-app directly. Kept in its
+# own layer, after the slow ext-sockets compile above, so adding it doesn't
+# invalidate that layer's cache (a mistake made once already this sprint —
+# see CLAUDE.md "Multi-Protocol VPN (v0.6.3)").
+RUN apk add --no-cache wireguard-tools
+
 # Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 

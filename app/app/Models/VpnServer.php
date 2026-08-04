@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\VpnProtocol;
 use App\Enums\VpnServerStatus;
 use App\Support\CidrRange;
 use Database\Factories\VpnServerFactory;
@@ -18,7 +19,7 @@ class VpnServer extends Model
         'hostname',
         'public_ip',
         'subnet_cidr',
-        'protocol_support',
+        'protocol',
         'max_clients',
         'current_clients',
         'status',
@@ -28,7 +29,7 @@ class VpnServer extends Model
     protected function casts(): array
     {
         return [
-            'protocol_support' => 'array',
+            'protocol' => VpnProtocol::class,
             'status' => VpnServerStatus::class,
             'is_active' => 'boolean',
         ];

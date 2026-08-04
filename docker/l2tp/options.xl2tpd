@@ -1,0 +1,11 @@
+debug
+require-mschap-v2
+ms-dns 8.8.8.8
+asyncmap 0
+auth
+crtscts
+lock
+hide-password
+modem
+proxyarp
+connect-delay 5000

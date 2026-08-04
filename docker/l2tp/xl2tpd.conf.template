@@ -1,0 +1,17 @@
+[global]
+port = 1701
+debug avp = yes
+debug network = yes
+debug state = yes
+debug tunnel = yes
+
+[lns default]
+ip range = __L2TP_IP_RANGE_START__-__L2TP_IP_RANGE_END__
+local ip = __L2TP_LOCAL_IP__
+require chap = yes
+refuse pap = yes
+require authentication = yes
+name = BossVPN
+ppp debug = yes
+pppoptfile = /etc/ppp/options.xl2tpd
+length bit = yes

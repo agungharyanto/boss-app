@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\ProvisionVpnAccountRequest;
 use App\Http\Resources\VpnAccountResource;
 use App\Models\Nas;
 use App\Models\VpnAccount;
@@ -20,11 +21,9 @@ class VpnAccountController extends Controller
      * vpn_accounts has no reseller_id/tenant_id of its own, same pattern as
      * odp_ports/work_order_photos — scoped implicitly through its parent).
      */
-    public function provision(Nas $nas, VpnProvisioningService $service): JsonResponse
+    public function provision(ProvisionVpnAccountRequest $request, Nas $nas, VpnProvisioningService $service): JsonResponse
     {
-        $this->authorize('manage', $nas);
-
-        $account = $service->provision($nas);
+        $account = $service->provision($nas, $request->protocol());
 
         return $this->success(new VpnAccountResource($account), 'Akun VPN berhasil dibuat', [], 201);
     }

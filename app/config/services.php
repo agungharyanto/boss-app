@@ -79,6 +79,26 @@ return [
         // each client-config-dir file (topology subnet requires the
         // netmask on every ifconfig-push, not just the IP).
         'netmask' => env('VPN_SUBNET_NETMASK', '255.255.255.0'),
+        // v0.6.3 — boss-app side of the vpn_wg_data/vpn_l2tp_secrets named
+        // volumes (docker-compose.yml), mirroring pki_dir/ccd_dir above.
+        // wg_peers_dir is a subdirectory of the wireguard container's own
+        // /etc/wireguard mount (its server keys live at the mount root,
+        // deliberately readable by boss-app too — same posture already
+        // accepted for OpenVPN's server.key inside the shared pki dir).
+        'wg_peers_dir' => env('VPN_WG_PEERS_DIR', '/vpn-wg-data/peers'),
+        'l2tp_secrets_dir' => env('VPN_L2TP_SECRETS_DIR', '/vpn-l2tp-data'),
+
+        // v0.6.3 Script Generator (VpnScriptService) — values embedded into
+        // generated Mikrotik scripts. public_ip/freeradius_internal_ip are
+        // the same server-wide values every VPN container's entrypoint
+        // already reads from .env; openvpn_port/wireguard_port match each
+        // container's own hardcoded/env port so the generated script always
+        // targets the port that container is actually listening on.
+        'public_ip' => env('VPN_PUBLIC_IP'),
+        'freeradius_internal_ip' => env('FREERADIUS_INTERNAL_IP'),
+        'openvpn_port' => (int) env('VPN_OPENVPN_PORT', 1194),
+        'wireguard_port' => (int) env('WG_LISTEN_PORT', 51820),
+        'l2tp_ipsec_psk' => env('L2TP_IPSEC_PSK'),
     ],
 
 ];

@@ -1,6 +1,9 @@
 FROM php:8.4-fpm-alpine
 
 # System deps
+# linux-headers: needed to compile ext-sockets below — Alpine doesn't ship
+# full kernel headers by default, and sockets.c fails on a missing
+# linux/sock_diag.h without it.
 RUN apk add --no-cache \
     bash \
     git \
@@ -12,9 +15,12 @@ RUN apk add --no-cache \
     oniguruma-dev \
     autoconf \
     g++ \
-    make
+    make \
+    linux-headers
 
 # PHP extensions
+# sockets: required by evilfreelancer/routeros-api-php (v0.6.1, RouterOS API
+# client used by NasService to test-connect to a NAS's Mikrotik API).
 RUN docker-php-ext-install \
     pdo \
     pdo_pgsql \
@@ -23,7 +29,8 @@ RUN docker-php-ext-install \
     intl \
     mbstring \
     bcmath \
-    opcache
+    opcache \
+    sockets
 
 # Redis extension via PECL
 RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \

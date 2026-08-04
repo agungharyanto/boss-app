@@ -106,6 +106,65 @@ services:
     # BOSS-010). boss-nginx does NOT proxy to this service either; it has
     # no public HTTP surface at all.
 
+  freeradius-db:
+    image: postgres:16-alpine
+    container_name: freeradius-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${RADIUS_DB_NAME}
+      POSTGRES_USER: ${RADIUS_DB_USER}
+      POSTGRES_PASSWORD: ${RADIUS_DB_PASSWORD}
+    volumes:
+      - freeradius_postgres_data:/var/lib/postgresql/data
+      # Standard FreeRADIUS Postgres schema (radcheck/radreply/radgroupcheck/
+      # radgroupreply/radusergroup/radacct/radpostauth/nas) — applied once by
+      # Postgres's own docker-entrypoint-initdb.d mechanism on first boot
+      # (a non-empty data volume skips it, same as any other Postgres init
+      # script).
+      - ./docker/freeradius/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${RADIUS_DB_USER} -d ${RADIUS_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - boss-network
+    # Deliberately a SEPARATE Postgres container/instance from
+    # boss-postgresql (BOSS-009: radius_db is logically separated from
+    # boss_db, no cross-database joins) — root .env.example already reserved
+    # a distinct RADIUS_DB_HOST placeholder for this since v0.1.0. Port 5432
+    # NOT exposed to host (BOSS-010).
+
+  freeradius:
+    build:
+      context: ./docker/freeradius
+    container_name: freeradius
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      freeradius-db:
+        condition: service_healthy
+    networks:
+      - boss-network
+    # No host port published (BOSS-010) — nothing outside boss-network needs
+    # to reach it yet. Real NAS/Mikrotik traffic arrives via the VPN
+    # concentrator container (v0.6.2), which will join boss-network and
+    # relay into freeradius:1812/1813/3799 internally; until then this
+    # container just needs to be up and rlm_sql-healthy.
+    healthcheck:
+      # Status-Server round-trip against the stock "localhost" client from
+      # clients.conf (secret "testing123", untouched default — real NAS
+      # clients are v0.6.5 scope) — a genuine liveness check, not just "is
+      # the process running": status_server=yes is FreeRADIUS's own default,
+      # and an Access-Accept here means the virtual server AND rlm_sql (sql
+      # is wired into authorize{}) both instantiated successfully.
+      test: ["CMD-SHELL", "echo 'Message-Authenticator = 0x00' | /opt/bin/radclient -x 127.0.0.1:1812 status testing123 | grep -q Access-Accept"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   boss-postgresql:
     image: postgres:16-alpine
     container_name: boss-postgresql
@@ -148,3 +207,4 @@ networks:
 volumes:
   boss_postgres_data:
   boss_redis_data:
+  freeradius_postgres_data:

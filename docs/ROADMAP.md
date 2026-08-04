@@ -12,18 +12,47 @@
 | v0.3.5  | Billing & Finance | Payment Gateway (Xendit)     | Integrasi Xendit (VA/QRIS/invoice), webhook handler + signature verification, idempotency, reconciliation | Selesai |
 | v0.4.0  | Komunikasi      | Communication (Baileys)       | WhatsApp gateway multi-sesi per reseller, template pesan, reminder invoice/suspend, reconciliation session | Selesai |
 | v0.5.0  | Operasional     | Installation                  | Work order teknisi (ODP locator Haversine, state machine, scan device, 4 foto wajib)          | Selesai |
-| v0.6.0  | Network         | FreeRADIUS                    | Akun PPPoE via RADIUS, profile bandwidth, accounting (radacct), CoA/disconnect                | Backlog |
-| v0.6.1  | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
+| v0.6.1  | Network         | FreeRADIUS Core & NAS Management | Container FreeRADIUS terpisah + rlm_sql ke `radius_db` (Postgres terpisah), tabel `nas` (port RADIUS unik per-NAS sejak migration pertama), NasService CRUD + test koneksi Mikrotik API | Aktif |
+| v0.6.2  | Network         | VPN Server Node #1 (OpenVPN)  | Hub-and-spoke: VPN node sebagai concentrator/relay, FreeRADIUS diakses di satu IP internal tetap dari sisi Mikrotik                          | Backlog |
+| v0.6.3  | Network         | Multi-Protokol VPN & Script Generator | WireGuard, L2TP/IPsec (SSTP di-skip), Script Generator (VPN + RADIUS script siap-paste ke terminal Mikrotik)                    | Backlog |
+| v0.6.4  | Network         | VPN Pool & Failover           | Schema `vpn_servers` siap N>1 node + health-check + auto-switch failover (N=1 node aktif sekarang, backend siap tanpa retrofit) | Backlog |
+| v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator + CoA/disconnect (port 3799) untuk isolir instan                     | Backlog |
 | v0.7.0  | Network         | GenieACS                      | Binding ONT, SSID/password, RX power, reboot, provisioning                                    | Backlog |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
+| v0.11.0 | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
 (lihat Definition of Done di RULES.md) sebelum lanjut ke versi berikutnya.
 Urutan antar-cluster mengikuti dependency teknis: reseller sebelum
 billing/tax (hindari retrofit), tax sebelum invoicing, invoicing sebelum
 payment gateway, FreeRADIUS sebelum mobile app & usage graph.
+
+**Amendment saat v0.6.1 dimulai (dikonfirmasi Agung)**: `v0.6.0` FreeRADIUS
+(satu versi) dipecah jadi 5 sub-versi `v0.6.1`-`v0.6.5` karena scope-nya
+besar — mereplikasi pola VPN+RADIUS dari referensi kompetitor MixRadius V3.2.
+Ini membuat slot `v0.6.1` yang sebelumnya dipakai "Mobile Self-Service
+Portal" bentrok; Mobile Self-Service Portal **digeser ke `v0.11.0`** (akhir
+backlog, setelah cluster Network selesai penuh) — bukan disisipkan di
+tengah lagi. Nomor `v0.7.0`-`v0.10.0` (GenieACS/LibreNMS/Commission/Outage)
+tidak berubah.
+
+**Keputusan arsitektur terkunci untuk seluruh cluster `v0.6.x`** (jangan
+dinegosiasi ulang tanpa konfirmasi eksplisit baru, BOSS-003):
+- VPN multi-protokol: OpenVPN, WireGuard, L2TP/IPsec. SSTP di-skip (server
+  open-source kurang matang).
+- Topologi VPN pool-ready dari awal (schema `vpn_servers` di v0.6.4 sudah
+  mengakomodasi banyak node + health-check + failover), tapi implementasi
+  aktual cuma 1 node untuk sekarang (server dev = calon server produksi
+  in-place, tidak ada VPS terpisah saat ini). Model hub-and-spoke: VPN node
+  adalah concentrator/relay, FreeRADIUS selalu diakses di satu IP internal
+  tetap dari sisi Mikrotik, apa pun node VPN yang dipakai.
+- Port RADIUS unik per-NAS (bukan 1812/1813 shared standar, pola MixRadius).
+  Konsekuensi: skema `nas` di v0.6.1 sudah menyertakan kolom
+  `auth_port`/`acct_port`/`coa_port` sejak migration pertama walau dynamic
+  virtual server + port allocator baru dibangun di v0.6.5 — supaya tidak
+  retrofit.
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

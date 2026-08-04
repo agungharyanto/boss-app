@@ -185,4 +185,67 @@ class VpnProvisioningServiceTest extends TestCase
 
         app(VpnProvisioningService::class)->provision($nas);
     }
+
+    /**
+     * Manual testing (nas-11) surfaced a real bug: a failed easyrsa
+     * invocation's raw errorOutput() — a mix of OpenSSL's RSA/EC
+     * progress-dot noise (".....+++....") with the real error message
+     * buried/truncated inside it — was dumped straight into the exception
+     * message with no cleaning, producing an unreadable API response.
+     */
+    public function test_provision_strips_openssl_progress_noise_from_the_error_message(): void
+    {
+        $garbled = ".....+.....+.+..+....+........+...+...+++++++++++++++++++++++++++++++++++++++*\n"
+            ."........+..+......+....+...+...+...+.........+.....+...+....+...+...............\n"
+            .'TXT_DB error number 2'; // the actual failure reason, on the last line
+        Process::fake([
+            '*easyrsa*build-client-full*' => Process::result(output: '', errorOutput: $garbled, exitCode: 1),
+        ]);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $this->serverWithPool();
+
+        try {
+            app(VpnProvisioningService::class)->provision($nas);
+            $this->fail('Expected VpnProvisioningException was not thrown.');
+        } catch (VpnProvisioningException $e) {
+            // The real failure reason must survive...
+            $this->assertStringContainsString('TXT_DB error number 2', $e->getMessage());
+            // ...but the cosmetic progress-dot noise must not.
+            $this->assertStringNotContainsString('+++++++++++++++++++++++++++++++++', $e->getMessage());
+            $this->assertLessThan(600, strlen($e->getMessage()));
+        }
+    }
+
+    /**
+     * Root cause found via manual testing: easyrsa's own file-creation
+     * defaults leave pki/index.txt & co. owned by whichever process ran
+     * the command, with restrictive (usually 600) permissions — blocking
+     * the NEXT invocation (e.g. from a different container/user) from
+     * writing to that same shared file. This is why every easyrsa
+     * operation must re-assert the shared volume's permissive posture
+     * afterward, not just once at container boot.
+     */
+    public function test_provision_restores_permissive_pki_permissions_after_easyrsa_runs(): void
+    {
+        $this->fakeSuccessfulEasyRsa();
+        Process::fake([
+            '*easyrsa*build-client-full*' => Process::result(output: ''),
+            '*openssl*' => Process::result(output: "serial=A1B2C3D4E5F60708\n"),
+            '*chmod*' => Process::result(output: ''),
+        ]);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $this->serverWithPool();
+
+        app(VpnProvisioningService::class)->provision($nas);
+
+        Process::assertRan(function ($process) {
+            $command = is_array($process->command) ? implode(' ', $process->command) : $process->command;
+
+            return str_contains($command, 'chmod')
+                && str_contains($command, '0777')
+                && str_contains($command, $this->pkiDir);
+        });
+    }
 }

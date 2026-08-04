@@ -9,8 +9,20 @@ key /etc/openvpn/pki-data/pki/private/server.key
 # EC certs (see entrypoint.sh's EASYRSA_ALGO=ec) don't need a slow
 # Diffie-Hellman param file — "dh none" avoids the classic
 # multi-minute `openvpn --genkey dh2048.pem` first-boot delay.
+# tls-crypt was deliberately dropped after a real RouterOS 7.11 test —
+# MikroTik's ovpn-client only gained tls-crypt support in 7.17rc3, so
+# mandating it here made the server incompatible with this (and most
+# currently-deployed) RouterOS versions outright ("tls-crypt unwrap
+# error", not a config mismatch — the client-side feature genuinely
+# doesn't exist yet on 7.11). tls-auth was considered as an older
+# alternative, but RouterOS's own /interface ovpn-client add has no
+# inline parameter for it either — it's only reachable by importing a
+# full .ovpn file, a different, more complex mechanism this script
+# generator doesn't use. Falling back to plain cert-based TLS (ca/cert/
+# key below) without an extra HMAC layer — still the standard, secure
+# OpenVPN auth mode, just without the additional pre-TLS-handshake
+# firewall tls-crypt/tls-auth adds.
 dh none
-tls-crypt /etc/openvpn/pki-data/pki/ta.key
 crl-verify /etc/openvpn/pki-data/pki/crl.pem
 
 server __VPN_SUBNET_NETWORK__ __VPN_SUBNET_NETMASK__

@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Enums\VpnProtocol;
 use App\Enums\VpnServerStatus;
 use App\Models\VpnServer;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -22,7 +23,7 @@ class VpnServerFactory extends Factory
             'hostname' => 'vpn-node-'.$this->faker->unique()->numerify('##'),
             'public_ip' => $this->faker->unique()->ipv4(),
             'subnet_cidr' => '172.23.'.$this->faker->unique()->numberBetween(100, 250).'.0/24',
-            'protocol_support' => ['openvpn'],
+            'protocol' => VpnProtocol::OpenVpn,
             'max_clients' => 250,
             'current_clients' => 0,
             'status' => VpnServerStatus::Online,

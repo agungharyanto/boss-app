@@ -6,8 +6,8 @@ data pelanggan dan pusat perintah.
 
 ## Status
 
-Sprint aktif: **v0.6.2-vpn-openvpn-node1**
-Branch aktif: `v0.6.2-vpn-openvpn-node1`
+Sprint aktif: **v0.6.3-multi-protocol-vpn-script-generator**
+Branch aktif: `v0.6.3-multi-protocol-vpn-script-generator`
 
 Lihat `docs/RULES.md` untuk aturan pengembangan (BOSS-001 s/d BOSS-014) dan
 `docs/ROADMAP.md` untuk urutan sprint yang sudah dikunci.

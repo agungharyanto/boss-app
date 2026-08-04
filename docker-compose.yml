@@ -39,6 +39,15 @@ services:
       # Server Node #1 (v0.6.2)").
       - vpn_pki:/vpn-pki-data
       - vpn_ccd:/vpn-ccd
+      # v0.6.3 — same shared-volume reasoning as vpn_pki/vpn_ccd above.
+      # wireguard: keypair gen is pure crypto (Process facade, no live
+      # interface needed) but PEER changes need the reconcile loop in the
+      # wireguard container itself — see docker/wireguard/entrypoint.sh and
+      # CLAUDE.md "Multi-Protocol VPN (v0.6.3)" for why `wg set` can't be
+      # run from here directly. l2tp: VpnProvisioningService rewrites
+      # chap-secrets wholesale on every provision()/revoke().
+      - vpn_wg_data:/vpn-wg-data
+      - vpn_l2tp_secrets:/vpn-l2tp-data
     env_file:
       - .env
     depends_on:
@@ -199,9 +208,10 @@ services:
     sysctls:
       net.ipv4.ip_forward: 1
     ports:
-      # The ONE service (besides boss-nginx 80/443) allowed a public host
-      # port — real Mikrotik NAS devices connect to this from outside
-      # boss-network entirely (BOSS-010 exception, by design).
+      # One of the few services (besides boss-nginx 80/443) allowed a public
+      # host port — real Mikrotik NAS devices connect to this from outside
+      # boss-network entirely (BOSS-010 exception, by design). wireguard and
+      # l2tp below are the same exception for their own protocols.
       - "1194:1194/udp"
     volumes:
       # Same /pki-data mount-root-vs-subdirectory reasoning as boss-app's
@@ -209,6 +219,49 @@ services:
       # pki-data itself.
       - vpn_pki:/etc/openvpn/pki-data
       - vpn_ccd:/etc/openvpn/ccd
+    env_file:
+      - .env
+    networks:
+      - boss-network
+    depends_on:
+      freeradius:
+        condition: service_healthy
+
+  wireguard:
+    build:
+      context: ./docker/wireguard
+    container_name: wireguard
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "51820:51820/udp"
+    volumes:
+      - vpn_wg_data:/etc/wireguard
+    env_file:
+      - .env
+    networks:
+      - boss-network
+    depends_on:
+      freeradius:
+        condition: service_healthy
+
+  l2tp:
+    build:
+      context: ./docker/l2tp
+    container_name: l2tp
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/ppp
+    ports:
+      - "500:500/udp"
+      - "4500:4500/udp"
+      - "1701:1701/udp"
+    volumes:
+      - vpn_l2tp_secrets:/etc/ppp/secrets-data
     env_file:
       - .env
     networks:
@@ -270,3 +323,5 @@ volumes:
   freeradius_postgres_data:
   vpn_pki:
   vpn_ccd:
+  vpn_wg_data:
+  vpn_l2tp_secrets:

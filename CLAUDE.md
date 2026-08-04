@@ -525,6 +525,68 @@ including QR delivery to the browser is confirmed working; the final "scan → c
 same `applyStatus()` code path already covered by `WhatsappSessionWebhookTest`, but hasn't been observed
 against a real Baileys/WhatsApp handshake.
 
+## Installation / Work Order (v0.5.0)
+
+**Topology**: `odps`, `technicians`, `work_orders` are all tenant-scoped with a nullable `reseller_id`
+(null = owned directly by ISP A) — the exact same shape as `whatsapp_sessions`/`customers.reseller_id`.
+`odp_ports`/`work_order_devices`/`work_order_photos` are child tables with no `tenant_id`/`reseller_id` of
+their own — they're scoped implicitly through their parent (`odp_id`/`work_order_id`).
+
+**`OdpLocatorService::findNearestAvailable()`** computes Haversine distance entirely in raw SQL (no
+PostGIS extension) — verified working identically on SQLite (what the test suite runs on) and Postgres;
+this environment's PHP SQLite build happens to include `acos`/`radians`/`cos`/`sin`, which isn't guaranteed
+on every SQLite build, so re-verify this if the test-runtime environment ever changes. Scoped to ODPs
+owned by the customer's own reseller (or the direct/no-reseller ODPs when the customer has none), same
+tenant, `odp_ports.status = 'available'` only.
+
+**A brand-new ODP has zero ports until `Odp::provisionPorts()` runs** — this is a model method, called
+explicitly by `OdpController::store()` right after creating the row (creates `port_number` 1..`total_ports`,
+all `available`). Deliberately **not** a model `created` event: that would silently fire for every
+`Odp::factory()->create()` in tests too, colliding with `OdpPortFactory`'s own independently-created ports
+on the `unique(odp_id, port_number)` constraint. If you ever add another real-world Odp-creation path
+(a seeder, an import command), remember to call `provisionPorts()` there too — it's opt-in, not automatic.
+
+**`WorkOrderStatus` state machine** (`App\Enums\WorkOrderStatus::canTransitionTo()`, mirrors
+`InvoiceStatus`/`CustomerStatus`): a fixed linear happy path —
+`pending_odp_check -> pending_verification -> ready -> assigned -> in_progress -> completed` — with
+`odp_unavailable` as a dead-end reachable only from `pending_odp_check` (no `WorkOrderService` method ever
+advances it further except `cancel()`), and any non-terminal status can be cancelled from anywhere.
+`completed`/`cancelled` are terminal. **`WorkOrderService::complete()` checks transition legality FIRST,
+before checking photo/device completeness** — found via its own test (`illegal transition ... is
+rejected` initially failed because `IncompleteWorkOrderException` fired before
+`InvalidWorkOrderStatusTransitionException` did); an illegal jump must fail as a transition error even when
+photos/devices also happen to be incomplete, not get masked by the readiness check.
+
+**`verify()` doesn't error on `equipmentReady=false`** — it just records the flag and leaves the work
+order at `pending_verification` (not ready yet, not a failure state). It only actually transitions to
+`Ready` when `equipmentReady` is true AND a port has already been reserved.
+
+**`equipment_ready` is a manual placeholder, not real stock data** — the real stock/inventory module is
+explicitly out of scope this sprint (see `docs/ROADMAP.md`); an admin/CS confirms it by hand via
+`verify()`. Don't wire this to a real inventory count without new scope confirmation.
+
+**Photo storage**: `App\Services\Installation\WorkOrderPhotoService::store()` — one photo per
+`(work_order_id, type)`, DB-enforced via a unique constraint. Re-uploading an already-present type deletes
+the old file first, then `updateOrCreate`s the row — never leaves two files or two rows for the same type.
+Stored on the `'local'` Laravel disk (private, never publicly served) — its actual root on Laravel 12 is
+`storage/app/private/`, not bare `storage/app/` (a framework-version detail, not a deliberate deviation
+from "use the local disk").
+
+**Authorization mirrors the reseller/WhatsApp-gateway pattern**: `OdpPolicy`/`TechnicianPolicy`/
+`WorkOrderPolicy` check `odps.*`/`technicians.*`/`work_orders.*` permissions (super_admin-only, seeded in
+`RolesAndPermissionsSeeder::seedInstallationPermissions()`) for full ISP-admin access, or **any active
+`reseller_users` membership** (owner **or** staff, not owner-only) for a reseller's own ODPs/
+technicians/work orders. The existing `teknisi` Spatie role (an `Agent` type used for field registration/
+commission since v0.3.0, a completely different concept from the new `Technician` model here) deliberately
+does **not** get these permissions automatically — a technician's own scoped access (seeing only their own
+assigned work orders), if ever wanted, is new scope for a later sprint, not assumed here.
+
+**Deferred, explicitly out of scope this sprint** (see `docs/ROADMAP.md`): real stock/inventory module,
+automatic WhatsApp notifications for work order events (the v0.4.0 WhatsApp Gateway module exists and could
+integrate here later, but wasn't wired up this sprint), and the html5-qrcode browser camera-scanning UI
+component (the `POST /work-orders/{id}/devices` API endpoint is ready to receive whatever a scan produces,
+the camera UI itself wasn't built).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

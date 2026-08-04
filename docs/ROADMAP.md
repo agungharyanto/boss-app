@@ -11,7 +11,7 @@
 | v0.3.4  | Billing & Finance | Invoicing Core               | Subscription plan per customer, generate invoice bulanan, invoice line items, status invoice   | Selesai |
 | v0.3.5  | Billing & Finance | Payment Gateway (Xendit)     | Integrasi Xendit (VA/QRIS/invoice), webhook handler + signature verification, idempotency, reconciliation | Selesai |
 | v0.4.0  | Komunikasi      | Communication (Baileys)       | WhatsApp gateway multi-sesi per reseller, template pesan, reminder invoice/suspend, reconciliation session | Selesai |
-| v0.5.0  | Operasional     | Installation                  | Work order teknisi, scan MAC/serial, ODP/PON, foto instalasi                                  | Backlog |
+| v0.5.0  | Operasional     | Installation                  | Work order teknisi (ODP locator Haversine, state machine, scan device, 4 foto wajib)          | Selesai |
 | v0.6.0  | Network         | FreeRADIUS                    | Akun PPPoE via RADIUS, profile bandwidth, accounting (radacct), CoA/disconnect                | Backlog |
 | v0.6.1  | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
 | v0.7.0  | Network         | GenieACS                      | Binding ONT, SSID/password, RX power, reboot, provisioning                                    | Backlog |
@@ -175,3 +175,48 @@ flow/partial payment/proration subscription (tetap deferred dari v0.3.4/
 v0.3.5, belum masuk scope manapun).
 
 Detail lengkap ada di CLAUDE.md bagian "WhatsApp Gateway (Baileys, v0.4.0)".
+
+## v0.5.0 — Installation (Work Order Teknisi)
+
+**Keputusan arsitektur final**: `odps`/`technicians`/`work_orders` tenant-scoped +
+`reseller_id` nullable (null = milik ISP A langsung), pola identik dengan
+`whatsapp_sessions`/`customers`. `OdpLocatorService::findNearestAvailable()` pakai
+Haversine murni raw SQL (bukan PostGIS) — diverifikasi bekerja identik di SQLite
+(driver test suite) maupun Postgres, termasuk fungsi `acos`/`radians`/`cos`/`sin`
+yang ternyata tersedia di build SQLite PHP environment ini. `WorkOrderStatus`
+adalah state machine linear (`pending_odp_check -> pending_verification -> ready
+-> assigned -> in_progress -> completed`, dengan `odp_unavailable` sebagai
+dead-end dari `pending_odp_check`, dan `cancelled` bisa dicapai dari status
+non-terminal manapun) — tidak bisa loncat state (mis. `assigned -> completed`
+tanpa `in_progress` ditolak dengan `InvalidWorkOrderStatusTransitionException`).
+
+**Gap yang ditemukan & diputuskan saat membangun**:
+- Migration `odps`/`odp_ports` tidak menyediakan endpoint terpisah untuk
+  generate baris `odp_ports` — kalau tidak ditambal, sebuah ODP yang baru
+  dibuat tidak akan pernah punya port sama sekali (tidak bisa dipakai
+  `OdpLocatorService`). Ditambal dengan `Odp::provisionPorts()` (method
+  eksplisit di model, BUKAN model event `created`) yang otomatis membuat
+  port 1..`total_ports` berstatus `available`, dipanggil dari
+  `OdpController::store()`. Sengaja bukan event `created` supaya
+  `Odp::factory()->create()` di test tetap bisa dipakai independen dari
+  `OdpPortFactory` tanpa collision di constraint `unique(odp_id,
+  port_number)`.
+- `WorkOrderService::complete()` awalnya mengecek kelengkapan foto/device
+  SEBELUM mengecek legalitas transisi status — ditemukan lewat test sendiri
+  ("illegal transition ... is rejected" gagal karena melempar
+  `IncompleteWorkOrderException` duluan, bukan
+  `InvalidWorkOrderStatusTransitionException`). Diperbaiki: legalitas
+  transisi dicek PALING DULU, baru validasi kelengkapan foto/device.
+- Disk `'local'` di Laravel 12 root-nya `storage/app/private/`, bukan bare
+  `storage/app/` seperti diasumsikan di draft awal spec — detail versi
+  framework, tidak mengubah keputusan "pakai disk local" itu sendiri.
+
+**Out-of-scope v0.5.0, di-declare eksplisit sebagai backlog**: modul stok/
+inventory barang riil (field `equipment_ready` di `work_orders` masih
+placeholder manual, bukan dari data stok sungguhan), notifikasi WhatsApp
+otomatis untuk work order (menyusul, terintegrasi dengan modul WhatsApp
+Gateway v0.4.0 yang sudah ada), UI scan kamera html5-qrcode (endpoint API
+`POST /work-orders/{id}/devices` sudah siap menerima hasil scan, komponen
+kamera browser menyusul).
+
+Detail lengkap ada di CLAUDE.md bagian "Installation / Work Order (v0.5.0)".

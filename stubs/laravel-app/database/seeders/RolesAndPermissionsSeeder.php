@@ -37,6 +37,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedInvoicingPermissions();
         $this->seedPaymentGatewaySettingsPermissions();
         $this->seedWhatsappGatewayPermissions();
+        $this->seedInstallationPermissions();
     }
 
     /**
@@ -200,6 +201,35 @@ class RolesAndPermissionsSeeder extends Seeder
             'whatsapp_gateway.manage',
             'whatsapp_gateway_settings.view',
             'whatsapp_gateway_settings.manage',
+        ];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+    }
+
+    /**
+     * Permission modul Installation / Work Order (v0.5.0). Same
+     * super_admin-only posture as resellers.* / tax engine — reseller
+     * owner/staff access their OWN reseller's ODPs/technicians/work orders
+     * instead via reseller_users membership (see OdpPolicy/TechnicianPolicy/
+     * WorkOrderPolicy), never via these Spatie permissions. The existing
+     * `teknisi` role (an Agent type used for field registration/commission,
+     * unrelated to the new Technician model) deliberately does NOT get
+     * these automatically — a technician's own scoped access, if ever
+     * needed, is new scope for a later sprint, not assumed here.
+     */
+    private function seedInstallationPermissions(): void
+    {
+        $permissions = [
+            'odps.view',
+            'odps.manage',
+            'technicians.view',
+            'technicians.manage',
+            'work_orders.view',
+            'work_orders.manage',
         ];
 
         foreach ($permissions as $permission) {

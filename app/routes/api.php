@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\DashboardWidgetSettingController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\LocaleSettingController;
+use App\Http\Controllers\Api\V1\OdpController;
 use App\Http\Controllers\Api\V1\PaymentController;
 use App\Http\Controllers\Api\V1\RegistrationController;
 use App\Http\Controllers\Api\V1\RemittanceSummaryController;
@@ -17,12 +18,14 @@ use App\Http\Controllers\Api\V1\ResellerUserController;
 use App\Http\Controllers\Api\V1\SubscriptionController;
 use App\Http\Controllers\Api\V1\TaxComponentController;
 use App\Http\Controllers\Api\V1\TaxLedgerController;
+use App\Http\Controllers\Api\V1\TechnicianController;
 use App\Http\Controllers\Api\V1\ThemeSettingsController;
 use App\Http\Controllers\Api\V1\WhatsappGatewaySettingsController;
 use App\Http\Controllers\Api\V1\WhatsappMessageLogController;
 use App\Http\Controllers\Api\V1\WhatsappMessageTemplateController;
 use App\Http\Controllers\Api\V1\WhatsappSessionController;
 use App\Http\Controllers\Api\V1\WhatsappWebhookController;
+use App\Http\Controllers\Api\V1\WorkOrderController;
 use App\Http\Controllers\Api\V1\XenditWebhookController;
 use Illuminate\Support\Facades\Route;
 
@@ -100,6 +103,28 @@ Route::prefix('v1')->group(function () {
 
             Route::get('whatsapp/message-logs', [WhatsappMessageLogController::class, 'index']);
             Route::post('whatsapp/message-logs/{log}/retry', [WhatsappMessageLogController::class, 'retry']);
+
+            Route::get('work-orders', [WorkOrderController::class, 'index']);
+            Route::post('work-orders', [WorkOrderController::class, 'store']);
+            Route::get('work-orders/{work_order}', [WorkOrderController::class, 'show']);
+            Route::post('subscriptions/{subscription}/work-order', [WorkOrderController::class, 'storeFromSubscription']);
+            Route::post('work-orders/{work_order}/verify', [WorkOrderController::class, 'verify']);
+            Route::post('work-orders/{work_order}/assign', [WorkOrderController::class, 'assign']);
+            Route::post('work-orders/{work_order}/start', [WorkOrderController::class, 'start']);
+            Route::post('work-orders/{work_order}/photos', [WorkOrderController::class, 'storePhoto']);
+            Route::post('work-orders/{work_order}/devices', [WorkOrderController::class, 'storeDevice']);
+            Route::post('work-orders/{work_order}/complete', [WorkOrderController::class, 'complete']);
+            Route::post('work-orders/{work_order}/cancel', [WorkOrderController::class, 'cancel']);
+
+            Route::get('odps', [OdpController::class, 'index']);
+            Route::post('odps', [OdpController::class, 'store']);
+            Route::get('odps/{odp}', [OdpController::class, 'show']);
+            Route::put('odps/{odp}', [OdpController::class, 'update']);
+            Route::delete('odps/{odp}', [OdpController::class, 'destroy']);
+
+            Route::get('technicians', [TechnicianController::class, 'index']);
+            Route::post('technicians', [TechnicianController::class, 'store']);
+            Route::get('technicians/{technician}', [TechnicianController::class, 'show']);
         });
 
         // Admin-only tax engine catalog/reporting — no reseller.context needed.

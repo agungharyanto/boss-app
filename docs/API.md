@@ -521,3 +521,35 @@ Ping ke Mikrotik API NAS ini (bukan RADIUS, bukan ICMP) lewat
 `RouterOsGateway` (evilfreelancer/routeros-api-php di baliknya), lalu
 menyimpan `status` (`online`/`offline`) + `last_ping_at`. **Ditolak** (422,
 `NasNotProvisionedException`) kalau `mikrotik_ip` masih kosong.
+
+## VPN Server Node #1 (OpenVPN, v0.6.2)
+
+Endpoint di bawah juga ada di dalam grup middleware `reseller.context`.
+`vpn_accounts` tidak punya `reseller_id`/`tenant_id` sendiri — otorisasi
+diturunkan dari NAS pemiliknya (`NasPolicy::manage` terhadap
+`$vpn_account->nas`), pola sama dengan `odp_ports`/`work_order_photos`
+(v0.5.0).
+
+### `POST /nas/{nas}/vpn-account`
+
+Provisioning akun VPN baru untuk sebuah NAS: alokasikan `internal_ip` dari
+`vpn_ip_pool` milik `vpn_servers` yang aktif (race-condition-safe lewat
+`lockForUpdate()`), jalankan `easyrsa build-client-full` terhadap PKI
+bersama, simpan `cert_serial`, tulis file client-config-dir
+(`ifconfig-push`). **Ditolak** (422) kalau NAS sudah punya akun VPN aktif
+untuk protokol yang sama, pool IP habis (`VpnIpPoolExhaustedException`),
+atau PKI container `openvpn` belum pernah bootstrap
+(`VpnProvisioningException`). Tidak mengisi `nas.mikrotik_ip` — itu langkah
+manual terpisah setelah NAS benar-benar connect lewat tunnel dan
+`POST /nas/{nas}/test-connection` berhasil (script generator otomatis
+Mikrotik baru v0.6.3).
+
+### `POST /vpn-accounts/{vpn_account}/revoke`
+
+Revoke sertifikat (`easyrsa revoke` + `gen-crl`), bebaskan `internal_ip`
+kembali ke pool, hapus file client-config-dir. **Tidak** me-restart/reload
+daemon `openvpn` — CRL dibaca ulang otomatis oleh OpenVPN di setiap koneksi
+baru/renegosiasi TLS, jadi revoke langsung efektif untuk percobaan koneksi
+berikutnya tanpa restart. Sesi yang SUDAH terkoneksi tidak langsung
+diputus paksa oleh endpoint ini (perlu OpenVPN management interface, belum
+dibangun sprint ini) — known limitation, dicatat sebagai backlog.

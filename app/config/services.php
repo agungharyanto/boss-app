@@ -62,4 +62,23 @@ return [
         'hmac_secret' => env('WHATSAPP_GATEWAY_HMAC_SECRET'),
     ],
 
+    // v0.6.2 OpenVPN provisioning — these paths are the boss-app side of
+    // the vpn_pki/vpn_ccd named volumes shared with the openvpn container
+    // (docker-compose.yml), NOT the openvpn container's own /etc/openvpn/*
+    // paths. VpnProvisioningService runs `easyrsa` directly against
+    // pki_dir; defaults already match the compose mount paths, so no new
+    // .env keys are required unless a deployment needs to override them.
+    'vpn' => [
+        // /vpn-pki-data/pki, not /vpn-pki-data itself — easyrsa init-pki
+        // rm -rf's --pki-dir on first run, which fails if --pki-dir IS the
+        // volume's own mountpoint (see docker-compose.yml's vpn_pki mount).
+        'pki_dir' => env('VPN_PKI_DIR', '/vpn-pki-data/pki'),
+        'ccd_dir' => env('VPN_CCD_DIR', '/vpn-ccd'),
+        // Same value as docker/openvpn/entrypoint.sh's VPN_SUBNET_NETMASK —
+        // used to write the matching `ifconfig-push <ip> <netmask>` line in
+        // each client-config-dir file (topology subnet requires the
+        // netmask on every ifconfig-push, not just the IP).
+        'netmask' => env('VPN_SUBNET_NETMASK', '255.255.255.0'),
+    ],
+
 ];

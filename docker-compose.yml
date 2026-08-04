@@ -25,6 +25,20 @@ services:
     working_dir: /var/www/html
     volumes:
       - ./app:/var/www/html
+      # v0.6.2 — shared with the openvpn container. VpnProvisioningService
+      # runs `easyrsa` (Process facade) directly against these to
+      # issue/revoke OpenVPN client certs and write client-config-dir
+      # files; see docker-compose.yml's openvpn service and CLAUDE.md "VPN
+      # Server Node #1 (v0.6.2)" for why (no Docker socket mounted here —
+      # that would be a much bigger hole than a shared data volume).
+      # vpn-pki-data (not /vpn-pki directly) — the actual PKI lives in a
+      # `pki/` subdirectory of this mount, never at the mount root itself.
+      # `easyrsa init-pki` does an rm -rf hard-reset of --pki-dir on first
+      # run, which fails with "Resource busy" if --pki-dir IS the volume's
+      # own mountpoint (found by actually running this — see CLAUDE.md "VPN
+      # Server Node #1 (v0.6.2)").
+      - vpn_pki:/vpn-pki-data
+      - vpn_ccd:/vpn-ccd
     env_file:
       - .env
     depends_on:
@@ -146,7 +160,15 @@ services:
       freeradius-db:
         condition: service_healthy
     networks:
-      - boss-network
+      boss-network:
+        # Static IP (v0.6.2) — "FreeRADIUS selalu diakses di SATU IP
+        # internal tetap dari sisi Mikrotik" is a locked architecture
+        # decision (docs/ROADMAP.md), not just a convenience: the openvpn
+        # container's push-route AND its iptables FORWARD allowlist are
+        # both keyed off this exact address (FREERADIUS_INTERNAL_IP in
+        # .env) — it must never silently drift to a different IP on
+        # container recreation the way an unpinned bridge IP could.
+        ipv4_address: ${FREERADIUS_INTERNAL_IP}
     # No host port published (BOSS-010) — nothing outside boss-network needs
     # to reach it yet. Real NAS/Mikrotik traffic arrives via the VPN
     # concentrator container (v0.6.2), which will join boss-network and
@@ -164,6 +186,36 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  openvpn:
+    build:
+      context: ./docker/openvpn
+    container_name: openvpn
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: 1
+    ports:
+      # The ONE service (besides boss-nginx 80/443) allowed a public host
+      # port — real Mikrotik NAS devices connect to this from outside
+      # boss-network entirely (BOSS-010 exception, by design).
+      - "1194:1194/udp"
+    volumes:
+      # Same /pki-data mount-root-vs-subdirectory reasoning as boss-app's
+      # mount above — entrypoint.sh's PKI_DIR points at pki-data/pki, not
+      # pki-data itself.
+      - vpn_pki:/etc/openvpn/pki-data
+      - vpn_ccd:/etc/openvpn/ccd
+    env_file:
+      - .env
+    networks:
+      - boss-network
+    depends_on:
+      freeradius:
+        condition: service_healthy
 
   boss-postgresql:
     image: postgres:16-alpine
@@ -203,8 +255,18 @@ services:
 networks:
   boss-network:
     driver: bridge
+    ipam:
+      config:
+        # v0.6.2 — a fixed subnet so freeradius can be pinned to a static
+        # ipv4_address (see its service block above). Distinct from
+        # VPN_SUBNET_CIDR (the OpenVPN client pool, 172.23.194.0/24) to
+        # avoid any address overlap between "containers on boss-network"
+        # and "NAS clients tunneled in over OpenVPN".
+        - subnet: 172.28.0.0/24
 
 volumes:
   boss_postgres_data:
   boss_redis_data:
   freeradius_postgres_data:
+  vpn_pki:
+  vpn_ccd:

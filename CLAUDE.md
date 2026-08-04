@@ -668,16 +668,114 @@ virtual server + port allocator + CoA/disconnect (v0.6.5) — meaning `auth_port
 the `nas` table are currently unused by FreeRADIUS itself, and no real NAS can authenticate against this
 FreeRADIUS instance yet.
 
+## VPN Server Node #1 (OpenVPN, v0.6.2)
+
+**Built from `alpine:3.20` + the distro's own `openvpn`/`easy-rsa` packages, not a community wrapper
+image** — same reasoning as `docker/freeradius`: `kylemanna/openvpn` (the default community choice) hasn't
+published an updated Docker Hub image since Dec 2020. Alpine 3.20 ships current `openvpn` 2.6.20 and
+`easy-rsa` 3.1.7.
+
+**`boss-network` now has a fixed IPAM subnet (`172.28.0.0/24`) and `freeradius` is pinned to a static
+`ipv4_address` (`172.28.0.10`, `FREERADIUS_INTERNAL_IP` in `.env`)** — this is not a convenience, it's load
+-bearing: the openvpn container's `push route` AND its iptables `FORWARD` allowlist are both keyed off this
+exact address, matching the locked decision "FreeRADIUS selalu diakses di SATU IP internal tetap dari sisi
+Mikrotik." An unpinned bridge IP could silently drift on container recreation and break both.
+
+**PKI bootstrap happens in the `openvpn` container's entrypoint on first boot, using EC certs
+(`EASYRSA_ALGO=ec`, `secp384r1`) + `dh none`** — avoids the classic multi-minute `openvpn --genkey
+dh2048.pem` first-boot delay. `status_server`/CRL behavior confirmed from OpenVPN's own docs (not assumed):
+`crl-verify` is re-read fresh on every new connection/TLS renegotiation, so `revoke()` needs no daemon
+signal/restart at all — it only blocks *future* connection attempts; an already-connected session isn't
+force-dropped (would need the OpenVPN management interface, not built this sprint — known limitation,
+tracked as backlog, not silently missing).
+
+**Provisioning architecture is a shared Docker volume, not a Docker-socket-mounted exec, not a sidecar HTTP
+API** (explicit decision, confirmed before implementation) — `boss-app` and `openvpn` both mount the same
+two named volumes (`vpn_pki`, `vpn_ccd`). `App\Services\Network\VpnProvisioningService` runs `easyrsa`
+directly (Process facade) from inside `boss-app` against the PKI the `openvpn` container already
+bootstrapped. **Gotcha found running this for real, not just in tests**: `easyrsa init-pki` does a hard
+`rm -rf` reset of `--pki-dir` on first run — this fails with `Resource busy` if `--pki-dir` is literally a
+volume's own mountpoint. Both containers mount the volume one level up from the actual PKI
+(`.../pki-data/pki`, not `.../pki-data`) specifically to avoid this. The shared volume is also
+`chmod -R 0777`'d by the `openvpn` entrypoint after bootstrap — `boss-app`'s php-fpm workers run as
+`www-data`, a different UID than the `openvpn` container's root process, and both need write access to the
+same `pki/issued`, `pki/private`, `pki/index.txt`, etc.
+
+**`vpn_ip_pool` is a table that wasn't in the original spec** — added because race-condition-safe IP
+allocation needs a *pool of individually lockable rows* (`SELECT ... WHERE status='available' ORDER BY id
+LIMIT 1 FOR UPDATE`, exactly the `OdpPort`/`WorkOrderService` pattern from v0.5.0), not just a
+"lock the parent and scan" approach — locking `vpn_servers` itself would serialize every concurrent
+provisioning attempt server-wide for no reason. `VpnServer::provisionIpPool()` (via `App\Support\CidrRange`,
+pure IP arithmetic, unit-tested independent of any DB) generates one `available` row per usable host address
+in `subnet_cidr` — same "explicit method call, not a `created` event" reasoning as `Odp::provisionPorts()`
+(avoids colliding with `VpnIpPoolFactory` rows in tests). `.1` in every subnet is reserved for the VPN
+node's own tun0 endpoint address and never appears in the pool.
+
+**`provision()` deliberately splits DB allocation from the slow `easyrsa` call across the transaction
+boundary**: the IP lock+insert transaction is fast and commits immediately; `easyrsa build-client-full` (and
+the ccd file write) run *after*, outside any lock. If that external step fails, the DB allocation is
+explicitly rolled back (IP released back to the pool, the `vpn_accounts` row deleted, `current_clients`
+decremented) rather than left behind as a phantom "active" account with no real certificate behind it —
+verified by a real induced failure in `VpnProvisioningServiceTest`, not just a happy-path assumption.
+
+**Hub-and-spoke isolation is enforced at three independent layers, not just "don't push a route"** (a
+NAS-facing VPN client that merely isn't *told* about `boss-postgresql`/`boss-redis` could still reach them
+by IP unless actively blocked):
+1. `client-config-dir` (`ccd/<username>`, `topology subnet`) — `ifconfig-push <internal_ip> <netmask>` only,
+   for static per-NAS IP assignment. No per-client route lives here — every NAS is allowed the exact same
+   one destination, so there's nothing to differentiate.
+2. A single global `push "route <FREERADIUS_INTERNAL_IP> 255.255.255.255"` in `server.conf` — the only
+   route any NAS is ever told about.
+3. `iptables` inside the `openvpn` container's own network namespace (`FORWARD` policy `DROP`, one explicit
+   `ACCEPT` rule scoped to `-i tun0 -d $FREERADIUS_INTERNAL_IP`) plus `MASQUERADE` on traffic leaving the VPN
+   subnet toward FreeRADIUS — set by the entrypoint at every container start (kernel netfilter state doesn't
+   persist across container recreation, so this can't be a one-time manual step).
+
+**Testing a raw-socket/CLI external dependency**: unlike `WhatsappGatewayService` (HTTP, testable via
+`Http::fake()`) or `RouterOsGateway` (v0.6.1, a hand-rolled interface + fake binding because the RouterOS
+API client has no fake mode), `easyrsa`/`openssl` calls go through Laravel's own `Process` facade, which
+has first-class `Process::fake([...])` support — no custom abstraction needed here. **Gotcha found writing
+these tests**: `Process::fake()` pattern-matches against `Symfony\Component\Process\Process::getCommandline()`,
+which quotes every argument (`'easyrsa' '--pki-dir=...' '--batch' ...`) — a fake pattern must start with `*`
+(`'*easyrsa*build-client-full*'`) to account for the leading quote character, or the pattern silently never
+matches and the test executes the *real* binary instead (which is how this was actually caught — a real
+`easyrsa` process failed against a fake `ca.crt`, not a passing-for-the-wrong-reason test).
+
+**Real end-to-end verification performed, not just mocked tests**: after bringing the `openvpn` container up
+for real, `boss-app` successfully ran `easyrsa build-client-full`/`revoke`/`gen-crl` directly against the
+same PKI the `openvpn` entrypoint had bootstrapped, and `VpnProvisioningService::provision()`/`revoke()` were
+called for real (not `Process::fake()`) end-to-end against a real `Nas` row, producing a real signed
+certificate, a real allocated `internal_ip`, and a real CRL update on revoke. A real Mikrotik→OpenVPN
+connection was **not** performed (no physical/virtual NAS device available in this environment) — everything
+up to and including cert issuance and IP allocation is confirmed working; the actual "Mikrotik dials in and
+gets this exact ifconfig-push IP" hop relies on stock OpenVPN/`client-config-dir` behavior, not custom code,
+but hasn't been observed against a real device. This mirrors the v0.4.0 WhatsApp QR-delivery-vs-actual-scan
+gap in this same file.
+
+**Out-of-scope v0.6.2, explicitly deferred to later v0.6.x sub-versions** (see `docs/ROADMAP.md`): WireGuard
+and L2TP/IPsec (v0.6.3), a Mikrotik-ready script generator (v0.6.3), multi-node `vpn_servers`
+pool/health-check/failover (v0.6.4 — this sprint's single row was created by hand via `tinker`, not through
+a REST endpoint; **no `VpnServerController` exists yet** because CRUD for it only becomes a real need once
+more than one node exists), dynamic per-NAS FreeRADIUS virtual server + CoA (v0.6.5, unchanged from v0.6.1's
+note), and force-disconnecting an already-connected VPN session on revoke (needs the OpenVPN management
+interface). `nas.mikrotik_ip` is still not auto-filled by this sprint's provisioning flow — the sprint scope
+was explicit that connecting `internal_ip` to `nas.mikrotik_ip` is a manual/separate step this sprint, not
+automated until v0.6.3's script generator closes the loop.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,
 serves requests) + `boss-worker` (`queue:work`, default queue) + `boss-whatsapp-worker` (`queue:work` on
 dynamic `whatsapp-*` queues, v0.4.0) + `boss-scheduler` (loops `schedule:run` every 60s) →
 `boss-postgresql` + `boss-redis` + `whatsapp-gateway` (Node.js Baileys service, v0.4.0, internal-only, no
-host port) + `freeradius` (FreeRADIUS 3.2, v0.6.1, internal-only, no host port) + `freeradius-db`
-(Postgres 16, `radius_db` — a SEPARATE Postgres instance from `boss-postgresql`, per BOSS-009) (no host
-ports exposed for any of these except `boss-nginx`, per BOSS-010). All share the `boss-network`
-bridge network; `boss-app`'s `app/` directory is bind-mounted read-write, nginx mounts it read-only.
+host port) + `freeradius` (FreeRADIUS 3.2, v0.6.1, internal-only, no host port, static
+`boss-network` IP `172.28.0.10`) + `freeradius-db` (Postgres 16, `radius_db` — a SEPARATE Postgres instance
+from `boss-postgresql`, per BOSS-009) + `openvpn` (OpenVPN 2.6, v0.6.2, the one exception besides
+`boss-nginx` with a published host port — UDP 1194, real Mikrotik NAS devices dial in from outside
+`boss-network` entirely) (no host ports exposed for any of the rest, per BOSS-010). All share the
+`boss-network` bridge network (fixed IPAM subnet `172.28.0.0/24` since v0.6.2); `boss-app`'s `app/`
+directory is bind-mounted read-write, nginx mounts it read-only. `boss-app` also shares two named volumes
+(`vpn_pki`, `vpn_ccd`) with `openvpn` — see "VPN Server Node #1 (v0.6.2)" above for why.
 
 **Auth/authz stack** (RULE BOSS-005 layering): Laravel Fortify handles authentication (see
 `app/app/Providers/FortifyServiceProvider.php` and `app/app/Actions/Fortify/*` for the customized

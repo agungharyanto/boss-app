@@ -3,6 +3,84 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.6.2 — VPN Server Node #1 (OpenVPN) & Hub-and-Spoke Routing ke FreeRADIUS
+
+- Container Docker baru `openvpn` — dibangun sendiri dari `alpine:3.20` +
+  paket `openvpn` (2.6.20) + `easy-rsa` (3.1.7) via apk, bukan image
+  komunitas (`kylemanna/openvpn` terakhir update Des 2020). Satu-satunya
+  service (selain `boss-nginx` 80/443) dengan host port publik: UDP 1194
+  (BOSS-010, exception disengaja — NAS Mikrotik asli connect dari luar).
+- `boss-network` sekarang punya IPAM subnet tetap (`172.28.0.0/24`) dan
+  `freeradius` di-pin ke IP statis `172.28.0.10` — locked decision "FreeRADIUS
+  selalu diakses di SATU IP internal tetap dari sisi Mikrotik" butuh alamat
+  yang tidak pernah drift saat container di-recreate.
+- Tabel baru `vpn_servers` (platform-level, bukan tenant/reseller-scoped —
+  pola sama `payment_gateway_settings`) dan `vpn_accounts` (`cert_serial`,
+  `revoked_at` untuk CRL, unique `internal_ip`). Tabel baru `vpn_ip_pool`
+  (tidak diminta eksplisit di spec awal, ditambahkan karena alokasi IP
+  race-condition-safe butuh pool of rows to lock — pola sama `odp_ports`
+  v0.5.0, bukan tabel IP pool di spec, keputusan implementasi) —
+  `VpnServer::provisionIpPool()` (via `App\Support\CidrRange`, unit-tested)
+  meng-generate satu baris per host address usable di `subnet_cidr`.
+- `App\Services\Network\VpnProvisioningService::provision()`/`revoke()` —
+  alokasi IP di dalam `lockForUpdate()` transaction (cepat, commit dulu),
+  BARU jalankan `easyrsa build-client-full` (lambat, di luar transaction —
+  gagal di sini roll back alokasi IP, bukan menyisakan row "active" palsu).
+  `revoke()` = `easyrsa revoke` + `gen-crl`, TANPA restart/reload daemon
+  openvpn — dikonfirmasi dari dokumentasi resmi OpenVPN: CRL dibaca ulang
+  otomatis di setiap koneksi baru/renegosiasi TLS.
+- Arsitektur provisioning: `boss-app` dan `openvpn` berbagi volume Docker
+  bernama (`vpn_pki`, `vpn_ccd`) — Laravel menjalankan `easyrsa` langsung
+  (Process facade) terhadap PKI yang sama yang di-bootstrap container
+  `openvpn` saat first boot, BUKAN docker exec dari host (tidak ada Docker
+  socket yang di-mount ke `boss-app`).
+- Isolasi jaringan hub-and-spoke: `client-config-dir` untuk `ifconfig-push`
+  IP statis per-NAS, SATU `push route` global ke IP FreeRADIUS saja, iptables
+  `FORWARD` default-DROP dengan satu `ACCEPT` eksplisit ke IP FreeRADIUS,
+  MASQUERADE trafik keluar dari subnet VPN — NAS pelanggan tidak bisa reach
+  `boss-postgresql`/`boss-redis`/container lain di `boss-network`.
+- REST API `POST /nas/{nas}/vpn-account` (provision) dan
+  `POST /vpn-accounts/{vpn_account}/revoke` — otorisasi diturunkan dari
+  `NasPolicy::manage()` terhadap NAS pemilik (tidak ada `VpnAccountPolicy`
+  terpisah, `vpn_accounts` tidak punya `reseller_id`/`tenant_id` sendiri,
+  pola sama `odp_ports`/`work_order_photos`).
+
+Bug nyata ditemukan & diperbaiki saat verifikasi end-to-end (bukan cuma
+dites dengan mock — dibuktikan lewat `easyrsa` sungguhan dari container
+`boss-app` terhadap PKI yang di-bootstrap container `openvpn`, provisioning
+sungguhan lewat HTTP-equivalent service call, dan revoke sungguhan):
+- `easyrsa init-pki` melakukan hard-reset (`rm -rf`) pada `--pki-dir` itu
+  sendiri — gagal dengan `Resource busy` kalau `--pki-dir` PERSIS di root
+  mount point volume Docker. Diperbaiki dengan memindahkan PKI ke
+  subdirectory (`pki-data/pki`), bukan langsung di root mount.
+- Volume shared butuh permission permisif (`chmod -R 0777` di entrypoint
+  `openvpn`) karena `boss-app` (php-fpm worker jalan sebagai `www-data`,
+  UID beda dari proses root di container `openvpn`) perlu menulis
+  cert/key baru ke direktori yang sama.
+- `Process::fake()` di Laravel mencocokkan pattern terhadap
+  `Symfony\Process::getCommandline()` yang MENGUTIP tiap argumen
+  (`'easyrsa' '--pki-dir=...'`) — pattern wildcard harus diawali `*`
+  (`'*easyrsa*build-client-full*'`), bukan `'easyrsa*...'` polos, atau
+  fake tidak pernah ter-trigger dan test diam-diam menjalankan proses asli.
+- `docker/php/Dockerfile` menambah `openssl`/`easy-rsa` ke layer `apk add`
+  yang SAMA dengan `linux-headers` (v0.6.1) — meng-invalidate cache layer
+  `docker-php-ext-install sockets` sesudahnya, memicu kompilasi ulang dari
+  nol (~7 menit) walau tidak ada perubahan pada extension itu sendiri.
+  Bukan bug fungsional, dicatat sebagai pelajaran Dockerfile-layering untuk
+  sprint berikutnya (taruh paket baru di layer terpisah kalau ingin cache
+  tetap valid).
+
+Out-of-scope v0.6.2, di-declare eksplisit sebagai backlog: WireGuard/L2TP
+(v0.6.3), script generator Mikrotik siap-paste (v0.6.3), multi-node pool +
+health-check otomatis + failover (v0.6.4, `vpn_servers` baru 1 baris manual
+lewat tinker — belum ada `VpnServerController`/REST API karena CRUD-nya baru
+jadi kebutuhan nyata saat multi-node), dynamic virtual server + CoA
+(v0.6.5), force-disconnect sesi VPN yang sudah terkoneksi saat revoke (perlu
+OpenVPN management interface, belum dibangun), Docker healthcheck untuk
+`openvpn` (monitoring VPN node sungguhan adalah pekerjaan v0.6.4).
+
+Detail lengkap ada di CLAUDE.md bagian "VPN Server Node #1 (v0.6.2)".
+
 ## v0.6.1 — FreeRADIUS Core & NAS Management
 
 - Container Docker baru `freeradius-db` (Postgres 16, terpisah dari

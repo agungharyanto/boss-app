@@ -21,6 +21,7 @@ use App\Http\Controllers\Api\V1\TaxComponentController;
 use App\Http\Controllers\Api\V1\TaxLedgerController;
 use App\Http\Controllers\Api\V1\TechnicianController;
 use App\Http\Controllers\Api\V1\ThemeSettingsController;
+use App\Http\Controllers\Api\V1\VpnAccountController;
 use App\Http\Controllers\Api\V1\WhatsappGatewaySettingsController;
 use App\Http\Controllers\Api\V1\WhatsappMessageLogController;
 use App\Http\Controllers\Api\V1\WhatsappMessageTemplateController;
@@ -133,6 +134,9 @@ Route::prefix('v1')->group(function () {
             Route::put('nas/{nas}', [NasController::class, 'update']);
             Route::delete('nas/{nas}', [NasController::class, 'destroy']);
             Route::post('nas/{nas}/test-connection', [NasController::class, 'testConnection']);
+
+            Route::post('nas/{nas}/vpn-account', [VpnAccountController::class, 'provision']);
+            Route::post('vpn-accounts/{vpn_account}/revoke', [VpnAccountController::class, 'revoke']);
         });
 
         // Admin-only tax engine catalog/reporting — no reseller.context needed.

@@ -4,6 +4,7 @@ use App\Console\Commands\GenerateDueInvoices;
 use App\Console\Commands\MarkOverdueInvoices;
 use App\Console\Commands\SendWhatsappDueReminders;
 use App\Console\Commands\SendWhatsappSuspendedReminders;
+use App\Console\Commands\VpnCheckNodeHealth;
 use App\Console\Commands\WhatsappCheckSessionHealth;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -24,3 +25,8 @@ Schedule::command(MarkOverdueInvoices::class)->daily();
 Schedule::command(SendWhatsappDueReminders::class)->everyMinute();
 Schedule::command(SendWhatsappSuspendedReminders::class)->dailyAt('08:00');
 Schedule::command(WhatsappCheckSessionHealth::class)->hourly();
+
+// v0.6.4 Multi-Node VPN Pool — same boss-scheduler loop. everyMinute()
+// matches boss-scheduler's own 60s polling granularity (no point checking
+// more often than the loop that actually runs schedule:run).
+Schedule::command(VpnCheckNodeHealth::class)->everyMinute();

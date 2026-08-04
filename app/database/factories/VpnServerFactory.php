@@ -22,6 +22,7 @@ class VpnServerFactory extends Factory
         return [
             'hostname' => 'vpn-node-'.$this->faker->unique()->numerify('##'),
             'public_ip' => $this->faker->unique()->ipv4(),
+            'port' => $this->faker->unique()->numberBetween(20000, 29999),
             'subnet_cidr' => '172.23.'.$this->faker->unique()->numberBetween(100, 250).'.0/24',
             'protocol' => VpnProtocol::OpenVpn,
             'max_clients' => 250,

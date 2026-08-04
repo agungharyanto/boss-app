@@ -38,7 +38,11 @@
                         <option value="wireguard" @if ($routerOsVersion === '6') disabled @endif>
                             WireGuard @if ($routerOsVersion === '6') (butuh RouterOS 7.x) @endif
                         </option>
-                        <option value="l2tp_ipsec">L2TP/IPsec</option>
+                        {{-- v0.6.4: tetap ditampilkan (bukan disembunyikan) dengan
+                             label eksplisit — admin masih boleh generate script
+                             L2TP kalau mau, tapi harus tahu batasannya dulu. Lihat
+                             catatan amber di bawah untuk detail lengkap. --}}
+                        <option value="l2tp_ipsec">L2TP/IPsec (known limitation)</option>
                     </select>
                 </div>
             </div>
@@ -52,6 +56,17 @@
                     Catatan: private key WireGuard hanya ditampilkan SEKALI saat pertama kali di-generate untuk NAS
                     ini — BOSS App tidak menyimpannya. Kalau NAS ini sudah punya akun WireGuard aktif, generate
                     ulang akan meminta konfirmasi cabut akun lama dulu (lihat tombol di bawah kalau ini terjadi).
+                </p>
+            @endif
+
+            @if ($vpnProtocol === 'l2tp_ipsec')
+                <p class="text-xs text-amber-600">
+                    <strong>Known limitation (v0.6.3, belum teratasi):</strong> IPsec berhasil terhubung (SA
+                    established, DPD sukses), tapi trafik L2TP-nya sendiri tidak pernah benar-benar ter-enkripsi
+                    ESP — root cause ada di perilaku RouterOS <code>l2tp-client use-ipsec=yes</code> yang di luar
+                    kendali sisi server, bukan bug di script ini. L2TP juga TIDAK ikut pool multi-node v0.6.4 —
+                    cuma 1 node, tanpa auto-switch failover. Disarankan pakai OpenVPN atau WireGuard (keduanya
+                    fully functional dan sudah diverifikasi nyata) sampai ini ditemukan solusinya.
                 </p>
             @endif
         </div>

@@ -50,6 +50,13 @@ class MikrotikScriptGenerator
      * before importing it, so the router's local file store — not this
      * script's own text — ever holds the raw certificate/key bytes.
      */
+    /**
+     * $nodePorts: every ONLINE node's port for this protocol at generation
+     * time (including this account's own $port), used to build the
+     * auto-switch scheduler block below — pass an empty array to omit
+     * auto-switch entirely (e.g. only one node exists/is online, nothing
+     * to fail over to).
+     */
     public function openVpnScript(
         VpnAccount $account,
         string $routerOsVersion,
@@ -60,6 +67,7 @@ class MikrotikScriptGenerator
         string $clientCertUrl,
         string $clientKeyUrl,
         string $fetchMode,
+        array $nodePorts = [],
     ): string {
         $ifaceName = 'boss-vpn-openvpn';
         $caFile = "{$account->username}-ca.crt";
@@ -67,6 +75,16 @@ class MikrotikScriptGenerator
         $keyFile = "{$account->username}.key";
         $cleanup = $this->interfaceCleanupBlock();
         $routing = $this->routingIsolationBlock($routerOsVersion, $ifaceName, $freeradiusInternalIp);
+        $autoSwitch = $this->autoSwitchBlock(
+            schedulerName: 'boss-vpn-autoswitch-openvpn',
+            freeradiusInternalIp: $freeradiusInternalIp,
+            nodePorts: $nodePorts,
+            ifaceName: $ifaceName,
+            menuPath: '/interface ovpn-client',
+            findKey: 'name',
+            portProperty: 'port',
+            needsReEnable: true,
+        );
 
         return <<<SCRIPT
         # BOSS App — OpenVPN client script untuk NAS "{$account->username}"
@@ -107,6 +125,8 @@ class MikrotikScriptGenerator
         {$routing}
 
         :log info "BOSS App: OpenVPN client {$ifaceName} selesai dikonfigurasi"
+
+        {$autoSwitch}
         SCRIPT;
     }
 
@@ -144,9 +164,20 @@ class MikrotikScriptGenerator
         string $freeradiusInternalIp,
         string $serverPublicKey,
         string $clientPrivateKey,
+        array $nodePorts = [],
     ): string {
         $ifaceName = 'boss-vpn-wireguard';
         $cleanup = $this->interfaceCleanupBlock();
+        $autoSwitch = $this->autoSwitchBlock(
+            schedulerName: 'boss-vpn-autoswitch-wireguard',
+            freeradiusInternalIp: $freeradiusInternalIp,
+            nodePorts: $nodePorts,
+            ifaceName: $ifaceName,
+            menuPath: '/interface wireguard peers',
+            findKey: 'interface',
+            portProperty: 'endpoint-port',
+            needsReEnable: false,
+        );
 
         return <<<SCRIPT
         # BOSS App — WireGuard client script untuk NAS "{$account->username}"
@@ -178,6 +209,8 @@ class MikrotikScriptGenerator
             comment="{$this->routeComment()}"
 
         :log info "BOSS App: WireGuard client {$ifaceName} selesai dikonfigurasi"
+
+        {$autoSwitch}
         SCRIPT;
     }
 
@@ -258,6 +291,113 @@ class MikrotikScriptGenerator
         /user add name={$apiUsername} group=boss-api-readonly password="{$apiPassword}"
 
         :log info "BOSS App: RADIUS untuk NAS {$nas->name} selesai dikonfigurasi"
+        SCRIPT;
+    }
+
+    /**
+     * v0.6.4 multi-node pool auto-switch — pattern referenced from the
+     * MixRadius "AutoSwitchVPN.rsc" reference script dissected at the start
+     * of the v0.6.0 cluster: a RouterOS scheduler pings FreeRADIUS through
+     * the tunnel periodically, and on failure, switches this NAS's
+     * connect-to endpoint to a sibling node of the same protocol.
+     *
+     * Deliberately uses plain integer arithmetic (next port = current + 1,
+     * wrapping min<->max), NOT array/:find-based lookup — every sibling
+     * node's port is allocated sequentially by VpnServersSeeder (1194/1195/
+     * 1196, 51820/51821/51822), so "the next candidate" is always just
+     * "+1, wrap at the range boundary". This avoids relying on RouterOS
+     * script array-search semantics that are harder to verify without a
+     * real device, in favor of the simplest, most robust operation
+     * available (integer comparison/assignment, unambiguous in every
+     * RouterOS version). All sibling nodes share the SAME public_ip this
+     * sprint (one physical server, see v0.6.4 architecture decision) — only
+     * the port ever needs to change, never connect-to itself.
+     *
+     * Returns an empty string (no scheduler at all) when $nodePorts has
+     * fewer than 2 entries — nothing to fail over to.
+     *
+     * **Two real bugs found and fixed via actual deployment to
+     * test-x86-bajastu (RouterOS 7.11), both the same root cause**: the
+     * first version wrote `/system scheduler add ... on-event={ ...multi-
+     * line script... }` directly — the scheduler WAS created, but
+     * `/system scheduler print` showed `on-event` as a genuinely EMPTY
+     * string (confirmed via an explicit `.proplist=on-event` query, not
+     * just a truncated display). Switched to this router's own proven
+     * pattern (its pre-existing `schedule-script-speed` scheduler) —
+     * define the logic as its own `/system script`, point `on-event` at
+     * that script's NAME (a plain quoted string) instead of inline code.
+     * That fixed the scheduler, but the SAME curly-brace-block problem
+     * then showed up one level down: `/system script add ... source={
+     * ...multi-line... }` ALSO left `source` empty on real hardware.
+     * Root cause both times: `/import`-run files apparently never
+     * correctly capture a `{ ... }` block spanning multiple LINES of the
+     * .rsc file as a single parameter value, unlike typing it interactively
+     * at a console. Fixed by making `source=` a single-line, semicolon-
+     * separated STRING instead (same proven idiom as this whole module's
+     * fetch+import one-liner) — and to avoid nested-quote escaping inside
+     * that now-quoted source string entirely, interface names are used
+     * UNQUOTED throughout this method (RouterOS doesn't require quotes for
+     * an identifier with no spaces, and `boss-vpn-*` names never have any).
+     */
+    private function autoSwitchBlock(
+        string $schedulerName,
+        string $freeradiusInternalIp,
+        array $nodePorts,
+        string $ifaceName,
+        string $menuPath,
+        string $findKey,
+        string $portProperty,
+        bool $needsReEnable,
+    ): string {
+        $nodePorts = array_values(array_unique($nodePorts));
+
+        if (count($nodePorts) < 2) {
+            return '# Auto-switch tidak disertakan — cuma 1 node online untuk protokol ini saat script digenerate, tidak ada node lain untuk gagal-pindah.';
+        }
+
+        $minPort = min($nodePorts);
+        $maxPort = max($nodePorts);
+        $scriptName = "{$schedulerName}-script";
+        $findExpr = "[find {$findKey}={$ifaceName}]";
+
+        // A LITERAL backslash followed by a dollar sign — NOT a PHP
+        // interpolation guard (that would just be "\$", which PHP reduces
+        // to a bare "$" in the output, no backslash survives). Real bug
+        // found via a real device: when a .rsc file run through /import
+        // contains `source="...$pingOk..."`, RouterOS expands $pingOk as a
+        // variable reference AT IMPORT TIME (in whatever scope /import
+        // itself is running in, where none of these locals exist yet), so
+        // every one of them silently evaluated to an empty string —
+        // confirmed via a live .proplist=source query showing
+        // "current + )" instead of "$current + )". Sending the exact same
+        // source string directly over the RouterOS API (not through a
+        // .rsc file) stores $-variables completely literally with no such
+        // expansion — the API and the /import command-line parser
+        // genuinely behave differently here. The fix, also confirmed
+        // directly against the router: prefixing every $ with a real
+        // backslash (\$var, not just $var) makes /import store it as a
+        // literal $var too, matching what the API does natively.
+        $dollar = '\\$';
+
+        $setPort = "{$menuPath} set {$findExpr} {$portProperty}={$dollar}nextPort";
+        $reEnable = '';
+        if ($needsReEnable) {
+            $setPort .= ' disabled=yes';
+            $reEnable = ";{$menuPath} set {$findExpr} disabled=no";
+        }
+
+        $sourceOneLiner = ":local currentPort [{$menuPath} get {$findExpr} {$portProperty}];"
+            .":local pingOk [:ping {$freeradiusInternalIp} interface={$ifaceName} count=3];"
+            .":if ({$dollar}pingOk = 0) do={:local nextPort ({$dollar}currentPort + 1);:if ({$dollar}nextPort > {$maxPort}) do={:set nextPort {$minPort}};{$setPort}{$reEnable}}";
+
+        return <<<SCRIPT
+        # Auto-switch: cek FreeRADIUS tiap 30 detik lewat tunnel ini, kalau
+        # gagal 3x ping berturut-turut, pindah ke node lain (siklus
+        # {$minPort}..{$maxPort}, urutan dari VpnServersSeeder v0.6.4).
+        /system script remove [find name={$scriptName}]
+        /system script add name={$scriptName} source="{$sourceOneLiner}"
+        /system scheduler remove [find name={$schedulerName}]
+        /system scheduler add name={$schedulerName} interval=30s on-event="{$scriptName}"
         SCRIPT;
     }
 

@@ -587,14 +587,96 @@ integrate here later, but wasn't wired up this sprint), and the html5-qrcode bro
 component (the `POST /work-orders/{id}/devices` API endpoint is ready to receive whatever a scan produces,
 the camera UI itself wasn't built).
 
+## FreeRADIUS Core & NAS Management (v0.6.1)
+
+**v0.6.0 was split into 5 sub-versions (`v0.6.1`-`v0.6.5`)** to replicate the VPN+RADIUS pattern from
+competitor reference MixRadius V3.2 — see `docs/ROADMAP.md` for the full breakdown and the locked
+cluster-wide architecture decisions (multi-protocol VPN, pool-ready-but-1-node topology, unique RADIUS
+port per NAS). This sprint is only the first slice: the FreeRADIUS container itself + Laravel's own NAS
+inventory/CRUD. No real NAS trusts this FreeRADIUS instance yet — that's v0.6.5 (dynamic virtual server +
+port allocator).
+
+**Two completely different `nas` tables, same name, different databases — do not confuse them**:
+`boss_db.nas` (this sprint's migration, `App\Models\Nas`) is BOSS App's own business inventory of Mikrotik
+routers — reseller-scoped, encrypted API/RADIUS credentials, driven entirely by `NasService`/`NasController`.
+`radius_db.nas` is FreeRADIUS's own standard schema table (`nasname`/`shortname`/`secret`/...) — the
+RADIUS-protocol client whitelist FreeRADIUS itself consults to decide which IPs may send it Access-Request
+packets. **v0.6.1 does NOT sync between them** — creating a row in `boss_db.nas` has zero effect on
+`radius_db.nas` right now. That sync (along with the dynamic virtual server + port allocator that makes a
+per-NAS unique port meaningful) is v0.6.5 scope.
+
+**Two separate Postgres containers, not two databases in one container** (confirmed explicitly before
+building, BOSS-009: `radius_db` logically separated from `boss_db`, no cross-database joins) —
+`freeradius-db` (own container, own volume, own credentials, `RADIUS_DB_*` env) is completely independent
+of `boss-postgresql`. Root `.env.example` had reserved a distinct `RADIUS_DB_HOST` placeholder since
+v0.1.0, which is what confirmed this was the intended shape rather than a shared instance. Neither
+`freeradius-db` nor `freeradius` publish a host port (BOSS-010) — nothing outside `boss-network` needs to
+reach FreeRADIUS yet; real NAS/Mikrotik traffic arrives via the VPN concentrator container starting v0.6.2,
+which will join `boss-network` and relay internally.
+
+**`nas.mikrotik_ip`/`auth_port`/`acct_port` are nullable on purpose, not a gap** — every NAS starts in a
+pre-VPN-provisioning state. `mikrotik_ip` gets filled automatically once VPN provisioning exists (v0.6.2);
+`auth_port`/`acct_port` get filled once the dynamic port allocator exists (v0.6.5). `StoreNasRequest`/
+`UpdateNasRequest` deliberately don't accept `mikrotik_ip` as user input at all in v0.6.1 — there is no
+manual "type in the router's IP" path, by design, so a later sprint can't accidentally skip the VPN
+provisioning step. `coa_port` is the one exception with a real default (3799, the RFC 5176
+Change-of-Authorization/Disconnect port) since it doesn't need to be unique the same way auth/acct do until
+v0.6.5 actually wires up CoA.
+
+**`App\Services\Network\Contracts\RouterOsGateway`** is a deliberate boundary around the MikroTik RouterOS
+API transport (`evilfreelancer/routeros-api-php`, raw sockets — not HTTP) so `NasService::testConnection()`
+stays testable without a real router: there's no `Http::fake()` equivalent for a raw-socket protocol, so
+tests bind a fake implementation of the interface directly (see `Tests\Feature\Network\NasServiceTest`).
+`RouterOsApiGateway` (the real implementation) builds a fresh `RouterOS\Client` per call from the NAS row's
+own encrypted credentials — never a static/global config — same per-row-credentials posture as
+`WhatsappGatewayService`'s per-session resolution. `NasService::testConnection()` refuses outright
+(`NasNotProvisionedException`, 422) when `mikrotik_ip` is still null, rather than attempting a connection
+that could only ever fail confusingly.
+
+**Response envelope never includes `api_password`/`radius_secret` values** — `NasResource` only exposes
+`has_api_password`/`has_radius_secret` booleans, same posture as `payment_gateway_settings` never
+re-rendering a saved secret back to the browser.
+
+**Three infrastructure gaps found and fixed while building** (same class of bug as the `APP_ENV`/WhatsApp
+`.env` entries earlier in this file — a new dependency's build/runtime requirement not yet reflected in the
+image or config that ships it):
+1. `ext-sockets` (required by `evilfreelancer/routeros-api-php`) failed to compile in `docker/php/Dockerfile`
+   with `fatal error: linux/sock_diag.h: No such file or directory` — Alpine's base image doesn't ship full
+   kernel headers. Fixed by adding the `linux-headers` apk package before `docker-php-ext-install sockets`.
+2. `freeradius/freeradius-server:*-alpine`'s compiled-in `rlm_sql_postgresql.so` failed to instantiate
+   (`Error loading shared library libpq.so.5`) — the alpine base image doesn't include the Postgres client
+   runtime library. Fixed by adding `apk add libpq` to `docker/freeradius/Dockerfile`.
+3. The first `mods-available/sql` overlay used `${env:RADIUS_DB_HOST}`-style syntax for injecting
+   `RADIUS_DB_*` into the connection string, which FreeRADIUS rejected at parse time
+   (`Reference "${env}" not found`) — `${...}` in a FreeRADIUS config file means "reference another config
+   value defined elsewhere," not environment-variable interpolation. The correct syntax, confirmed working
+   end-to-end (a manually inserted `radcheck` row authenticated successfully via `radclient auth` and
+   returned a real `Access-Accept`), is Perl-style `$ENV{RADIUS_DB_HOST}`.
+
+**Healthcheck is a real Status-Server round-trip, not just "is the process running"** — it sends a
+Status-Server packet via `radclient` (binary lives at `/opt/bin/radclient` in this image, not on `$PATH`)
+against the stock `localhost` client already defined in the unmodified default `clients.conf` (secret
+`testing123`) and greps for `Access-Accept`. `status_server = yes` is FreeRADIUS's own default in
+`radiusd.conf`, so this works with zero extra config — and because `-sql` is already wired into
+`authorize{}` in the stock `sites-enabled/default` (the leading `-` means a missing/failed module doesn't
+hard-reject the request; no site-file edits were needed at all this sprint), a passing healthcheck is
+reasonable evidence the `sql` module itself instantiated correctly too, not just that the process is alive.
+
+**Out-of-scope v0.6.1, explicitly deferred to later v0.6.x sub-versions** (see `docs/ROADMAP.md`): any VPN
+protocol/server (v0.6.2/v0.6.3), `vpn_servers` pool/failover schema (v0.6.4), dynamic per-NAS FreeRADIUS
+virtual server + port allocator + CoA/disconnect (v0.6.5) — meaning `auth_port`/`acct_port`/`coa_port` on
+the `nas` table are currently unused by FreeRADIUS itself, and no real NAS can authenticate against this
+FreeRADIUS instance yet.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,
 serves requests) + `boss-worker` (`queue:work`, default queue) + `boss-whatsapp-worker` (`queue:work` on
 dynamic `whatsapp-*` queues, v0.4.0) + `boss-scheduler` (loops `schedule:run` every 60s) →
 `boss-postgresql` + `boss-redis` + `whatsapp-gateway` (Node.js Baileys service, v0.4.0, internal-only, no
-host port) (no host ports exposed for any of these except `boss-nginx`, per BOSS-010). All share the
-`boss-network`
+host port) + `freeradius` (FreeRADIUS 3.2, v0.6.1, internal-only, no host port) + `freeradius-db`
+(Postgres 16, `radius_db` — a SEPARATE Postgres instance from `boss-postgresql`, per BOSS-009) (no host
+ports exposed for any of these except `boss-nginx`, per BOSS-010). All share the `boss-network`
 bridge network; `boss-app`'s `app/` directory is bind-mounted read-write, nginx mounts it read-only.
 
 **Auth/authz stack** (RULE BOSS-005 layering): Laravel Fortify handles authentication (see

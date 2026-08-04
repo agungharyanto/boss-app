@@ -38,6 +38,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedPaymentGatewaySettingsPermissions();
         $this->seedWhatsappGatewayPermissions();
         $this->seedInstallationPermissions();
+        $this->seedNetworkPermissions();
     }
 
     /**
@@ -230,6 +231,26 @@ class RolesAndPermissionsSeeder extends Seeder
             'technicians.manage',
             'work_orders.view',
             'work_orders.manage',
+        ];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+    }
+
+    /**
+     * Permission modul Network / FreeRADIUS (v0.6.1). Sama pola dengan
+     * seedInstallationPermissions() — super_admin-only; reseller mengelola
+     * NAS miliknya sendiri lewat reseller_users membership (dicek di
+     * NasPolicy), bukan lewat permission Spatie ini.
+     */
+    private function seedNetworkPermissions(): void
+    {
+        $permissions = [
+            'nas.view',
+            'nas.manage',
         ];
 
         foreach ($permissions as $permission) {

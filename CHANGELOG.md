@@ -3,6 +3,73 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.6.1 — FreeRADIUS Core & NAS Management
+
+- Container Docker baru `freeradius-db` (Postgres 16, terpisah dari
+  `boss-postgresql` — BOSS-009: `radius_db` logically separated dari
+  `boss_db`, no cross-database join) dan `freeradius`
+  (`freeradius/freeradius-server:3.2.10-alpine`, build custom di
+  `docker/freeradius/`). Tidak ada host port dipublikasikan (BOSS-010) —
+  belum ada NAS/VPN yang perlu menjangkaunya dari luar sampai v0.6.2.
+- Schema PostgreSQL standar FreeRADIUS (`radcheck`, `radreply`,
+  `radgroupcheck`, `radgroupreply`, `radusergroup`, `radacct`,
+  `radpostauth`, `nas`, `nasreload`) diambil dari upstream
+  `FreeRADIUS/freeradius-server` v3.2.x dan di-load otomatis lewat
+  `docker-entrypoint-initdb.d` saat `freeradius-db` pertama kali start.
+- `rlm_sql` diarahkan ke `radius_db` lewat `docker/freeradius/mods-available/sql`
+  (dialect `postgresql`, driver `rlm_sql_postgresql`, connection string dari
+  `$ENV{RADIUS_DB_*}`) — diverifikasi end-to-end: `radcheck` row manual ->
+  `radclient auth` -> `Access-Accept` sungguhan, bukan cuma "container tidak
+  crash".
+- Tabel baru `nas` (di `boss_db`, BUKAN tabel `nas` bawaan FreeRADIUS di
+  `radius_db` — nama sama, database beda) — inventaris router Mikrotik:
+  `reseller_id` nullable (pola sama dengan `whatsapp_sessions`/
+  `work_orders`), `mikrotik_ip` nullable sengaja (baru terisi lewat VPN
+  provisioning v0.6.2), `api_password`/`radius_secret` encrypted,
+  `auth_port`/`acct_port` nullable sampai port allocator v0.6.5,
+  `coa_port` default 3799.
+- `App\Services\Network\NasService` (CRUD + `testConnection()`) dan
+  `App\Services\Network\Contracts\RouterOsGateway` (interface,
+  implementasi nyata `RouterOsApiGateway` pakai
+  `evilfreelancer/routeros-api-php` — butuh `ext-sockets`, baru
+  ditambahkan ke `docker/php/Dockerfile`) — dibuat sebagai boundary
+  eksplisit supaya test tidak perlu router sungguhan (bind fake
+  implementasi lewat container, tidak ada `Http::fake()` karena
+  protokolnya raw socket, bukan HTTP).
+- REST API `GET/POST /nas`, `GET/PUT/DELETE /nas/{nas}`,
+  `POST /nas/{nas}/test-connection` — reseller-scoped lewat
+  `BelongsToResellerScope` + `NasPolicy` (pola identik
+  Odp/Technician/WorkOrder Policy v0.5.0). Response tidak pernah
+  menyertakan nilai asli `api_password`/`radius_secret`.
+- Permission `nas.view`/`nas.manage` (super_admin-only, pola sama dengan
+  `seedInstallationPermissions()`).
+- `docs/ROADMAP.md` diperbarui: `v0.6.0` (FreeRADIUS, satu versi) dipecah
+  jadi 5 sub-versi `v0.6.1`-`v0.6.5` untuk mereplikasi pola VPN+RADIUS
+  MixRadius V3.2; `v0.6.1` (Mobile Self-Service Portal) yang lama digeser
+  ke `v0.11.0`.
+
+**Gap infrastruktur yang ditemukan & diperbaiki saat membangun** (sama
+kelas dengan gap `.env`/build-image di sprint-sprint sebelumnya — bukan
+scope baru, murni supaya container ini benar-benar bisa dipakai):
+- `ext-sockets` gagal dikompilasi di image `php:8.4-fpm-alpine` karena
+  Alpine tidak menyertakan kernel header lengkap secara default
+  (`linux/sock_diag.h` hilang) — diperbaiki dengan menambah paket
+  `linux-headers` ke `docker/php/Dockerfile` sebelum
+  `docker-php-ext-install sockets`.
+- `rlm_sql_postgresql.so` di image `freeradius/freeradius-server:*-alpine`
+  gagal instantiate (`Error loading shared library libpq.so.5`) karena
+  base image Alpine tidak menyertakan runtime client Postgres —
+  diperbaiki dengan `apk add libpq` di `docker/freeradius/Dockerfile`.
+- Sintaks substitusi environment variable FreeRADIUS yang benar di
+  config statis (`mods-available/sql`) adalah `$ENV{VAR}` (gaya Perl),
+  **bukan** `${env:VAR}` — percobaan pertama gagal dengan error
+  `Reference "${env}" not found` karena `${...}` di FreeRADIUS adalah
+  sintaks "rujuk nilai config lain", bukan environment-variable
+  interpolation.
+
+Detail lengkap ada di CLAUDE.md bagian "FreeRADIUS Core & NAS Management
+(v0.6.1)".
+
 ## v0.5.0 — Installation (Work Order Teknisi)
 
 - Tabel baru `odps` — inventory ODP (`code` unik per tenant, `latitude`/

@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\DashboardWidgetSettingController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\LocaleSettingController;
+use App\Http\Controllers\Api\V1\NasController;
 use App\Http\Controllers\Api\V1\OdpController;
 use App\Http\Controllers\Api\V1\PaymentController;
 use App\Http\Controllers\Api\V1\RegistrationController;
@@ -125,6 +126,13 @@ Route::prefix('v1')->group(function () {
             Route::get('technicians', [TechnicianController::class, 'index']);
             Route::post('technicians', [TechnicianController::class, 'store']);
             Route::get('technicians/{technician}', [TechnicianController::class, 'show']);
+
+            Route::get('nas', [NasController::class, 'index']);
+            Route::post('nas', [NasController::class, 'store']);
+            Route::get('nas/{nas}', [NasController::class, 'show']);
+            Route::put('nas/{nas}', [NasController::class, 'update']);
+            Route::delete('nas/{nas}', [NasController::class, 'destroy']);
+            Route::post('nas/{nas}/test-connection', [NasController::class, 'testConnection']);
         });
 
         // Admin-only tax engine catalog/reporting — no reseller.context needed.

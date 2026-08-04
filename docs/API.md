@@ -494,3 +494,30 @@ status sendiri (state machine tetap prioritas pertama).
 
 Transisi ke `cancelled` dari status non-terminal manapun. Port ODP yang
 sempat `reserved`/`used` dikembalikan ke `available`.
+
+## FreeRADIUS Core & NAS Management (v0.6.1)
+
+Semua endpoint di bawah ada di dalam grup middleware `reseller.context` —
+scoping otomatis lewat `BelongsToResellerScope` pada model `Nas`: reseller
+(owner/staff, via `reseller_users` membership) hanya melihat/mengelola NAS
+miliknya sendiri; ISP admin (permission `nas.*`) melihat semuanya termasuk
+yang direct (tanpa reseller). Tabel `nas` ini berada di `boss_db` — bukan
+tabel `nas` bawaan FreeRADIUS sendiri di `radius_db` (nama sama, database
+beda, lihat CLAUDE.md).
+
+### `GET/POST /nas` · `GET /nas/{nas}` · `PUT /nas/{nas}` · `DELETE /nas/{nas}`
+
+CRUD inventaris NAS (router Mikrotik). `mikrotik_ip` TIDAK bisa diisi manual
+lewat endpoint ini di v0.6.1 — baru terisi otomatis setelah VPN provisioning
+(v0.6.2). `auth_port`/`acct_port` juga masih kosong sampai dynamic virtual
+server + port allocator (v0.6.5) mengisi otomatis; `coa_port` default 3799.
+Response TIDAK PERNAH menyertakan nilai asli `api_password`/`radius_secret`
+— hanya flag `has_api_password`/`has_radius_secret` (pola sama dengan
+`payment_gateway_settings`).
+
+### `POST /nas/{nas}/test-connection`
+
+Ping ke Mikrotik API NAS ini (bukan RADIUS, bukan ICMP) lewat
+`RouterOsGateway` (evilfreelancer/routeros-api-php di baliknya), lalu
+menyimpan `status` (`online`/`offline`) + `last_ping_at`. **Ditolak** (422,
+`NasNotProvisionedException`) kalau `mikrotik_ip` masih kosong.

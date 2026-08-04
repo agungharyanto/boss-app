@@ -1,0 +1,90 @@
+<?php
+
+namespace Tests\Feature\Network;
+
+use App\Enums\NasStatus;
+use App\Exceptions\NasNotProvisionedException;
+use App\Models\Nas;
+use App\Models\Tenant;
+use App\Services\Network\Contracts\RouterOsGateway;
+use App\Services\Network\NasService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Tests\TestCase;
+
+class NasServiceTest extends TestCase
+{
+    use RefreshDatabase;
+
+    /**
+     * RouterOsGateway talks raw sockets (evilfreelancer/routeros-api-php),
+     * not HTTP — there's no Http::fake() equivalent, so we bind a fake
+     * implementation of the interface instead (see
+     * App\Providers\AppServiceProvider's default binding).
+     */
+    private function bindGateway(bool $online, ?string $message = null): void
+    {
+        $this->app->bind(RouterOsGateway::class, fn () => new class($online, $message) implements RouterOsGateway
+        {
+            public function __construct(private readonly bool $online, private readonly ?string $message) {}
+
+            public function ping(Nas $nas): array
+            {
+                return ['online' => $this->online, 'message' => $this->message];
+            }
+        });
+    }
+
+    public function test_test_connection_marks_nas_online_on_success(): void
+    {
+        $this->bindGateway(online: true);
+
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->provisioned()->create(['tenant_id' => $tenant->id, 'status' => NasStatus::Unknown]);
+
+        $result = app(NasService::class)->testConnection($nas);
+
+        $this->assertSame(NasStatus::Online, $result->status);
+        $this->assertNotNull($result->last_ping_at);
+    }
+
+    public function test_test_connection_marks_nas_offline_on_failure(): void
+    {
+        $this->bindGateway(online: false, message: 'connection refused');
+
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->provisioned()->create(['tenant_id' => $tenant->id, 'status' => NasStatus::Online]);
+
+        $result = app(NasService::class)->testConnection($nas);
+
+        $this->assertSame(NasStatus::Offline, $result->status);
+        $this->assertNotNull($result->last_ping_at);
+    }
+
+    public function test_test_connection_refuses_when_mikrotik_ip_is_not_yet_provisioned(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id, 'mikrotik_ip' => null]);
+
+        $this->expectException(NasNotProvisionedException::class);
+
+        app(NasService::class)->testConnection($nas);
+    }
+
+    public function test_encrypted_columns_round_trip_and_never_appear_raw_in_the_database(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create([
+            'tenant_id' => $tenant->id,
+            'api_password' => 'plaintext-api-password',
+            'radius_secret' => 'plaintext-radius-secret',
+        ]);
+
+        $this->assertSame('plaintext-api-password', $nas->fresh()->api_password);
+        $this->assertSame('plaintext-radius-secret', $nas->fresh()->radius_secret);
+
+        $raw = DB::table('nas')->where('id', $nas->id)->first();
+        $this->assertStringNotContainsString('plaintext-api-password', $raw->api_password);
+        $this->assertStringNotContainsString('plaintext-radius-secret', $raw->radius_secret);
+    }
+}

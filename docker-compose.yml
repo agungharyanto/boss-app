@@ -106,6 +106,17 @@ services:
     entrypoint: ["sh", "-c", "while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"]
     volumes:
       - ./app:/var/www/html
+      # v0.6.4 — VpnCheckNodeHealth (routes/console.php, ->everyMinute())
+      # is the scheduled command that actually READS these heartbeat files,
+      # and schedule:run genuinely executes here, in boss-scheduler, not in
+      # boss-app. Found via a real test: without these mounts,
+      # config('services.vpn.pki_dir')/wg_peers_dir resolve to paths that
+      # simply don't exist in THIS container, so every node's heartbeat
+      # silently reads as "missing" and gets marked Offline regardless of
+      # real status — same class of gap as v0.6.1-v0.6.3's other "container
+      # X doesn't have the env/volume container Y assumed it would" bugs.
+      - vpn_pki:/vpn-pki-data
+      - vpn_wg_data:/vpn-wg-data
     env_file:
       - .env
     depends_on:
@@ -219,6 +230,12 @@ services:
       # pki-data itself.
       - vpn_pki:/etc/openvpn/pki-data
       - vpn_ccd:/etc/openvpn/ccd
+    environment:
+      # v0.6.4 — matches VpnServersSeeder's hostname for this row; the
+      # entrypoint's heartbeat loop writes a file named after this so
+      # VpnCheckNodeHealth (boss-app, reading the same shared volume) can
+      # tell which node a given heartbeat file belongs to.
+      NODE_HOSTNAME: vpn-node-1
     env_file:
       - .env
     networks:
@@ -238,6 +255,8 @@ services:
       - "51820:51820/udp"
     volumes:
       - vpn_wg_data:/etc/wireguard
+    environment:
+      NODE_HOSTNAME: vpn-node-1
     env_file:
       - .env
     networks:
@@ -245,6 +264,144 @@ services:
     depends_on:
       freeradius:
         condition: service_healthy
+
+  # --- v0.6.4 multi-node pool: node2/node3 for openvpn/wireguard ---
+  #
+  # Same build context/image as node1 above — only container_name, host
+  # port, and (for openvpn) the client subnet actually differ; the
+  # entrypoint script itself is 100% shared, no per-node variant needed.
+  #
+  # OpenVPN node2/node3 share `vpn_pki` with node1 (see CLAUDE.md "Multi-
+  # Node VPN Pool (v0.6.4)" for the full rationale) — a client certificate
+  # issued once is trusted by whichever of the 3 nodes it actually
+  # connects to, which is what makes the auto-switch Mikrotik script able
+  # to just change `connect-to`/`endpoint-address` on failover instead of
+  # re-importing credentials. `depends_on: openvpn` (not just
+  # `freeradius`) is deliberate — the shared PKI's one-time bootstrap
+  # (`if [ ! -f ca.crt ]`) must finish on node1 first, or two siblings
+  # racing to init the same empty volume at once could both "win" that
+  # check simultaneously.
+  openvpn-node2:
+    build:
+      context: ./docker/openvpn
+    container_name: openvpn-node2
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: 1
+    ports:
+      - "1195:1194/udp"
+    volumes:
+      - vpn_pki:/etc/openvpn/pki-data
+      - vpn_ccd:/etc/openvpn/ccd
+    environment:
+      # Node2's OWN client subnet, distinct from node1's 172.23.194.0/24 —
+      # this node's ccd is never actually written to (see
+      # VpnProvisioningService/VpnServer::poolOwnerFor()'s docblock: only
+      # the pool owner, node1, ever gets a ccd entry for a given client),
+      # so clients that fail over here always get a plain DYNAMIC
+      # ifconfig-pool address from this subnet, not a static push — fine,
+      # since the FreeRADIUS-only routing isolation never depends on the
+      # specific internal_ip value.
+      VPN_SUBNET_CIDR: 172.23.199.0/24
+      VPN_SUBNET_NETWORK: 172.23.199.0
+      VPN_SUBNET_NETMASK: 255.255.255.0
+      NODE_HOSTNAME: vpn-node-2
+    env_file:
+      - .env
+    networks:
+      - boss-network
+    depends_on:
+      openvpn:
+        condition: service_started
+
+  openvpn-node3:
+    build:
+      context: ./docker/openvpn
+    container_name: openvpn-node3
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: 1
+    ports:
+      - "1196:1194/udp"
+    volumes:
+      - vpn_pki:/etc/openvpn/pki-data
+      - vpn_ccd:/etc/openvpn/ccd
+    environment:
+      VPN_SUBNET_CIDR: 172.23.200.0/24
+      VPN_SUBNET_NETWORK: 172.23.200.0
+      VPN_SUBNET_NETMASK: 255.255.255.0
+      NODE_HOSTNAME: vpn-node-3
+    env_file:
+      - .env
+    networks:
+      - boss-network
+    depends_on:
+      openvpn:
+        condition: service_started
+
+  # WireGuard node2/node3 share `vpn_wg_data` with node1 — NOT just the
+  # peers directory but the server keypair file too, so all 3 nodes
+  # present the IDENTICAL public key to clients. This matters more than it
+  # does for OpenVPN: WireGuard's AllowedIPs/peer model has no equivalent
+  # of "verify-server-certificate=no" to fall back on, and a client's own
+  # `/interface wireguard peers` entry has the server's public-key baked
+  # in — sharing the keypair means failover truly only needs an
+  # endpoint-address/port change, never a peer public-key change. Each
+  # node's reconcile loop independently applies the SAME shared peers/*.conf
+  # files to its OWN wg0 — `depends_on: wireguard` again purely to avoid a
+  # first-boot keygen race on the shared volume (see wireguard's own
+  # entrypoint.sh: `if [ ! -f server_private.key ]`).
+  wireguard-node2:
+    build:
+      context: ./docker/wireguard
+    container_name: wireguard-node2
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "51821:51821/udp"
+    volumes:
+      - vpn_wg_data:/etc/wireguard
+    environment:
+      WG_LISTEN_PORT: 51821
+      NODE_HOSTNAME: vpn-node-2
+    env_file:
+      - .env
+    networks:
+      - boss-network
+    depends_on:
+      wireguard:
+        condition: service_started
+
+  wireguard-node3:
+    build:
+      context: ./docker/wireguard
+    container_name: wireguard-node3
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "51822:51822/udp"
+    volumes:
+      - vpn_wg_data:/etc/wireguard
+    environment:
+      WG_LISTEN_PORT: 51822
+      NODE_HOSTNAME: vpn-node-3
+    env_file:
+      - .env
+    networks:
+      - boss-network
+    depends_on:
+      wireguard:
+        condition: service_started
 
   l2tp:
     build:

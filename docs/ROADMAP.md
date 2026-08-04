@@ -15,8 +15,8 @@
 | v0.6.1  | Network         | FreeRADIUS Core & NAS Management | Container FreeRADIUS terpisah + rlm_sql ke `radius_db` (Postgres terpisah), tabel `nas` (port RADIUS unik per-NAS sejak migration pertama), NasService CRUD + test koneksi Mikrotik API | Selesai |
 | v0.6.2  | Network         | VPN Server Node #1 (OpenVPN)  | Hub-and-spoke: VPN node sebagai concentrator/relay, FreeRADIUS diakses di satu IP internal tetap dari sisi Mikrotik                          | Selesai |
 | v0.6.3  | Network         | Multi-Protokol VPN & Script Generator | WireGuard, L2TP/IPsec (SSTP di-skip; L2TP/IPsec sendiri berstatus known limitation, lihat catatan di bawah), Script Generator (VPN + RADIUS script siap-paste ke terminal Mikrotik) | Selesai |
-| v0.6.4  | Network         | VPN Pool & Failover           | Schema `vpn_servers` siap N>1 node + health-check + auto-switch failover (N=1 node aktif sekarang, backend siap tanpa retrofit) | Backlog |
-| v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator + CoA/disconnect (port 3799) untuk isolir instan                     | Backlog |
+| v0.6.4  | Network         | VPN Pool & Failover           | Pool 3 node nyata x 2 protokol (OpenVPN + WireGuard, L2TP tetap 1 node — known limitation), load-distribution, health-check terjadwal, auto-switch failover Mikrotik — diverifikasi end-to-end nyata (matikan node, konfirmasi pindah otomatis) | Selesai |
+| v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator + CoA/disconnect (port 3799) untuk isolir instan                     | Aktif |
 | v0.7.0  | Network         | GenieACS                      | Binding ONT, SSID/password, RX power, reboot, provisioning                                    | Backlog |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
@@ -100,6 +100,30 @@ v0.6.3 tetap ditutup** — OpenVPN dan WireGuard sudah fully functional dan
 terverifikasi nyata di router produksi yang sama (lihat CHANGELOG.md), jadi
 sprint ini tidak diblokir oleh L2TP. Backlog: revisit L2TP/IPsec di sprint
 Network mendatang kalau ada temuan baru atau dukungan MikroTik.
+
+**Keputusan arsitektur v0.6.4 (dikonfirmasi bersama Agung sebelum
+implementasi)**: pool **3 node VPN nyata** untuk OpenVPN dan WireGuard
+(bukan cuma skema siap N>1 seperti rencana awal v0.6.2) — masing-masing
+protokol 3 container terpisah, konsisten pola single-responsibility sejak
+v0.6.3. L2TP TIDAK ikut pool (known limitation di atas belum selesai).
+**Ketiga node per protokol berbagi trust domain yang sama** (satu PKI
+untuk OpenVPN, satu server keypair + direktori peer untuk WireGuard) —
+supaya auto-switch failover cukup ganti endpoint/port tanpa re-import
+credential. Detail teknis lengkap (termasuk 3 bug nyata soal sintaks
+RouterOS `/import` yang ditemukan & diperbaiki lewat deploy sungguhan ke
+`test-x86-bajastu`, dan verifikasi failover end-to-end dengan mematikan
+node secara paksa) ada di CHANGELOG.md "v0.6.4" dan CLAUDE.md.
+
+**Catatan verifikasi tertunda untuk v0.6.4 (bukan bug, bukan sprint belum
+selesai)**: implementasi dan fungsinya sudah terbukti nyata sepenuhnya
+lewat API langsung ke `test-x86-bajastu` — load-distribution, health-check,
+dan auto-switch failover semua dikonfirmasi bekerja end-to-end (termasuk
+mematikan satu node secara paksa dan mengamati router pindah otomatis).
+**Yang belum dicoba: jalur UI Livewire (Script Generator) untuk skenario
+multi-node/failover ini belum pernah diverifikasi manual oleh Agung lewat
+browser** — verifikasi sejauh ini seluruhnya lewat Claude Code
+(`RouterOsApiGateway` + API langsung). Agung akan menyiapkan router
+Mikrotik terpisah khusus untuk testing UI menyeluruh nanti.
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

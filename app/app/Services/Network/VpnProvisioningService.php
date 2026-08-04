@@ -53,19 +53,37 @@ class VpnProvisioningService
         $username = 'nas-'.$nas->id;
 
         $account = DB::transaction(function () use ($nas, $protocol, $username) {
+            // v0.6.4 load distribution: among ONLINE nodes for this
+            // protocol with spare capacity, prefer the one with the most
+            // room (lowest current_clients) — locked to prevent two
+            // concurrent provisions both picking the same near-full node
+            // and overcommitting past max_clients (same lockForUpdate()
+            // pattern already used below for the IP pool row itself).
+            // "online" specifically (not just "not offline") — a node
+            // reported Full by the health-check job is deliberately
+            // excluded here even though it isn't Offline.
             $server = VpnServer::query()
                 ->where('protocol', $protocol)
                 ->where('is_active', true)
-                ->where('status', '!=', VpnServerStatus::Offline)
-                ->orderBy('id')
+                ->where('status', VpnServerStatus::Online)
+                ->whereColumn('current_clients', '<', 'max_clients')
+                ->orderBy('current_clients')
+                ->lockForUpdate()
                 ->first();
 
             if ($server === null) {
-                throw new VpnProvisioningException("Tidak ada VPN server aktif untuk protokol {$protocol->label()}.");
+                throw new VpnProvisioningException("Tidak ada VPN server online dengan kapasitas tersedia untuk protokol {$protocol->label()}.");
             }
 
+            // The account's internal_ip always comes from the pool OWNER
+            // (not necessarily $server above) — see
+            // VpnServer::poolOwnerFor()'s docblock for why sibling nodes
+            // can't each have an independent IP pool without breaking
+            // OpenVPN's node1-only ccd or WireGuard's shared peers dir.
+            $poolOwner = VpnServer::poolOwnerFor($protocol);
+
             $poolEntry = VpnIpPool::query()
-                ->where('vpn_server_id', $server->id)
+                ->where('vpn_server_id', $poolOwner->id)
                 ->where('status', VpnIpPoolStatus::Available)
                 ->orderBy('id')
                 ->lockForUpdate()
@@ -73,7 +91,7 @@ class VpnProvisioningService
 
             if ($poolEntry === null) {
                 throw new VpnIpPoolExhaustedException(
-                    "Pool IP VPN server '{$server->hostname}' ({$protocol->label()}) sudah habis."
+                    "Pool IP VPN ({$protocol->label()}, pool owner '{$poolOwner->hostname}') sudah habis."
                 );
             }
 

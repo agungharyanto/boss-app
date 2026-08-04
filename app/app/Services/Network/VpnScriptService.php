@@ -4,9 +4,11 @@ namespace App\Services\Network;
 
 use App\Enums\VpnAccountStatus;
 use App\Enums\VpnProtocol;
+use App\Enums\VpnServerStatus;
 use App\Exceptions\VpnScriptGenerationException;
 use App\Models\Nas;
 use App\Models\VpnAccount;
+use App\Models\VpnServer;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
 
@@ -53,7 +55,16 @@ class VpnScriptService
             $account = $this->provisioning->provision($nas, $protocol);
         }
 
-        $publicIp = config('services.vpn.public_ip');
+        // v0.6.4: public_ip/port now come from the account's OWN assigned
+        // node (VpnProvisioningService's load-balanced pick — see
+        // VpnServer::poolOwnerFor()'s docblock for why that can be a
+        // different node than the one internal_ip/credentials were issued
+        // against), not a single global config value — config('services.
+        // vpn.openvpn_port'/'wireguard_port') only made sense back when
+        // exactly one node per protocol existed.
+        $account->loadMissing('vpnServer');
+        $node = $account->vpnServer;
+        $publicIp = $node->public_ip;
         $freeradiusIp = config('services.vpn.freeradius_internal_ip');
 
         return match ($protocol) {
@@ -61,14 +72,18 @@ class VpnScriptService
                 $account,
                 $routerOsVersion,
                 $publicIp,
-                config('services.vpn.openvpn_port'),
+                $node->port,
                 $freeradiusIp,
                 $this->publishFileForDownload(File::get(config('services.vpn.pki_dir').'/ca.crt')),
                 $this->publishFileForDownload(File::get(config('services.vpn.pki_dir')."/issued/{$account->username}.crt")),
                 $this->publishFileForDownload(File::get(config('services.vpn.pki_dir')."/private/{$account->username}.key")),
                 $this->tokens->fetchMode(request()->getSchemeAndHttpHost()),
+                $this->onlineNodePorts($protocol),
             ),
-            VpnProtocol::WireGuard => $this->wireGuardScriptOrThrow($account, $justProvisioned, $publicIp, $freeradiusIp),
+            VpnProtocol::WireGuard => $this->wireGuardScriptOrThrow($account, $justProvisioned, $publicIp, $node->port, $freeradiusIp),
+            // L2TP/IPsec stays a single node (v0.6.4 scope: known
+            // limitation, not part of the multi-node pool) — no
+            // auto-switch candidates to offer.
             VpnProtocol::L2tpIpsec => $this->generator->l2tpScript(
                 $account,
                 $routerOsVersion,
@@ -77,6 +92,26 @@ class VpnScriptService
                 config('services.vpn.l2tp_ipsec_psk'),
             ),
         };
+    }
+
+    /**
+     * v0.6.4 — every ONLINE or FULL node's port for this protocol, fed
+     * into MikrotikScriptGenerator's auto-switch scheduler block as
+     * failover candidates. FULL nodes are still included deliberately —
+     * "no spare capacity for a brand-new account" (VpnProvisioningService's
+     * own selection query) is a different question from "can an already-
+     * provisioned client's tunnel still reach this node", which shared
+     * PKI/peers-dir credentials make possible regardless of current_clients.
+     * Only genuinely Offline nodes are excluded.
+     */
+    private function onlineNodePorts(VpnProtocol $protocol): array
+    {
+        return VpnServer::query()
+            ->where('protocol', $protocol)
+            ->where('is_active', true)
+            ->whereIn('status', [VpnServerStatus::Online, VpnServerStatus::Full])
+            ->pluck('port')
+            ->all();
     }
 
     /**
@@ -95,7 +130,7 @@ class VpnScriptService
         return $this->tokens->buildDownloadUrl($token, request()->getSchemeAndHttpHost());
     }
 
-    private function wireGuardScriptOrThrow(VpnAccount $account, bool $justProvisioned, string $publicIp, string $freeradiusIp): string
+    private function wireGuardScriptOrThrow(VpnAccount $account, bool $justProvisioned, string $publicIp, int $port, string $freeradiusIp): string
     {
         if (! $justProvisioned || $account->wireguardPrivateKey === null) {
             throw new VpnScriptGenerationException(
@@ -108,10 +143,17 @@ class VpnScriptService
         return $this->generator->wireGuardScript(
             $account,
             $publicIp,
-            config('services.vpn.wireguard_port'),
+            $port,
             $freeradiusIp,
-            File::get($serverPublicKeyFile),
+            // trim() matters here, not just tidiness — `wg pubkey` writes a
+            // trailing newline, and this value goes straight into a quoted
+            // RouterOS string argument (public-key="..."); found via a real
+            // generated script where the closing quote landed on its own
+            // line right after the key, which real RouterOS hardware has
+            // not been confirmed to tolerate.
+            trim(File::get($serverPublicKeyFile)),
             $account->wireguardPrivateKey,
+            $this->onlineNodePorts(VpnProtocol::WireGuard),
         );
     }
 

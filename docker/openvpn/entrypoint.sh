@@ -11,6 +11,7 @@ CCD_DIR=/etc/openvpn/ccd
 : "${VPN_SUBNET_CIDR:?VPN_SUBNET_CIDR must be set}"
 : "${VPN_SUBNET_NETWORK:?VPN_SUBNET_NETWORK must be set}"
 : "${VPN_SUBNET_NETMASK:?VPN_SUBNET_NETMASK must be set}"
+: "${NODE_HOSTNAME:?NODE_HOSTNAME must be set}"
 
 mkdir -p "$CCD_DIR"
 
@@ -20,21 +21,32 @@ mkdir -p "$CCD_DIR"
 # node's own SERVER identity). EC certs (secp384r1) generate almost
 # instantly, unlike RSA/DH — avoids the classic "openvpn container takes
 # 5 minutes to boot the first time" problem.
-if [ ! -f "$PKI_DIR/ca.crt" ]; then
-    echo ">> [entrypoint] Bootstrapping PKI (first boot for this volume)..."
+#
+# v0.6.4: this volume is now ALSO shared with sibling nodes (openvpn-
+# node2/node3, see docker-compose.yml) — every node presents the SAME
+# "server" cert/CA, which is fine since the generated Mikrotik client
+# script already sets verify-server-certificate=no (identity isn't
+# validated client-side). flock guards the genuinely-once bootstrap
+# against a first-boot race between sibling containers — same reasoning
+# as wireguard/entrypoint.sh's keygen lock.
+(
+    flock -x 200
+    if [ ! -f "$PKI_DIR/ca.crt" ]; then
+        echo ">> [entrypoint] Bootstrapping PKI (first boot for this volume)..."
 
-    export EASYRSA_ALGO=ec
-    export EASYRSA_CURVE=secp384r1
-    export EASYRSA_BATCH=1
+        export EASYRSA_ALGO=ec
+        export EASYRSA_CURVE=secp384r1
+        export EASYRSA_BATCH=1
 
-    easyrsa --pki-dir="$PKI_DIR" init-pki
-    easyrsa --pki-dir="$PKI_DIR" build-ca nopass
-    easyrsa --pki-dir="$PKI_DIR" build-server-full server nopass
-    easyrsa --pki-dir="$PKI_DIR" gen-crl
-    openvpn --genkey secret "$PKI_DIR/ta.key"
+        easyrsa --pki-dir="$PKI_DIR" init-pki
+        easyrsa --pki-dir="$PKI_DIR" build-ca nopass
+        easyrsa --pki-dir="$PKI_DIR" build-server-full server nopass
+        easyrsa --pki-dir="$PKI_DIR" gen-crl
+        openvpn --genkey secret "$PKI_DIR/ta.key"
 
-    echo ">> [entrypoint] PKI bootstrap done."
-fi
+        echo ">> [entrypoint] PKI bootstrap done."
+    fi
+) 200>"$PKI_DIR/../.keygen.lock"
 
 # The PKI volume is shared with boss-app (a completely separate container,
 # different UID for its php-fpm workers — www-data) which needs to write
@@ -69,5 +81,21 @@ sed \
     -e "s|__VPN_SUBNET_NETMASK__|${VPN_SUBNET_NETMASK}|g" \
     -e "s|__FREERADIUS_IP__|${FREERADIUS_INTERNAL_IP}|g" \
     /etc/openvpn/server.conf.template > /etc/openvpn/server.conf
+
+# v0.6.4 health-check: boss-app has no Docker socket access (deliberate
+# stance since v0.6.2 — see CLAUDE.md), so "is this node's container alive"
+# can't be a docker inspect/exec call. Instead this node writes its own
+# timestamp to the SAME shared vpn_pki volume boss-app already mounts, one
+# file per sibling node (named after NODE_HOSTNAME so VpnCheckNodeHealth can
+# tell node1/node2/node3 apart) — same "communicate via the shared volume
+# you already have" pattern as chap-secrets/wg peers, not a new network
+# surface. Lives at the mount ROOT (a sibling of pki/), never inside pki/
+# itself, to stay clear of easyrsa's own permission-sensitive files.
+(
+    while true; do
+        date +%s > "$PKI_DIR/../heartbeat-${NODE_HOSTNAME}"
+        sleep 10
+    done
+) &
 
 exec openvpn --config /etc/openvpn/server.conf

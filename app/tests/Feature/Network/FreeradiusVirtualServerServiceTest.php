@@ -60,6 +60,13 @@ class FreeradiusVirtualServerServiceTest extends TestCase
         $clients = File::get("{$this->configDir}/clients/nas-{$nas->id}.conf");
         $this->assertStringContainsString('secret = "super-secret"', $clients);
         $this->assertStringContainsString('172.28.0.0/24', $clients);
+
+        // Regression test: real MikroTik NAS traffic was being silently
+        // discarded by radiusd.conf's global require_message_authenticator
+        // = yes (RouterOS doesn't send Message-Authenticator on PPP
+        // CHAP/MSCHAP Access-Requests) — must be scoped off per-client here,
+        // not left to the insecure global default.
+        $this->assertStringContainsString('require_message_authenticator = no', $clients);
     }
 
     public function test_sync_skips_a_nas_with_no_allocated_ports_yet(): void

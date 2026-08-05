@@ -1051,6 +1051,174 @@ confirmed the fetch+import one-liner rendered successfully with no 500 — cross
 (old account flipped to `revoked`, a new one `active`) and the Laravel log (zero new error/warning entries
 during that window).
 
+## FreeRADIUS Dynamic Virtual Server & CoA (v0.6.5)
+
+**Final sub-sprint of the v0.6.0 FreeRADIUS cluster.** Scope: real per-NAS FreeRADIUS listen sockets (not
+the shared default port from v0.6.1-v0.6.4), a race-safe port allocator, the Script Generator RADIUS tab
+switched to real ports, and a CoA/Disconnect service — all verified against `test-x86-bajastu`, which
+turned out mid-sprint to be a **real production router with 427 active PPPoE customers**, not a lab
+device (see the CoA section below for the safety implications this had).
+
+**Dynamic virtual server mechanism**: `App\Services\Network\FreeradiusVirtualServerService::sync()`/
+`remove()` write/delete two files per NAS (`listen/nas-{id}.conf`, `clients/nas-{id}.conf`) onto a new
+shared volume (`freeradius_nas_config`, mounted at `/freeradius-nas-config` in both `boss-app` and
+`freeradius`) — `NasService::create()`/`update()`/`delete()` call these automatically. FreeRADIUS's stock
+`sites-enabled/default` and `clients.conf` are patched once, idempotently, by `docker/freeradius/
+entrypoint.sh` with `$INCLUDE /freeradius-nas-config/listen/` and `$INCLUDE .../clients/` — a directory
+`$INCLUDE`, not a single file, confirmed to be real supported FreeRADIUS syntax by testing it directly
+against the running container (a test `listen{}` dropped into the directory, followed by a restart,
+genuinely opened the new UDP port and a `radclient` round-tripped a real reply through it). Every NAS gets
+its own `auth`+`acct` listen pair sharing ONE `clients {}` block scoped to `172.28.0.0/24` (boss-network as
+a whole, **not** the NAS's own VPN tunnel `internal_ip`) — because every VPN node container MASQUERADEs NAS
+traffic onto its own boss-network IP before it reaches FreeRADIUS (v0.6.2 hub-and-spoke), FreeRADIUS can't
+tell NAS apart by source IP the way a normal RADIUS deployment would. **Isolation between NAS is by PORT,
+not source IP** — this is the actual reason "unique RADIUS port per NAS" was locked in as this cluster's
+architecture all the way back in v0.6.1, not just a cosmetic choice.
+
+**Real infrastructure gaps found deploying this for real** (same class as every prior sprint's entries in
+this file — found by actually running it, not by reading FreeRADIUS's docs):
+1. **`SIGHUP` does NOT open new listen sockets.** Tested directly: added a test `listen{}` to a running
+   container's config, sent `kill -HUP 1`, confirmed via the server's own log ("HUP - Re-reading
+   configuration files") and `netstat` that modules/virtual-servers reloaded but the new port stayed
+   closed. This means adding a NAS requires an actual `radiusd` **restart**, not a reload — `docker/
+   freeradius/entrypoint.sh` now replaces the base image's plain `exec radiusd -f` with a supervisor: starts
+   `radiusd -f` as a background child, polls a content-hash of the listen/clients directories every 3s, and
+   restarts the child (not the whole container) on any change. Measured real restart latency: well under 1
+   second (log timestamps: process exit and "Ready to process requests" landed in the same wall-clock
+   second) — brief enough that other NAS mid-flight just see one dropped UDP packet and retransmit, no
+   forced session drop.
+2. **FreeRADIUS refuses to start with a world-writable `$INCLUDE`'d directory** ("Directory ... is globally
+   writable. Refusing to start due to insecure configuration") — its own security hardening, not a bug.
+   Unlike `vpn_pki`/`vpn_wg_data`/`vpn_l2tp_secrets` (all `0777`), `freeradius_nas_config` is `chgrp 82
+   (www-data) + chmod 0770` instead — `radiusd` itself runs as root the whole time (no `user=`/`group=` in
+   `radiusd.conf`), so root always has access regardless of group, and `www-data` (boss-app) is gid 82.
+3. **Port range collision with FreeRADIUS's own stock `inner-tunnel` listener.** The allocator's first
+   chosen starting port (18120) collided with `raddb/sites-enabled/inner-tunnel`'s own untouched default
+   `listen { ipaddr = 127.0.0.1; port = 18120 }` (used for internal EAP testing) — radiusd refused to
+   rebind ("Address in use") on the very first real `sync()`. Moved the range to start at 20000 instead
+   (confirmed clear via `grep -rn "port = [0-9]" raddb/` across the whole tree — the only other hardcoded
+   values are 1812/1813 and this one).
+4. **A stray root-owned file can permanently block a real write.** `docker compose exec boss-app php artisan
+   tinker` (used constantly for verification throughout this sprint, same as every prior one) always runs
+   as root — any file it writes into the shared volume lands `root:root 0644`, which `www-data` can then
+   never overwrite again. This is the exact same bug class as the OpenVPN PKI "nas-11" incident from v0.6.3,
+   reproduced fresh here: a real NAS "Simpan" in the browser 500'd with `file_put_contents(): Permission
+   denied` the first time this was tested end-to-end, from files my own tinker sessions had left behind.
+   Fixed the same way as before — `entrypoint.sh`'s poll loop now re-applies `chgrp 82 + chmod 0770` on
+   every single cycle (every ~3s), not just at container boot, so a stray root-owned file self-heals
+   quickly instead of wedging the next real save permanently.
+5. **A colliding/bad config can leave `radiusd` dead until the next unrelated change.** Discovered for
+   real: an orphaned `nas-11.conf` (leftover from a raw `migrate:fresh` DB wipe that bypassed `NasService::
+   delete()`'s cleanup — see below) claimed the same port a freshly-created NAS also got allocated. The
+   restart triggered by the new NAS's config change made `radiusd` exit immediately on the port collision,
+   and the supervisor loop had no logic to notice — the container was left with **zero** `radiusd` process
+   running, while the Status-Server healthcheck kept reporting stale "healthy" for up to one more interval
+   (masking the outage). Fixed: the loop now also checks `kill -0 $RADIUSD_PID` every cycle independent of
+   config-change detection, and restarts if the child isn't alive — a crash/collision self-heals within one
+   poll cycle once the bad file is fixed/removed, instead of staying down indefinitely.
+
+**Port allocator (`App\Services\Network\NasPortAllocatorService`)**: a singleton counter row
+(`nas_port_allocator_state`, id=1, `lockForUpdate()` inside a transaction — same portable-to-sqlite pattern
+as `payment_gateway_settings`, deliberately not a Postgres-only advisory lock) hands out `(auth_port,
+acct_port)` pairs stepped by 10 starting at 20000, never reclaimed. **`coa_port` is deliberately NOT part of
+this allocation** — an initial design mistake caught and fixed *before* CoaService was ever built, by
+checking a real router's `/radius/incoming/print` first rather than assuming symmetry with auth/acct: unlike
+authentication-port/accounting-port, RouterOS's CoA listener port is a single **router-wide** setting, not
+tied to a specific `/radius` (server) entry — there's no FreeRADIUS-side collision to avoid the way auth/acct
+have (many NAS sharing one FreeRADIUS, indistinguishable by source IP), so forcing `coa_port` unique across
+NAS would have been meaningless busywork. It stays a plain, non-unique, admin-editable column (default 3799,
+RFC 5176) — see `NasPortAllocatorService`'s own docblock for the full reasoning.
+
+**Script Generator RADIUS tab**: `MikrotikScriptGenerator::radiusScript()` now emits `authentication-port=
+{$nas->auth_port}`/`accounting-port={$nas->acct_port}` for real, not the old shared 1812/1813. **Real bug
+found pushing this to test-x86-bajastu for the first time**: the generated `/user group add ... policy=`
+line included `!dude` — a RouterOS 6.x-era policy keyword removed in 7.x. RouterOS rejects the ENTIRE
+`policy=` string the instant one token doesn't match a known keyword ("input does not match any value of
+policy"), which read identically to a genuine permission error and was briefly misdiagnosed as one (a
+*separate*, real permission issue — the API user's restricted `boss-api-readonly` group correctly can't
+`/import` — happened to be encountered first and looked the same). Isolated by testing the exact same
+fetch+import mechanism with a trivial script first, which succeeded once the user actually had full access,
+proving the failure was in the script content, not the credential. Fixed by dropping `!dude` and adding
+`!rest-api` (a real 7.x keyword, kept denied for consistency). **Verified for real, full round trip**: the
+fixed script applied cleanly via `/tool fetch` + `/import`, the router's own `/radius/print` showed the new
+entry with the NAS's real ports, and a genuine `radclient` `Access-Accept` (not just Reject) round-tripped
+through that exact port using a real `radcheck` row.
+
+**CoA/Disconnect (`App\Services\Network\CoaService`, `POST /nas/{nas}/disconnect`)**: sends RFC 5176
+Disconnect-Request/CoA-Request — the OPPOSITE direction from auth/acct (BOSS App is the Dynamic
+Authorization *Client*, the NAS's own RouterOS `/radius incoming` is the *server*). Targets the NAS's most
+recent active OpenVPN/WireGuard `vpn_account.internal_ip` — L2TP/IPsec deliberately excluded (existing known
+limitation, ESP never wraps its traffic). **Why the actual `radclient` call has to run inside the
+`freeradius` container, not `boss-app`**: confirmed against the real router that RouterOS's `/radius
+incoming` validates an incoming CoA packet against the `address=` of a matching `/radius` client entry —
+every NAS's own `/radius add address=...` (the RADIUS script above) is configured with
+`FREERADIUS_INTERNAL_IP` specifically, which is `freeradius`'s own real static IP, not `boss-app`'s. Since
+`boss-app` has no Docker exec access to another container (same stance as every other cross-container
+coordination in this codebase), `CoaService` hands off via the same shared-volume-plus-poll pattern already
+used for NAS config (a `coa-queue/*.json` request file, picked up within ~3s by `entrypoint.sh`'s loop,
+which invokes the new `coa-worker.sh` and writes a `*.result.json` back — `CoaService` polls for it, up to
+15s, `jq` used on both ends for safe JSON handling since secrets/usernames could contain characters a
+hand-rolled parser would mangle).
+
+**Firewall exception (explicitly confirmed with Agung before implementing, since it changes a security
+boundary locked in at v0.6.2/v0.6.3)**: one narrow rule added to `docker/openvpn/entrypoint.sh` and
+`docker/wireguard/entrypoint.sh` — `iptables -A FORWARD -i eth0 -o tun0/wg0 -s $FREERADIUS_INTERNAL_IP -j
+ACCEPT`, allowing NEW connections sourced ONLY from FreeRADIUS's own IP, outbound through the tunnel. No
+MASQUERADE needed for this direction — since `freeradius`'s real IP already IS the address every NAS expects
+its RADIUS server at, the packet needs no translation. The `freeradius` container also needs `NET_ADMIN` +
+routes to each protocol's tunnel subnet (`docker-compose.yml`), resolved by container NAME (`openvpn`/
+`wireguard`, not a hardcoded IP — those containers aren't pinned the way `freeradius`'s own IP is) and
+refreshed every ~3s in the same supervisor loop for self-healing across container recreation.
+
+**Verified for real, up to a clear, honest limit**: `tcpdump` on the OpenVPN container's `tun0` confirmed
+Disconnect-Request packets genuinely transit end-to-end — correct source (`172.28.0.10`), correct
+destination (the NAS's real `internal_ip` on a genuinely-connected tunnel, confirmed via the OpenVPN
+server's own log: `MULTI_sva: pool returned IPv4=172.23.194.2`), correct port. The full queue/poll plumbing,
+routing, and firewall exception are all confirmed working. **What is NOT confirmed**: whether RouterOS
+actually *acts* on the Disconnect-Request (no ACK/NAK was observed for a deliberately-nonexistent test
+username, and disconnecting one of the router's 427 real active customer sessions just to observe the
+effect was explicitly decided against — Agung chose to defer full confirmation rather than risk a real
+customer's connection, same call already made once before for the WhatsApp QR-scan gap and the L2TP
+RouterOS retest). Tracked as a pending verification item, not a bug — needs either a real PPP session
+through this exact tunnel or Agung's own controlled test.
+
+**Known, accepted limitation for the v0.6.4 multi-node pool**: the reverse route only reaches the POOL
+OWNER node (`vpn-node-1`) for each protocol's subnet — if a NAS has actually failed over to a sibling node
+(v0.6.4 auto-switch) at the exact moment CoA is sent, delivery can fail even though the account row is
+perfectly valid (WireGuard specifically has no way to send data to a peer that particular daemon has never
+itself handshaked with). Not solved this sprint — flagged as backlog for a smarter multi-node-aware CoA
+router, consistent with how every other multi-node edge case in this cluster has been handled (documented
+gap, not silently pretended away).
+
+**Real bug found and fixed in existing (pre-v0.6.5) code while verifying this sprint**: `App\Livewire\
+Network\NasIndex::testConnection()` built its connectivity probe from the form's *currently-typed* password
+(falling back to the stored one only if left blank — the established "masked field" convention), but on
+success only ever persisted `status`/`last_ping_at`, never the password that actually worked. Consequence,
+observed for real: testing with a different (correct) password than what was stored showed "online"
+immediately, while the underlying `nas.api_password` silently stayed wrong — any *subsequent* use of the
+stored credential (script generation, this same test again with a blank password field, a real reconnect)
+would then fail again, looking exactly like the NAS "randomly went offline with nothing changed." This is
+very likely the true root cause of an earlier session's "mysterious 154415 password" investigation, which
+found no evidence of data loss but never explained the drift. Fixed: a successful test using a non-blank,
+freshly-typed password now persists that `api_username`/`api_password` onto the NAS row too — proof it
+works IS proof it's the real current credential.
+
+**Operational note, not sprint scope but happened mid-sprint at Agung's explicit request**: `config('app.
+timezone')` was hardcoded `'UTC'` in `config/app.php` despite root `.env`/`.env.example` already declaring
+`APP_TIMEZONE=Asia/Jakarta` since some earlier point — classic "env declared but never actually wired"
+class of bug, same as `APP_ENV`/`WHATSAPP_GATEWAY_URL` earlier in this file. Fixed to `env('APP_TIMEZONE',
+'UTC')`. Because this changes what every stored timestamp means going forward (this app was pre-production
+with no real customer data of its own — separate from `test-x86-bajastu`'s own real, unrelated PPPoE
+customer base — so Agung explicitly authorized this), the fix was paired with a full `migrate:fresh` +
+reseed (`RolesAndPermissionsSeeder`, `DemoUsersSeeder`, `WhatsappMessageTemplateSeeder`,
+`PaymentGatewayChannelSeeder`, `VpnServersSeeder`) rather than trying to reconcile old UTC rows with new
+Jakarta ones. **Real ordering bug caught during this reset**: `VpnServersSeeder` (v0.6.4) assumes node1's 3
+rows already exist with the lowest `id` per protocol (`VpnServer::poolOwnerFor()` depends on this for
+real — it's how the pool owner is chosen) — running the seeder before manually recreating node1 gave
+node2/node3 the lowest ids instead, silently making a SIBLING node the pool owner. Caught by checking
+`poolOwnerFor()`'s actual return value after reseeding, not assumed; fixed by clearing and recreating in the
+correct order (node1 first, always).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

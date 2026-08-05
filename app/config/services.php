@@ -101,4 +101,13 @@ return [
         'l2tp_ipsec_psk' => env('L2TP_IPSEC_PSK'),
     ],
 
+    // v0.6.5 dynamic virtual server + CoA — boss-app side of the
+    // freeradius_nas_config named volume shared with the freeradius
+    // container (docker-compose.yml), mirroring vpn.pki_dir/wg_peers_dir
+    // above. FreeradiusVirtualServerService writes into listen/ + clients/
+    // here; CoaService writes into coa-queue/ (see its own docblock).
+    'freeradius' => [
+        'nas_config_dir' => env('FREERADIUS_NAS_CONFIG_DIR', '/freeradius-nas-config'),
+    ],
+
 ];

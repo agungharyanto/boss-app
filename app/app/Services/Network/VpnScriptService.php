@@ -158,9 +158,11 @@ class VpnScriptService
     }
 
     /**
-     * v0.6.3 decision B: uses FreeRADIUS's default port (see
-     * MikrotikScriptGenerator::radiusScript()'s own docblock). Also
-     * (re)generates the NAS's Mikrotik API credentials and persists them
+     * v0.6.5: uses this NAS's own dynamic auth_port/acct_port (see
+     * MikrotikScriptGenerator::radiusScript()'s own docblock) — no longer
+     * FreeRADIUS's shared default port (that was the v0.6.3-v0.6.4 interim
+     * state). Also (re)generates the NAS's Mikrotik API credentials and
+     * persists them
      * onto nas.api_username/api_password — closing the loop with
      * NasService::testConnection() (v0.6.1), which needs real, currently-
      * valid credentials to actually succeed. Every call to this method

@@ -508,11 +508,16 @@ beda, lihat CLAUDE.md).
 ### `GET/POST /nas` · `GET /nas/{nas}` · `PUT /nas/{nas}` · `DELETE /nas/{nas}`
 
 CRUD inventaris NAS (router Mikrotik). `mikrotik_ip` TIDAK bisa diisi manual
-lewat endpoint ini di v0.6.1 — baru terisi otomatis setelah VPN provisioning
-(v0.6.2). `auth_port`/`acct_port` juga masih kosong sampai dynamic virtual
-server + port allocator (v0.6.5) mengisi otomatis; `coa_port` default 3799.
-Response TIDAK PERNAH menyertakan nilai asli `api_password`/`radius_secret`
-— hanya flag `has_api_password`/`has_radius_secret` (pola sama dengan
+lewat endpoint REST ini (bisa lewat UI `/nas`, lihat bawah).
+`auth_port`/`acct_port` **otomatis teralokasi unik** saat create (v0.6.5,
+`NasPortAllocatorService`) — tidak pernah diterima sebagai input dan tidak
+pernah berubah setelah itu. `coa_port` **bukan** bagian dari alokasi itu —
+tetap kolom biasa yang bisa diisi manual, default 3799 (RFC 5176), karena
+CoA divalidasi oleh RouterOS berdasarkan `/radius incoming port=` yang
+sifatnya satu pengaturan per-router, bukan per-server-RADIUS (lihat
+CLAUDE.md v0.6.5 untuk detail temuannya). Response TIDAK PERNAH
+menyertakan nilai asli `api_password`/`radius_secret` — hanya flag
+`has_api_password`/`has_radius_secret` (pola sama dengan
 `payment_gateway_settings`).
 
 ### `POST /nas/{nas}/test-connection`
@@ -521,6 +526,20 @@ Ping ke Mikrotik API NAS ini (bukan RADIUS, bukan ICMP) lewat
 `RouterOsGateway` (evilfreelancer/routeros-api-php di baliknya), lalu
 menyimpan `status` (`online`/`offline`) + `last_ping_at`. **Ditolak** (422,
 `NasNotProvisionedException`) kalau `mikrotik_ip` masih kosong.
+
+### `POST /nas/{nas}/disconnect` (v0.6.5)
+
+Body wajib: `username`. Mengirim RADIUS Disconnect-Request (RFC 5176) ke
+NAS lewat `CoaService` — isolir instan pelanggan menunggak. Menyasar akun
+VPN OpenVPN/WireGuard **aktif** paling baru milik NAS ini (`internal_ip`-
+nya); **ditolak** (422, `CoaUnavailableException`) kalau tidak ada akun
+aktif dengan salah satu dari kedua protokol itu — L2TP/IPsec sengaja tidak
+didukung (known limitation, lihat CLAUDE.md). Response `data.ok` (boolean)
++ `data.raw` (output mentah `radclient`) — timeout 15 detik
+(`CoaTimeoutException`, 422) kalau container `freeradius` tidak merespons.
+Lihat CLAUDE.md v0.6.5 untuk kenapa eksekusi sesungguhnya harus terjadi di
+dalam container `freeradius` (bukan `boss-app`), dan keterbatasan yang
+sudah diketahui pada topologi multi-node (v0.6.4).
 
 ## VPN Multi-Protokol (OpenVPN v0.6.2, WireGuard/L2TP-IPsec v0.6.3)
 
@@ -576,12 +595,17 @@ terikat ke reseller miliknya, field disembunyikan), zona waktu, IP router
 (bisa diisi manual, terkunci read-only begitu NAS punya `vpn_accounts`
 aktif), port/username/password API (password masked, blank submit tidak
 menghapus nilai tersimpan), secret RADIUS (masked, wajib diisi saat create),
-deskripsi. Auth/Accounting Port ditampilkan read-only (1812/1813, sama
-seperti keputusan port default v0.6.3 di atas). Tombol "Tes Koneksi"
-memakai `RouterOsGateway` yang sama dengan endpoint REST
+deskripsi. Auth/Accounting/CoA Port ditampilkan read-only (v0.6.5: nilai
+NYATA milik NAS ini — auth/acct teralokasi otomatis & unik saat create,
+tidak pernah berubah setelahnya; coa_port default 3799, editable lewat
+REST API tapi belum lewat form ini). Tombol "Tes Koneksi" memakai
+`RouterOsGateway` yang sama dengan endpoint REST
 `POST /nas/{nas}/test-connection` (v0.6.1) tapi terhadap nilai form yang
 sedang diketik, bukan nilai tersimpan — lihat CLAUDE.md untuk detail kenapa
-`NasService::testConnection()` sendiri tidak langsung dipakai di sini.
+`NasService::testConnection()` sendiri tidak langsung dipakai di sini, dan
+untuk bug nyata yang pernah ditemukan di sini (tes sukses dengan password
+BEDA dari yang tersimpan tidak pernah menyimpan ulang kredensial yang
+benar — sudah diperbaiki).
 REST API `/api/v1/nas` (v0.6.1) tetap ada dan tidak berubah — halaman ini
 cuma UI tambahan, bukan pengganti.
 
@@ -601,9 +625,14 @@ Livewire biasa di dalam layout web utama. 2 tab:
   pernah disimpan) — kalau sudah ada akun aktif dari sebelumnya, harus
   revoke dulu lewat API baru generate ulang.
 - **RADIUS Script**: generate `/radius add` + user API Mikrotik baru
-  (permission terbatas). Memakai port default FreeRADIUS (1812/1813),
-  BUKAN `nas.auth_port`/`acct_port` — lihat CLAUDE.md untuk alasannya.
-  Setiap generate juga me-rotate `nas.api_username`/`api_password`.
+  (permission terbatas). v0.6.5: memakai `nas.auth_port`/`acct_port`
+  NYATA milik NAS ini (dynamic virtual server FreeRADIUS), bukan lagi port
+  default 1812/1813 bersama — diverifikasi nyata terhadap test-x86-bajastu
+  (Access-Accept genuine lewat port dinamisnya). Setiap generate juga
+  me-rotate `nas.api_username`/`api_password` — **setiap panggilan, sukses
+  ATAU gagal diterapkan ke router**, lihat CLAUDE.md v0.6.5 untuk
+  konsekuensinya (kredensial tersimpan bisa mismatch dari yang aktif di
+  router kalau script yang digenerate tidak langsung dijalankan).
 
 Script yang dihasilkan idempotent (hapus interface/route/rule lama dulu)
 dan mengisolasi routing (routing-mark untuk OpenVPN/L2TP, `allowed-address`

@@ -10,11 +10,33 @@ use App\Services\Network\Contracts\RouterOsGateway;
 use App\Services\Network\NasService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Tests\TestCase;
 
 class NasServiceTest extends TestCase
 {
     use RefreshDatabase;
+
+    private string $freeradiusConfigDir;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // v0.6.5 — NasService::create()/update()/delete() now write real
+        // files via FreeradiusVirtualServerService; redirect to a temp dir
+        // so these pre-existing tests don't need to know about it, same
+        // isolation approach as FreeradiusVirtualServerServiceTest.
+        $this->freeradiusConfigDir = sys_get_temp_dir().'/freeradius-nas-config-'.uniqid();
+        config(['services.freeradius.nas_config_dir' => $this->freeradiusConfigDir]);
+    }
+
+    protected function tearDown(): void
+    {
+        File::deleteDirectory($this->freeradiusConfigDir);
+
+        parent::tearDown();
+    }
 
     /**
      * RouterOsGateway talks raw sockets (evilfreelancer/routeros-api-php),
@@ -86,5 +108,43 @@ class NasServiceTest extends TestCase
         $raw = DB::table('nas')->where('id', $nas->id)->first();
         $this->assertStringNotContainsString('plaintext-api-password', $raw->api_password);
         $this->assertStringNotContainsString('plaintext-radius-secret', $raw->radius_secret);
+    }
+
+    public function test_create_allocates_ports_automatically_and_writes_virtual_server_config(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $nas = app(NasService::class)->create([
+            'name' => 'nas-baru',
+            'radius_secret' => 'a-secret',
+        ], $tenant->id, null);
+
+        $this->assertNotNull($nas->auth_port);
+        $this->assertSame($nas->auth_port + 1, $nas->acct_port);
+        $this->assertFileExists("{$this->freeradiusConfigDir}/listen/nas-{$nas->id}.conf");
+        $this->assertFileExists("{$this->freeradiusConfigDir}/clients/nas-{$nas->id}.conf");
+    }
+
+    public function test_create_never_allocates_the_same_ports_for_two_nas(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $service = app(NasService::class);
+
+        $first = $service->create(['name' => 'nas-a', 'radius_secret' => 'secret-a'], $tenant->id, null);
+        $second = $service->create(['name' => 'nas-b', 'radius_secret' => 'secret-b'], $tenant->id, null);
+
+        $this->assertNotSame($first->auth_port, $second->auth_port);
+    }
+
+    public function test_delete_removes_the_generated_virtual_server_config(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = app(NasService::class)->create(['name' => 'nas-hapus', 'radius_secret' => 'secret'], $tenant->id, null);
+        $configPath = "{$this->freeradiusConfigDir}/listen/nas-{$nas->id}.conf";
+        $this->assertFileExists($configPath);
+
+        app(NasService::class)->delete($nas);
+
+        $this->assertFileDoesNotExist($configPath);
     }
 }

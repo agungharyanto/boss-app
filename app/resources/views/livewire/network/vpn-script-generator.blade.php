@@ -79,9 +79,9 @@
                 Script ini mengaktifkan RADIUS di NAS (PPP AAA + Hotspot profile) dan membuat user API BOSS App
                 baru dengan permission terbatas (dipakai untuk fitur "Tes Koneksi" NAS).
             </p>
-            <p class="text-xs text-amber-600">
-                Sementara memakai port default FreeRADIUS (1812/1813), bukan port unik per-NAS — dynamic virtual
-                server per-NAS baru selesai di v0.6.5. Generate ulang script ini setelah v0.6.5 shipped.
+            <p class="text-xs text-gray-500">
+                Memakai port auth/acct unik milik NAS ini sendiri (dynamic virtual server FreeRADIUS, v0.6.5) —
+                bukan lagi port default 1812/1813 bersama.
             </p>
 
             <button wire:click="generateRadius" wire:loading.attr="disabled" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">

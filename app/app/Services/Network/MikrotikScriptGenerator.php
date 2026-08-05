@@ -246,34 +246,43 @@ class MikrotikScriptGenerator
     }
 
     /**
-     * v0.6.3 decision B (confirmed explicitly): FreeRADIUS only has ONE
-     * default virtual server (port 1812/1813) until the dynamic per-NAS
-     * virtual server + port allocator ships in v0.6.5 — this script
-     * deliberately uses that default port, NOT $nas->auth_port/acct_port,
-     * even though those columns exist and are already unique per NAS since
-     * v0.6.1. Upgrading this to use them is v0.6.5 scope, not a bug here.
+     * v0.6.5: FreeRADIUS now runs a real dynamic virtual server per NAS
+     * (App\Services\Network\FreeradiusVirtualServerService) — this script
+     * uses $nas->auth_port/acct_port for real, no longer the shared default
+     * 1812/1813.
+     *
+     * Real bug found running this script for real (fetch+import) against
+     * test-x86-bajastu (RouterOS 7.11): the `/user group add ... policy=`
+     * line included `!dude` — a RouterOS 6.x-era policy keyword that
+     * doesn't exist anymore on 7.x. RouterOS rejects the ENTIRE policy
+     * string the instant one token doesn't match a known keyword
+     * ("input does not match any value of policy"), which looked
+     * identical to a genuine permission error (and was initially
+     * misdiagnosed as one, since the API user really did lack `/import`
+     * rights on an earlier, separate attempt) until isolated by testing
+     * the exact same fetch+import mechanism with a trivial script first.
+     * Fixed by dropping `!dude` and adding `!rest-api` (a real 7.x
+     * keyword, kept denied for consistency with the rest of this
+     * deliberately narrow policy).
+     *
+     * NasService::create() always allocates auth_port/acct_port
+     * immediately (NasPortAllocatorService), so a NAS reaching this method
+     * without them would mean the allocator itself was bypassed — not a
+     * state this method tries to paper over.
      */
     public function radiusScript(Nas $nas, string $freeradiusInternalIp, string $apiUsername, string $apiPassword): string
     {
-        $assignedPorts = $nas->auth_port !== null && $nas->acct_port !== null
-            ? "{$nas->auth_port}/{$nas->acct_port}"
-            : 'belum diisi, menunggu v0.6.5';
-
         return <<<SCRIPT
         # BOSS App — RADIUS setup script untuk NAS "{$nas->name}"
-        #
-        # SEMENTARA memakai port default FreeRADIUS (1812/1813) — BUKAN
-        # nas.auth_port/acct_port ({$assignedPorts}),
-        # walau kolom itu sudah ada sejak v0.6.1. FreeRADIUS baru bisa
-        # dengar di port unik per-NAS setelah dynamic virtual server +
-        # port allocator (v0.6.5) selesai — script ini WAJIB digenerate
-        # ulang setelah v0.6.5 shipped supaya benar-benar pakai port unik.
+        # Port auth/acct unik untuk NAS ini: {$nas->auth_port}/{$nas->acct_port}
+        # (dynamic virtual server FreeRADIUS, v0.6.5 — bukan lagi port
+        # default 1812/1813 bersama).
 
         :log info "BOSS App: konfigurasi ulang RADIUS untuk NAS {$nas->name}"
 
         /radius remove [find comment="boss-radius"]
         /radius add service=ppp,hotspot address={$freeradiusInternalIp} \\
-            secret="{$nas->radius_secret}" authentication-port=1812 accounting-port=1813 \\
+            secret="{$nas->radius_secret}" authentication-port={$nas->auth_port} accounting-port={$nas->acct_port} \\
             timeout=3s comment="boss-radius"
 
         /ppp aaa set use-radius=yes
@@ -285,7 +294,7 @@ class MikrotikScriptGenerator
         # mengubah konfigurasi NAS.
         /user group remove [find name="boss-api-readonly"]
         /user group add name=boss-api-readonly \\
-            policy=read,api,!local,!telnet,!ssh,!ftp,!reboot,!write,!policy,!test,!winbox,!password,!web,!sniff,!sensitive,!romon,!dude
+            policy=read,api,!local,!telnet,!ssh,!ftp,!reboot,!write,!policy,!test,!winbox,!password,!web,!sniff,!sensitive,!romon,!rest-api
 
         /user remove [find name="{$apiUsername}"]
         /user add name={$apiUsername} group=boss-api-readonly password="{$apiPassword}"

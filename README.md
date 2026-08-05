@@ -6,8 +6,9 @@ data pelanggan dan pusat perintah.
 
 ## Status
 
-Sprint aktif: **v0.6.3-multi-protocol-vpn-script-generator**
-Branch aktif: `v0.6.3-multi-protocol-vpn-script-generator`
+Cluster v0.6.0 (FreeRADIUS Integration, v0.6.1-v0.6.5) **selesai** — lihat
+`docs/ROADMAP.md` bagian "Ringkasan penutup cluster v0.6.0" untuk status
+akhir tiap sub-versi. Sprint berikutnya belum diputuskan.
 
 Lihat `docs/RULES.md` untuk aturan pengembangan (BOSS-001 s/d BOSS-014) dan
 `docs/ROADMAP.md` untuk urutan sprint yang sudah dikunci.

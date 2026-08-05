@@ -251,7 +251,7 @@ class MikrotikScriptGeneratorTest extends TestCase
         $this->assertMatchesRegularExpression('/source="[^"]*"/', $script);
     }
 
-    public function test_radius_script_uses_default_freeradius_ports_not_nas_specific_ports(): void
+    public function test_radius_script_uses_the_nas_own_dynamic_ports(): void
     {
         $nas = $this->nas([
             'name' => 'NAS Gambir',
@@ -262,25 +262,15 @@ class MikrotikScriptGeneratorTest extends TestCase
 
         $script = $this->generator->radiusScript($nas, '172.28.0.10', 'boss-api', 'apipass123');
 
-        $this->assertStringContainsString('authentication-port=1812', $script);
-        $this->assertStringContainsString('accounting-port=1813', $script);
-        // The NAS's own unique ports (27189/27190) may appear in the
-        // informational comment (telling the admin what v0.6.5 will
-        // eventually use) but must NEVER appear in the actual `/radius add`
-        // command line itself.
-        $radiusAddLine = collect(explode(PHP_EOL, $script))->first(fn ($l) => str_starts_with(trim($l), '/radius add'));
-        $this->assertStringNotContainsString('27189', $radiusAddLine);
-        $this->assertStringNotContainsString('27190', $radiusAddLine);
+        // v0.6.5: the actual `/radius add` command (spans two physical
+        // lines via a trailing `\` continuation) must use THIS NAS's own
+        // unique auth/acct ports, never the old shared default (1812/1813)
+        // — that was the v0.6.3-v0.6.4 interim behavior.
+        $this->assertStringContainsString('authentication-port=27189', $script);
+        $this->assertStringContainsString('accounting-port=27190', $script);
+        $this->assertStringNotContainsString('authentication-port=1812', $script);
+        $this->assertStringNotContainsString('accounting-port=1813', $script);
         $this->assertStringContainsString('secret="nas-radius-secret"', $script);
         $this->assertStringContainsString('policy=read,api,!local,!telnet,!ssh,!ftp,!reboot,!write', $script);
-    }
-
-    public function test_radius_script_handles_unassigned_nas_ports_gracefully(): void
-    {
-        $nas = $this->nas(['auth_port' => null, 'acct_port' => null]);
-
-        $script = $this->generator->radiusScript($nas, '172.28.0.10', 'boss-api', 'apipass123');
-
-        $this->assertStringContainsString('belum diisi, menunggu v0.6.5', $script);
     }
 }

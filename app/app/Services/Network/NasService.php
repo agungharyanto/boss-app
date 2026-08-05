@@ -11,6 +11,8 @@ class NasService
 {
     public function __construct(
         private readonly RouterOsGateway $gateway,
+        private readonly NasPortAllocatorService $portAllocator,
+        private readonly FreeradiusVirtualServerService $virtualServers,
     ) {}
 
     /**
@@ -18,11 +20,29 @@ class NasService
      */
     public function create(array $data, int $tenantId, ?int $resellerId): Nas
     {
-        return Nas::create([
+        // v0.6.5 — no input path (StoreNasRequest, NasIndex Livewire form)
+        // ever supplies auth_port/acct_port; every new NAS is allocated a
+        // fresh, globally-unique pair automatically. See
+        // NasPortAllocatorService's docblock for why this can't collide
+        // even under concurrent NAS creation, and for why coa_port is
+        // deliberately NOT part of this allocation (stays whatever $data
+        // provides, or the plain DB default of 3799).
+        $nas = Nas::create([
             ...$data,
+            ...$this->portAllocator->allocate(),
             'tenant_id' => $tenantId,
             'reseller_id' => $resellerId,
         ]);
+
+        $this->virtualServers->sync($nas);
+
+        // ->fresh(), not the in-memory $nas — coa_port wasn't part of the
+        // insert's own attribute array (it's DB-default-3799 unless $data
+        // overrides it), and Eloquent doesn't back-fill column defaults
+        // into the in-memory model after INSERT, only Postgres itself
+        // knows the value until reloaded. Same reasoning as update()
+        // returning ->fresh() below.
+        return $nas->fresh();
     }
 
     /**
@@ -32,11 +52,22 @@ class NasService
     {
         $nas->update($data);
 
+        // radius_secret is the only field a virtual-server regeneration
+        // actually cares about (auth_port/acct_port are immutable post-
+        // allocation — nothing in this codebase ever writes to them again
+        // after create()) — but re-syncing unconditionally on every update
+        // is simplest and cheap (idempotent file write, only actually
+        // triggers a radiusd restart if the written content changed, see
+        // FreeradiusVirtualServerService::sync()'s docblock).
+        $this->virtualServers->sync($nas);
+
         return $nas->fresh();
     }
 
     public function delete(Nas $nas): void
     {
+        $this->virtualServers->remove($nas);
+
         $nas->delete();
     }
 

@@ -117,6 +117,25 @@ class NasIndex extends Component
             ->exists();
     }
 
+    /**
+     * v0.6.5 — real per-NAS auth/acct/coa ports (NasPortAllocatorService),
+     * not the old shared-default 1812/1813 placeholder. Null for a
+     * brand-new NAS not saved yet (ports are only allocated by
+     * NasService::create()).
+     *
+     * @return array{auth_port: ?int, acct_port: ?int, coa_port: ?int}
+     */
+    public function currentPorts(): array
+    {
+        if ($this->editingNasId === null) {
+            return ['auth_port' => null, 'acct_port' => null, 'coa_port' => null];
+        }
+
+        $nas = Nas::findOrFail($this->editingNasId);
+
+        return ['auth_port' => $nas->auth_port, 'acct_port' => $nas->acct_port, 'coa_port' => $nas->coa_port];
+    }
+
     public function save(NasService $service): void
     {
         $context = app(ResellerContext::class);
@@ -239,10 +258,28 @@ class NasIndex extends Component
         $result = $gateway->ping($probe);
 
         if ($nas !== null) {
-            $nas->update([
+            $updates = [
                 'status' => $result['online'] ? NasStatus::Online : NasStatus::Offline,
                 'last_ping_at' => now(),
-            ]);
+            ];
+
+            // Real bug found 2026-08-04: a successful test using a freshly
+            // TYPED password (different from what's stored) used to leave
+            // nas.api_password untouched — the list would show "online"
+            // right after, but the very next connection attempt using the
+            // STORED credential (script generation, this same test next
+            // time with a blank password field, etc.) would fail again,
+            // looking like the NAS randomly went offline with nothing
+            // changed. A successful test IS proof this typed credential is
+            // the NAS's real current one — persist it, same as any other
+            // masked-field "only overwrite when actually typed" field in
+            // this form.
+            if ($result['online'] && $this->apiPassword !== '') {
+                $updates['api_username'] = $this->apiUsername;
+                $updates['api_password'] = $this->apiPassword;
+            }
+
+            $nas->update($updates);
         }
 
         $this->testConnectionResult = $result['online']

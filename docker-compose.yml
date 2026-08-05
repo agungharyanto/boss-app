@@ -48,6 +48,13 @@ services:
       # chap-secrets wholesale on every provision()/revoke().
       - vpn_wg_data:/vpn-wg-data
       - vpn_l2tp_secrets:/vpn-l2tp-data
+      # v0.6.5 — shared with the freeradius container. NasService writes
+      # per-NAS listen/clients config here (FreeradiusVirtualServerService)
+      # and CoaService queues CoA/Disconnect requests here — same
+      # "communicate via a shared volume, no Docker socket" posture as
+      # every other cross-container coordination in this stack. See
+      # CLAUDE.md "FreeRADIUS Core & NAS Management" v0.6.5 section.
+      - freeradius_nas_config:/freeradius-nas-config
     env_file:
       - .env
     depends_on:
@@ -174,8 +181,22 @@ services:
       context: ./docker/freeradius
     container_name: freeradius
     restart: unless-stopped
+    # v0.6.5 CoA/Disconnect — entrypoint.sh adds routes to the VPN node
+    # subnets (via openvpn/wireguard's own boss-network IP as next-hop) so
+    # CoaService's radclient calls can actually reach a NAS's internal_ip;
+    # `ip route add` needs NET_ADMIN inside this container's own netns
+    # (confirmed for real: failed with "Operation not permitted" without
+    # it).
+    cap_add:
+      - NET_ADMIN
     env_file:
       - .env
+    volumes:
+      # v0.6.5 — shared with boss-app. entrypoint.sh mounts this at
+      # /etc/raddb/nas-config (listen/ + clients/ read via $INCLUDE from
+      # sites-enabled/default + clients.conf) and /coa-queue (CoaService
+      # requests) — see docker/freeradius/entrypoint.sh.
+      - freeradius_nas_config:/freeradius-nas-config
     depends_on:
       freeradius-db:
         condition: service_healthy
@@ -482,3 +503,4 @@ volumes:
   vpn_ccd:
   vpn_wg_data:
   vpn_l2tp_secrets:
+  freeradius_nas_config:

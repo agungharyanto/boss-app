@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\CoaDisconnectRequest;
 use App\Http\Requests\StoreNasRequest;
 use App\Http\Requests\UpdateNasRequest;
 use App\Http\Resources\NasResource;
 use App\Models\Nas;
+use App\Services\Network\CoaService;
 use App\Services\Network\NasService;
 use App\Support\ResellerContext;
 use Illuminate\Http\JsonResponse;
@@ -83,5 +85,18 @@ class NasController extends Controller
         $nas = $service->testConnection($nas);
 
         return $this->success(new NasResource($nas), 'Tes koneksi selesai');
+    }
+
+    /**
+     * v0.6.5 — force-drops an active PPP/hotspot session on this NAS via
+     * RADIUS Disconnect-Request (RFC 5176), e.g. isolir instan pelanggan
+     * menunggak. See CoaService's own docblock for the OpenVPN/WireGuard-
+     * only limitation and the multi-node-pool caveat.
+     */
+    public function disconnect(CoaDisconnectRequest $request, Nas $nas, CoaService $service): JsonResponse
+    {
+        $result = $service->disconnect($nas, $request->validated('username'));
+
+        return $this->success($result, $result['ok'] ? 'Sesi berhasil diputus' : 'NAS menolak permintaan disconnect');
     }
 }

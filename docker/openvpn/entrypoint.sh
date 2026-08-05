@@ -69,6 +69,23 @@ iptables -P FORWARD DROP
 iptables -A FORWARD -i tun0 -d "$FREERADIUS_INTERNAL_IP" -j ACCEPT
 iptables -A FORWARD -o tun0 -d "$VPN_SUBNET_CIDR" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
+# v0.6.5 CoA/Disconnect — one narrow, deliberate exception to the
+# one-directional guarantee above (confirmed explicitly with Agung before
+# implementing, since it changes a security-relevant boundary locked in at
+# v0.6.2/v0.6.3): allows NEW connections initiated FROM FreeRADIUS's own
+# static IP, OUT through this tunnel, to reach a NAS's internal_ip — the
+# opposite direction of the existing NAS-initiated auth/acct traffic.
+# Source is restricted to FREERADIUS_INTERNAL_IP specifically (not
+# boss-network generally) because that's the ONLY address a NAS's own
+# `/radius incoming` will accept a CoA/Disconnect-Request from — it's
+# already the address every NAS's `/radius add` entry is configured with
+# (see MikrotikScriptGenerator::radiusScript()), so CoaService's packets
+# need no NAT/MASQUERADE to "look like" anything: freeradius's own real IP
+# already IS that address. No destination restriction (-d) — a NAS's
+# internal_ip varies (VpnAccount.internal_ip), always somewhere inside
+# this tunnel's own subnet, already scoped by `-o tun0`.
+iptables -A FORWARD -i eth0 -o tun0 -s "$FREERADIUS_INTERNAL_IP" -j ACCEPT
+
 # MASQUERADE traffic leaving the VPN subnet toward FreeRADIUS so it looks
 # like it came from this container's own boss-network IP — FreeRADIUS
 # replies naturally without needing any route back to 172.23.194.0/24 at

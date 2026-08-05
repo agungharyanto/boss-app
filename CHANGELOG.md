@@ -3,6 +3,89 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.6.5 — Dynamic Virtual Server & CoA (penutup v0.6.0)
+
+Sub-sprint terakhir cluster v0.6.0 (FreeRADIUS Integration).
+
+- **Dynamic per-NAS virtual server FreeRADIUS**: `FreeradiusVirtualServerService`
+  menulis 2 file per NAS (`listen/nas-{id}.conf`, `clients/nas-{id}.conf`) ke
+  volume baru `freeradius_nas_config`, dibaca lewat `$INCLUDE` direktori dari
+  `sites-enabled/default`/`clients.conf` — dipatch idempoten oleh
+  `docker/freeradius/entrypoint.sh`. Isolasi antar-NAS lewat PORT, bukan IP
+  sumber (semua trafik NAS ter-MASQUERADE oleh container VPN node yang
+  dilewati, jadi IP sumber tidak bisa membedakan NAS mana pun).
+- **5 gap infrastruktur nyata ditemukan & diperbaiki saat deploy** (bukan
+  cuma baca dokumentasi FreeRADIUS): `SIGHUP` TIDAK membuka listen socket
+  baru (radiusd perlu restart sungguhan — dibuktikan lewat log server +
+  `netstat` sebelum/sesudah); FreeRADIUS menolak start kalau direktori
+  `$INCLUDE` world-writable (fix: `chgrp www-data + chmod 0770`, bukan
+  `0777` seperti volume VPN lainnya); tabrakan port dengan listener
+  `inner-tunnel` bawaan FreeRADIUS di 18120 (range dipindah mulai 20000);
+  file root-owned dari sesi `tinker` verifikasi bikin `www-data` gagal
+  menulis ulang (self-healing chmod tiap siklus poll ~3 detik, kelas bug
+  sama seperti insiden PKI OpenVPN "nas-11" v0.6.3); config NAS yang
+  tabrakan bikin `radiusd` mati total tanpa auto-restart (supervisor loop
+  sekarang cek proses hidup tiap siklus, bukan cuma saat config berubah).
+- **Port allocator** (`NasPortAllocatorService`, singleton counter row
+  `lockForUpdate()`): `auth_port`/`acct_port` teralokasi otomatis & unik
+  per NAS. **`coa_port` SENGAJA TIDAK ikut dialokasikan** — ditemukan
+  lewat cek nyata `/radius/incoming/print` di router: port CoA RouterOS
+  itu satu pengaturan per-router, bukan per-server-RADIUS, jadi tidak ada
+  alasan harus unik seperti auth/acct. Tetap kolom biasa default 3799.
+- **Script Generator RADIUS tab**: sekarang pakai `auth_port`/`acct_port`
+  asli NAS (dynamic virtual server), bukan lagi port default 1812/1813
+  bersama. **Bug nyata ditemukan push pertama ke test-x86-bajastu**: baris
+  `/user group add ... policy=...` memuat `!dude`, keyword RouterOS 6.x
+  yang sudah dihapus di 7.x — RouterOS menolak SELURUH string policy
+  begitu satu token tidak dikenal, sempat salah didiagnosis sebagai
+  masalah izin (ada masalah izin nyata terpisah yang kebetulan ditemukan
+  lebih dulu). Diperbaiki (buang `!dude`, tambah `!rest-api`).
+  **Diverifikasi nyata penuh**: script diterapkan bersih ke router asli,
+  `radclient` dapat `Access-Accept` sungguhan lewat port dinamisnya.
+- **CoA/Disconnect** (`CoaService`, `POST /nas/{nas}/disconnect`): kirim
+  Disconnect-Request/CoA-Request ke NAS (arah kebalikan dari auth/acct —
+  BOSS App jadi client, NAS jadi server). Eksekusi radclient WAJIB terjadi
+  di dalam container `freeradius` sendiri (dibuktikan lewat
+  `/radius/incoming/print` router: validasi CoA berdasarkan `address=`
+  entri `/radius`, yang selalu IP statis freeradius) — dikoordinasikan
+  lewat antrian file di volume bersama (pola sama seperti config NAS),
+  bukan panggilan langsung dari `boss-app`. Firewall exception sempit
+  ditambahkan (dikonfirmasi dulu bersama Agung, karena mengubah jaminan
+  keamanan satu-arah yang dikunci sejak v0.6.2/v0.6.3):
+  `iptables ... -s $FREERADIUS_INTERNAL_IP -j ACCEPT` di container
+  openvpn/wireguard, plus route balik dari `freeradius` (resolve nama
+  container, bukan IP hardcode, self-healing tiap siklus).
+  **Diverifikasi nyata sampai batas yang jujur**: `tcpdump` di tun0
+  konfirmasi paket Disconnect-Request benar-benar transit end-to-end
+  (routing + firewall exception + eksekusi radclient dari container yang
+  benar, semua terbukti). **Belum terverifikasi**: apakah router benar-
+  benar mengeksekusi disconnect-nya — `test-x86-bajastu` ternyata router
+  produksi nyata dengan 427 sesi pelanggan aktif (bukan lab), dan Agung
+  memilih tidak memutus sesi pelanggan asli hanya untuk uji coba. Dicatat
+  sebagai item verifikasi tertunda, bukan bug — sama seperti gap QR-scan
+  WhatsApp dan retest hardware L2TP sebelumnya.
+- **Bug nyata ditemukan & diperbaiki di kode v0.6.1-v0.6.4**:
+  `NasIndex::testConnection()` — tes yang sukses dengan password BEDA
+  dari yang tersimpan (misal masukin ulang password lama yang benar)
+  cuma menyimpan `status`/`last_ping_at`, TIDAK PERNAH menyimpan ulang
+  password yang benar itu — akibatnya NAS terlihat "online" sesaat lalu
+  "offline lagi" di pemakaian berikutnya, pola yang kemungkinan besar
+  adalah akar dari insiden "password 154415" yang pernah diselidiki
+  sebelumnya. Sekarang tes sukses dengan password baru otomatis
+  menyimpannya.
+- **Di luar sprint tapi terjadi di tengah sprint atas permintaan
+  eksplisit Agung**: `config('app.timezone')` ternyata hardcode `'UTC'`
+  walau root `.env` sudah lama mendeklarasikan `APP_TIMEZONE=Asia/
+  Jakarta` (pola bug sama seperti `APP_ENV`) — diperbaiki, dipasangkan
+  dengan `migrate:fresh` + reseed penuh (disetujui karena BOSS App
+  sendiri belum live production). Ketemu 1 bug urutan nyata saat reseed:
+  `VpnServersSeeder` (v0.6.4) mengasumsikan baris node1 sudah ada dengan
+  id terendah per protokol (`VpnServer::poolOwnerFor()` bergantung pada
+  ini) — kalau dijalankan sebelum node1 dibuat ulang, node2/3 malah jadi
+  pool owner secara diam-diam. Ditemukan lewat cek `poolOwnerFor()`
+  langsung, bukan diasumsikan; diperbaiki dengan urutan buat ulang yang
+  benar.
+
 ## v0.6.4 — Multi-Node VPN Pool & Auto-Switch Failover
 
 - **Keputusan arsitektur dikonfirmasi bersama Agung sebelum implementasi**:

@@ -541,6 +541,22 @@ Lihat CLAUDE.md v0.6.5 untuk kenapa eksekusi sesungguhnya harus terjadi di
 dalam container `freeradius` (bukan `boss-app`), dan keterbatasan yang
 sudah diketahui pada topologi multi-node (v0.6.4).
 
+### `POST /nas/{nas}/provision-api-user` (v0.6.5, amendment)
+
+Body wajib: `admin_username`, `admin_password` — kredensial admin ASLI
+router (full akses), dipakai **sekali pakai** untuk request ini saja, TIDAK
+PERNAH disimpan ke database atau log. Membuat/memperbarui user API khusus
+BOSS App di router (`boss-app-api-{nas_id}`, grup `boss-app-api`, policy
+`read,api,password` + deny selebihnya — lihat CLAUDE.md v0.6.5), lalu
+meng-update `nas.api_username`/`api_password` ke kredensial baru itu.
+**Ini satu-satunya jalur yang menulis kolom itu** — `POST /nas/{nas}` dan
+`PUT /nas/{nas}` (`StoreNasRequest`/`UpdateNasRequest`) juga masih
+menerima `api_username`/`api_password` untuk kasus isi manual, tapi
+endpoint ini adalah jalur yang direkomendasikan. **Ditolak** (422,
+`NasApiUserProvisioningException`) kalau router menolak kredensial admin
+atau perintah provisioning gagal — tidak ada perubahan ke `nas` row kalau
+gagal.
+
 ## VPN Multi-Protokol (OpenVPN v0.6.2, WireGuard/L2TP-IPsec v0.6.3)
 
 Endpoint di bawah juga ada di dalam grup middleware `reseller.context`.
@@ -624,15 +640,17 @@ Livewire biasa di dalam layout web utama. 2 tab:
   akunnya baru saja diprovisioning di request yang sama (private key tidak
   pernah disimpan) — kalau sudah ada akun aktif dari sebelumnya, harus
   revoke dulu lewat API baru generate ulang.
-- **RADIUS Script**: generate `/radius add` + user API Mikrotik baru
-  (permission terbatas). v0.6.5: memakai `nas.auth_port`/`acct_port`
-  NYATA milik NAS ini (dynamic virtual server FreeRADIUS), bukan lagi port
-  default 1812/1813 bersama — diverifikasi nyata terhadap test-x86-bajastu
-  (Access-Accept genuine lewat port dinamisnya). Setiap generate juga
-  me-rotate `nas.api_username`/`api_password` — **setiap panggilan, sukses
-  ATAU gagal diterapkan ke router**, lihat CLAUDE.md v0.6.5 untuk
-  konsekuensinya (kredensial tersimpan bisa mismatch dari yang aktif di
-  router kalau script yang digenerate tidak langsung dijalankan).
+- **RADIUS Script**: generate `/radius add` SAJA (registrasi FreeRADIUS
+  sebagai server RADIUS di NAS ini). v0.6.5: memakai `nas.auth_port`/
+  `acct_port` NYATA milik NAS ini (dynamic virtual server FreeRADIUS),
+  bukan lagi port default 1812/1813 bersama — diverifikasi nyata terhadap
+  test-x86-bajastu (Access-Accept genuine lewat port dinamisnya). **Murni
+  read-only** — tidak lagi menyentuh `nas.api_username`/`api_password`
+  atau `/user`/`/user group` di router sama sekali (amendment: versi
+  sebelumnya merotate kredensial API di setiap panggilan, bug nyata yang
+  jadi penyebab NAS "offline sendiri" berulang — lihat CLAUDE.md v0.6.5).
+  User API Mikrotik sekarang dibuat/diperbarui lewat aksi terpisah,
+  `POST /nas/{nas}/provision-api-user` (lihat di atas).
 
 Script yang dihasilkan idempotent (hapus interface/route/rule lama dulu)
 dan mengisolasi routing (routing-mark untuk OpenVPN/L2TP, `allowed-address`

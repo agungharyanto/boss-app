@@ -225,19 +225,34 @@ class VpnScriptGeneratorLivewireTest extends TestCase
         $this->assertNotSame($oldAccountId, $newAccount->id);
     }
 
-    public function test_generates_radius_script_and_rotates_nas_api_credentials(): void
+    public function test_generating_radius_script_never_touches_nas_api_credentials(): void
     {
+        // Regression test for a real bug: generateRadiusScript() used to
+        // rotate nas.api_username/api_password as a side effect of mere
+        // preview, even when the script was never applied to the router —
+        // this is exactly the pattern that caused NAS to silently "go
+        // offline" with the stored credential mismatching the router's
+        // real one. Mikrotik API user provisioning is now a fully separate
+        // action (NasApiUserProvisioningService) — see its own docblock.
         $tenant = Tenant::factory()->create();
-        $nas = Nas::factory()->create(['tenant_id' => $tenant->id, 'api_username' => null, 'radius_secret' => 'secretvalue']);
+        $nas = Nas::factory()->create([
+            'tenant_id' => $tenant->id,
+            'api_username' => 'existing-api-user',
+            'api_password' => 'existing-api-password',
+            'radius_secret' => 'secretvalue',
+        ]);
 
-        Livewire::actingAs($this->admin($tenant))
-            ->test(VpnScriptGenerator::class)
-            ->set('selectedNasId', $nas->id)
-            ->call('generateRadius')
-            ->assertHasNoErrors();
+        $component = Livewire::actingAs($this->admin($tenant))->test(VpnScriptGenerator::class)
+            ->set('selectedNasId', $nas->id);
+
+        // Called 5 times in a row, matching this project's own real-world
+        // verification standard — must never mutate anything.
+        for ($i = 0; $i < 5; $i++) {
+            $component->call('generateRadius')->assertHasNoErrors();
+        }
 
         $nas->refresh();
-        $this->assertSame('boss-api', $nas->api_username);
-        $this->assertNotNull($nas->api_password);
+        $this->assertSame('existing-api-user', $nas->api_username);
+        $this->assertSame('existing-api-password', $nas->api_password);
     }
 }

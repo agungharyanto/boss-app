@@ -260,7 +260,7 @@ class MikrotikScriptGeneratorTest extends TestCase
             'acct_port' => 27190,
         ]);
 
-        $script = $this->generator->radiusScript($nas, '172.28.0.10', 'boss-api', 'apipass123');
+        $script = $this->generator->radiusScript($nas, '172.28.0.10');
 
         // v0.6.5: the actual `/radius add` command (spans two physical
         // lines via a trailing `\` continuation) must use THIS NAS's own
@@ -271,6 +271,19 @@ class MikrotikScriptGeneratorTest extends TestCase
         $this->assertStringNotContainsString('authentication-port=1812', $script);
         $this->assertStringNotContainsString('accounting-port=1813', $script);
         $this->assertStringContainsString('secret="nas-radius-secret"', $script);
-        $this->assertStringContainsString('policy=read,api,!local,!telnet,!ssh,!ftp,!reboot,!write', $script);
+    }
+
+    public function test_radius_script_never_touches_user_or_user_group(): void
+    {
+        // Real bug fixed: this script used to create/rotate a Mikrotik API
+        // user as a side effect — that's now a fully separate, explicit
+        // action (NasApiUserProvisioningService), never bundled into
+        // script text at all.
+        $nas = $this->nas(['auth_port' => 20000, 'acct_port' => 20001]);
+
+        $script = $this->generator->radiusScript($nas, '172.28.0.10');
+
+        $this->assertStringNotContainsString('/user ', $script);
+        $this->assertStringNotContainsString('/user group', $script);
     }
 }

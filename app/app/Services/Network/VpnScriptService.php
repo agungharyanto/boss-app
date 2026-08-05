@@ -10,7 +10,6 @@ use App\Models\Nas;
 use App\Models\VpnAccount;
 use App\Models\VpnServer;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Str;
 
 /**
  * Orchestrates VpnProvisioningService (data/credentials) +
@@ -161,26 +160,20 @@ class VpnScriptService
      * v0.6.5: uses this NAS's own dynamic auth_port/acct_port (see
      * MikrotikScriptGenerator::radiusScript()'s own docblock) — no longer
      * FreeRADIUS's shared default port (that was the v0.6.3-v0.6.4 interim
-     * state). Also (re)generates the NAS's Mikrotik API credentials and
-     * persists them
-     * onto nas.api_username/api_password — closing the loop with
-     * NasService::testConnection() (v0.6.1), which needs real, currently-
-     * valid credentials to actually succeed. Every call to this method
-     * rotates the password (the old one becomes invalid the moment the
-     * generated script is run on the router).
+     * state).
+     *
+     * Deliberately, verifiably READ-ONLY — a real bug (found and fixed
+     * before this docblock was written, not a hypothetical) had this
+     * method rotate nas.api_username/api_password as a side effect of
+     * being called, even for a pure preview that was never applied to the
+     * router. Calling this method any number of times in a row must never
+     * change anything in the database — see VpnScriptServiceTest's
+     * dedicated regression test for this. Mikrotik API user provisioning
+     * is a separate, explicit action now — see
+     * App\Services\Network\NasApiUserProvisioningService.
      */
     public function generateRadiusScript(Nas $nas): string
     {
-        $apiUsername = $nas->api_username ?: 'boss-api';
-        $apiPassword = Str::random(20);
-
-        $nas->update(['api_username' => $apiUsername, 'api_password' => $apiPassword]);
-
-        return $this->generator->radiusScript(
-            $nas,
-            config('services.vpn.freeradius_internal_ip'),
-            $apiUsername,
-            $apiPassword,
-        );
+        return $this->generator->radiusScript($nas, config('services.vpn.freeradius_internal_ip'));
     }
 }

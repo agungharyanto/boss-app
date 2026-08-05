@@ -32,15 +32,20 @@ class NasIndexLivewireTest extends TestCase
      * RouterOsGateway talks raw sockets, not HTTP — same fake-binding
      * pattern as NasServiceTest, no Http::fake() equivalent exists.
      */
-    private function bindGateway(bool $online, ?string $message = null): void
+    private function bindGateway(bool $online, ?string $message = null, bool $provisionSuccess = true): void
     {
-        $this->app->bind(RouterOsGateway::class, fn () => new class($online, $message) implements RouterOsGateway
+        $this->app->bind(RouterOsGateway::class, fn () => new class($online, $message, $provisionSuccess) implements RouterOsGateway
         {
-            public function __construct(private readonly bool $online, private readonly ?string $message) {}
+            public function __construct(private readonly bool $online, private readonly ?string $message, private readonly bool $provisionSuccess) {}
 
             public function ping(Nas $nas): array
             {
                 return ['online' => $this->online, 'message' => $this->message];
+            }
+
+            public function provisionApiUser(Nas $nas, string $connectAsUsername, string $connectAsPassword, string $newApiUsername, string $newApiPassword): array
+            {
+                return ['success' => $this->provisionSuccess, 'message' => $this->provisionSuccess ? null : 'invalid admin credential'];
             }
         });
     }
@@ -347,5 +352,60 @@ class NasIndexLivewireTest extends TestCase
             ->assertSet('testConnectionResult.status', 'success');
 
         $this->assertDatabaseCount('nas', 0);
+    }
+
+    public function test_provision_api_user_modal_creates_dedicated_credential_and_clears_admin_fields(): void
+    {
+        $this->bindGateway(online: true, provisionSuccess: true);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id, 'api_username' => null, 'api_password' => null]);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(NasIndex::class)
+            ->call('openProvisionApiModal', $nas->id)
+            ->set('provisionAdminUsername', 'router-admin')
+            ->set('provisionAdminPassword', 'router-admin-password')
+            ->call('provisionApiUser');
+
+        $component->assertSet('provisionApiResult.status', 'success');
+        // The admin credential is never left sitting in component state.
+        $component->assertSet('provisionAdminUsername', '');
+        $component->assertSet('provisionAdminPassword', '');
+
+        $this->assertSame("boss-app-api-{$nas->id}", $nas->fresh()->api_username);
+    }
+
+    public function test_provision_api_user_modal_shows_failure_and_does_not_persist_anything(): void
+    {
+        $this->bindGateway(online: true, provisionSuccess: false);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id, 'api_username' => 'old-user', 'api_password' => 'old-pass']);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(NasIndex::class)
+            ->call('openProvisionApiModal', $nas->id)
+            ->set('provisionAdminUsername', 'router-admin')
+            ->set('provisionAdminPassword', 'wrong-password')
+            ->call('provisionApiUser');
+
+        $component->assertSet('provisionApiResult.status', 'failed');
+        $this->assertSame('old-user', $nas->fresh()->api_username);
+        $this->assertSame('old-pass', $nas->fresh()->api_password);
+    }
+
+    public function test_reseller_a_cannot_open_provision_api_modal_for_reseller_bs_nas(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $resellerA = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $resellerB = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $nasB = Nas::factory()->forReseller($resellerB)->create();
+
+        $ownerA = User::factory()->create(['tenant_id' => $tenant->id]);
+        $resellerA->users()->attach($ownerA->id, ['role' => 'owner', 'status' => 'active']);
+
+        Livewire::actingAs($ownerA)
+            ->test(NasIndex::class)
+            ->call('openProvisionApiModal', $nasB->id)
+            ->assertForbidden();
     }
 }

@@ -1219,6 +1219,48 @@ node2/node3 the lowest ids instead, silently making a SIBLING node the pool owne
 `poolOwnerFor()`'s actual return value after reseeding, not assumed; fixed by clearing and recreating in the
 correct order (node1 first, always).
 
+**Amendment (found and fixed right after v0.6.5 was tagged, same sprint's own bug — not a new sprint)**:
+Agung independently confirmed the exact same root cause suspected above — `generateRadiusScript()` really
+was rotating `nas.api_username`/`api_password` on **every single call**, including a pure UI preview that
+was never applied to the router, unconditionally. This is a distinct, worse-than-described violation: the
+method wasn't just "read-only in spirit" — it actively wrote to the database as an undocumented side effect
+of what looked like a getter. **Fixed properly, not patched**: `MikrotikScriptGenerator::radiusScript()` no
+longer touches `/user`/`/user group` at all — it only emits the `/radius add` line now.
+`VpnScriptService::generateRadiusScript()` is now verifiably read-only (regression test calls it 5x in a
+row and asserts zero DB change; verified for real against `test-x86-bajastu` too — 5 consecutive calls,
+`nas.api_password` unchanged, `testConnection()` still succeeded with no re-entry needed).
+
+**Root confusion identified and fixed at the same time, per Agung's explicit design**: `nas.api_username`/
+`api_password` used to hold the router OWNER's real, full-access admin credential, typed in manually — the
+same column the buggy rotation above was corrupting, which is exactly why the blast radius of that bug was
+so bad (a real admin login going stale, not just an internal service credential). Two credentials are now
+explicitly separated:
+- **Admin credential** — the NAS owner's real router login. Used exactly ONCE, in memory, for a single
+  request — never persisted anywhere, never logged. Entered through its own dedicated modal ("Buat/Perbarui
+  User API" in `/nas`, `App\Livewire\Network\NasIndex::provisionApiUser()`) and its own Form Request
+  (`ProvisionNasApiUserRequest`) — deliberately never bound to the same fields as `nas.api_username`/
+  `api_password`, so this exact class of mixup can't recur by accident.
+- **API credential** (`nas.api_username`/`api_password`) — a dedicated, restricted-policy user BOSS App
+  fully owns, created/updated by `App\Services\Network\NasApiUserProvisioningService::
+  provisionWithAdminCredential()`. Username convention `boss-app-api-{nas_id}` (unique even if two NAS rows
+  ever pointed at the same physical router); router-side group `boss-app-api`, policy `read,api,password,
+  !local,!telnet,!ssh,!ftp,!reboot,!write,!policy,!test,!winbox,!web,!sniff,!sensitive,!romon,!rest-api` —
+  note `password` IS allowed (a deliberately broader-than-pure-read-only tradeoff, confirmed explicitly with
+  Agung) specifically so `NasApiUserProvisioningService::rotate()` can self-service future password
+  rotations using the dedicated user's OWN current credential, without ever asking for the admin credential
+  again. `rotate()` has no UI trigger yet this round (not asked for) but needs zero router-side changes to
+  wire up later. Both `provisionWithAdminCredential()` and `rotate()` funnel through the SAME new
+  `RouterOsGateway::provisionApiUser()` method (implemented via idempotent `/user/group/set-or-add` +
+  `/user/set-or-add`, not remove+recreate — a remove+recreate would transiently invalidate a self-rotating
+  user's own session mid-call).
+
+**Verified for real, all 3 claims, against `test-x86-bajastu`**: `provisionWithAdminCredential()` called
+with the already-full-access `boss-apps` user as the one-time admin credential → router's `/user/print`
+confirmed a genuine new `boss-app-api-1` user in group `boss-app-api`; `/user/group/print` confirmed the
+policy string landed exactly as designed (including the `!rest-api`/no-`!dude` fix); `nas.api_username`/
+`api_password` in the database updated to that new credential; `NasService::testConnection()` immediately
+succeeded using it with zero manual re-entry.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

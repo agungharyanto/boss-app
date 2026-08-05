@@ -253,24 +253,31 @@ class MikrotikScriptGenerator
      *
      * Real bug found running this script for real (fetch+import) against
      * test-x86-bajastu (RouterOS 7.11): the `/user group add ... policy=`
-     * line included `!dude` — a RouterOS 6.x-era policy keyword that
-     * doesn't exist anymore on 7.x. RouterOS rejects the ENTIRE policy
-     * string the instant one token doesn't match a known keyword
-     * ("input does not match any value of policy"), which looked
-     * identical to a genuine permission error (and was initially
-     * misdiagnosed as one, since the API user really did lack `/import`
-     * rights on an earlier, separate attempt) until isolated by testing
-     * the exact same fetch+import mechanism with a trivial script first.
-     * Fixed by dropping `!dude` and adding `!rest-api` (a real 7.x
-     * keyword, kept denied for consistency with the rest of this
-     * deliberately narrow policy).
+     * line (removed since — see below) included `!dude`, a RouterOS
+     * 6.x-era policy keyword that doesn't exist anymore on 7.x. RouterOS
+     * rejects the ENTIRE policy string the instant one token doesn't match
+     * a known keyword ("input does not match any value of policy"), which
+     * looked identical to a genuine permission error and was initially
+     * misdiagnosed as one.
+     *
+     * Deliberately does NOT touch `/user`/`/user group` at all anymore
+     * (it did in earlier v0.6.5 iterations) — found, and fixed, a real bug
+     * where THIS method itself rotated nas.api_username/api_password as a
+     * side effect of merely being called to produce preview text, even
+     * when the resulting script was never actually run on the router
+     * (VpnScriptService::generateRadiusScript() is documented read-only
+     * now). Router-side API user creation/rotation is a separate, explicit
+     * action — see App\Services\Network\NasApiUserProvisioningService —
+     * executed directly via the RouterOS API, not through a downloadable
+     * script, specifically so it can be a deliberate one-shot call rather
+     * than a byproduct of viewing something.
      *
      * NasService::create() always allocates auth_port/acct_port
      * immediately (NasPortAllocatorService), so a NAS reaching this method
      * without them would mean the allocator itself was bypassed — not a
      * state this method tries to paper over.
      */
-    public function radiusScript(Nas $nas, string $freeradiusInternalIp, string $apiUsername, string $apiPassword): string
+    public function radiusScript(Nas $nas, string $freeradiusInternalIp): string
     {
         return <<<SCRIPT
         # BOSS App — RADIUS setup script untuk NAS "{$nas->name}"
@@ -287,17 +294,6 @@ class MikrotikScriptGenerator
 
         /ppp aaa set use-radius=yes
         /ip hotspot profile set [find] use-radius=yes
-
-        # User API terbatas khusus BOSS App (read-only + api, tanpa write/
-        # winbox/telnet/ssh/ftp/password/sensitive) — dipakai NasService's
-        # RouterOsGateway (v0.6.1) untuk test-connection, bukan untuk
-        # mengubah konfigurasi NAS.
-        /user group remove [find name="boss-api-readonly"]
-        /user group add name=boss-api-readonly \\
-            policy=read,api,!local,!telnet,!ssh,!ftp,!reboot,!write,!policy,!test,!winbox,!password,!web,!sniff,!sensitive,!romon,!rest-api
-
-        /user remove [find name="{$apiUsername}"]
-        /user add name={$apiUsername} group=boss-api-readonly password="{$apiPassword}"
 
         :log info "BOSS App: RADIUS untuk NAS {$nas->name} selesai dikonfigurasi"
         SCRIPT;

@@ -86,6 +86,35 @@ Sub-sprint terakhir cluster v0.6.0 (FreeRADIUS Integration).
   langsung, bukan diasumsikan; diperbaiki dengan urutan buat ulang yang
   benar.
 
+### Amendment — perbaikan bug rotasi password API NAS (masih v0.6.5, sebelum tag)
+
+- **Bug dikonfirmasi ulang oleh Agung**: `generateRadiusScript()` merotasi
+  `nas.api_username`/`api_password` di SETIAP pemanggilan tanpa syarat,
+  termasuk saat cuma preview — bukan cuma efek samping ringan, tapi
+  penyebab langsung insiden "NAS offline sendiri" yang berulang kali
+  dilaporkan sepanjang sprint ini. Diperbaiki tuntas:
+  `MikrotikScriptGenerator::radiusScript()` sekarang cuma berisi
+  `/radius add`, tidak menyentuh `/user`/`/user group` sama sekali;
+  `VpnScriptService::generateRadiusScript()` murni read-only (test baru
+  memanggil 5x berturut-turut, assert nol perubahan DB — diverifikasi
+  nyata juga terhadap `test-x86-bajastu`: 5x panggilan, `api_password`
+  tidak berubah, `testConnection()` tetap berhasil tanpa input ulang).
+- **User API khusus BOSS App, terpisah dari kredensial admin asli**
+  (root confusion yang bikin bug di atas berdampak besar — kredensial
+  admin ASLI ikut rusak, bukan cuma kredensial internal): kredensial
+  admin sekarang cuma dipakai sekali pakai lewat modal terpisah ("Buat/
+  Perbarui User API" di `/nas`), tidak pernah disimpan. BOSS App
+  otomatis membuat user API khusus (`boss-app-api-{nas_id}`, grup
+  `boss-app-api`, policy `read,api,password` + deny selebihnya, TANPA
+  `!dude`) lewat `NasApiUserProvisioningService`, dan `nas.api_username`/
+  `api_password` ter-update ke kredensial baru itu. Grup dapat hak
+  `password` (bisa ubah password sendiri) supaya rotasi berikutnya bisa
+  self-service tanpa minta kredensial admin lagi.
+  **Diverifikasi nyata terhadap test-x86-bajastu**: user `boss-app-api-1`
+  benar-benar dibuat di router dengan policy persis seperti dirancang,
+  `nas.api_username`/`api_password` di database ter-update, dan
+  `testConnection()` berhasil pakai kredensial barunya.
+
 ## v0.6.4 — Multi-Node VPN Pool & Auto-Switch Failover
 
 - **Keputusan arsitektur dikonfirmasi bersama Agung sebelum implementasi**:

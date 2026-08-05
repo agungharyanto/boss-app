@@ -1261,6 +1261,65 @@ policy string landed exactly as designed (including the `!rest-api`/no-`!dude` f
 `api_password` in the database updated to that new credential; `NasService::testConnection()` immediately
 succeeded using it with zero manual re-entry.
 
+**Second amendment (found and fixed the same sprint, during real production RADIUS testing against
+`test-x86-bajastu` — a genuine ~400-430 active PPPoE customer router, not a lab device)**: a real, ongoing
+production incident traced through several wrong hypotheses before the actual root cause. `boss-app`'s
+`/radius` entry was briefly placed FIRST in the router's fallback order to test it against real traffic; its
+`/radius/monitor` counters showed an alarming ~61% timeout rate (`req=2889 acc=1119 rej=0 to=1770`), which
+briefly looked like a genuine FreeRADIUS performance/capacity problem serious enough to risk delaying login
+for every real customer on the router (RouterOS only falls over to the next `/radius` entry on
+authentication TIMEOUT, not on reject — so a slow/timing-out first entry delays every single auth attempt
+that hits it). **Immediate response, done first, no investigation**: the entry was disabled outright
+(`disabled=true`, not just reordered) — the fastest, lowest-risk way to guarantee zero further impact on
+real customers, verified by watching total `PPP Active` count stay stable (435→436) right after.
+
+**Root-cause investigation, once safe**, ruled out FreeRADIUS performance entirely, in order:
+1. `radius_db` is tiny (2 `radcheck` rows, 7 `radreply` rows, 13 `radpostauth` rows — only our own test
+   accounts) — a slow query was never plausible once actually measured.
+2. A direct `radclient` test against the per-NAS auth port, run from a source IP correctly inside the
+   listener's own `clients{}` ACL (`172.28.0.0/24`), got **Access-Accept in under 1ms, 100/100 times** in a
+   follow-up bulk benchmark. The auth path itself was never the problem.
+3. Two of my own testing mistakes produced false leads before this was found: (a) testing from `127.0.0.1`
+   inside the `freeradius` container itself got silently ignored (no reply at all) — not a bug, just the
+   wrong source IP for that listener's ACL; (b) checking WireGuard tunnel health on the WRONG container
+   (`wireguard`/node1, showing zero handshake ever) before realizing — from the router's own
+   `current-endpoint-port` — that this NAS's v0.6.4 multi-node pool had actually placed it on
+   `wireguard-node2`. On the correct node, the handshake was healthy and a `ping` sourced as `wireguard-
+   node2`'s own address got 100% packet loss (RouterOS's iptables-equivalent only accepts inbound tunnel
+   traffic sourced as `FREERADIUS_INTERNAL_IP` specifically, per the CoA firewall exception below) — but
+   sourced correctly as `172.28.0.10` (`freeradius`'s own pinned IP), the same ping got a clean 6-13ms RTT,
+   0% loss.
+4. **The actual cause**: the router's `/radius` entry for `boss-app` had its `accounting-port` deliberately
+   pointed at port 1 (nothing listening) earlier in this same investigation, specifically to make the router
+   stop successfully collecting real customers' accounting data into `radacct` — but RouterOS broadcasts
+   Accounting-Request to every matching `/radius` entry regardless of order or response (confirmed
+   separately, earlier in this same investigation), so **every accounting Interim-Update from every one of
+   the router's real active sessions was hitting a dead port and timing out, 100% of the time, for as long as
+   the entry existed** — not just while it was first in order. This inflated `/radius/monitor`'s combined
+   auth+accounting counters into what looked like a severe auth-path performance problem, when the auth path
+   itself was never measurably slow.
+
+**Fixed properly, not by re-enabling the black hole**: `docker/freeradius/entrypoint.sh` now also patches
+`sites-enabled/default`'s single shared `accounting {}` section (idempotent, same `grep -q` guard pattern as
+the existing `$INCLUDE` patches) to comment out `detail` (raw packet-to-disk logging) and `-sql` (the
+`radacct` write) — FreeRADIUS still listens on the NAS's real accounting port and still sends a genuine,
+fast `Accounting-Response` for every request (stock behavior once the `accounting {}` section completes
+without an explicit reject), it just no longer persists anything customer-identifiable to disk or the
+database, consistent with this sprint's established "don't collect data we don't need" posture (the same
+reasoning that emptied `radacct` and deleted the raw detail files earlier in this investigation). Verified
+directly: a raw `Accounting-Request` sent to the real port got a real `Accounting-Response` back, and
+`radacct`'s row count stayed at 0 both before and after. The router's `/radius` entry's `accounting-port`
+was corrected back to `20001` (the real, now-safe-to-use port) — done while the entry was still
+`disabled=true`, so this had zero live effect at the time.
+
+**Net result**: the `boss-app` `/radius` entry remains `disabled=true` (second/inactive position) as of this
+writing — reordering it back to first position is a separate decision requiring its own explicit
+confirmation, not an automatic next step now that the accounting black-hole is fixed. The original ~61%
+timeout figure should NOT be read as "FreeRADIUS can only handle 39% of production auth load" — the
+evidence now points to the auth path being fully healthy, with the timeout rate almost entirely explained by
+the accounting-port=1 self-inflicted black hole (plus this session's own repeated manual `radclient`/tinker
+testing traffic, which shares the same cumulative `/radius/monitor` counters).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

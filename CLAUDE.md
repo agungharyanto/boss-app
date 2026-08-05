@@ -1364,6 +1364,19 @@ retrying, `/radius/monitor` shows timeouts, but `radiusd -X` never once logs "Re
 it), check the raw packet bytes (`tcpdump`) for this attribute before assuming a performance or network
 problem.
 
+## Permanent test account — `085166445368` (do not delete, not test data to clean up)
+
+`085166445368` (`radcheck`/`radreply` rows on `radius_db`, NAS `test-x86-bajastu`) is a **deliberate,
+permanent QA fixture**, confirmed explicitly by Agung — not leftover test data from this investigation.
+It's free/unbilled (Agung's own number, not a paying customer) and is meant to keep being used for RADIUS/VPN
+testing across future sprints (later v0.6.x work, and any later version touching RADIUS/VPN/NAS). **Any
+future cleanup script, audit, or Claude Code session that finds this account should skip it, not delete
+it** — the stock `radcheck`/`radreply` schema (see `docker/freeradius/schema.sql`) has no
+comment/description column to mark this on the row itself, so this note is the only record of that intent;
+don't "clean it up" without checking here first. No `nas`/customer/subscription record exists for it in
+`boss_db` — wiring `radcheck` accounts to real Laravel customer/billing records is out of scope for v0.6.5,
+likely a future version's work, not something to backfill now just because this account exists.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

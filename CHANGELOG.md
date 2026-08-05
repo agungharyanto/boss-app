@@ -222,6 +222,47 @@ Sub-sprint terakhir cluster v0.6.0 (FreeRADIUS Integration).
   (`tcpdump`) untuk keberadaan atribut ini sebelum menyalahkan performa
   atau jaringan.
 
+### Penutupan v0.6.5 — dari hasil eksperimen manual jadi benar-benar dikelola BOSS App
+
+- **Port allocator akhirnya diverifikasi race-safe secara nyata**: 5 proses
+  `NasPortAllocatorService::allocate()` ditembak bersamaan ke Postgres
+  produksi (bukan sqlite test) — semua port hasil alokasi unik, tanpa
+  duplikat. Sebelumnya klaim "race-condition-safe" hanya didukung test
+  sekuensial.
+- **Config `/radius` di router `test-x86-bajastu` sekarang hasil generate
+  resmi Script Generator BOSS App, bukan lagi hasil edit manual berkali-kali
+  sepanjang investigasi**: entri manual lama (comment `added by boss-app`)
+  dihapus, digantikan entri baru (comment `boss-radius`) lewat alur
+  fetch+import normal — persis yang akan dialami admin lewat UI. Diverifikasi
+  identik secara fungsional (address/port/secret/timeout) dengan konfigurasi
+  yang sudah terbukti jalan; `PPP Active` tidak terganggu sepanjang proses
+  (438 sebelum, 437-438 sesudah).
+- **CoA/Disconnect akhirnya diuji nyata untuk pertama kalinya** (sebelumnya
+  cuma terverifikasi sampai level transit paket, eksekusi oleh router tidak
+  pernah dikonfirmasi) — memakai `085166445368` (akun test milik sendiri,
+  aman diputus, lihat catatan akun permanen di CLAUDE.md), bukan pelanggan
+  asli. Hasil: Disconnect-Request terkirim benar (format, retry, secret
+  semua sesuai) tapi tanpa balasan — ditelusuri sampai akar masalah: rute
+  CoA `freeradius` untuk subnet WireGuard NAS ini mengarah ke node pool
+  owner (node1), padahal akun WireGuard NAS ini nyambung ke node sibling
+  (node2) yang tidak pernah node1 ajak handshake. **Ini mengonfirmasi
+  known limitation v0.6.4 yang sudah didokumentasikan di `CoaService`'s
+  docblock sejak awal** — bukan bug baru, dan tetap backlog terpisah
+  (CoA router yang sadar multi-node), bukan scope v0.6.5.
+- **`085166445368` resmi jadi akun test permanen** (dikonfirmasi Agung,
+  bukan data test yang perlu dibersihkan) — gratis/tidak ditagih, dipakai
+  untuk QA RADIUS/VPN berkelanjutan di sprint-sprint mendatang. Skema
+  `radcheck`/`radreply` bawaan FreeRADIUS tidak punya kolom deskripsi,
+  jadi statusnya didokumentasikan di CLAUDE.md (bagian "Permanent test
+  account") supaya tidak disalahartikan sebagai data tertinggal oleh
+  audit/cleanup di masa depan.
+- Regression suite penuh: **313 test, 803 assertion, semua lolos** — tidak
+  ada dampak dari seluruh rangkaian perbaikan v0.6.5 ke modul lain.
+
+**v0.6.5 resmi ditutup — sekaligus menutup seluruh cluster v0.6.0 (FreeRADIUS
+Integration, v0.6.1-v0.6.5).** Ringkasan penutupan cluster lengkap ada di
+`docs/ROADMAP.md`.
+
 ## v0.6.4 — Multi-Node VPN Pool & Auto-Switch Failover
 
 - **Keputusan arsitektur dikonfirmasi bersama Agung sebelum implementasi**:

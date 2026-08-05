@@ -16,7 +16,7 @@
 | v0.6.2  | Network         | VPN Server Node #1 (OpenVPN)  | Hub-and-spoke: VPN node sebagai concentrator/relay, FreeRADIUS diakses di satu IP internal tetap dari sisi Mikrotik                          | Selesai |
 | v0.6.3  | Network         | Multi-Protokol VPN & Script Generator | WireGuard, L2TP/IPsec (SSTP di-skip; L2TP/IPsec sendiri berstatus known limitation, lihat catatan di bawah), Script Generator (VPN + RADIUS script siap-paste ke terminal Mikrotik) | Selesai |
 | v0.6.4  | Network         | VPN Pool & Failover           | Pool 3 node nyata x 2 protokol (OpenVPN + WireGuard, L2TP tetap 1 node — known limitation), load-distribution, health-check terjadwal, auto-switch failover Mikrotik — diverifikasi end-to-end nyata (matikan node, konfirmasi pindah otomatis) | Selesai |
-| v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS (isolasi per-port, bukan IP) + port allocator (auth/acct unik, coa_port sengaja tidak) + CoA/Disconnect — diverifikasi nyata sampai transit paket end-to-end, eksekusi disconnect oleh router masih tertunda (lihat catatan) | Selesai |
+| v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator (diverifikasi race-safe nyata) + CoA/Disconnect + fix `require_message_authenticator` per-NAS (akar masalah sesungguhnya) — sesi PPPoE nyata pertama berhasil end-to-end lewat FreeRADIUS produksi, config router sepenuhnya hasil generate resmi BOSS App | Selesai |
 | v0.7.0  | Network         | GenieACS                      | Binding ONT, SSID/password, RX power, reboot, provisioning                                    | Backlog |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
@@ -126,19 +126,37 @@ browser** — verifikasi sejauh ini seluruhnya lewat Claude Code
 Mikrotik terpisah khusus untuk testing UI menyeluruh nanti.
 
 **v0.6.5 (Dynamic Virtual Server & CoA) selesai — penutup cluster v0.6.0.**
-Virtual server FreeRADIUS per-NAS, port allocator, dan Script Generator RADIUS
-tab semuanya diverifikasi nyata penuh (Access-Accept sungguhan lewat port
-dinamis NAS, di router produksi `test-x86-bajastu`). **Catatan verifikasi
-tertunda untuk CoA/Disconnect (bukan bug)**: paket Disconnect-Request
-terbukti transit end-to-end secara nyata (`tcpdump`, routing, firewall
-exception, eksekusi radclient dari container yang benar — semua terverifikasi)
-— TAPI apakah router benar-benar mengeksekusi disconnect-nya belum
-dikonfirmasi, karena `test-x86-bajastu` ternyata router produksi nyata dengan
-427 sesi pelanggan aktif, bukan lab, dan Agung memilih tidak memutus sesi
-pelanggan asli hanya untuk uji coba. Detail lengkap (5 bug infrastruktur
-nyata, bug `!dude`, bug `NasIndex::testConnection()` yang kemungkinan besar
-akar dari insiden "password 154415") ada di CHANGELOG.md "v0.6.5" dan
-CLAUDE.md.
+Virtual server FreeRADIUS per-NAS, port allocator (sekarang diverifikasi
+race-safe lewat 5 proses konkuren nyata terhadap Postgres produksi, bukan
+cuma sekuensial), dan Script Generator RADIUS tab semuanya diverifikasi
+nyata penuh — termasuk akar masalah sesungguhnya yang baru ketemu setelah
+tag awal: `radiusd.conf`'s `require_message_authenticator = yes` (mitigasi
+BlastRADIUS) diam-diam membuang setiap Access-Request dari RouterOS (yang
+tidak pernah menyertakan atribut ini di PPP CHAP/MSCHAP), bukan sekadar
+"performa" atau "network" seperti dugaan awal — dilacak sampai byte-level
+lewat `tcpdump`. Fix-nya: override `require_message_authenticator = no`
+scoped ke client per-NAS saja (rekomendasi resmi dari `radiusd.conf`
+sendiri, bukan diubah global). Setelah fix, config router untuk
+`test-x86-bajastu` juga sudah dipindahkan dari hasil edit manual berkali-kali
+sepanjang investigasi menjadi **hasil generate resmi lewat Script Generator
+BOSS App** (fetch+import biasa, tidak ada langkah manual tersisa) — akun
+`085166445368` (sekarang jadi akun test permanen, lihat CLAUDE.md) berhasil
+konek PPPoE nyata end-to-end, IP ter-assign, sesi stabil.
+
+**CoA/Disconnect — akhirnya diuji nyata (bukan lagi cuma level transit
+paket), akar masalah ketemu, statusnya known limitation v0.6.4, bukan lagi
+"tertunda"**: memakai `085166445368` (akun test milik sendiri, aman untuk
+diputus, bukan pelanggan asli), Disconnect-Request nyata dikirim ke NAS —
+terkirim benar (radclient, 3x retry, format paket benar) tapi tidak ada
+balasan. Ditelusuri: rute CoA `freeradius` untuk subnet WireGuard NAS ini
+mengarah ke node POOL OWNER (node1), padahal akun WireGuard NAS ini
+sebenarnya nyambung ke node SIBLING (node2, dari load-distribution v0.6.4)
+yang tidak pernah handshake dengan NAS ini sama sekali dari sisi node1.
+Ini **persis** limitation yang sudah didokumentasikan sejak v0.6.4
+(`CoaService`'s own docblock) — sekarang terbukti nyata terjadi, bukan
+cuma teori. Perbaikan (CoA router yang sadar multi-node) tetap backlog
+untuk sprint Network mendatang, BUKAN scope v0.6.5. Detail lengkap ada di
+CHANGELOG.md "v0.6.5" dan CLAUDE.md.
 
 ## Ringkasan penutup cluster v0.6.0 — FreeRADIUS Integration (v0.6.1-v0.6.5)
 
@@ -160,11 +178,26 @@ akhir per komponen:
   nyata lewat API (matikan node, konfirmasi pindah otomatis). Verifikasi UI
   Livewire untuk skenario ini masih tertunda (item terpisah, bukan blocker).
 - **Dynamic virtual server & CoA** (v0.6.5): selesai & terverifikasi nyata
-  untuk auth/acct dinamis. CoA/Disconnect terverifikasi sampai level jaringan
-  (paket transit end-to-end); eksekusi nyata oleh router masih tertunda
-  (lihat catatan v0.6.5 di atas) — bukan diblokir, tapi juga belum bisa
-  diklaim 100% bekerja di produksi sampai ada sesi PPP nyata atau NAS test
-  khusus untuk mengonfirmasi.
+  penuh — sesi PPPoE nyata pertama berhasil end-to-end lewat FreeRADIUS
+  produksi (bukan cuma Access-Accept di level paket), setelah akar masalah
+  sesungguhnya (`require_message_authenticator`, bukan performa/jaringan)
+  ditemukan dan diperbaiki per-NAS. Config router sepenuhnya hasil generate
+  resmi Script Generator, tidak ada lagi hasil edit manual tersisa.
+  CoA/Disconnect sudah diuji nyata (bukan cuma level jaringan lagi) — hasilnya
+  mengonfirmasi known limitation v0.6.4 (CoA belum sadar multi-node,
+  backlog terpisah), bukan lagi status "tertunda".
+
+**Catatan operasional wajib untuk onboarding NAS Mikrotik berikutnya** (bukan
+cuma histori debugging — ini langkah nyata yang perlu dicek setiap kali NAS
+baru tidak mau autentikasi): jangan asumsikan semua RouterOS mengirim
+Message-Authenticator di Access-Request PPP CHAP/MSCHAP. Kalau NAS baru
+menunjukkan gejala "retry terus-menerus, `/radius/monitor` mencatat timeout,
+tapi `radiusd -X` TIDAK PERNAH mencatat 'Received Access-Request' sama
+sekali" — itu bukan masalah performa atau jaringan, cek dulu byte mentah
+paketnya (`tcpdump`) untuk keberadaan atribut ini sebelum menelusuri arah
+lain. Fix-nya sudah jadi pola siap pakai di `FreeradiusVirtualServerService`
+(override per-client, bukan global) — tinggal diterapkan kalau NAS lain
+menunjukkan gejala yang sama.
 
 **Yang TIDAK pernah masuk scope v0.6.0** (bukan lupa — sengaja di luar,
 sesuai kickoff v0.6.1): stok/inventaris RADIUS, integrasi billing otomatis

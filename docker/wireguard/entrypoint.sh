@@ -70,6 +70,18 @@ iptables -P FORWARD DROP
 iptables -A FORWARD -i wg0 -d "$FREERADIUS_INTERNAL_IP" -j ACCEPT
 iptables -A FORWARD -o wg0 -d "$WG_SUBNET_CIDR" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
+# v0.6.5 CoA/Disconnect — same narrow, deliberate reverse exception as
+# openvpn/entrypoint.sh (see its own comment for the full rationale):
+# NEW connections sourced from FreeRADIUS's own static IP, out through
+# wg0, reaching a NAS's internal_ip. NOTE (known limitation, not a bug):
+# only the SIBLING node a given NAS currently has an actual live handshake
+# with can successfully deliver — this container has no way to send data
+# to a peer it has never itself handshaked with (WireGuard, unlike
+# OpenVPN, needs a learned endpoint per peer). CoaService therefore only
+# reliably reaches a NAS that hasn't (recently) auto-switched away from
+# its originally-provisioned node — see CoaService's own docblock.
+iptables -A FORWARD -i eth0 -o wg0 -s "$FREERADIUS_INTERNAL_IP" -j ACCEPT
+
 iptables -t nat -F POSTROUTING
 iptables -t nat -A POSTROUTING -s "$WG_SUBNET_CIDR" -d "$FREERADIUS_INTERNAL_IP" -j MASQUERADE
 

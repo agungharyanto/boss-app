@@ -97,9 +97,15 @@
                 </div>
             </div>
 
+            @php($ports = $this->currentPorts())
             <div class="p-3 rounded-md bg-gray-50 text-xs text-gray-500">
-                Authentication Port / Accounting Port: <span class="font-mono">1812 / 1813</span>
-                (default FreeRADIUS untuk semua NAS saat ini — port unik per-NAS baru aktif setelah v0.6.5).
+                @if ($ports['auth_port'] !== null)
+                    Authentication Port / Accounting Port / CoA Port:
+                    <span class="font-mono">{{ $ports['auth_port'] }} / {{ $ports['acct_port'] }} / {{ $ports['coa_port'] }}</span>
+                    (auth/acct teralokasi otomatis dan unik untuk NAS ini; CoA port bisa diedit manual, default 3799).
+                @else
+                    Auth/Accounting Port akan teralokasi otomatis begitu NAS ini disimpan.
+                @endif
             </div>
 
             <div class="flex items-center gap-3 pt-2">

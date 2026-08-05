@@ -16,7 +16,7 @@
 | v0.6.2  | Network         | VPN Server Node #1 (OpenVPN)  | Hub-and-spoke: VPN node sebagai concentrator/relay, FreeRADIUS diakses di satu IP internal tetap dari sisi Mikrotik                          | Selesai |
 | v0.6.3  | Network         | Multi-Protokol VPN & Script Generator | WireGuard, L2TP/IPsec (SSTP di-skip; L2TP/IPsec sendiri berstatus known limitation, lihat catatan di bawah), Script Generator (VPN + RADIUS script siap-paste ke terminal Mikrotik) | Selesai |
 | v0.6.4  | Network         | VPN Pool & Failover           | Pool 3 node nyata x 2 protokol (OpenVPN + WireGuard, L2TP tetap 1 node — known limitation), load-distribution, health-check terjadwal, auto-switch failover Mikrotik — diverifikasi end-to-end nyata (matikan node, konfirmasi pindah otomatis) | Selesai |
-| v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator + CoA/disconnect (port 3799) untuk isolir instan                     | Aktif |
+| v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS (isolasi per-port, bukan IP) + port allocator (auth/acct unik, coa_port sengaja tidak) + CoA/Disconnect — diverifikasi nyata sampai transit paket end-to-end, eksekusi disconnect oleh router masih tertunda (lihat catatan) | Selesai |
 | v0.7.0  | Network         | GenieACS                      | Binding ONT, SSID/password, RX power, reboot, provisioning                                    | Backlog |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
@@ -124,6 +124,57 @@ multi-node/failover ini belum pernah diverifikasi manual oleh Agung lewat
 browser** — verifikasi sejauh ini seluruhnya lewat Claude Code
 (`RouterOsApiGateway` + API langsung). Agung akan menyiapkan router
 Mikrotik terpisah khusus untuk testing UI menyeluruh nanti.
+
+**v0.6.5 (Dynamic Virtual Server & CoA) selesai — penutup cluster v0.6.0.**
+Virtual server FreeRADIUS per-NAS, port allocator, dan Script Generator RADIUS
+tab semuanya diverifikasi nyata penuh (Access-Accept sungguhan lewat port
+dinamis NAS, di router produksi `test-x86-bajastu`). **Catatan verifikasi
+tertunda untuk CoA/Disconnect (bukan bug)**: paket Disconnect-Request
+terbukti transit end-to-end secara nyata (`tcpdump`, routing, firewall
+exception, eksekusi radclient dari container yang benar — semua terverifikasi)
+— TAPI apakah router benar-benar mengeksekusi disconnect-nya belum
+dikonfirmasi, karena `test-x86-bajastu` ternyata router produksi nyata dengan
+427 sesi pelanggan aktif, bukan lab, dan Agung memilih tidak memutus sesi
+pelanggan asli hanya untuk uji coba. Detail lengkap (5 bug infrastruktur
+nyata, bug `!dude`, bug `NasIndex::testConnection()` yang kemungkinan besar
+akar dari insiden "password 154415") ada di CHANGELOG.md "v0.6.5" dan
+CLAUDE.md.
+
+## Ringkasan penutup cluster v0.6.0 — FreeRADIUS Integration (v0.6.1-v0.6.5)
+
+Seluruh cluster Network "FreeRADIUS Integration" (dipecah jadi 5 sub-versi
+saat v0.6.1 dimulai — lihat amendment di atas) sekarang **selesai**. Status
+akhir per komponen:
+
+- **FreeRADIUS core + NAS inventory** (v0.6.1): selesai, terverifikasi.
+- **OpenVPN hub-and-spoke, 1 node** (v0.6.2): selesai, terverifikasi
+  (provisioning + isolasi 3-lapis terbukti nyata).
+- **WireGuard + L2TP/IPsec + Script Generator** (v0.6.3): OpenVPN & WireGuard
+  selesai & terverifikasi penuh di produksi. **L2TP/IPsec — known limitation
+  yang MASIH TERBUKA**: IKE/IPsec SA berhasil established, tapi trafik L2TP
+  tidak pernah benar-benar terenkripsi ESP (root cause di luar kendali sisi
+  server, kemungkinan perilaku internal `l2tp-client use-ipsec=yes`
+  RouterOS). Backlog untuk sprint Network mendatang kalau ada temuan baru
+  atau dukungan resmi MikroTik.
+- **Multi-node pool & auto-switch failover** (v0.6.4): selesai & terverifikasi
+  nyata lewat API (matikan node, konfirmasi pindah otomatis). Verifikasi UI
+  Livewire untuk skenario ini masih tertunda (item terpisah, bukan blocker).
+- **Dynamic virtual server & CoA** (v0.6.5): selesai & terverifikasi nyata
+  untuk auth/acct dinamis. CoA/Disconnect terverifikasi sampai level jaringan
+  (paket transit end-to-end); eksekusi nyata oleh router masih tertunda
+  (lihat catatan v0.6.5 di atas) — bukan diblokir, tapi juga belum bisa
+  diklaim 100% bekerja di produksi sampai ada sesi PPP nyata atau NAS test
+  khusus untuk mengonfirmasi.
+
+**Yang TIDAK pernah masuk scope v0.6.0** (bukan lupa — sengaja di luar,
+sesuai kickoff v0.6.1): stok/inventaris RADIUS, integrasi billing otomatis
+dengan status RADIUS (isolir otomatis saat invoice overdue lewat CoA — CoA-
+nya sudah ada endpoint-nya di v0.6.5, tapi trigger otomatis dari billing
+belum dibangun, itu scope terpisah), dashboard monitoring RADIUS real-time
+(itu domain LibreNMS, v0.8.0), dan multi-tenant SaaS penuh untuk beberapa ISP
+berbagi satu `freeradius`/VPN node (posisi operasional saat ini: satu
+deployment BOSS App = satu ISP, sama seperti `payment_gateway_settings`/
+`whatsapp_gateway` "direct" session — didokumentasikan di CLAUDE.md).
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

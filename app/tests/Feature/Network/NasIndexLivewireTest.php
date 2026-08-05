@@ -250,6 +250,88 @@ class NasIndexLivewireTest extends TestCase
         $this->assertSame(NasStatus::Offline, $nas->fresh()->status);
     }
 
+    public function test_test_connection_with_a_freshly_typed_password_that_works_persists_it(): void
+    {
+        // Regression test for a real bug found 2026-08-04: testing with a
+        // password DIFFERENT from what's stored (e.g. re-entering the
+        // NAS's actual current password after it drifted out of sync) used
+        // to show "success"/"online" without ever correcting the stored
+        // nas.api_password — the very next real connection attempt using
+        // the stale stored value would then fail again, looking like the
+        // NAS randomly went offline with nothing changed.
+        $this->bindGateway(online: true);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create([
+            'tenant_id' => $tenant->id,
+            'api_username' => 'stale-user',
+            'api_password' => 'stale-password',
+            'status' => NasStatus::Offline,
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NasIndex::class)
+            ->call('edit', $nas->id)
+            ->set('mikrotikIp', '192.168.88.1')
+            ->set('apiUsername', 'the-real-user')
+            ->set('apiPassword', 'the-real-password')
+            ->call('testConnection')
+            ->assertSet('testConnectionResult.status', 'success');
+
+        $fresh = $nas->fresh();
+        $this->assertSame(NasStatus::Online, $fresh->status);
+        $this->assertSame('the-real-user', $fresh->api_username);
+        $this->assertSame('the-real-password', $fresh->api_password);
+    }
+
+    public function test_test_connection_with_a_blank_password_field_never_touches_the_stored_credential(): void
+    {
+        $this->bindGateway(online: true);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create([
+            'tenant_id' => $tenant->id,
+            'api_username' => 'existing-user',
+            'api_password' => 'existing-password',
+            'status' => NasStatus::Unknown,
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NasIndex::class)
+            ->call('edit', $nas->id)
+            ->set('mikrotikIp', '192.168.88.1')
+            ->set('apiPassword', '')
+            ->call('testConnection')
+            ->assertSet('testConnectionResult.status', 'success');
+
+        $fresh = $nas->fresh();
+        $this->assertSame(NasStatus::Online, $fresh->status);
+        $this->assertSame('existing-password', $fresh->api_password);
+    }
+
+    public function test_test_connection_with_a_freshly_typed_wrong_password_does_not_persist_it(): void
+    {
+        $this->bindGateway(online: false, message: 'RouterOS: bad credentials');
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create([
+            'tenant_id' => $tenant->id,
+            'api_username' => 'existing-user',
+            'api_password' => 'existing-password',
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NasIndex::class)
+            ->call('edit', $nas->id)
+            ->set('mikrotikIp', '192.168.88.1')
+            ->set('apiPassword', 'a-wrong-guess')
+            ->call('testConnection')
+            ->assertSet('testConnectionResult.status', 'failed');
+
+        $fresh = $nas->fresh();
+        $this->assertSame(NasStatus::Offline, $fresh->status);
+        // A FAILED test never overwrites the stored credential — only a
+        // proven-working one does.
+        $this->assertSame('existing-password', $fresh->api_password);
+    }
+
     public function test_test_connection_on_a_new_unsaved_nas_does_not_persist_anything(): void
     {
         $this->bindGateway(online: true);

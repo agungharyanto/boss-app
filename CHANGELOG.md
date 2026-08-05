@@ -115,6 +115,40 @@ Sub-sprint terakhir cluster v0.6.0 (FreeRADIUS Integration).
   `nas.api_username`/`api_password` di database ter-update, dan
   `testConnection()` berhasil pakai kredensial barunya.
 
+### Amendment — perbaikan black-hole Accounting-Request (masih v0.6.5, sebelum tag)
+
+- **Insiden nyata ditemukan saat uji produksi terhadap `test-x86-bajastu`**:
+  entri `/radius` boss-app sempat menunjukkan timeout rate ~61% saat
+  diuji, sempat terlihat seperti masalah performa FreeRADIUS serius.
+  Investigasi bertahap membuktikan jalur auth-nya sendiri SEHAT (test
+  langsung dari IP sumber yang benar dapat Access-Accept instan,
+  100/100 sukses di benchmark volume besar) — akar masalah sebenarnya
+  adalah `accounting-port` entri itu sengaja diarahkan ke port 1 (tidak
+  ada yang dengar) di percobaan sebelumnya, supaya data accounting
+  pelanggan asli berhenti terkumpul. Efek sampingnya: SETIAP paket
+  Accounting-Request dari SEMUA sesi aktif router (bukan cuma akun uji)
+  selalu timeout 100%, mencemari counter `/radius/monitor` dan bikin
+  router retry percuma terus-menerus.
+- **Perbaikan sesungguhnya, bukan menghidupkan lagi black hole-nya**:
+  `docker/freeradius/entrypoint.sh` sekarang juga mem-patch blok
+  `accounting {}` bersama di `sites-enabled/default` (idempoten, pola
+  sama seperti patch `$INCLUDE` yang sudah ada) — mematikan `detail`
+  (log mentah ke file) dan `-sql` (tulis ke `radacct`). FreeRADIUS tetap
+  mendengar di accounting-port asli dan tetap membalas
+  Accounting-Response yang valid & cepat, cuma tidak lagi menyimpan
+  apa pun yang bisa diidentifikasi ke pelanggan — sejalan dengan sikap
+  "jangan kumpulkan data yang tidak perlu" yang sudah diterapkan
+  sebelumnya di sprint ini. **Diverifikasi nyata**: kirim
+  Accounting-Request langsung ke port asli → dapat Accounting-Response
+  sungguhan, baris `radacct` tetap 0 sebelum dan sesudah.
+  `accounting-port` di entri router juga dikembalikan ke port asli
+  (20001) — dilakukan saat entri masih `disabled=true`, jadi tidak ada
+  efek langsung ke trafik nyata.
+- Entri `/radius` boss-app tetap `disabled=true` (posisi nonaktif) —
+  mengembalikannya ke posisi pertama tetap keputusan terpisah yang
+  perlu konfirmasi eksplisit lebih dulu, bukan langkah otomatis setelah
+  perbaikan ini.
+
 ## v0.6.4 — Multi-Node VPN Pool & Auto-Switch Failover
 
 - **Keputusan arsitektur dikonfirmasi bersama Agung sebelum implementasi**:

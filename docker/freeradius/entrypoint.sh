@@ -51,6 +51,34 @@ if ! grep -q "$CLIENTS_DIR" /etc/raddb/clients.conf 2>/dev/null; then
     echo "\$INCLUDE $CLIENTS_DIR/" >> /etc/raddb/clients.conf
 fi
 
+# Real production incident (found debugging test-x-bajastu, v0.6.5
+# amendment): a NAS's Accounting-Request traffic was previously stopped by
+# pointing the ROUTER's own /radius accounting-port at a dead port (1) —
+# this "worked" in the sense that we never collected the data, but every
+# single accounting packet then genuinely timed out (no listener at all),
+# which polluted /radius/monitor's counters with a 100% failure rate that
+# briefly looked like a FreeRADIUS performance problem, and made the NAS
+# retransmit forever for nothing. The correct fix is the other end of this:
+# FreeRADIUS DOES listen on the real accounting port (see the per-NAS
+# listen{} config above) and DOES answer every Accounting-Request with a
+# real Accounting-Response — it just never persists what's in it. `detail`
+# (raw packet dump to a logfile) and `-sql` (write to radacct) are both
+# disabled below, so nothing customer-identifiable is written to disk or
+# the database — same "don't collect data we don't need" posture already
+# applied to radacct/detail files earlier this session. `exec` and
+# `attr_filter.accounting_response` are left untouched (harmless — no
+# Exec-Program configured, and attribute filtering doesn't persist
+# anything). This patches the ONE shared `accounting {}` section in
+# sites-enabled/default, so it applies to every NAS's accounting listener,
+# not just this one — deliberate, since none of them should be logging raw
+# customer accounting data without a real reason to.
+if ! grep -q "boss-app: accounting logging disabled" /etc/raddb/sites-enabled/default 2>/dev/null; then
+    sed -i '/^accounting {/,/^}/{
+        s/^\tdetail$/#\tdetail\t# boss-app: accounting logging disabled (privacy - no raw packet log)/
+        s/^\t-sql$/#\t-sql\t# boss-app: accounting logging disabled (privacy - do not persist radacct)/
+    }' /etc/raddb/sites-enabled/default
+fi
+
 # v0.6.5 CoA/Disconnect — this container has no route to either VPN node's
 # tunnel subnet by default (boss-network only knows about 172.28.0.0/24;
 # 172.23.194.0/24 and 172.23.195.0/24 live inside openvpn's/wireguard's own

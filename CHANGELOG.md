@@ -149,6 +149,79 @@ Sub-sprint terakhir cluster v0.6.0 (FreeRADIUS Integration).
   perlu konfirmasi eksplisit lebih dulu, bukan langkah otomatis setelah
   perbaikan ini.
 
+### Amendment — akar masalah sesungguhnya: `require_message_authenticator` (masih v0.6.5, sebelum tag)
+
+- **Bug paling dalam dari seluruh rangkaian investigasi produksi terhadap
+  `test-x86-bajastu`, ditemukan lewat pendekatan sistematis bertingkat
+  (Level 1-6) mulai dari nol**: setelah black-hole accounting (amendment
+  di atas) diperbaiki, entri boss-app diaktifkan lagi untuk diuji —
+  tapi `radiusd -X` tetap menunjukkan **nol** `Received Access-Request`
+  untuk percobaan `085166445368`, padahal log router terus mencatat
+  retry setiap ~90 detik. Dilacak dengan `tcpdump` di 3 titik (masuk
+  tunnel WireGuard, keluar node VPN, masuk interface `freeradius`
+  sendiri) — paket Access-Request ASLI dari router terbukti **sampai
+  utuh** ke `freeradius` (MAC tujuan cocok, checksum UDP valid, dibedah
+  hex byte-per-byte: RADIUS Code=1 sah, atribut MS-CHAP2-Response ada),
+  statistik kernel (`/proc/net/udp`, `/proc/net/snmp`) nol drop — tapi
+  `radiusd` tidak pernah mencatatnya sama sekali, bahkan di mode debug
+  penuh.
+- **Akar masalah**: `radiusd.conf` punya default bawaan image
+  `require_message_authenticator = yes` (mitigasi BlastRADIUS) —
+  paket Access-Request TANPA atribut Message-Authenticator langsung
+  dibuang diam-diam, sebelum sempat dicatat/diproses sama sekali. Paket
+  asli dari RouterOS (dikonfirmasi dari hex dump) memang tidak pernah
+  menyertakan atribut ini, sementara `radclient` (alat uji kita)
+  otomatis selalu menambahkannya — itu sebabnya SEMUA test manual kita
+  sebelumnya (5x, 100x) selalu sukses, sementara trafik NAS asli selalu
+  didiamkan tanpa jejak log apa pun. Dari sudut pandang RouterOS ini
+  identik dengan timeout biasa (RouterOS memang cuma failover ke server
+  RADIUS berikutnya kalau timeout, bukan kalau reject eksplisit) —
+  jadi bug ini jugalah alasan sebenarnya kenapa boss-app di posisi
+  pertama selama ini tidak pernah benar-benar mengintervensi trafik
+  pelanggan (bukan karena aman, tapi karena diam total).
+- **Perbaikan**: override `require_message_authenticator = no` di
+  `FreeradiusVirtualServerService`, scoped KHUSUS ke definisi client
+  per-NAS (`clients/nas-{id}.conf`) — bukan mengubah default global di
+  `radiusd.conf`. Ini persis rekomendasi resmi dari dokumentasi
+  `radiusd.conf` sendiri untuk skenario "RADIUS client yang belum
+  update". Mode `"auto"` sengaja TIDAK dipakai — dokumentasi yang sama
+  menyebutkan eksplisit bahwa auto-detect tidak berfungsi untuk client
+  yang didefinisikan lewat network/mask (client kita `/24`, bukan IP
+  tunggal).
+- **Eksekusi dilakukan dengan urutan aman berlapis** (rollback duluan →
+  fix → verifikasi terisolasi → baru live lagi, bukan fix-langsung-live):
+  1. Entri boss-app di-disable dulu di router, PPP Active dikonfirmasi
+     stabil (438 sebelum/sesudah) — memastikan tidak ada risiko
+     tambahan sebelum fix diterapkan.
+  2. Fix diterapkan (kode + regenerasi config nyata untuk NAS produksi).
+  3. **Diverifikasi lewat cara yang sama sekali tidak menyentuh trafik
+     produksi**: skrip PHP raw-socket menyusun Access-Request PERSIS
+     meniru bentuk byte paket MikroTik asli (tanpa Message-Authenticator,
+     enkripsi PAP RFC 2865 manual) dikirim langsung ke FreeRADIUS —
+     password benar → `Access-Accept`, password salah → `Access-Reject`
+     (membuktikan logika autentikasi tetap utuh, bukan asal-terima).
+  4. Baru setelah lolos verifikasi terisolasi, entri boss-app diaktifkan
+     kembali di posisi pertama, dipantau ketat tiap 15 detik selama 5
+     menit penuh (20 titik cek) dengan auto-rollback siap terpicu kalau
+     PPP Active turun >5 dari baseline — **tidak pernah terpicu**, PPP
+     Active tetap 437-438 sepanjang window, `rejects` naik wajar (0→7,
+     bukti FreeRADIUS kini benar-benar menjawab), `timeouts` tidak
+     bertambah sama sekali.
+- **Hasil akhir, verifikasi nyata end-to-end pertama yang benar-benar
+  berhasil di seluruh investigasi ini**: `085166445368` muncul di
+  `/ppp/active/print` dengan `address=10.0.1.144` (IP asli dari pool
+  `PPPOE-REMOTE`), `uptime=5m3s`, `radius=true` — sesi PPPoE asli,
+  terautentikasi via FreeRADIUS kita, stabil tersambung, bukan lagi
+  cuma Access-Accept di level paket.
+- **Catatan untuk NAS Mikrotik lain di masa depan**: jangan asumsikan
+  RouterOS selalu mengirim Message-Authenticator di Access-Request PPP
+  CHAP/MSCHAP — versi/konfigurasi tertentu tidak menyertakannya. Kalau
+  NAS baru menunjukkan gejala serupa (retry terus-menerus, timeout di
+  `/radius/monitor`, tapi `radiusd -X` tidak pernah mencatat
+  "Received Access-Request" sama sekali), cek dulu byte mentah paketnya
+  (`tcpdump`) untuk keberadaan atribut ini sebelum menyalahkan performa
+  atau jaringan.
+
 ## v0.6.4 — Multi-Node VPN Pool & Auto-Switch Failover
 
 - **Keputusan arsitektur dikonfirmasi bersama Agung sebelum implementasi**:

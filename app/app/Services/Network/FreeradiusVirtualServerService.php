@@ -67,6 +67,29 @@ class FreeradiusVirtualServerService
                 # the real per-NAS security boundary, not this ipaddr.
                 ipaddr = 172.28.0.0/24
                 secret = "{$nas->radius_secret}"
+
+                # Real production bug found debugging test-x-bajastu (v0.6.5
+                # amendment): radiusd.conf's global `require_message_authenticator
+                # = yes` (BlastRADIUS mitigation, on by default in this stock
+                # image) silently DISCARDS any Access-Request lacking a
+                # Message-Authenticator attribute — no log line at all, not
+                # even a reject, confirmed via tcpdump showing the real packet
+                # arriving intact at this container's own interface while
+                # radiusd's own debug log never once recorded receiving it.
+                # RouterOS's real PPP CHAP/MSCHAP Access-Requests do not
+                # include Message-Authenticator (verified byte-for-byte via a
+                # captured packet's hex dump), so EVERY real NAS auth attempt
+                # was being silently dropped, indistinguishable from a normal
+                # timeout — which is exactly why RouterOS never observed an
+                # explicit reject and kept retrying instead of failing over.
+                # Overriding it to "no" HERE (scoped to this one client, not
+                # radiusd.conf's global default) is radiusd.conf's own
+                # documented recommendation for exactly this situation — a
+                # RADIUS client that hasn't been updated to send
+                # Message-Authenticator. "auto" is NOT an option: radiusd.conf
+                # explicitly states auto-detection has no effect for a client
+                # defined by a network/mask (ours is a /24, not a single IP).
+                require_message_authenticator = no
             }
         }
         CONF);

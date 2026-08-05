@@ -1320,6 +1320,50 @@ evidence now points to the auth path being fully healthy, with the timeout rate 
 the accounting-port=1 self-inflicted black hole (plus this session's own repeated manual `radclient`/tinker
 testing traffic, which shares the same cumulative `/radius/monitor` counters).
 
+**Third amendment — the real root cause, found via a from-scratch systematic Level-1-through-6 retest (still
+v0.6.5, before tag)**: with the accounting black hole fixed, boss-app was re-enabled for a clean retest —
+`radiusd -X` still showed **zero** `Received Access-Request` for `085166445368`, despite the router logging a
+retry every ~90s. `tcpdump` at three points (WireGuard tunnel ingress, VPN node egress, `freeradius`'s own
+interface) proved the real Access-Request genuinely arrived intact (matching destination MAC, valid UDP
+checksum, RADIUS Code=1 confirmed byte-for-byte via hex dump) with zero kernel-level drops (`/proc/net/udp`,
+`/proc/net/snmp`) — yet `radiusd` never logged receiving it, even in full debug mode. Root cause:
+`radiusd.conf`'s stock default `require_message_authenticator = yes` (a BlastRADIUS mitigation) **silently
+discards** any Access-Request lacking a Message-Authenticator attribute, before any request-level logging
+happens at all. RouterOS's real PPP CHAP/MSCHAP Access-Requests do not include this attribute (confirmed from
+the captured packet's own hex dump) — `radclient` (our test tool) always adds it automatically, which is why
+every synthetic test this whole investigation succeeded while every real NAS attempt was silently dropped,
+indistinguishable from an ordinary timeout to RouterOS (which only fails over to the next `/radius` entry on
+timeout, never on an explicit reject) — this is also the real reason boss-app being first in order never
+actually intervened in real customer traffic before now.
+
+**Fixed per `radiusd.conf`'s own documented recommendation for this exact scenario**:
+`require_message_authenticator = no` added inside `FreeradiusVirtualServerService`'s generated
+`clients/nas-{id}.conf`, scoped to that one client block — never the global default. `"auto"` mode is
+explicitly not an option here: the same documentation states auto-detection has no effect for a client
+defined by a network/mask (this client is a `/24`, not a single IP).
+
+**Executed with a deliberately layered-safe rollout, not fix-then-immediately-live**: boss-app disabled
+first (PPP Active confirmed stable, 438 before/after) → fix applied → verified via a method that never
+touched production traffic at all (a raw-socket PHP script constructing an Access-Request byte-for-byte
+matching the real MikroTik packet shape — no Message-Authenticator, manual RFC 2865 PAP encryption — sent
+directly to FreeRADIUS: correct password → real `Access-Accept`, wrong password → real `Access-Reject`,
+proving the fix restores full auth logic, not a blanket bypass) → only then re-enabled at first position
+again, monitored every 15s for a full 5 minutes (20 checks) with an armed auto-rollback (>5 drop from
+baseline → immediate disable). Never triggered — PPP Active held at 437-438 the entire window,
+`/radius/monitor`'s `rejects` climbed as expected (0→7, proof FreeRADIUS is now genuinely answering) while
+`timeouts` never grew again.
+
+**Verified for real, the first genuinely successful end-to-end result of this entire investigation**:
+`085166445368` appeared in `/ppp/active/print` with `address=10.0.1.144` (a real IP from the `PPPOE-REMOTE`
+pool), `uptime=5m3s`, `radius=true` — a real, stable PPPoE session authenticated through this FreeRADIUS
+instance, not just a packet-level Access-Accept.
+
+**Note for any future MikroTik NAS**: don't assume RouterOS always sends Message-Authenticator on PPP
+CHAP/MSCHAP Access-Requests — some versions/configs don't. If a new NAS shows the same symptom (NAS keeps
+retrying, `/radius/monitor` shows timeouts, but `radiusd -X` never once logs "Received Access-Request" for
+it), check the raw packet bytes (`tcpdump`) for this attribute before assuming a performance or network
+problem.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

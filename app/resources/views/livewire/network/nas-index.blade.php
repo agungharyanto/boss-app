@@ -128,6 +128,52 @@
         </div>
     @endif
 
+    {{-- PROVISION USER API MODAL (v0.6.5) — deliberately its own isolated
+         form, never sharing fields with the NAS edit form above. Username/
+         password here are the router owner's REAL admin login, used once
+         and never persisted — see NasApiUserProvisioningService's docblock
+         for why this used to be conflated with nas.api_username/
+         api_password and caused a real credential-rotation bug. --}}
+    @if ($showProvisionApiModal)
+        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeProvisionApiModal">
+            <div class="bg-white rounded-md p-6 w-full max-w-md space-y-4">
+                <h2 class="font-medium">Buat / Perbarui User API</h2>
+                <p class="text-xs text-gray-500">
+                    Masukkan username &amp; password ADMIN ASLI router ini (bukan user API BOSS App).
+                    Dipakai sekali untuk membuat/memperbarui user API khusus BOSS App dengan hak akses
+                    terbatas — kredensial admin ini TIDAK PERNAH disimpan.
+                </p>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">Username Admin</label>
+                    <input type="text" wire:model="provisionAdminUsername" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                    @error('provisionAdminUsername') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">Password Admin</label>
+                    <input type="password" wire:model="provisionAdminPassword" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                    @error('provisionAdminPassword') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+                </div>
+
+                @if ($provisionApiResult)
+                    <div class="text-sm {{ $provisionApiResult['status'] === 'success' ? 'text-green-600' : 'text-red-600' }}">
+                        {{ $provisionApiResult['message'] }}
+                    </div>
+                @endif
+
+                <div class="flex items-center gap-3 pt-2">
+                    <button wire:click="provisionApiUser" wire:loading.attr="disabled" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">
+                        Provision
+                    </button>
+                    <button wire:click="closeProvisionApiModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
+                        Tutup
+                    </button>
+                </div>
+            </div>
+        </div>
+    @endif
+
     {{-- LIST --}}
     <div class="border border-gray-200 rounded-md overflow-x-auto">
         <table class="w-full text-sm">
@@ -161,6 +207,7 @@
                         </td>
                         <td class="px-4 py-2 text-right space-x-2">
                             <button wire:click="edit({{ $nas->id }})" class="text-primary hover:underline">Edit</button>
+                            <button wire:click="openProvisionApiModal({{ $nas->id }})" class="text-primary hover:underline">User API</button>
                             <button wire:click="delete({{ $nas->id }})" wire:confirm="Hapus NAS ini?" class="text-red-500 hover:underline">Hapus</button>
                         </td>
                     </tr>

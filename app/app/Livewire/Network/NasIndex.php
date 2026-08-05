@@ -4,9 +4,11 @@ namespace App\Livewire\Network;
 
 use App\Enums\NasStatus;
 use App\Enums\VpnAccountStatus;
+use App\Exceptions\NasApiUserProvisioningException;
 use App\Models\Nas;
 use App\Models\Reseller;
 use App\Services\Network\Contracts\RouterOsGateway;
+use App\Services\Network\NasApiUserProvisioningService;
 use App\Services\Network\NasService;
 use App\Support\ResellerContext;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
@@ -49,6 +51,23 @@ class NasIndex extends Component
 
     /** @var array{status: string, message: string}|null */
     public ?array $testConnectionResult = null;
+
+    // v0.6.5 — "Provision User API" modal state, deliberately kept
+    // completely separate from apiUsername/apiPassword above (the exact
+    // mixup that caused a real credential-rotation bug this whole flow
+    // replaces — see NasApiUserProvisioningService's docblock).
+    // provisionAdminUsername/provisionAdminPassword are NEVER part of
+    // save()'s $data and never bound to any Nas attribute directly.
+    public bool $showProvisionApiModal = false;
+
+    public ?int $provisioningNasId = null;
+
+    public string $provisionAdminUsername = '';
+
+    public string $provisionAdminPassword = '';
+
+    /** @var array{status: string, message: string}|null */
+    public ?array $provisionApiResult = null;
 
     public function mount(): void
     {
@@ -134,6 +153,60 @@ class NasIndex extends Component
         $nas = Nas::findOrFail($this->editingNasId);
 
         return ['auth_port' => $nas->auth_port, 'acct_port' => $nas->acct_port, 'coa_port' => $nas->coa_port];
+    }
+
+    /**
+     * v0.6.5 — only meaningful for an already-saved NAS (needs a real
+     * mikrotik_ip to connect to). Opens a modal with its OWN two fields,
+     * never pre-filled from anything already stored — the whole point is
+     * this credential is the router owner's real admin login, typed fresh
+     * every time, never persisted.
+     */
+    public function openProvisionApiModal(int $nasId): void
+    {
+        $nas = Nas::findOrFail($nasId);
+        $this->authorize('manage', $nas);
+
+        $this->provisioningNasId = $nasId;
+        $this->provisionAdminUsername = '';
+        $this->provisionAdminPassword = '';
+        $this->provisionApiResult = null;
+        $this->showProvisionApiModal = true;
+    }
+
+    public function closeProvisionApiModal(): void
+    {
+        $this->provisioningNasId = null;
+        $this->provisionAdminUsername = '';
+        $this->provisionAdminPassword = '';
+        $this->provisionApiResult = null;
+        $this->showProvisionApiModal = false;
+    }
+
+    public function provisionApiUser(NasApiUserProvisioningService $service): void
+    {
+        $this->provisionApiResult = null;
+
+        $this->validate([
+            'provisionAdminUsername' => ['required', 'string', 'max:255'],
+            'provisionAdminPassword' => ['required', 'string', 'max:255'],
+        ]);
+
+        $nas = Nas::findOrFail($this->provisioningNasId);
+        $this->authorize('manage', $nas);
+
+        try {
+            $service->provisionWithAdminCredential($nas, $this->provisionAdminUsername, $this->provisionAdminPassword);
+            $this->provisionApiResult = ['status' => 'success', 'message' => 'User API berhasil dibuat/diperbarui di router.'];
+        } catch (NasApiUserProvisioningException $e) {
+            $this->provisionApiResult = ['status' => 'failed', 'message' => $e->getMessage()];
+        } finally {
+            // The admin credential is never kept in component state one
+            // moment longer than the single request that used it —
+            // success or failure.
+            $this->provisionAdminUsername = '';
+            $this->provisionAdminPassword = '';
+        }
     }
 
     public function save(NasService $service): void

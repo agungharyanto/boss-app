@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CoaDisconnectRequest;
+use App\Http\Requests\ProvisionNasApiUserRequest;
 use App\Http\Requests\StoreNasRequest;
 use App\Http\Requests\UpdateNasRequest;
 use App\Http\Resources\NasResource;
 use App\Models\Nas;
 use App\Services\Network\CoaService;
+use App\Services\Network\NasApiUserProvisioningService;
 use App\Services\Network\NasService;
 use App\Support\ResellerContext;
 use Illuminate\Http\JsonResponse;
@@ -98,5 +100,25 @@ class NasController extends Controller
         $result = $service->disconnect($nas, $request->validated('username'));
 
         return $this->success($result, $result['ok'] ? 'Sesi berhasil diputus' : 'NAS menolak permintaan disconnect');
+    }
+
+    /**
+     * v0.6.5 — one-time (per call) action: connects with the router's real
+     * admin credential (never persisted, see ProvisionNasApiUserRequest's
+     * own docblock) to create/replace a dedicated, restricted-policy API
+     * user, then updates nas.api_username/api_password to that new
+     * credential. Replaces the old behavior where generating the RADIUS
+     * script silently rotated these on every call — see
+     * NasApiUserProvisioningService's docblock for the full story.
+     */
+    public function provisionApiUser(ProvisionNasApiUserRequest $request, Nas $nas, NasApiUserProvisioningService $service): JsonResponse
+    {
+        $nas = $service->provisionWithAdminCredential(
+            $nas,
+            $request->validated('admin_username'),
+            $request->validated('admin_password'),
+        );
+
+        return $this->success(new NasResource($nas), 'User API berhasil dibuat/diperbarui');
     }
 }

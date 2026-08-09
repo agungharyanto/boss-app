@@ -3,6 +3,73 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.7.1 — GenieACS Core (pembuka cluster v0.7.0)
+
+Sub-sprint pertama cluster v0.7.0 (GenieACS/TR-069 CPE Management), dipecah
+jadi v0.7.1-v0.7.4 sama pola dengan v0.6.0 → v0.6.1-v0.6.5 (lihat
+`docs/ROADMAP.md`). BOSS-002 relaxed untuk cluster ini.
+
+- **Deploy stack GenieACS + MongoDB**: 4 container baru
+  (`genieacs-cwmp`/`genieacs-nbi`/`genieacs-fs`/`genieacs-ui`, di-build dari
+  `docker/genieacs/Dockerfile` — npm install, tidak ada image resmi, sama
+  alasan seperti freeradius/openvpn/wireguard/l2tp) + `mongo:8.0` sebagai
+  datastore terpisah (BOSS-009: tidak pernah `boss_db`/`radius_db`).
+  `genieacs-nbi` **tidak punya host port sama sekali** — hanya reachable
+  container-to-container lewat `boss-network`, karena NBI tidak punya
+  autentikasi bawaan sendiri (isolasi jaringan adalah lapisan keamanan
+  utamanya). `genieacs-cwmp` (port 7547, tempat ONT/CPE pelanggan connect)
+  justru harus publik — difronting `boss-nginx` (reverse proxy HTTP) alih-
+  alih expose port TR-069 mentah langsung, per keputusan yang dikunci saat
+  planning.
+- **Bentuk respons NBI diverifikasi nyata, bukan diasumsikan dari
+  dokumentasi resmi** (yang tidak memberi contoh JSON lengkap) — SOAP
+  Inform mentah dikirim langsung ke `genieacs-cwmp` yang hidup, hasilnya
+  dibedah: `_id` formatnya persis `OUI-ProductClass-SerialNumber`, tiap
+  parameter TR-069 muncul sebagai object bersarang dengan field `_value`,
+  dan `_deviceId` (Manufacturer/OUI/ProductClass/SerialNumber langsung dari
+  struct DeviceId milik RPC Inform) ternyata tersedia independen dari root
+  TR-098/TR-181 apa pun yang dipakai device. `genieacs-sim` (simulator
+  resmi project GenieACS) dicoba dulu sesuai arahan, tapi paketnya (v0.9.0
+  di npm) menyasar Node 6.x — dependensi native `libxmljs` gagal build di
+  toolchain modern. Diganti SOAP Inform manual, cukup untuk kebutuhan
+  verifikasi sprint ini.
+- **Penyimpangan dari spec awal**: rencana awal menyebut MAC address
+  "biasanya paling reliable" untuk mencocokkan device hasil scan teknisi ke
+  device GenieACS. Verifikasi nyata di atas membuktikan sebaliknya — MAC
+  tidak punya path parameter TR-069 yang sama di semua vendor (baru
+  dipetakan per-vendor di v0.7.2), sedangkan `_deviceId._SerialNumber`
+  selalu tersedia dari setiap Inform RPC (field wajib TR-069, bukan
+  parameter opsional). `CpeBindingService` karena itu mencocokkan lewat
+  **serial number**, bukan MAC.
+- **Auto-binding otomatis dari Installation**: hook baru di
+  `WorkOrderService::complete()` memanggil
+  `CpeBindingService::bindFromWorkOrder()` — best-effort (catch + log,
+  tidak pernah menggagalkan penyelesaian work order itu sendiri, pola sama
+  dengan `WhatsappGatewayService::buildAndQueue()`). Device yang belum
+  pernah inform ke GenieACS sama sekali saat binding **tidak gagal keras**
+  — baris `cpe_devices` tetap dibuat dengan `genieacs_device_id` null dan
+  `status = pending_first_connect`.
+- **Reconciliation job terjadwal** (`ReconcileCpeDevices`, `everyFiveMinutes()`):
+  mencocokkan ulang device `pending_first_connect` terhadap GenieACS
+  berdasarkan serial number setiap kali dijalankan, untuk kasus umum device
+  di-scan/di-bind sebelum online pertama kalinya.
+- **Fallback TR-098 → TR-181**: `GenieAcsClientService::getStandardIdentity()`
+  mencoba root `InternetGatewayDevice.DeviceInfo.*` dulu, baru
+  `Device.DeviceInfo.*` kalau kosong — root mana yang berhasil disimpan ke
+  `cpe_devices.tr069_root` supaya query parameter berikutnya (v0.7.2+)
+  tidak perlu menebak ulang.
+- **API read-only**: `GET /cpe-devices`, `GET /cpe-devices/{id}` — sengaja
+  tidak ada endpoint create/update/delete, binding selalu otomatis lewat
+  `CpeBindingService`, bukan input admin manual.
+- **UI Livewire read-only** (`/cpe-devices`, "Perangkat CPE" di sidebar
+  Network): list device reseller-scoped, kolom customer/manufacturer-model/
+  serial/status/last inform. Belum ada tombol aksi apa pun (reboot/ganti
+  SSID itu scope v0.7.3).
+- **Test**: 11 test baru (binding otomatis saat work order completed,
+  device belum pernah inform tidak gagal keras, reconciliation job,
+  isolasi reseller di API + UI, fallback TR-098/TR-181) — semuanya lulus,
+  ditambah full regression 324 test lain di repo tetap hijau.
+
 ## v0.6.5 — Dynamic Virtual Server & CoA (penutup v0.6.0)
 
 Sub-sprint terakhir cluster v0.6.0 (FreeRADIUS Integration).

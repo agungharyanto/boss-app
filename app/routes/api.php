@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\CpeDeviceController;
 use App\Http\Controllers\Api\V1\CustomerContactController;
 use App\Http\Controllers\Api\V1\CustomerController;
 use App\Http\Controllers\Api\V1\CustomerTimelineController;
@@ -139,6 +140,11 @@ Route::prefix('v1')->group(function () {
 
             Route::post('nas/{nas}/vpn-account', [VpnAccountController::class, 'provision']);
             Route::post('vpn-accounts/{vpn_account}/revoke', [VpnAccountController::class, 'revoke']);
+
+            // v0.7.1 GenieACS — read-only, no store/update/destroy (binding
+            // otomatis lewat CpeBindingService, bukan endpoint create).
+            Route::get('cpe-devices', [CpeDeviceController::class, 'index']);
+            Route::get('cpe-devices/{cpe_device}', [CpeDeviceController::class, 'show']);
         });
 
         // Admin-only tax engine catalog/reporting — no reseller.context needed.

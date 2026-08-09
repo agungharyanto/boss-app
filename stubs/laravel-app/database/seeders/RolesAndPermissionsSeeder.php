@@ -39,6 +39,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedWhatsappGatewayPermissions();
         $this->seedInstallationPermissions();
         $this->seedNetworkPermissions();
+        $this->seedGenieAcsPermissions();
     }
 
     /**
@@ -258,5 +259,20 @@ class RolesAndPermissionsSeeder extends Seeder
         }
 
         Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+    }
+
+    /**
+     * v0.7.1 GenieACS Core — read-only this sprint (binding is fully
+     * automatic from Installation, no manual create/manage action exists
+     * yet), so only a `.view` permission, no `.manage`. Reseller access to
+     * their own devices goes through CpeDevicePolicy's
+     * BelongsToResellerScope check, same as odps/nas — not a Spatie
+     * permission per reseller.
+     */
+    private function seedGenieAcsPermissions(): void
+    {
+        Permission::firstOrCreate(['name' => 'cpe_devices.view', 'guard_name' => 'web']);
+
+        Role::findByName('super_admin', 'web')->givePermissionTo('cpe_devices.view');
     }
 }

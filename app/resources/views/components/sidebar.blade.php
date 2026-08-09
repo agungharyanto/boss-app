@@ -63,13 +63,16 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\Nas::class)
                     ? ['route' => 'web.nas.index', 'label' => __('NAS')]
                     : null,
                 auth()->user()->can('viewAny', \App\Models\Nas::class)
                     ? ['route' => 'web.vpn-script-generator.index', 'label' => __('Script Generator')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\CpeDevice::class)
+                    ? ['route' => 'web.cpe-devices.index', 'label' => __('Perangkat CPE')]
                     : null,
             ]),
         ],

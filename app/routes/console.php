@@ -2,6 +2,7 @@
 
 use App\Console\Commands\GenerateDueInvoices;
 use App\Console\Commands\MarkOverdueInvoices;
+use App\Console\Commands\ReconcileCpeDevices;
 use App\Console\Commands\SendWhatsappDueReminders;
 use App\Console\Commands\SendWhatsappSuspendedReminders;
 use App\Console\Commands\VpnCheckNodeHealth;
@@ -30,3 +31,9 @@ Schedule::command(WhatsappCheckSessionHealth::class)->hourly();
 // matches boss-scheduler's own 60s polling granularity (no point checking
 // more often than the loop that actually runs schedule:run).
 Schedule::command(VpnCheckNodeHealth::class)->everyMinute();
+
+// v0.7.1 GenieACS Core — reconciles CpeDevice rows bound before their first
+// real TR-069 Inform (see CpeBindingService::reconcilePending()'s own
+// docblock). 5 minutes is plenty for "device physically powers on and dials
+// home" — this isn't a liveness/failover check needing tight polling.
+Schedule::command(ReconcileCpeDevices::class)->everyFiveMinutes();

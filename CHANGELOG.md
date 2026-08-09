@@ -55,6 +55,21 @@ langsung terhadap device live.
   sengaja dikunci ke satu tujuan FreeRADIUS saja, jaringan ZTE belum punya
   tunnel sama sekali.
 
+**Amendment pasca-tag v0.7.2 (ditemukan saat investigasi v0.7.3, dua klaim
+follow-up di atas ternyata salah)**: tunnel WireGuard `test-x86-bajastu`
+**tidak pernah mati** — klaim "tidak pernah handshake" berasal dari
+mengecek node WireGuard yang salah (`wireguard`/node-1, padahal
+`vpn_accounts` NAS ini di-assign ke `vpn-node-2`); dicek ulang di node
+yang benar, handshake aktif dengan trafik nyata. Akar masalah Connection
+Request sebenarnya ada di `AllowedIPs` WireGuard (cryptokey routing,
+dikunci ke `172.28.0.10/32` di kedua ujung), bukan tunnel mati. Juga:
+**tidak ada "jaringan ZTE" terpisah** — dicek langsung ke RouterOS API
+`test-x86-bajastu` (port API custom, bukan default 8728), device Huawei
+(`10.1.12.87`) dan ZTE (`10.1.13.229`) sama-sama lease DHCP aktif dari
+satu DHCP server yang sama (`dhcp2`, pool `10.1.0.0/20`) di router yang
+sama — satu NAS, satu subnet manajemen, bukan dua lokasi. Lihat entry
+v0.7.3 di bawah untuk implementasi perbaikan yang sebenarnya dibutuhkan.
+
 ## v0.7.1 — GenieACS Core (pembuka cluster v0.7.0)
 
 Sub-sprint pertama cluster v0.7.0 (GenieACS/TR-069 CPE Management), dipecah

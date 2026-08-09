@@ -297,16 +297,26 @@ follow-up untuk sprint mendatang**:
    data GenieACS cuma bisa jalan untuk device yang preset-nya sudah
    dipasang, bukan otomatis untuk device yang sekadar pernah connect.
 2. **Connection Request / refresh on-demand untuk v0.7.3**: diinvestigasi
-   penuh, ternyata **belum bisa jalan sama sekali** — bukan cuma kurang
-   rute. Tunnel WireGuard `test-x86-bajastu` (`vpn_accounts` status
-   `active` di DB) ternyata **tidak pernah benar-benar handshake**
-   (`latest handshake: 0`). Firewall hub-and-spoke sejak v0.6.2 sengaja
-   dikunci ke SATU rule `/32` tujuan FreeRADIUS saja (keputusan keamanan
-   terkunci, bukan celah). Jaringan ZTE (`10.1.13.x`) malah belum punya
-   NAS/tunnel tercatat sama sekali. v0.7.3 perlu keputusan arsitektur baru
-   (rute+firewall tambahan di sisi VPN server, kemungkinan routing/NAT di
-   sisi Mikrotik lewat Script Generator v0.6.3, dan tunnel baru dari nol
-   untuk lokasi ZTE) — bukan quick-fix config server.
+   penuh, ternyata **belum bisa jalan** — tapi BUKAN karena tunnel mati
+   seperti sempat disimpulkan keliru di sini. **Amendment**: klaim
+   "tunnel WireGuard `test-x86-bajastu` tidak pernah handshake" di atas
+   **salah** — itu hasil mengecek node WireGuard yang salah (`wireguard`/
+   node-1, padahal `vpn_accounts` NAS ini di-assign ke `vpn-node-2`).
+   Dicek ulang di node yang benar: handshake aktif, trafik nyata mengalir
+   (150+ KiB kedua arah). Akar masalah sebenarnya: `AllowedIPs` WireGuard
+   (kripto-routing, bukan cuma iptables) di kedua ujung tunnel dikunci ke
+   `172.28.0.10/32` (FreeRADIUS) saja — perlu di-widen, bukan diperbaiki
+   dari "mati". Firewall hub-and-spoke sejak v0.6.2 sengaja dikunci ke
+   SATU rule `/32` tujuan FreeRADIUS saja (keputusan keamanan terkunci,
+   bukan celah). **Juga dikoreksi**: tidak ada "jaringan ZTE" yang
+   terpisah — dicek langsung ke API router `test-x86-bajastu` (port API
+   custom `49198`, bukan default), device Huawei (`10.1.12.87`) DAN ZTE
+   (`10.1.13.229`) sama-sama lease DHCP aktif dari SATU DHCP server
+   (`dhcp2`, interface `vlan9-TR069`, pool `10.1.0.0/20` penuh) di router
+   yang SAMA — cuma satu NAS/lokasi, bukan dua. v0.7.3 (implementasi,
+   lihat CHANGELOG) menyelesaikan ini dengan widen `AllowedIPs` +
+   kolom `nas.tr069_management_subnet` + firewall exception baru, bukan
+   tunnel/lokasi baru.
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

@@ -1504,18 +1504,30 @@ not solved by more time on this same approach**:
    GenieACS's own data only works for devices whose relevant preset is
    already in place, not simply "any device that's ever connected."
 2. **Connection Request / on-demand refresh, needed for v0.7.3**:
-   investigated in full — genuinely not reachable yet, not just a missing
-   route. `test-x86-bajastu`'s WireGuard tunnel (`vpn_accounts` row, DB
-   status `active`) has **never actually handshaked** (`wg show ...
-   latest-handshakes` → `0`). Even a connected tunnel wouldn't help as-is:
-   the hub-and-spoke firewall locked in since v0.6.2 allows exactly ONE
-   `/32` destination (FreeRADIUS's own internal IP) and nothing else, by
-   deliberate security design — not an oversight to patch. The ZTE network
-   (`10.1.13.x`) has no NAS/tunnel record at all. v0.7.3 needs new
-   architecture decisions here (additional VPN-server-side routes +
-   firewall exceptions, likely Mikrotik-side routing/NAT via the Script
-   Generator v0.6.3, and a brand-new tunnel from scratch for the ZTE
-   location) — not a quick server-config change.
+   investigated in full — genuinely not reachable yet, but **not for the
+   reason first suspected**. **Amendment**: the claim below that
+   `test-x86-bajastu`'s WireGuard tunnel "never actually handshaked" was
+   **wrong** — caused by checking the wrong pool node (`wireguard`/node-1
+   in the `wg show` command, when this NAS's `vpn_accounts` row is actually
+   assigned to `vpn-node-2`). Checked again on the correct node: a live,
+   active handshake with real bidirectional traffic. The real blocker is
+   `AllowedIPs` — WireGuard's own cryptokey routing (enforced before
+   iptables even runs) locks both ends of the tunnel to `172.28.0.10/32`
+   (FreeRADIUS) only; nothing else can cross it regardless of iptables
+   rules. The hub-and-spoke firewall locked in since v0.6.2 also only
+   allows that same one `/32` destination, by deliberate security design —
+   not an oversight to patch, but this second layer too needs widening.
+   **Also corrected**: there is no separate "ZTE network" — a direct
+   RouterOS API check against `test-x86-bajastu` (its API listens on a
+   custom port, `49198`, not the RouterOS default 8728 — the earlier
+   "unreachable" read was from testing the wrong port) showed the Huawei
+   ONT (`10.1.12.87`) and the ZTE ONT (`10.1.13.229`) are **both active
+   DHCP leases from the exact same DHCP server** (`dhcp2`, interface
+   `vlan9-TR069`, pool `10.1.0.0/20`) on this one router — one NAS, one
+   management subnet, not two locations. v0.7.3 (implementation, see
+   CHANGELOG) resolves this by widening `AllowedIPs` on both ends to
+   include `10.1.0.0/20`, adding `nas.tr069_management_subnet`, and a new
+   firewall exception scoped to that subnet — not a new tunnel/location.
 
 ## Architecture
 

@@ -1529,6 +1529,112 @@ not solved by more time on this same approach**:
    include `10.1.0.0/20`, adding `nas.tr069_management_subnet`, and a new
    firewall exception scoped to that subnet — not a new tunnel/location.
 
+## GenieACS Connection Request Routing (v0.7.3) — implementation done, end-to-end verification PENDING
+
+**Honest status, don't upgrade this to "done" without rechecking first**: the
+network plumbing below is implemented and unit/feature-tested, and three real
+infrastructure bugs were found and fixed while building it — but the actual
+retry of a real Connection Request against real hardware, after the third
+(and most important) fix, **has not been run and confirmed successful**.
+Agung made a deliberate call to move on to v0.7.4 before that retest — this
+section is not a claim that GenieACS can actually reach a CPE behind a NAS
+yet, only that the pieces believed necessary are in place. **Before any
+v0.7.4 work depends on this**, run `nc -zv` from the `genieacs-nbi` container
+against a real CPE's TR-069 management IP (`10.1.12.87:7547` and
+`10.1.13.229:58000` for the two devices already used to investigate this),
+and retry the two long-queued `refreshObject` tasks (Huawei
+`6a7897028f1edd3ee0656c81`, ZTE `6a789984a542ad1c34df1865`) via
+`POST /devices/{id}/tasks?connection_request` against `genieacs-nbi`.
+
+**What v0.7.2's own "not yet reachable" investigation got wrong, corrected
+here (see the v0.7.2 section above for the original, now-superseded claims)**:
+the WireGuard tunnel was never down (checking the wrong pool node caused that
+false read), and there's no separate "ZTE network" (one NAS, one DHCP-served
+management subnet, both ONTs on it). The real blocker was always `AllowedIPs`
+— WireGuard's own cryptokey routing, enforced before RouterOS's firewall/
+routing tables are even consulted — locked to `172.28.0.10/32` (FreeRADIUS)
+only on both ends of the tunnel.
+
+**What this sprint built**: `nas.tr069_management_subnet` (nullable string,
+e.g. `10.1.0.0/20` for `test-x86-bajastu`), static `boss-network` IPs for
+`genieacs-cwmp`/`genieacs-nbi` (`GENIEACS_CWMP_INTERNAL_IP`/
+`GENIEACS_NBI_INTERNAL_IP`, same "must not drift on container recreation"
+reasoning as `FREERADIUS_INTERNAL_IP`), a widened WireGuard `AllowedIPs` on
+both server and router, and a new firewall exception in the shared
+`docker/wireguard/entrypoint.sh` (applies identically on whichever pool node
+a NAS's account currently lives on) scoped to `genieacs-cwmp`/`genieacs-nbi`'s
+own pinned source IPs + the NAS's `tr069_management_subnet` as destination —
+never a wider `boss-network`-to-anywhere allow.
+
+**Three real bugs found and fixed while verifying this against
+`test-x86-bajastu` for real, in the order they surfaced**:
+
+1. **A revoked-and-reissued WireGuard keypair was mistaken for a dead
+   tunnel.** "Cabut & Generate Ulang" (the only WireGuard code path that can
+   ever produce a new keypair — see the v0.6.3 section above for why plain
+   re-generation is blocked by design, the private key is never persisted)
+   was used to apply the widened `AllowedIPs`, which necessarily revokes the
+   old `vpn_accounts` row and issues a new one with a different public key.
+   Checking `wg show` on the server confirmed: the OLD key had zero matching
+   peer left (correctly revoked), the NEW key had zero handshake yet (script
+   not applied to the router at that point) — both true simultaneously, and
+   neither means "the tunnel mechanism is broken." Once the new script was
+   actually applied, the new key's handshake came up fine and stayed live
+   across repeated checks (traffic counters climbing each time, not stuck at
+   a stale byte count).
+
+2. **The first cut's reverse route was a single route to the NAS's WHOLE
+   `tr069_management_subnet` — found dead on the real router.** That subnet
+   IS the NAS's own local LAN, so RouterOS's connected route to it always
+   wins over anything pointed at the tunnel; the static route was accepted
+   with no error but never actually used for anything. Fixed by generalizing
+   `MikrotikScriptGenerator::wireGuardScript()`'s route generation from a
+   single hardcoded FreeRADIUS `/32` route into `$reverseRouteTargets`
+   (`label => ip`), one `/ip route` + one `allowed-address` entry per
+   internal service that actually *initiates* a connection toward a CPE
+   behind the NAS (FreeRADIUS was already such a service since v0.6.2;
+   GenieACS NBI/CWMP are the new ones for Connection Request) — never a
+   whole-subnet route again. `VpnScriptService::reverseRouteTargets()` only
+   adds the GenieACS entries when the NAS actually has
+   `tr069_management_subnet` set; most NAS still only get FreeRADIUS.
+
+3. **`MASQUERADE` vs `allowed-address` mismatch — found by inspecting the
+   live `wireguard-node3` container's own `wg0`/`iptables` state directly**
+   (`ip addr show wg0`, `iptables -t nat -L POSTROUTING -n -v`), not by more
+   router-side testing. `docker/wireguard/entrypoint.sh`'s
+   `TR069_MANAGEMENT_SUBNET` `MASQUERADE` rule
+   (`POSTROUTING -o wg0 -d $TR069_MANAGEMENT_SUBNET -j MASQUERADE`) rewrites
+   GenieACS's real container IP to the VPN node's OWN tunnel gateway address
+   (confirmed live: `wireguard-node3`'s `wg0` has `172.23.195.1/24` — the
+   reserved `.1`, see `App\Support\CidrRange::gatewayAddress()`, added this
+   sprint) before the packet ever reaches the router. WireGuard's cryptokey
+   routing checks a decrypted packet's SOURCE address against the peer's own
+   `allowed-address` and drops anything that doesn't match — since neither
+   FreeRADIUS's IP nor the (now-removed) whole management subnet ever
+   covered `172.23.195.1`, the forward leg of a Connection Request would be
+   silently dropped by WireGuard itself, before RouterOS's own
+   firewall/routing tables ever see it, no matter how many `/ip route` lines
+   exist. Fixed with a new `$vpnNodeTunnelIp` parameter on
+   `wireGuardScript()`, added to `allowed-address` (not to the route list —
+   the router only needs to ACCEPT packets sourced from it, never send
+   anything TO it).
+
+**This third fix is the one that has NOT been retested end-to-end** — it was
+applied to `MikrotikScriptGenerator`/`VpnScriptService` and covered by new
+unit/feature tests (all passing, full 350-test regression suite clean), but
+the actual router-side `allowed-address` change it implies has not been
+confirmed to make a real Connection Request succeed against
+`test-x86-bajastu`'s real Huawei/ZTE ONTs. Don't assume it works just because
+the code compiles and the tests pass — the tests prove the script now
+*contains* the right lines, not that RouterOS/WireGuard actually behave the
+way this section assumes once those lines are applied for real.
+
+**Out of scope this sprint, unchanged from v0.7.2's framing**: the actual
+remote-action features this routing exists to enable (reboot, SSID push)
+were never this sprint's scope — this sprint is purely the network
+prerequisite. Real GenieACS Remote Actions work should not start until the
+verification above is actually done.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

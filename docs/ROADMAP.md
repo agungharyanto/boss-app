@@ -19,7 +19,7 @@
 | v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator (diverifikasi race-safe nyata) + CoA/Disconnect + fix `require_message_authenticator` per-NAS (akar masalah sesungguhnya) — sesi PPPoE nyata pertama berhasil end-to-end lewat FreeRADIUS produksi, config router sepenuhnya hasil generate resmi BOSS App | Selesai |
 | v0.7.1  | Network         | GenieACS Core                 | Deploy GenieACS+MongoDB, auto-binding device dari Installation (work_order_devices), CpeDevice model + API + UI list read-only | Selesai |
 | v0.7.2  | Network         | GenieACS Vendor Mapping       | Mapping parameter per-vendor (`cpe_parameter_maps`), resolve RX/TX power via `refreshObject` — refresh on-demand lewat Connection Request/tunnel VPN masih diblokir, lihat catatan v0.7.3 | Selesai |
-| v0.7.3  | Network         | GenieACS Remote Actions       | Reboot/push SSID instan (Connection Request lewat tunnel VPN, kemungkinan terhubung ke Mikrotik Script Generator v0.6.3)      | Backlog |
+| v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Implementasi selesai — verifikasi akhir pending |
 | v0.7.4  | Network         | GenieACS Auto-Provisioning    | Provisioning otomatis, digerbang oleh status binding (`cpe_devices.bound_at`, disiapkan sejak v0.7.1)                          | Backlog |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
@@ -317,6 +317,60 @@ follow-up untuk sprint mendatang**:
    lihat CHANGELOG) menyelesaikan ini dengan widen `AllowedIPs` +
    kolom `nas.tr069_management_subnet` + firewall exception baru, bukan
    tunnel/lokasi baru.
+
+**v0.7.3 (GenieACS Connection Request Routing) — implementasi selesai,
+verifikasi akhir BELUM dikonfirmasi.** Ini keputusan sadar Agung untuk
+lanjut ke v0.7.4 sebelum retest terakhir dijalankan, bukan klaim bahwa
+fitur ini sudah terbukti jalan end-to-end. Dibangun: kolom
+`nas.tr069_management_subnet`, static IP boss-network untuk
+`genieacs-cwmp`/`genieacs-nbi` (`GENIEACS_CWMP_INTERNAL_IP`/
+`GENIEACS_NBI_INTERNAL_IP`), widen WireGuard `AllowedIPs` (server+router)
++ firewall exception per-NAS di `docker/wireguard/entrypoint.sh`, dan
+perbaikan `MikrotikScriptGenerator` supaya route balik dihasilkan
+per-service (FreeRADIUS + GenieACS NBI/CWMP), bukan hardcode satu
+service saja.
+
+Tiga bug nyata ditemukan+diperbaiki sepanjang sprint ini (detail teknis
+lengkap di CLAUDE.md bagian "GenieACS Core & TR-069 CWMP proxying
+gotcha"/gotcha v0.7.3 baru):
+1. **Rotasi private key WireGuard tak disadari** — tombol "Cabut &
+   Generate Ulang" menghasilkan keypair baru (bukan reuse), sempat
+   disalahpahami sebagai "tunnel putus" padahal sebenarnya key lama
+   memang sengaja diganti.
+2. **Route balik tidak lengkap/salah target** — cut pertama menambahkan
+   SATU route ke seluruh `tr069_management_subnet` NAS, ternyata mati
+   total di router nyata (connected route ke subnet lokal NAS sendiri
+   selalu menang atas static route lewat tunnel). Diganti dengan route
+   `/32` per-service (FreeRADIUS, GenieACS NBI, GenieACS CWMP) — pola
+   yang sama seperti route FreeRADIUS yang sudah terbukti jalan sejak
+   v0.6.2/v0.6.3.
+3. **MASQUERADE vs allowed-address tidak sinkron** — ditemukan lewat
+   inspeksi langsung state live container `wireguard-node3`: traffic
+   GenieACS NBI/CWMP di-MASQUERADE oleh `docker/wireguard/entrypoint.sh`
+   ke IP tunnel milik VPN node sendiri (`.1` dari `subnet_cidr`, bukan IP
+   asli container GenieACS) sebelum sampai ke router — sehingga
+   `allowed-address` peer WireGuard di router HARUS mencantumkan IP
+   tunnel node tersebut sebagai source yang diterima, kalau tidak paket
+   di-drop di layer kripto WireGuard sebelum sempat diproses RouterOS
+   sama sekali. Ini yang paling terakhir ditemukan dan diperbaiki di
+   `MikrotikScriptGenerator`/`VpnScriptService` (parameter
+   `$vpnNodeTunnelIp`, dihitung via `App\Support\CidrRange::gatewayAddress()`).
+
+**Yang BELUM dikonfirmasi**: retry TCP connectivity test + Connection
+Request end-to-end setelah fix #3 di atas diterapkan **belum pernah
+dijalankan ulang dan sukses**. Dua task `refreshObject` masih diantre di
+GenieACS, belum pernah retry pasca-fix terakhir:
+- Huawei EG8141A5 (`00259E-EG8141A5-48575443796B91A7`) — task
+  `6a7897028f1edd3ee0656c81`
+- ZTE F663NV3a (`F86CE1-F663NV3a-ZICG296C2E7B`) — task
+  `6a789984a542ad1c34df1865`
+
+**TODO wajib sebelum v0.7.4 benar-benar mengandalkan fitur ini**: jalankan
+ulang tes TCP mentah (`nc -zv` dari `genieacs-nbi` ke kedua device) dan
+retry Connection Request kedua task di atas, buktikan Connection Request
+benar-benar sampai (bukan cuma tunnel handshake hidup). Sampai itu
+dikonfirmasi, anggap fitur ini "implementasi selesai, belum terbukti
+jalan" — bukan "selesai".
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

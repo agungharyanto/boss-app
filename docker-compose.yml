@@ -559,11 +559,18 @@ services:
     container_name: genieacs-cwmp
     restart: unless-stopped
     command: genieacs-cwmp
+    # v0.7.3 — NET_ADMIN + entrypoint.sh's `ip route replace` for
+    # Connection Request routing toward a NAS's TR-069 management subnet
+    # (see docker/genieacs/entrypoint.sh).
+    cap_add:
+      - NET_ADMIN
     environment:
       GENIEACS_MONGODB_CONNECTION_URL: mongodb://${MONGO_DB_USER}:${MONGO_DB_PASSWORD}@mongo/${MONGO_DB_NAME}?authSource=admin
       GENIEACS_CWMP_INTERFACE: "0.0.0.0"
       GENIEACS_CWMP_PORT: "7547"
       TZ: Asia/Jakarta
+      TR069_MANAGEMENT_SUBNET: ${TR069_MANAGEMENT_SUBNET:-}
+      TR069_MANAGEMENT_GATEWAY: ${TR069_MANAGEMENT_GATEWAY:-}
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -572,7 +579,15 @@ services:
       mongo:
         condition: service_healthy
     networks:
-      - boss-network
+      boss-network:
+        # Static IP (v0.7.3) — the new Connection Request firewall
+        # exception in docker/wireguard/entrypoint.sh is keyed off this
+        # exact address (GENIEACS_CWMP_INTERNAL_IP in .env), same "must
+        # never silently drift on container recreation" reasoning as
+        # FREERADIUS_INTERNAL_IP above — proven to actually happen for real
+        # during the v0.7.2 timezone rollout (every container's bridge IP
+        # reshuffled when the whole stack was recreated together).
+        ipv4_address: ${GENIEACS_CWMP_INTERNAL_IP}
     # No host port here on purpose — boss-nginx is the actual public entry
     # point for CPE traffic (see its own service block + docker/nginx/
     # conf.d/genieacs-cwmp.conf), same "one public entry point" posture as
@@ -584,11 +599,16 @@ services:
     container_name: genieacs-nbi
     restart: unless-stopped
     command: genieacs-nbi
+    # v0.7.3 — same reasoning as genieacs-cwmp above.
+    cap_add:
+      - NET_ADMIN
     environment:
       GENIEACS_MONGODB_CONNECTION_URL: mongodb://${MONGO_DB_USER}:${MONGO_DB_PASSWORD}@mongo/${MONGO_DB_NAME}?authSource=admin
       GENIEACS_NBI_INTERFACE: "0.0.0.0"
       GENIEACS_NBI_PORT: "7557"
       TZ: Asia/Jakarta
+      TR069_MANAGEMENT_SUBNET: ${TR069_MANAGEMENT_SUBNET:-}
+      TR069_MANAGEMENT_GATEWAY: ${TR069_MANAGEMENT_GATEWAY:-}
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -597,7 +617,15 @@ services:
       mongo:
         condition: service_healthy
     networks:
-      - boss-network
+      boss-network:
+        # Static IP (v0.7.3) — same reasoning as genieacs-cwmp above; the
+        # Connection Request firewall exception needs both genieacs-cwmp
+        # and genieacs-nbi's source IPs pinned (GENIEACS_NBI_INTERNAL_IP in
+        # .env), since NBI is the one that actually issues the
+        # connection_request HTTP call (CpeParameterResolverService /
+        # NasController-style flows all go through genieacs-nbi, not cwmp,
+        # for outbound calls to GenieACS's own REST API).
+        ipv4_address: ${GENIEACS_NBI_INTERNAL_IP}
     # NO port mapping to the host AT ALL (unlike cwmp, not even proxied) —
     # genieacs-nbi's REST API has no authentication of its own, so network
     # isolation (container-to-container only, inside boss-network) IS its

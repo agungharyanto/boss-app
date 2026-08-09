@@ -9,6 +9,7 @@ use App\Exceptions\VpnScriptGenerationException;
 use App\Models\Nas;
 use App\Models\VpnAccount;
 use App\Models\VpnServer;
+use App\Support\CidrRange;
 use Illuminate\Support\Facades\File;
 
 /**
@@ -143,7 +144,6 @@ class VpnScriptService
             $account,
             $publicIp,
             $port,
-            $freeradiusIp,
             // trim() matters here, not just tidiness — `wg pubkey` writes a
             // trailing newline, and this value goes straight into a quoted
             // RouterOS string argument (public-key="..."); found via a real
@@ -152,8 +152,44 @@ class VpnScriptService
             // not been confirmed to tolerate.
             trim(File::get($serverPublicKeyFile)),
             $account->wireguardPrivateKey,
+            $this->reverseRouteTargets($freeradiusIp, $account->nas),
             $this->onlineNodePorts(VpnProtocol::WireGuard),
+            $account->nas->tr069_management_subnet !== null
+                ? CidrRange::gatewayAddress($account->vpnServer->subnet_cidr)
+                : null,
         );
+    }
+
+    /**
+     * FreeRADIUS is always reachable through the tunnel; GenieACS NBI/CWMP
+     * (v0.7.3) are added only for a NAS that actually has CPE behind it
+     * worth issuing a Connection Request to (`tr069_management_subnet` set)
+     * — most NAS don't, and there's no reverse route to add for a service
+     * with no configured internal IP either (nbi_internal_ip/
+     * cwmp_internal_ip stay null until GENIEACS_NBI_INTERNAL_IP/
+     * GENIEACS_CWMP_INTERNAL_IP are set — see config/services.php).
+     *
+     * @return array<string, string> label => IP, fed straight into
+     *                               MikrotikScriptGenerator::wireGuardScript()'s $reverseRouteTargets.
+     */
+    private function reverseRouteTargets(string $freeradiusIp, Nas $nas): array
+    {
+        $targets = ['freeradius' => $freeradiusIp];
+
+        if ($nas->tr069_management_subnet === null) {
+            return $targets;
+        }
+
+        foreach ([
+            'genieacs-nbi' => config('services.genieacs.nbi_internal_ip'),
+            'genieacs-cwmp' => config('services.genieacs.cwmp_internal_ip'),
+        ] as $label => $ip) {
+            if ($ip !== null) {
+                $targets[$label] = $ip;
+            }
+        }
+
+        return $targets;
     }
 
     /**

@@ -9,6 +9,15 @@ PEERS_DIR="$WG_DIR/peers"
 : "${WG_SUBNET_CIDR:?WG_SUBNET_CIDR must be set}"                  # e.g. 172.23.195.0/24
 : "${FREERADIUS_INTERNAL_IP:?FREERADIUS_INTERNAL_IP must be set}"
 : "${NODE_HOSTNAME:?NODE_HOSTNAME must be set}"
+# v0.7.3 — Connection Request routing. Deliberately optional (unset/empty
+# skips the exception below entirely) — not every deployment has a NAS with
+# tr069_management_subnet configured yet. GENIEACS_CWMP_INTERNAL_IP/
+# GENIEACS_NBI_INTERNAL_IP must be pinned static IPs (docker-compose.yml),
+# same "must not silently drift on container recreation" reasoning as
+# FREERADIUS_INTERNAL_IP.
+TR069_MANAGEMENT_SUBNET="${TR069_MANAGEMENT_SUBNET:-}"
+GENIEACS_CWMP_INTERNAL_IP="${GENIEACS_CWMP_INTERNAL_IP:-}"
+GENIEACS_NBI_INTERNAL_IP="${GENIEACS_NBI_INTERNAL_IP:-}"
 
 mkdir -p "$PEERS_DIR"
 
@@ -82,8 +91,41 @@ iptables -A FORWARD -o wg0 -d "$WG_SUBNET_CIDR" -m state --state ESTABLISHED,REL
 # its originally-provisioned node — see CoaService's own docblock.
 iptables -A FORWARD -i eth0 -o wg0 -s "$FREERADIUS_INTERNAL_IP" -j ACCEPT
 
+# v0.7.3 — GenieACS Connection Request into a NAS's TR-069 management
+# subnet (e.g. test-x86-bajastu's 10.1.0.0/20, confirmed for real via
+# direct RouterOS API query — see CLAUDE.md "GenieACS Vendor Parameter
+# Mapping"). Deliberately scoped to ONLY genieacs-cwmp/genieacs-nbi's own
+# pinned source IPs, never a wider boss-network allow — this is an
+# addition to the existing hub-and-spoke allowlist above, not a
+# replacement; the FreeRADIUS rules above are untouched. Static per-NAS
+# subnet only (no per-account dynamic sync yet, known limitation — see
+# CLAUDE.md): if this NAS's WireGuard account ever moves to a different
+# pool node, this same rule (baked into the shared entrypoint.sh image)
+# applies identically on whichever node it lands on, so no per-node
+# tracking is needed for THAT part — but genieacs-cwmp/genieacs-nbi's own
+# route to reach this subnet (added manually, not by this script) still
+# points at a specific node's boss-network IP and needs updating by hand
+# if the account moves.
+if [ -n "$TR069_MANAGEMENT_SUBNET" ]; then
+    if [ -n "$GENIEACS_CWMP_INTERNAL_IP" ]; then
+        iptables -A FORWARD -i eth0 -o wg0 -s "$GENIEACS_CWMP_INTERNAL_IP" -d "$TR069_MANAGEMENT_SUBNET" -j ACCEPT
+    fi
+    if [ -n "$GENIEACS_NBI_INTERNAL_IP" ]; then
+        iptables -A FORWARD -i eth0 -o wg0 -s "$GENIEACS_NBI_INTERNAL_IP" -d "$TR069_MANAGEMENT_SUBNET" -j ACCEPT
+    fi
+    iptables -A FORWARD -o eth0 -i wg0 -s "$TR069_MANAGEMENT_SUBNET" -m state --state ESTABLISHED,RELATED -j ACCEPT
+fi
+
 iptables -t nat -F POSTROUTING
 iptables -t nat -A POSTROUTING -s "$WG_SUBNET_CIDR" -d "$FREERADIUS_INTERNAL_IP" -j MASQUERADE
+
+if [ -n "$TR069_MANAGEMENT_SUBNET" ]; then
+    # Masquerade genieacs's real boss-network IP into this node's own
+    # tun-side identity — the NAS never needs a route back to
+    # boss-network's 172.28.0.0/24 (which would leak internal topology),
+    # only to this node's own already-known wg0 gateway.
+    iptables -t nat -A POSTROUTING -o wg0 -d "$TR069_MANAGEMENT_SUBNET" -j MASQUERADE
+fi
 
 echo ">> [entrypoint] wg0 up (pubkey $(cat "$WG_DIR/server_public.key")). Entering reconcile loop."
 

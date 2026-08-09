@@ -3,6 +3,66 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.7.3 — GenieACS Connection Request Routing (implementasi selesai — verifikasi akhir PENDING)
+
+Sub-sprint ketiga cluster v0.7.0. **Status jujur**: implementasi inti selesai
+dan tiga bug infrastruktur nyata ditemukan+diperbaiki sepanjang sprint ini,
+tapi **retry TCP connectivity + Connection Request end-to-end setelah
+perbaikan terakhir belum pernah dijalankan ulang dan dikonfirmasi sukses**.
+Agung memutuskan sadar untuk lanjut ke v0.7.4 sebelum retest terakhir ini
+dilakukan — ini bukan klaim bahwa fitur ini sudah terbukti jalan.
+
+- **Dibangun**: kolom `nas.tr069_management_subnet` (subnet manajemen TR-069
+  milik NAS, mis. `10.1.0.0/20`), static boss-network IP untuk
+  `genieacs-cwmp`/`genieacs-nbi` (`GENIEACS_CWMP_INTERNAL_IP`/
+  `GENIEACS_NBI_INTERNAL_IP`), widen WireGuard `AllowedIPs` (server + router)
+  dan firewall exception baru di `docker/wireguard/entrypoint.sh` (scoped ke
+  IP genieacs-cwmp/nbi + `tr069_management_subnet`, tidak melebar ke
+  `boss-network` secara umum).
+- **Perbaikan `MikrotikScriptGenerator`/`VpnScriptService`** (dilakukan
+  setelah tag awal dipertimbangkan, sebelum commit final sprint ini): route
+  balik sekarang dihasilkan per-service (FreeRADIUS + GenieACS NBI + GenieACS
+  CWMP, masing-masing `/32` + entry `allowed-address` sendiri) lewat
+  `$reverseRouteTargets`, bukan hardcode satu service (FreeRADIUS) saja
+  seperti cut pertama. Route subnet-utuh-lewat-tunnel (`boss-vpn-tr069-route`)
+  **dihapus total** dari template — terbukti mati di router nyata karena
+  connected route ke subnet lokal NAS sendiri selalu menang.
+- **Tiga bug nyata ditemukan+diperbaiki sepanjang sprint ini**:
+  1. **Rotasi private key WireGuard tak disadari** — "Cabut & Generate Ulang"
+     menghasilkan keypair baru (bukan reuse in-place, private key WireGuard
+     memang tidak pernah disimpan BOSS App), sempat disalahartikan sebagai
+     "tunnel putus" padahal memang perilaku desain yang benar.
+  2. **Route balik tidak lengkap** — cut pertama cuma menyertakan SATU route
+     ke seluruh `tr069_management_subnet`, terbukti mati (lihat di atas).
+     Diganti per-service `/32`, pola sama seperti route FreeRADIUS yang sudah
+     terbukti jalan sejak v0.6.2/v0.6.3.
+  3. **MASQUERADE vs `allowed-address` tidak sinkron** — ditemukan lewat
+     inspeksi langsung state live container `wireguard-node3` (`wg show`,
+     `iptables -t nat -L POSTROUTING`), bukan tebakan: traffic GenieACS
+     NBI/CWMP di-MASQUERADE oleh `docker/wireguard/entrypoint.sh` ke IP
+     tunnel node itu sendiri (reserved `.1` dari `subnet_cidr`, lihat
+     `App\Support\CidrRange::gatewayAddress()`) sebelum sampai ke router —
+     `allowed-address` peer WireGuard di router HARUS mencantumkan IP ini
+     sebagai source yang diterima, kalau tidak paket didrop di layer kripto
+     WireGuard sebelum sempat diproses RouterOS sama sekali. Parameter baru
+     `$vpnNodeTunnelIp` di `wireGuardScript()` menutup celah ini.
+- **Test**: 3 test baru di `MikrotikScriptGeneratorTest`, 1 test end-to-end
+  baru di `VpnScriptGeneratorLivewireTest`, 2 test baru di `CidrRangeTest` —
+  full regression 350 test lain di repo tetap hijau, dikonfirmasi ulang dari
+  state final branch.
+- **BELUM DIKONFIRMASI — jangan andalkan fitur ini di v0.7.4 sebelum ini
+  diverifikasi ulang**: task `refreshObject` untuk kedua device real masih
+  antre di GenieACS, retry pasca-fix #3 di atas belum pernah dijalankan:
+  - Huawei EG8141A5 (`00259E-EG8141A5-48575443796B91A7`) — task
+    `6a7897028f1edd3ee0656c81`
+  - ZTE F663NV3a (`F86CE1-F663NV3a-ZICG296C2E7B`) — task
+    `6a789984a542ad1c34df1865`
+
+  TODO wajib sebelum v0.7.4 membangun apa pun di atas fitur ini: jalankan
+  ulang `nc -zv` dari container `genieacs-nbi` ke kedua device (port 7547
+  dan 58000) dan retry kedua task di atas, buktikan Connection Request
+  benar-benar sampai ke device (bukan cuma tunnel WireGuard yang handshake).
+
 ## v0.7.2 — GenieACS Vendor Parameter Mapping + RX/TX Power
 
 Sub-sprint kedua cluster v0.7.0. `cpe_parameter_maps` (platform-level, key

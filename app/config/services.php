@@ -110,4 +110,12 @@ return [
         'nas_config_dir' => env('FREERADIUS_NAS_CONFIG_DIR', '/freeradius-nas-config'),
     ],
 
+    // v0.7.1 GenieACS — genieacs-nbi has no auth of its own, network
+    // isolation is the security boundary (see docker-compose.yml's
+    // genieacs-nbi service comment), so this is just the internal
+    // container-to-container URL, never exposed to the host.
+    'genieacs' => [
+        'nbi_url' => env('GENIEACS_NBI_URL', 'http://genieacs-nbi:7557'),
+    ],
+
 ];

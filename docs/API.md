@@ -657,3 +657,41 @@ dan mengisolasi routing (routing-mark untuk OpenVPN/L2TP, `allowed-address`
 bawaan untuk WireGuard) — NAS tidak pernah dapat default route lewat
 tunnel. **Belum diuji terhadap perangkat Mikrotik sungguhan** (tidak ada
 di environment ini).
+
+## GenieACS Core (v0.7.1)
+
+Endpoint di bawah ada di dalam grup middleware `reseller.context` — scoping
+otomatis lewat `BelongsToResellerScope` pada model `CpeDevice`, pola sama
+dengan `nas`/`odps`: reseller (owner/staff) hanya melihat perangkat CPE
+miliknya sendiri; ISP admin (permission `cpe_devices.view`) melihat semuanya
+termasuk yang direct (tanpa reseller). **Tidak ada endpoint create/update/
+delete** — satu-satunya cara sebuah baris `cpe_devices` tercipta adalah
+otomatis lewat `CpeBindingService::bindFromWorkOrder()`, dipanggil dari hook
+di `WorkOrderService::complete()` (best-effort — kegagalan binding tidak
+pernah menggagalkan penyelesaian work order itu sendiri). Tidak ada input
+manual admin untuk binding device, sesuai keputusan yang dikunci saat
+planning sprint ini.
+
+### `GET /cpe-devices` · `GET /cpe-devices/{cpe_device}`
+
+List (paginated, `?per_page=`) dan detail satu perangkat CPE. Response
+lewat `CpeDeviceResource`: `customer_id`/`customer_name`, `reseller_id`/
+`reseller_name`, `genieacs_device_id` (format
+`OUI-ProductClass-SerialNumber`, `null` kalau perangkat belum pernah
+inform ke GenieACS), `manufacturer`, `model_name`, `serial_number`,
+`tr069_root` (`InternetGatewayDevice` atau `Device` — TR-098 vs TR-181,
+`null` kalau belum diketahui), `status` (`pending_first_connect` /
+`online` / `offline`) + `status_label`, `last_inform_at`, `bound_at`
+(kapan proses binding terjadi — dipakai v0.7.4 nanti sebagai gerbang
+provisioning otomatis), `created_at`.
+
+**Matching binding memakai serial number, bukan MAC address** — MAC tidak
+punya path parameter TR-069 yang sama di semua vendor (baru dipetakan
+per-vendor di v0.7.2), sedangkan `_deviceId._SerialNumber` selalu tersedia
+dari setiap Inform RPC (field wajib TR-069, bukan opsional). Kalau device
+hasil scan teknisi belum pernah inform ke GenieACS sama sekali saat work
+order selesai, baris `cpe_devices` tetap dibuat dengan
+`genieacs_device_id` null dan `status = pending_first_connect` (tidak
+gagal keras) — command terjadwal `ReconcileCpeDevices` (tiap 5 menit)
+mencoba mencocokkan ulang berdasarkan serial number begitu device itu
+benar-benar online.

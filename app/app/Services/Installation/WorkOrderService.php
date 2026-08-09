@@ -13,12 +13,16 @@ use App\Models\Subscription;
 use App\Models\Technician;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
+use App\Services\Network\CpeBindingService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class WorkOrderService
 {
     public function __construct(
         private readonly OdpLocatorService $odpLocator,
+        private readonly CpeBindingService $cpeBinding,
     ) {}
 
     /**
@@ -115,6 +119,20 @@ class WorkOrderService
 
         if ($workOrder->odp_port_id !== null) {
             $workOrder->odpPort->update(['status' => OdpPortStatus::Used]);
+        }
+
+        // v0.7.1 GenieACS — best-effort, never blocks completing the work
+        // order itself (same "catch, log, don't fail the caller's own
+        // transaction" posture as WhatsappGatewayService::buildAndQueue()).
+        // A technician standing at the customer's premises shouldn't be
+        // stuck unable to close out an installation because genieacs-nbi
+        // had a momentary hiccup — ReconcileCpeDevices' reconciliation loop
+        // exists precisely so a binding that didn't happen here can still
+        // resolve later.
+        try {
+            $this->cpeBinding->bindFromWorkOrder($workOrder);
+        } catch (Throwable $e) {
+            Log::warning("WorkOrderService: CPE binding failed for work order #{$workOrder->id} — {$e->getMessage()}");
         }
 
         return $workOrder->fresh();

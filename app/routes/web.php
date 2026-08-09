@@ -8,6 +8,7 @@ use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
+use App\Livewire\Network\CpeDeviceIndex;
 use App\Livewire\Network\NasIndex;
 use App\Livewire\Network\VpnScriptGenerator;
 use App\Livewire\Resellers\PackagePricingIndex;
@@ -66,6 +67,7 @@ Route::middleware('auth')->name('web.')->group(function () {
         Route::get('/whatsapp-gateway', WhatsappGatewayIndex::class)->name('whatsapp-gateway.index');
         Route::get('/nas', NasIndex::class)->name('nas.index');
         Route::get('/vpn-script-generator', VpnScriptGenerator::class)->name('vpn-script-generator.index');
+        Route::get('/cpe-devices', CpeDeviceIndex::class)->name('cpe-devices.index');
     });
 
     Route::get('/resellers', ResellerIndex::class)->name('resellers.index');

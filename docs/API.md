@@ -695,3 +695,46 @@ order selesai, baris `cpe_devices` tetap dibuat dengan
 gagal keras) — command terjadwal `ReconcileCpeDevices` (tiap 5 menit)
 mencoba mencocokkan ulang berdasarkan serial number begitu device itu
 benar-benar online.
+
+## GenieACS Vendor Parameter Mapping (v0.7.2)
+
+Platform-level catalog (super_admin-only, permission `cpe_parameter_maps.view`/
+`.manage`, **tidak** ada carve-out reseller seperti `nas`/`odps`) yang
+memetakan path parameter TR-069 per vendor/model (`oui` + `product_class`,
+persis nilai `_deviceId._OUI`/`_deviceId._ProductClass` dari GenieACS) ke
+nilai dunia-nyata lewat formula konversi (`raw`, `linear`, atau
+`sff8472_optical_log10` — lihat `App\Enums\CpeParameterConversionFormula`).
+Sebuah baris punya `verified_at`/`verified_against_device_id` **hanya**
+kalau sudah benar-benar dicek terhadap device nyata (lewat endpoint
+`verify` di bawah, atau seeder untuk baris pertama yang sudah diverifikasi
+manual) — field ini sengaja tidak bisa diisi langsung lewat `store`/
+`update`, mengedit definisi (path/formula/params) sebuah baris otomatis
+menurunkannya kembali ke belum-terverifikasi.
+
+### `GET /cpe-parameter-maps` · `GET /cpe-parameter-maps/{cpe_parameter_map}`
+
+List (filter opsional `?oui=`/`?product_class=`) dan detail satu mapping.
+
+### `POST /cpe-parameter-maps` · `PUT /cpe-parameter-maps/{cpe_parameter_map}` · `DELETE /cpe-parameter-maps/{cpe_parameter_map}`
+
+CRUD standar. `oui`+`product_class`+`parameter_key` unik bersama.
+
+### `POST /cpe-parameter-maps/{cpe_parameter_map}/verify`
+
+Body: `{"device_id": "OUI-ProductClass-SerialNumber"}`. Menandai baris
+terverifikasi memakai waktu saat ini + device id yang benar-benar dites —
+tidak menerima timestamp/device id dari input langsung.
+
+### `GET /cpe-parameter-maps/resolve/{genieacs_device_id}`
+
+Endpoint pembuktian end-to-end: ambil device nyata dari GenieACS lewat
+`GenieAcsClientService`, cocokkan OUI+ProductClass-nya ke baris
+`cpe_parameter_maps` yang ada, tarik raw value dari parameter tree device
+itu, konversi lewat `ParameterConversionService`. Per parameter_key,
+response berisi `raw_value`, `value` (hasil konversi, `null` kalau path
+belum ada di tree device — biasanya berarti device itu belum pernah
+di-`refreshObject` sampai kedalaman itu), `verified`, dan `error` (kalau
+ada). Contoh nyata pertama yang sudah diverifikasi: ZTE F663NV3.1
+(`oui=F86CE1`, `product_class=F663NV3a`) — `rx_power_dbm`/`tx_power_dbm`
+lewat `InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig.
+{RXPower,TXPower}`, formula `sff8472_optical_log10`.

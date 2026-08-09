@@ -1377,6 +1377,146 @@ don't "clean it up" without checking here first. No `nas`/customer/subscription 
 `boss_db` — wiring `radcheck` accounts to real Laravel customer/billing records is out of scope for v0.6.5,
 likely a future version's work, not something to backfill now just because this account exists.
 
+## GenieACS Core & TR-069 CWMP proxying gotcha (v0.7.2)
+
+**CPE devices dial `boss-nginx:7547`, which forwards to `genieacs-cwmp`** — see
+`docker/nginx/stream.conf.d/genieacs-cwmp.conf`. This used to be a plain HTTP `proxy_pass` (a
+`server { listen 7547; ... }` block under `docker/nginx/conf.d/`), which turned out to make Digest
+auth (`cwmp.auth` config, e.g. `AUTH(Device.ManagementServer.Username, Device.ManagementServer.Password)`
+or a fixed `AUTH("user","pass")`) **fail for every single device, unconditionally, regardless of
+whether the credentials were correct** — found via a real, fully-instrumented investigation (`tcpdump`
+capture of a real Huawei EG8141A5 ONT's TR-069 session, plus independently recomputing GenieACS's own
+MD5 Digest-response algorithm from `bin/genieacs-cwmp` source to *prove* the captured credentials were
+byte-correct before looking anywhere else).
+
+**Root cause**: GenieACS binds a Digest challenge nonce to the specific inbound TCP socket object
+(`As.get(e.httpRequest.socket)`, a `WeakMap` in `bin/genieacs-cwmp`) — not to the device, not to an
+IP, not to any session ID in the request itself. A compliant CPE keeps ONE TCP connection open across
+the challenge (401 + nonce) and the follow-up authenticated retry, which is exactly what standard
+HTTP Digest auth (RFC 2617) assumes. But nginx's default `proxy_pass` (no `upstream {...keepalive...}`
+configured) opens a **brand-new backend connection to `genieacs-cwmp` for every single proxied
+request** — confirmed directly in the packet capture: the CPE's one TCP connection to nginx (source
+port stayed constant) mapped to *two different* nginx→genieacs-cwmp backend connections (two different
+source ports, the first one `FIN`'d immediately after the 401 response). The nonce issued on backend
+connection #1 was never found via `As.get()` on backend connection #2 → immediate rejection, before
+`AUTH()` is even evaluated. This is invisible from the credential side entirely — every device we
+tested failed the exact same way regardless of vendor/OUI, and regardless of whether `cwmp.auth` was a
+fixed pair or the dynamic `Device.ManagementServer.*` form.
+
+**Fixed by switching to a raw TCP passthrough** (nginx `stream {}` module, not `http {}`) —
+`docker/nginx/stream.conf.d/genieacs-cwmp.conf`:
+```
+server {
+    listen 7547;
+    proxy_pass genieacs-cwmp:7547;
+}
+```
+`stream {}` must be a **top-level block in `nginx.conf`, sibling to `http {}`** — it cannot live inside
+`docker/nginx/conf.d/*.conf`, because that directory is `include`'d from *inside* the `http {}` block.
+`docker-compose.yml`'s `boss-nginx` service mounts a new `./docker/nginx/stream.conf.d` directory
+alongside the existing `conf.d` mount for this reason. The old HTTP-level
+`docker/nginx/conf.d/genieacs-cwmp.conf` was deleted outright (not just disabled) — two configs can't
+both `listen 7547` in different contexts at once. **This does not violate the "boss-nginx is the only
+public entry point for CPE traffic" decision** — nginx is still the sole listener on 7547 from the
+internet's perspective; only the proxying *layer* changed from L7 (HTTP) to L4 (TCP), so a raw TCP
+connection now maps 1:1 to one CPE session for its whole lifetime, matching what GenieACS's nonce
+binding assumes. Confirmed the fix is real HTTP passthrough, not just an open port: a raw
+`curl -X POST http://<host>:7547/` returns GenieACS's own native `400 Bad Request` / `"Invalid session"`
+body, not an nginx error page.
+
+**One side effect of the switch**: `access_log`/`error_log` directives from the old HTTP-level config
+(`genieacs-cwmp.access.log`/`.error.log`) are gone — the `stream {}` block doesn't have one configured.
+`genieacs-cwmp`'s own structured log (`docker compose logs genieacs-cwmp`) is the sole source of truth
+for CWMP traffic now, and is more informative anyway (device ID + exact failure reason per line, vs.
+nginx's bare status code).
+
+**Verified for real, end-to-end**: after the fix, a real Huawei EG8141A5 ONT (`00259E-EG8141A5-...`)
+rebooted by Agung completed Bootstrap Inform cleanly on its very first attempt post-fix — zero
+"Authentication failure" lines in the log for that session (every attempt before the fix, across
+several different real ONTs/OUIs, had logged at least one). Full parameter tree
+(`InternetGatewayDevice.*`) was retrieved and the device landed in GenieACS's `devices` collection with
+a genuine `_registered` timestamp. **A GenieACS-side successful connect is not the same as the device
+appearing in BOSS App's own "Perangkat CPE" UI** — that side additionally needs `CpeBindingService` to
+match the reported serial number against a real `work_order_devices` row from the Installation module
+(v0.5.0); a test device with no real work order behind it will show up in GenieACS but stay absent from
+BOSS App's UI by design, not a bug.
+
+## GenieACS Vendor Parameter Mapping (v0.7.2)
+
+**`cpe_parameter_maps`** (platform-level, keyed by `oui`+`product_class`+
+`parameter_key` — never tenant-scoped, same posture as
+`payment_gateway_channels`) maps a vendor/model's own TR-069 parameter path
+to a real-world value via `App\Services\Network\ParameterConversionService`
+(`raw`/`linear`/`sff8472_optical_log10`) — resolved for a real device by
+`App\Services\Network\CpeParameterResolverService`, which matches
+`_deviceId._OUI`/`_deviceId._ProductClass` from
+`GenieAcsClientService::findDeviceById()` against the catalog. A row only
+carries `verified_at`/`verified_against_device_id` once genuinely checked
+against real hardware (via `POST /cpe-parameter-maps/{id}/verify` or the
+Livewire "Tes Resolve" panel's "Tandai Terverifikasi" button) — editing a
+row's definition (path/formula/params) demotes it back to unverified rather
+than silently keeping a stale verification timestamp attached to now-
+different data.
+
+**`sff8472_optical_log10` formula, verified for real against a live ZTE
+F663NV3.1** (`F86CE1-F663NV3a-ZICG296C2E7B`) — its optical DDM object
+(`InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig`) exposes
+standard SFF-8472 fields (`BiasCurrent`/`RXPower`/`TXPower`/
+`SupplyVottage`/`TransceiverTemperature`). `raw` is a linear power reading
+in `scale` mW units (e.g. `scale=0.0001` for 0.1 µW steps); the formula is
+`dBm = 10*log10(raw*scale)`. Confirmed correct by converting **all four**
+numeric DDM fields at once under the same scale family, not just RXPower in
+isolation — `SupplyVottage`(32830)→3.283V, `BiasCurrent`(8150)→16.3mA,
+`TransceiverTemperature`(14668)→57.3°C all landed on textbook-normal
+real-world readings, and `TXPower`(17100)→2.33dBm sits squarely in normal
+GPON TX range — `RXPower`(15)→**-28.24dBm** (real reading of a live weak-ish
+link, not a clean round number — itself further evidence this is a genuine
+measurement, not a coincidental formula match). **Raw value 0 is rejected**
+(`InvalidArgumentException` in `ParameterConversionService`), not silently
+converted to `-INF` — a 0 reading means "no optical signal at all", not "0
+dBm".
+
+**Full parameter tree discovery needs a `refreshObject` task, not just
+"the device connected"**: `db.presets`/`db.provisions` are empty in this
+GenieACS instance, so a device's stored tree only ever contains what it
+volunteered in its own Bootstrap Inform (a handful of `DeviceInfo`/
+`ManagementServer` fields) — nothing pulls the rest automatically. A
+`refreshObject` task with `objectName:""` (root) queued via NBI
+(`POST /devices/{id}/tasks?connection_request`) executes on the device's
+*next* Inform if `connection_request` itself fails (very likely — see below)
+— but can itself fault with `too_many_commits` (`MAX_COMMIT_ITERATIONS`,
+default 32) on a device with a genuinely large tree, requiring the task to
+retry across multiple Inform sessions before the full tree lands. This is
+exactly how the ZTE optical DDM object above was actually discovered — took
+2 retried sessions before `X_CT-COM_GponInterfaceConfig` showed up.
+
+**Two discovery items, NOT delivered this sprint — real follow-up work,
+not solved by more time on this same approach**:
+
+1. **400+ existing modem backfill (separate initiative, not v0.7.x)**:
+   `customers` has **no legacy-system customer ID column at all**
+   (`legacy_id`/`old_system_id`/`external_ref`/etc. — checked directly
+   against migrations, live schema, and `Customer::$fillable`, all three
+   confirm nothing) — a new column is needed before ID-based matching to
+   the old system can work. Separately, MAC address is **not** stored in a
+   GenieACS device's parameter tree unless a preset explicitly pulls it (see
+   above) — a MAC→SerialNumber cross-reference strategy built from
+   GenieACS's own data only works for devices whose relevant preset is
+   already in place, not simply "any device that's ever connected."
+2. **Connection Request / on-demand refresh, needed for v0.7.3**:
+   investigated in full — genuinely not reachable yet, not just a missing
+   route. `test-x86-bajastu`'s WireGuard tunnel (`vpn_accounts` row, DB
+   status `active`) has **never actually handshaked** (`wg show ...
+   latest-handshakes` → `0`). Even a connected tunnel wouldn't help as-is:
+   the hub-and-spoke firewall locked in since v0.6.2 allows exactly ONE
+   `/32` destination (FreeRADIUS's own internal IP) and nothing else, by
+   deliberate security design — not an oversight to patch. The ZTE network
+   (`10.1.13.x`) has no NAS/tunnel record at all. v0.7.3 needs new
+   architecture decisions here (additional VPN-server-side routes +
+   firewall exceptions, likely Mikrotik-side routing/NAT via the Script
+   Generator v0.6.3, and a brand-new tunnel from scratch for the ZTE
+   location) — not a quick server-config change.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

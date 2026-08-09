@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\CpeDeviceController;
+use App\Http\Controllers\Api\V1\CpeParameterMapController;
 use App\Http\Controllers\Api\V1\CustomerContactController;
 use App\Http\Controllers\Api\V1\CustomerController;
 use App\Http\Controllers\Api\V1\CustomerTimelineController;
@@ -170,6 +171,18 @@ Route::prefix('v1')->group(function () {
         Route::put('settings/dashboard-widgets', [DashboardWidgetSettingController::class, 'update']);
         Route::get('settings/whatsapp-gateway', [WhatsappGatewaySettingsController::class, 'show']);
         Route::put('settings/whatsapp-gateway', [WhatsappGatewaySettingsController::class, 'update']);
+
+        // v0.7.2 — per-vendor TR-069 parameter mapping catalog, platform-level
+        // (super_admin-only, see CpeParameterMapPolicy), no reseller.context
+        // needed, same posture as tax-components/settings/* above.
+        Route::get('cpe-parameter-maps', [CpeParameterMapController::class, 'index']);
+        Route::post('cpe-parameter-maps', [CpeParameterMapController::class, 'store']);
+        Route::get('cpe-parameter-maps/{cpe_parameter_map}', [CpeParameterMapController::class, 'show']);
+        Route::put('cpe-parameter-maps/{cpe_parameter_map}', [CpeParameterMapController::class, 'update']);
+        Route::delete('cpe-parameter-maps/{cpe_parameter_map}', [CpeParameterMapController::class, 'destroy']);
+        Route::post('cpe-parameter-maps/{cpe_parameter_map}/verify', [CpeParameterMapController::class, 'markVerified']);
+        Route::get('cpe-parameter-maps/resolve/{genieacs_device_id}', [CpeParameterMapController::class, 'resolve'])
+            ->where('genieacs_device_id', '.*');
 
         // Admin-only reseller management — no reseller.context needed here,
         // ISP admins always act with an explicit {reseller} route param.

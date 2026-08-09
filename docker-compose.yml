@@ -12,10 +12,16 @@ services:
       # nginx rather than published on genieacs-cwmp itself directly (see
       # docker/nginx/conf.d/genieacs-cwmp.conf).
       - "7547:7547"
+    environment:
+      TZ: Asia/Jakarta
     volumes:
       - ./app:/var/www/html:ro
       - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./docker/nginx/stream.conf.d:/etc/nginx/stream.conf.d:ro
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     depends_on:
       - boss-app
       - genieacs-cwmp
@@ -60,6 +66,11 @@ services:
       # every other cross-container coordination in this stack. See
       # CLAUDE.md "FreeRADIUS Core & NAS Management" v0.6.5 section.
       - freeradius_nas_config:/freeradius-nas-config
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    environment:
+      TZ: Asia/Jakarta
     env_file:
       - .env
     depends_on:
@@ -79,6 +90,11 @@ services:
     command: php artisan queue:work --sleep=3 --tries=3 --max-time=3600
     volumes:
       - ./app:/var/www/html
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    environment:
+      TZ: Asia/Jakarta
     env_file:
       - .env
     depends_on:
@@ -102,6 +118,11 @@ services:
     entrypoint: ["sh", "-c", "while true; do php artisan queue:work --queue=$(php artisan whatsapp:queue-names) --sleep=3 --tries=3 --max-time=300; done"]
     volumes:
       - ./app:/var/www/html
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    environment:
+      TZ: Asia/Jakarta
     env_file:
       - .env
     depends_on:
@@ -129,6 +150,11 @@ services:
       # X doesn't have the env/volume container Y assumed it would" bugs.
       - vpn_pki:/vpn-pki-data
       - vpn_wg_data:/vpn-wg-data
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    environment:
+      TZ: Asia/Jakarta
     env_file:
       - .env
     depends_on:
@@ -143,6 +169,11 @@ services:
     restart: unless-stopped
     volumes:
       - ./whatsapp-gateway/auth_state:/app/auth_state
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    environment:
+      TZ: Asia/Jakarta
     env_file:
       - ./whatsapp-gateway/.env
     networks:
@@ -160,6 +191,8 @@ services:
       POSTGRES_DB: ${RADIUS_DB_NAME}
       POSTGRES_USER: ${RADIUS_DB_USER}
       POSTGRES_PASSWORD: ${RADIUS_DB_PASSWORD}
+      TZ: Asia/Jakarta
+      PGTZ: Asia/Jakarta
     volumes:
       - freeradius_postgres_data:/var/lib/postgresql/data
       # Standard FreeRADIUS Postgres schema (radcheck/radreply/radgroupcheck/
@@ -168,6 +201,9 @@ services:
       # (a non-empty data volume skips it, same as any other Postgres init
       # script).
       - ./docker/freeradius/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${RADIUS_DB_USER} -d ${RADIUS_DB_NAME}"]
       interval: 5s
@@ -194,6 +230,8 @@ services:
     # it).
     cap_add:
       - NET_ADMIN
+    environment:
+      TZ: Asia/Jakarta
     env_file:
       - .env
     volumes:
@@ -202,6 +240,9 @@ services:
       # sites-enabled/default + clients.conf) and /coa-queue (CoaService
       # requests) — see docker/freeradius/entrypoint.sh.
       - freeradius_nas_config:/freeradius-nas-config
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     depends_on:
       freeradius-db:
         condition: service_healthy
@@ -256,12 +297,16 @@ services:
       # pki-data itself.
       - vpn_pki:/etc/openvpn/pki-data
       - vpn_ccd:/etc/openvpn/ccd
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     environment:
       # v0.6.4 — matches VpnServersSeeder's hostname for this row; the
       # entrypoint's heartbeat loop writes a file named after this so
       # VpnCheckNodeHealth (boss-app, reading the same shared volume) can
       # tell which node a given heartbeat file belongs to.
       NODE_HOSTNAME: vpn-node-1
+      TZ: Asia/Jakarta
     env_file:
       - .env
     networks:
@@ -281,8 +326,12 @@ services:
       - "51820:51820/udp"
     volumes:
       - vpn_wg_data:/etc/wireguard
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     environment:
       NODE_HOSTNAME: vpn-node-1
+      TZ: Asia/Jakarta
     env_file:
       - .env
     networks:
@@ -323,6 +372,9 @@ services:
     volumes:
       - vpn_pki:/etc/openvpn/pki-data
       - vpn_ccd:/etc/openvpn/ccd
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     environment:
       # Node2's OWN client subnet, distinct from node1's 172.23.194.0/24 —
       # this node's ccd is never actually written to (see
@@ -336,6 +388,7 @@ services:
       VPN_SUBNET_NETWORK: 172.23.199.0
       VPN_SUBNET_NETMASK: 255.255.255.0
       NODE_HOSTNAME: vpn-node-2
+      TZ: Asia/Jakarta
     env_file:
       - .env
     networks:
@@ -360,11 +413,15 @@ services:
     volumes:
       - vpn_pki:/etc/openvpn/pki-data
       - vpn_ccd:/etc/openvpn/ccd
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     environment:
       VPN_SUBNET_CIDR: 172.23.200.0/24
       VPN_SUBNET_NETWORK: 172.23.200.0
       VPN_SUBNET_NETMASK: 255.255.255.0
       NODE_HOSTNAME: vpn-node-3
+      TZ: Asia/Jakarta
     env_file:
       - .env
     networks:
@@ -396,9 +453,13 @@ services:
       - "51821:51821/udp"
     volumes:
       - vpn_wg_data:/etc/wireguard
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     environment:
       WG_LISTEN_PORT: 51821
       NODE_HOSTNAME: vpn-node-2
+      TZ: Asia/Jakarta
     env_file:
       - .env
     networks:
@@ -418,9 +479,13 @@ services:
       - "51822:51822/udp"
     volumes:
       - vpn_wg_data:/etc/wireguard
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     environment:
       WG_LISTEN_PORT: 51822
       NODE_HOSTNAME: vpn-node-3
+      TZ: Asia/Jakarta
     env_file:
       - .env
     networks:
@@ -445,6 +510,11 @@ services:
       - "1701:1701/udp"
     volumes:
       - vpn_l2tp_secrets:/etc/ppp/secrets-data
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    environment:
+      TZ: Asia/Jakarta
     env_file:
       - .env
     networks:
@@ -465,8 +535,12 @@ services:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_DB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_DB_PASSWORD}
       MONGO_INITDB_DATABASE: ${MONGO_DB_NAME}
+      TZ: Asia/Jakarta
     volumes:
       - mongo_data:/data/db
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
       interval: 5s
@@ -489,6 +563,11 @@ services:
       GENIEACS_MONGODB_CONNECTION_URL: mongodb://${MONGO_DB_USER}:${MONGO_DB_PASSWORD}@mongo/${MONGO_DB_NAME}?authSource=admin
       GENIEACS_CWMP_INTERFACE: "0.0.0.0"
       GENIEACS_CWMP_PORT: "7547"
+      TZ: Asia/Jakarta
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     depends_on:
       mongo:
         condition: service_healthy
@@ -509,6 +588,11 @@ services:
       GENIEACS_MONGODB_CONNECTION_URL: mongodb://${MONGO_DB_USER}:${MONGO_DB_PASSWORD}@mongo/${MONGO_DB_NAME}?authSource=admin
       GENIEACS_NBI_INTERFACE: "0.0.0.0"
       GENIEACS_NBI_PORT: "7557"
+      TZ: Asia/Jakarta
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     depends_on:
       mongo:
         condition: service_healthy
@@ -530,6 +614,11 @@ services:
       GENIEACS_MONGODB_CONNECTION_URL: mongodb://${MONGO_DB_USER}:${MONGO_DB_PASSWORD}@mongo/${MONGO_DB_NAME}?authSource=admin
       GENIEACS_FS_INTERFACE: "0.0.0.0"
       GENIEACS_FS_PORT: "7567"
+      TZ: Asia/Jakarta
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     depends_on:
       mongo:
         condition: service_healthy
@@ -552,6 +641,11 @@ services:
       GENIEACS_UI_INTERFACE: "0.0.0.0"
       GENIEACS_UI_PORT: "3000"
       GENIEACS_UI_JWT_SECRET: ${GENIEACS_UI_JWT_SECRET}
+      TZ: Asia/Jakarta
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     depends_on:
       mongo:
         condition: service_healthy
@@ -573,8 +667,13 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Jakarta
+      PGTZ: Asia/Jakarta
     volumes:
       - boss_postgres_data:/var/lib/postgresql/data
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -589,8 +688,13 @@ services:
     container_name: boss-redis
     restart: unless-stopped
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    environment:
+      TZ: Asia/Jakarta
     volumes:
       - boss_redis_data:/data
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 5s

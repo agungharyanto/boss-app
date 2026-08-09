@@ -24,6 +24,7 @@ class Nas extends Model
         'name',
         'description',
         'mikrotik_ip',
+        'tr069_management_subnet',
         'api_port',
         'api_username',
         'api_password',

@@ -153,6 +153,7 @@ class VpnScriptService
             trim(File::get($serverPublicKeyFile)),
             $account->wireguardPrivateKey,
             $this->onlineNodePorts(VpnProtocol::WireGuard),
+            $account->nas->tr069_management_subnet,
         );
     }
 

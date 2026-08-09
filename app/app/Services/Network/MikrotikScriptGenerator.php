@@ -30,6 +30,13 @@ class MikrotikScriptGenerator
 
     private const IROUTE_ROUTE_COMMENT = 'boss-vpn-freeradius-route';
 
+    // v0.7.3 — separate comment from IROUTE_ROUTE_COMMENT above on purpose:
+    // the two routes are independently added/removed (a NAS's
+    // tr069_management_subnet can be null while its FreeRADIUS route still
+    // exists), so `find comment=...` in the WireGuard script's cleanup step
+    // must not accidentally match/remove the other one.
+    private const TR069_ROUTE_COMMENT = 'boss-vpn-tr069-route';
+
     private const MANGLE_COMMENT = 'boss-vpn-mangle';
 
     /**
@@ -165,6 +172,7 @@ class MikrotikScriptGenerator
         string $serverPublicKey,
         string $clientPrivateKey,
         array $nodePorts = [],
+        ?string $tr069ManagementSubnet = null,
     ): string {
         $ifaceName = 'boss-vpn-wireguard';
         $cleanup = $this->interfaceCleanupBlock();
@@ -178,6 +186,28 @@ class MikrotikScriptGenerator
             portProperty: 'endpoint-port',
             needsReEnable: false,
         );
+
+        // v0.7.3 — widen allowed-address to also admit this NAS's TR-069
+        // management subnet (when set), so GenieACS Connection Request can
+        // reach CPE behind it. Same "allowed-address doesn't auto-populate
+        // the routing table" gotcha documented above applies here too — a
+        // second explicit /ip route is required, not just the widened
+        // allowed-address on its own.
+        $allowedAddress = "{$freeradiusInternalIp}/32";
+        $tr069RouteBlock = '';
+
+        if ($tr069ManagementSubnet !== null) {
+            $allowedAddress .= ",{$tr069ManagementSubnet}";
+            $tr069RouteBlock = <<<BLOCK
+
+            # v0.7.3 — GenieACS Connection Request ke subnet manajemen
+            # TR-069 NAS ini, sama alasan seperti route FreeRADIUS di atas
+            # (allowed-address tidak otomatis mengisi routing table).
+            /ip route remove [find comment="{$this->tr069RouteComment()}"]
+            /ip route add dst-address={$tr069ManagementSubnet} gateway={$ifaceName} \\
+                comment="{$this->tr069RouteComment()}"
+            BLOCK;
+        }
 
         return <<<SCRIPT
         # BOSS App — WireGuard client script untuk NAS "{$account->username}"
@@ -194,7 +224,7 @@ class MikrotikScriptGenerator
 
         /interface wireguard peers add interface={$ifaceName} public-key="{$serverPublicKey}" \\
             endpoint-address={$publicIp} endpoint-port={$port} \\
-            allowed-address={$freeradiusInternalIp}/32 persistent-keepalive=25s
+            allowed-address={$allowedAddress} persistent-keepalive=25s
 
         /ip address remove [find interface="{$ifaceName}"]
         /ip address add address={$account->internal_ip}/32 interface={$ifaceName}
@@ -207,7 +237,7 @@ class MikrotikScriptGenerator
         /ip route remove [find comment="{$this->routeComment()}"]
         /ip route add dst-address={$freeradiusInternalIp}/32 gateway={$ifaceName} \\
             comment="{$this->routeComment()}"
-
+        {$tr069RouteBlock}
         :log info "BOSS App: WireGuard client {$ifaceName} selesai dikonfigurasi"
 
         {$autoSwitch}
@@ -482,6 +512,11 @@ class MikrotikScriptGenerator
     private function routeComment(): string
     {
         return self::IROUTE_ROUTE_COMMENT;
+    }
+
+    private function tr069RouteComment(): string
+    {
+        return self::TR069_ROUTE_COMMENT;
     }
 
     private function ruleComment(): string

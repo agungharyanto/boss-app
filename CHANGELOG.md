@@ -3,6 +3,58 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.7.2 — GenieACS Vendor Parameter Mapping + RX/TX Power
+
+Sub-sprint kedua cluster v0.7.0. `cpe_parameter_maps` (platform-level, key
+`oui`+`product_class`+`parameter_key`) memetakan path parameter TR-069 per
+vendor/model ke nilai dunia-nyata lewat `ParameterConversionService`
+(`raw`/`linear`/`sff8472_optical_log10`), diresolve untuk device nyata lewat
+`CpeParameterResolverService`. CRUD API + endpoint `verify` (menandai
+terverifikasi hanya lewat aksi eksplisit) + `resolve` (pembuktian
+end-to-end) + UI Livewire `/cpe-parameter-maps` dengan panel "Tes Resolve"
+langsung terhadap device live.
+
+- **Formula `sff8472_optical_log10` diverifikasi nyata**, bukan cuma dari
+  riset komunitas — terhadap ONT ZTE F663NV3.1
+  (`F86CE1-F663NV3a-ZICG296C2E7B`) yang benar-benar connect. Empat field DDM
+  optik standar SFF-8472 di object yang sama (`BiasCurrent`/`RXPower`/
+  `TXPower`/`SupplyVottage`/`TransceiverTemperature`) semuanya mendarat di
+  nilai dunia-nyata yang masuk akal di bawah skala yang sama — bukan cuma
+  RX power sendirian yang dicocokkan. Hasil: RX -28.24 dBm, TX 2.33 dBm.
+  Raw value 0 sengaja di-reject (`InvalidArgumentException`), bukan
+  didiamkan jadi `-INF`.
+- **Bug infrastruktur kritis ditemukan & diperbaiki**: proxy
+  `boss-nginx` → `genieacs-cwmp` yang sejak v0.7.1 masih level HTTP
+  (`proxy_pass` tanpa `upstream keepalive`) membuat SEMUA Digest auth gagal
+  tanpa terkecuali, terlepas dari device/kredensial apa pun — GenieACS
+  mengikat nonce challenge ke socket TCP tertentu, sedangkan nginx membuka
+  koneksi backend baru tiap request. Ditemukan lewat investigasi penuh
+  (`tcpdump` capture device nyata + rekomputasi independen algoritma MD5
+  Digest-response GenieACS untuk membuktikan kredensial sudah benar sebelum
+  mencari akar masalah lain). Diperbaiki dengan proxy TCP murni (`stream {}`
+  module nginx, bukan `http {}`) — lihat CLAUDE.md "GenieACS Core &
+  TR-069 CWMP proxying gotcha (v0.7.2)". Tanpa fix ini tidak ada satu device
+  pun yang bisa sukses connect lewat auth apa pun.
+- **Operasional, dibundel di commit ini**: timezone host + seluruh
+  22 container diset ke `Asia/Jakarta` (host `timedatectl`,
+  `TZ` env + bind-mount `/etc/localtime`/`/etc/timezone`/`zoneinfo` di
+  `docker-compose.yml`) — perubahan operasional terpisah dari scope
+  v0.7.2, dibundel di sini karena sudah live sejak sebelum sprint ini
+  ditutup dan perlu masuk git (BOSS-001).
+- **Test**: 20 test baru (formula konversi, resolver dengan `Http::fake`,
+  API/policy termasuk aturan "edit definisi menurunkan status verifikasi")
+  — semuanya lulus, ditambah full regression 344 test lain di repo tetap
+  hijau, dikonfirmasi ulang dari state final branch (bukan angka lama).
+- **Known follow-up, BUKAN bagian selesai sprint ini** (lihat
+  `docs/ROADMAP.md` untuk detail lengkap): (1) backfill 400+ modem existing
+  butuh kolom legacy customer ID baru di `customers` (belum ada sama
+  sekali) dan strategi MAC→SerialNumber lewat GenieACS cuma jalan kalau ada
+  preset eksplisit (`db.presets` kosong di instance ini); (2) Connection
+  Request/refresh on-demand untuk v0.7.3 belum bisa jalan — tunnel VPN
+  `test-x86-bajastu` belum pernah handshake, firewall hub-and-spoke v0.6.2
+  sengaja dikunci ke satu tujuan FreeRADIUS saja, jaringan ZTE belum punya
+  tunnel sama sekali.
+
 ## v0.7.1 — GenieACS Core (pembuka cluster v0.7.0)
 
 Sub-sprint pertama cluster v0.7.0 (GenieACS/TR-069 CPE Management), dipecah

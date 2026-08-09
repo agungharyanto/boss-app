@@ -18,7 +18,7 @@
 | v0.6.4  | Network         | VPN Pool & Failover           | Pool 3 node nyata x 2 protokol (OpenVPN + WireGuard, L2TP tetap 1 node — known limitation), load-distribution, health-check terjadwal, auto-switch failover Mikrotik — diverifikasi end-to-end nyata (matikan node, konfirmasi pindah otomatis) | Selesai |
 | v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator (diverifikasi race-safe nyata) + CoA/Disconnect + fix `require_message_authenticator` per-NAS (akar masalah sesungguhnya) — sesi PPPoE nyata pertama berhasil end-to-end lewat FreeRADIUS produksi, config router sepenuhnya hasil generate resmi BOSS App | Selesai |
 | v0.7.1  | Network         | GenieACS Core                 | Deploy GenieACS+MongoDB, auto-binding device dari Installation (work_order_devices), CpeDevice model + API + UI list read-only | Selesai |
-| v0.7.2  | Network         | GenieACS Vendor Mapping       | Mapping parameter per-vendor (Huawei/ZTE/Nokia), refresh RX power on-demand (butuh Connection Request lewat tunnel VPN)       | Backlog |
+| v0.7.2  | Network         | GenieACS Vendor Mapping       | Mapping parameter per-vendor (`cpe_parameter_maps`), resolve RX/TX power via `refreshObject` — refresh on-demand lewat Connection Request/tunnel VPN masih diblokir, lihat catatan v0.7.3 | Selesai |
 | v0.7.3  | Network         | GenieACS Remote Actions       | Reboot/push SSID instan (Connection Request lewat tunnel VPN, kemungkinan terhubung ke Mikrotik Script Generator v0.6.3)      | Backlog |
 | v0.7.4  | Network         | GenieACS Auto-Provisioning    | Provisioning otomatis, digerbang oleh status binding (`cpe_devices.bound_at`, disiapkan sejak v0.7.1)                          | Backlog |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
@@ -257,6 +257,56 @@ mengirim SOAP Inform mentah secara manual (justru inilah yang dipakai untuk
 verifikasi bentuk respons NBI di atas) — cukup untuk kebutuhan verifikasi
 v0.7.1, tidak butuh simulator penuh untuk test otomatis (reconciliation job
 di-test lewat `Http::fake()`, bukan device simulator sungguhan).
+
+**v0.7.2 (GenieACS Vendor Mapping) selesai**: `cpe_parameter_maps`
+(platform-level, key `oui`+`product_class`+`parameter_key`) +
+`ParameterConversionService` (`raw`/`linear`/`sff8472_optical_log10`) +
+`CpeParameterResolverService` (cocokkan device nyata ke katalog, tarik raw
+value, konversi) + CRUD API/`resolve` endpoint/UI Livewire dengan panel "Tes
+Resolve" langsung terhadap device live. Formula `sff8472_optical_log10`
+(power SFF-8472 standar: `dBm = 10*log10(raw*scale)`) **diverifikasi nyata**
+terhadap satu ONT ZTE F663NV3.1 (`F86CE1-F663NV3a-ZICG296C2E7B`) — bukan cuma
+RX power sendirian, tapi keempat field DDM optik di object yang sama
+(`BiasCurrent`/`RXPower`/`TXPower`/`SupplyVottage`/`TransceiverTemperature`)
+sama-sama mendarat di nilai dunia-nyata yang masuk akal di bawah skala yang
+sama (RX -28.24 dBm, TX 2.33 dBm, ~16.3mA, ~3.28V, ~57°C) — lihat CLAUDE.md
+"GenieACS Vendor Parameter Mapping (v0.7.2)" untuk detail lengkap. Raw value
+0 sengaja di-reject (`InvalidArgumentException`), bukan didiamkan jadi -∞.
+
+**Bug infrastruktur kritis ditemukan & diperbaiki di tengah sprint ini**:
+proxy `boss-nginx` → `genieacs-cwmp` yang sejak v0.7.1 masih di level HTTP
+(`proxy_pass` tanpa `upstream keepalive`) ternyata membuat SEMUA Digest auth
+gagal tanpa terkecuali — GenieACS mengikat nonce challenge-nya ke socket TCP
+tertentu, sedangkan nginx membuka koneksi backend baru tiap request, jadi
+nonce dari request pertama tidak pernah ditemukan lagi di request kedua.
+Diperbaiki dengan proxy TCP murni (`stream {}` module nginx, bukan `http{}`)
+— lihat CLAUDE.md "GenieACS Core & TR-069 CWMP proxying gotcha (v0.7.2)".
+Tanpa fix ini, tidak ada satu device pun yang bisa sukses connect ke
+GenieACS lewat auth apa pun — jadi bug ini blocker keras buat pembuktian
+formula konversi di atas, bukan sekadar temuan sampingan.
+
+**Dua temuan discovery, BUKAN bagian selesai v0.7.2, dicatat sebagai
+follow-up untuk sprint mendatang**:
+1. **Backfill 400+ modem existing** (di luar v0.7.x, rencana terpisah):
+   tabel `customers` **tidak punya kolom ID pelanggan sistem lama** sama
+   sekali (`legacy_id`/`old_system_id`/dst — sudah dicek migration+schema
+   langsung, nihil) — perlu kolom baru sebelum backfill bisa jalan. Selain
+   itu, MAC address device **tidak tersimpan di parameter tree GenieACS**
+   kecuali ada preset eksplisit yang menariknya (`db.presets` kosong total
+   di instance ini) — jadi strategi cross-reference MAC→SerialNumber lewat
+   data GenieACS cuma bisa jalan untuk device yang preset-nya sudah
+   dipasang, bukan otomatis untuk device yang sekadar pernah connect.
+2. **Connection Request / refresh on-demand untuk v0.7.3**: diinvestigasi
+   penuh, ternyata **belum bisa jalan sama sekali** — bukan cuma kurang
+   rute. Tunnel WireGuard `test-x86-bajastu` (`vpn_accounts` status
+   `active` di DB) ternyata **tidak pernah benar-benar handshake**
+   (`latest handshake: 0`). Firewall hub-and-spoke sejak v0.6.2 sengaja
+   dikunci ke SATU rule `/32` tujuan FreeRADIUS saja (keputusan keamanan
+   terkunci, bukan celah). Jaringan ZTE (`10.1.13.x`) malah belum punya
+   NAS/tunnel tercatat sama sekali. v0.7.3 perlu keputusan arsitektur baru
+   (rute+firewall tambahan di sisi VPN server, kemungkinan routing/NAT di
+   sisi Mikrotik lewat Script Generator v0.6.3, dan tunnel baru dari nol
+   untuk lokasi ZTE) — bukan quick-fix config server.
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

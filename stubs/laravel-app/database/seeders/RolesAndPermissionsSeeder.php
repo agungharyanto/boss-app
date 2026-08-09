@@ -40,6 +40,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedInstallationPermissions();
         $this->seedNetworkPermissions();
         $this->seedGenieAcsPermissions();
+        $this->seedCpeParameterMapPermissions();
     }
 
     /**
@@ -274,5 +275,22 @@ class RolesAndPermissionsSeeder extends Seeder
         Permission::firstOrCreate(['name' => 'cpe_devices.view', 'guard_name' => 'web']);
 
         Role::findByName('super_admin', 'web')->givePermissionTo('cpe_devices.view');
+    }
+
+    /**
+     * v0.7.2 — strictly super_admin-only, same posture as
+     * payment_gateway_settings/whatsapp_gateway_settings: this is
+     * platform-level technical config (per-vendor TR-069 parameter maps),
+     * not a per-reseller concern.
+     */
+    private function seedCpeParameterMapPermissions(): void
+    {
+        Permission::firstOrCreate(['name' => 'cpe_parameter_maps.view', 'guard_name' => 'web']);
+        Permission::firstOrCreate(['name' => 'cpe_parameter_maps.manage', 'guard_name' => 'web']);
+
+        Role::findByName('super_admin', 'web')->givePermissionTo([
+            'cpe_parameter_maps.view',
+            'cpe_parameter_maps.manage',
+        ]);
     }
 }

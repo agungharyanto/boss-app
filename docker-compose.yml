@@ -8,12 +8,17 @@ services:
     ports:
       - "80:80"
       # - "443:443"   # aktifkan setelah TLS terpasang (lihat docs/DEPLOYMENT.md)
+      # v0.7.1 — CPE devices dial this to reach genieacs-cwmp, fronted by
+      # nginx rather than published on genieacs-cwmp itself directly (see
+      # docker/nginx/conf.d/genieacs-cwmp.conf).
+      - "7547:7547"
     volumes:
       - ./app:/var/www/html:ro
       - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - boss-app
+      - genieacs-cwmp
     networks:
       - boss-network
 
@@ -448,6 +453,118 @@ services:
       freeradius:
         condition: service_healthy
 
+  # --- v0.7.1 GenieACS (TR-069 CPE management) — mongo + 4 GenieACS
+  # services, all built from docker/genieacs (npm-installed, no official
+  # image exists — see that Dockerfile's own comment). ---
+
+  mongo:
+    image: mongo:8.0
+    container_name: mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_DB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_DB_NAME}
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - boss-network
+    # Own separate datastore for GenieACS (BOSS-009: never boss_db/
+    # radius_db, no cross-database joins). Port 27017 SENGAJA TIDAK
+    # di-expose ke host (RULE BOSS-010) — reserved for exactly this since
+    # v0.1.0's own .env.example.
+
+  genieacs-cwmp:
+    build:
+      context: ./docker/genieacs
+    container_name: genieacs-cwmp
+    restart: unless-stopped
+    command: genieacs-cwmp
+    environment:
+      GENIEACS_MONGODB_CONNECTION_URL: mongodb://${MONGO_DB_USER}:${MONGO_DB_PASSWORD}@mongo/${MONGO_DB_NAME}?authSource=admin
+      GENIEACS_CWMP_INTERFACE: "0.0.0.0"
+      GENIEACS_CWMP_PORT: "7547"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - boss-network
+    # No host port here on purpose — boss-nginx is the actual public entry
+    # point for CPE traffic (see its own service block + docker/nginx/
+    # conf.d/genieacs-cwmp.conf), same "one public entry point" posture as
+    # boss-app's own port-80 traffic.
+
+  genieacs-nbi:
+    build:
+      context: ./docker/genieacs
+    container_name: genieacs-nbi
+    restart: unless-stopped
+    command: genieacs-nbi
+    environment:
+      GENIEACS_MONGODB_CONNECTION_URL: mongodb://${MONGO_DB_USER}:${MONGO_DB_PASSWORD}@mongo/${MONGO_DB_NAME}?authSource=admin
+      GENIEACS_NBI_INTERFACE: "0.0.0.0"
+      GENIEACS_NBI_PORT: "7557"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - boss-network
+    # NO port mapping to the host AT ALL (unlike cwmp, not even proxied) —
+    # genieacs-nbi's REST API has no authentication of its own, so network
+    # isolation (container-to-container only, inside boss-network) IS its
+    # security boundary. GenieAcsClientService (boss-app) reaches it at
+    # http://genieacs-nbi:7557 — see config/services.php's `genieacs.nbi_url`.
+
+  genieacs-fs:
+    build:
+      context: ./docker/genieacs
+    container_name: genieacs-fs
+    restart: unless-stopped
+    command: genieacs-fs
+    environment:
+      GENIEACS_MONGODB_CONNECTION_URL: mongodb://${MONGO_DB_USER}:${MONGO_DB_PASSWORD}@mongo/${MONGO_DB_NAME}?authSource=admin
+      GENIEACS_FS_INTERFACE: "0.0.0.0"
+      GENIEACS_FS_PORT: "7567"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - boss-network
+    # Not wired into any v0.7.1 feature yet (firmware/config file
+    # distribution to CPEs isn't this sub-version's scope) — included
+    # because it's part of a standard GenieACS deployment, not because
+    # anything calls it right now. No host port for the same "not needed
+    # yet" reason.
+
+  genieacs-ui:
+    build:
+      context: ./docker/genieacs
+    container_name: genieacs-ui
+    restart: unless-stopped
+    command: genieacs-ui
+    environment:
+      GENIEACS_MONGODB_CONNECTION_URL: mongodb://${MONGO_DB_USER}:${MONGO_DB_PASSWORD}@mongo/${MONGO_DB_NAME}?authSource=admin
+      GENIEACS_UI_INTERFACE: "0.0.0.0"
+      GENIEACS_UI_PORT: "3000"
+      GENIEACS_UI_JWT_SECRET: ${GENIEACS_UI_JWT_SECRET}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - boss-network
+    # GenieACS's own bundled admin UI — optional, for manual debugging only;
+    # BOSS App itself never talks to this (all binding/status logic goes
+    # through genieacs-nbi directly). No host port published (BOSS-010
+    # minimal-public-surface posture) — reach it via `docker compose exec`
+    # or an SSH tunnel to port 3000 on boss-network if needed, not a public
+    # port. Add one deliberately later if admins actually need routine
+    # browser access to it.
+
   boss-postgresql:
     image: postgres:16-alpine
     container_name: boss-postgresql
@@ -503,4 +620,5 @@ volumes:
   vpn_ccd:
   vpn_wg_data:
   vpn_l2tp_secrets:
+  mongo_data:
   freeradius_nas_config:

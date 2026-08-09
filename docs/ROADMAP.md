@@ -17,7 +17,10 @@
 | v0.6.3  | Network         | Multi-Protokol VPN & Script Generator | WireGuard, L2TP/IPsec (SSTP di-skip; L2TP/IPsec sendiri berstatus known limitation, lihat catatan di bawah), Script Generator (VPN + RADIUS script siap-paste ke terminal Mikrotik) | Selesai |
 | v0.6.4  | Network         | VPN Pool & Failover           | Pool 3 node nyata x 2 protokol (OpenVPN + WireGuard, L2TP tetap 1 node — known limitation), load-distribution, health-check terjadwal, auto-switch failover Mikrotik — diverifikasi end-to-end nyata (matikan node, konfirmasi pindah otomatis) | Selesai |
 | v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator (diverifikasi race-safe nyata) + CoA/Disconnect + fix `require_message_authenticator` per-NAS (akar masalah sesungguhnya) — sesi PPPoE nyata pertama berhasil end-to-end lewat FreeRADIUS produksi, config router sepenuhnya hasil generate resmi BOSS App | Selesai |
-| v0.7.0  | Network         | GenieACS                      | Binding ONT, SSID/password, RX power, reboot, provisioning                                    | Backlog |
+| v0.7.1  | Network         | GenieACS Core                 | Deploy GenieACS+MongoDB, auto-binding device dari Installation (work_order_devices), CpeDevice model + API + UI list read-only | Selesai |
+| v0.7.2  | Network         | GenieACS Vendor Mapping       | Mapping parameter per-vendor (Huawei/ZTE/Nokia), refresh RX power on-demand (butuh Connection Request lewat tunnel VPN)       | Backlog |
+| v0.7.3  | Network         | GenieACS Remote Actions       | Reboot/push SSID instan (Connection Request lewat tunnel VPN, kemungkinan terhubung ke Mikrotik Script Generator v0.6.3)      | Backlog |
+| v0.7.4  | Network         | GenieACS Auto-Provisioning    | Provisioning otomatis, digerbang oleh status binding (`cpe_devices.bound_at`, disiapkan sejak v0.7.1)                          | Backlog |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
@@ -208,6 +211,52 @@ belum dibangun, itu scope terpisah), dashboard monitoring RADIUS real-time
 berbagi satu `freeradius`/VPN node (posisi operasional saat ini: satu
 deployment BOSS App = satu ISP, sama seperti `payment_gateway_settings`/
 `whatsapp_gateway` "direct" session — didokumentasikan di CLAUDE.md).
+
+## v0.7.0 dipecah jadi sub-cluster v0.7.1-v0.7.4 (dikonfirmasi Agung saat v0.7.1 dimulai)
+
+Sama pola dengan `v0.6.0` → `v0.6.1`-`v0.6.5`: `v0.7.0` (GenieACS, satu baris)
+dipecah jadi 4 sub-versi karena scope-nya juga besar dan berlapis (deploy
+dasar → mapping per-vendor → aksi remote real-time → provisioning otomatis,
+masing-masing punya dependency teknis ke yang sebelumnya). **BOSS-002 relaxed
+untuk cluster `v0.7.x` ini** — sub-versi boleh berjalan berurutan dalam satu
+alur kerja tanpa commit/tag terpisah tiap sub-versi kalau memang lebih
+efisien, beda dari `v0.6.x` yang tiap sub-versi ditag sendiri-sendiri
+(v0.7.1 sendiri tetap ditag seperti biasa karena ini penutupan sub-versi
+pertama, bukan pekerjaan yang menyambung ke sub-versi berikutnya dalam satu
+sesi).
+
+**v0.7.1 (GenieACS Core) selesai**: container `mongo`+`genieacs-cwmp`+
+`genieacs-nbi`+`genieacs-fs`+`genieacs-ui` (npm install, tidak ada image
+resmi — sama alasan seperti freeradius/openvpn/wireguard/l2tp), auto-binding
+`cpe_devices` dari `work_order_devices` lewat hook di
+`WorkOrderService::complete()` (best-effort, tidak pernah menggagalkan
+penyelesaian work order), API+UI list read-only. **Bentuk respons NBI
+diverifikasi nyata** (bukan diasumsikan dari dokumentasi resmi yang tidak
+memberi contoh JSON lengkap) — TR-069 Inform mentah dikirim langsung ke
+`genieacs-cwmp` yang hidup, hasilnya dibedah: `_id` formatnya persis
+"OUI-ProductClass-SerialNumber", tiap parameter TR-069 muncul sebagai object
+bersarang dengan field `_value`, dan `_deviceId` (berisi Manufacturer/OUI/
+ProductClass/SerialNumber langsung dari struct DeviceId milik RPC Inform)
+ternyata tersedia independen dari root TR-098/TR-181 apa pun.
+
+**Penyimpangan dari spec awal yang perlu dicatat**: spec awal bilang "MAC
+address biasanya paling reliable" untuk mencocokkan device hasil scan
+teknisi ke device GenieACS. Setelah verifikasi nyata di atas, ternyata MAC
+address TIDAK punya path standar yang sama di semua vendor (baru
+dipetakan per-vendor di v0.7.2) — sedangkan serial number, lewat
+`_deviceId._SerialNumber`, tersedia otomatis dari SETIAP device TR-069 tanpa
+perlu tahu vendor-nya (itu field wajib RPC Inform, bukan parameter
+opsional). `CpeBindingService` karena itu mencocokkan lewat serial number,
+bukan MAC — didokumentasikan lengkap di docblock class itu sendiri.
+
+`genieacs-sim` (simulator resmi project GenieACS) dicoba dulu sesuai arahan,
+tapi paketnya (v0.9.0 di npm) sudah terlalu using untuk Node.js modern —
+dependensi native `libxmljs`-nya gagal build bahkan dengan toolchain
+lengkap (python3/make/g++) karena memang menyasar Node 6.x. Diganti dengan
+mengirim SOAP Inform mentah secara manual (justru inilah yang dipakai untuk
+verifikasi bentuk respons NBI di atas) — cukup untuk kebutuhan verifikasi
+v0.7.1, tidak butuh simulator penuh untuk test otomatis (reconciliation job
+di-test lewat `Http::fake()`, bukan device simulator sungguhan).
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

@@ -9,6 +9,7 @@ use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
 use App\Livewire\Network\CpeDeviceIndex;
+use App\Livewire\Network\CpeParameterMapIndex;
 use App\Livewire\Network\NasIndex;
 use App\Livewire\Network\VpnScriptGenerator;
 use App\Livewire\Resellers\PackagePricingIndex;
@@ -77,4 +78,5 @@ Route::middleware('auth')->name('web.')->group(function () {
 
     Route::get('/settings/theme', ThemeSettings::class)->name('settings.theme');
     Route::get('/settings/payment-gateway', PaymentGatewaySettings::class)->name('settings.payment-gateway');
+    Route::get('/cpe-parameter-maps', CpeParameterMapIndex::class)->name('cpe-parameter-maps.index');
 });

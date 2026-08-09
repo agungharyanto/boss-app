@@ -298,9 +298,26 @@ class VpnProvisioningService
             File::makeDirectory($peersDir, 0777, true);
         }
 
+        // v0.7.3 — AllowedIPs is WireGuard's own cryptokey-routing filter
+        // (enforced before iptables ever runs), not just an access-list
+        // convenience: a destination outside this list is silently
+        // undeliverable through this peer, no matter what the firewall
+        // says. Widening it to the NAS's own tr069_management_subnet (when
+        // set — see CLAUDE.md "GenieACS Vendor Parameter Mapping"'s
+        // Connection Request investigation for how this was confirmed to
+        // be the actual blocker, not a dead tunnel) is what lets
+        // GenieACS's Connection Request reach CPE behind this NAS at all.
+        // WireGuard automatically installs the matching kernel route for
+        // any range added here — no manual `ip route add` needed.
+        $allowedIps = "{$account->internal_ip}/32";
+
+        if ($account->nas->tr069_management_subnet !== null) {
+            $allowedIps .= ', '.$account->nas->tr069_management_subnet;
+        }
+
         File::put(
             rtrim($peersDir, '/')."/{$account->username}.conf",
-            '[Peer]'.PHP_EOL."PublicKey = {$publicKey}".PHP_EOL."AllowedIPs = {$account->internal_ip}/32".PHP_EOL
+            '[Peer]'.PHP_EOL."PublicKey = {$publicKey}".PHP_EOL."AllowedIPs = {$allowedIps}".PHP_EOL
         );
 
         $account->update(['public_key' => $publicKey]);

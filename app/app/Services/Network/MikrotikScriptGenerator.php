@@ -156,18 +156,54 @@ class MikrotikScriptGenerator
      * mark/routing-table indirection (allowed-address already prevents any
      * OTHER traffic from ever being encrypted through this tunnel, so a
      * plain route is sufficient, not just "safe enough").
+     *
+     * **v0.7.3's first cut of this (a single route to the NAS's WHOLE
+     * `tr069_management_subnet`) was found dead on a real router**: that
+     * subnet IS the NAS's own local LAN, so RouterOS's connected route to
+     * it always wins over a static route through the tunnel — the route
+     * was accepted but never actually used. What GenieACS Connection
+     * Request genuinely needs instead is a per-service reverse route, same
+     * shape as the FreeRADIUS one above: each internal service that
+     * *initiates* a connection toward a CPE behind this NAS (GenieACS
+     * NBI/CWMP) gets its own `/32` route so the CPE's reply can find its
+     * way back through the tunnel instead of out the NAS's normal WAN
+     * route. $reverseRouteTargets carries these as label => IP (FreeRADIUS
+     * is always included by the caller; VpnScriptService adds GenieACS
+     * NBI/CWMP only when this NAS has `tr069_management_subnet` set).
+     *
+     * **A second, separate gap in the same v0.7.3 cut, found by inspecting
+     * the live wireguard-node3 container's own iptables/interface state
+     * directly (not by more router testing)**: `docker/wireguard/
+     * entrypoint.sh`'s TR069_MANAGEMENT_SUBNET MASQUERADE rule
+     * (`POSTROUTING -o wg0 -d $TR069_MANAGEMENT_SUBNET -j MASQUERADE`)
+     * rewrites GenieACS's real source IP to the VPN node's OWN tunnel
+     * gateway address (confirmed live: wireguard-node3's wg0 has
+     * `172.23.195.1/24`, i.e. the reserved `.1` — see
+     * App\Support\CidrRange::gatewayAddress()) before the packet ever
+     * reaches the router. WireGuard's cryptokey routing checks a decrypted
+     * packet's SOURCE against the peer's own `allowed-address` and drops
+     * it on mismatch — since neither FreeRADIUS's IP nor the (now-removed)
+     * whole management subnet ever covered `172.23.195.1`, the forward leg
+     * of a Connection Request would have been silently dropped by
+     * WireGuard itself, before RouterOS's own firewall/routing ever saw
+     * it, regardless of how many /ip route lines existed. $vpnNodeTunnelIp
+     * is that address — added to allowed-address (not to the route list;
+     * the router never needs to SEND anything to it, only ACCEPT packets
+     * sourced from it).
      */
     public function wireGuardScript(
         VpnAccount $account,
         string $publicIp,
         int $port,
-        string $freeradiusInternalIp,
         string $serverPublicKey,
         string $clientPrivateKey,
+        array $reverseRouteTargets,
         array $nodePorts = [],
+        ?string $vpnNodeTunnelIp = null,
     ): string {
         $ifaceName = 'boss-vpn-wireguard';
         $cleanup = $this->interfaceCleanupBlock();
+        $freeradiusInternalIp = $reverseRouteTargets['freeradius'];
         $autoSwitch = $this->autoSwitchBlock(
             schedulerName: 'boss-vpn-autoswitch-wireguard',
             freeradiusInternalIp: $freeradiusInternalIp,
@@ -178,6 +214,25 @@ class MikrotikScriptGenerator
             portProperty: 'endpoint-port',
             needsReEnable: false,
         );
+
+        $allowedAddress = collect($reverseRouteTargets)
+            ->map(fn (string $ip) => "{$ip}/32")
+            ->implode(',');
+
+        if ($vpnNodeTunnelIp !== null) {
+            $allowedAddress .= ",{$vpnNodeTunnelIp}/32";
+        }
+
+        $reverseRouteBlock = collect($reverseRouteTargets)
+            ->map(function (string $ip, string $label) use ($ifaceName) {
+                $comment = $this->reverseRouteComment($label);
+
+                return <<<BLOCK
+                /ip route remove [find comment="{$comment}"]
+                /ip route add dst-address={$ip}/32 gateway={$ifaceName} comment="{$comment}"
+                BLOCK;
+            })
+            ->implode("\n");
 
         return <<<SCRIPT
         # BOSS App — WireGuard client script untuk NAS "{$account->username}"
@@ -194,7 +249,7 @@ class MikrotikScriptGenerator
 
         /interface wireguard peers add interface={$ifaceName} public-key="{$serverPublicKey}" \\
             endpoint-address={$publicIp} endpoint-port={$port} \\
-            allowed-address={$freeradiusInternalIp}/32 persistent-keepalive=25s
+            allowed-address={$allowedAddress} persistent-keepalive=25s
 
         /ip address remove [find interface="{$ifaceName}"]
         /ip address add address={$account->internal_ip}/32 interface={$ifaceName}
@@ -202,12 +257,9 @@ class MikrotikScriptGenerator
         # allowed-address di atas HANYA filter kripto/interface — TIDAK
         # otomatis mengisi routing table (dibuktikan lewat tes ping asli:
         # handshake berhasil tapi paket ICMP tidak pernah sampai tanpa baris
-        # di bawah ini). Route eksplisit wajib supaya traffic ke FreeRADIUS
-        # benar-benar lewat tunnel ini.
-        /ip route remove [find comment="{$this->routeComment()}"]
-        /ip route add dst-address={$freeradiusInternalIp}/32 gateway={$ifaceName} \\
-            comment="{$this->routeComment()}"
-
+        # di bawah ini). Route eksplisit per-service wajib supaya traffic
+        # balasan dari tiap service benar-benar lewat tunnel ini.
+        {$reverseRouteBlock}
         :log info "BOSS App: WireGuard client {$ifaceName} selesai dikonfigurasi"
 
         {$autoSwitch}
@@ -482,6 +534,20 @@ class MikrotikScriptGenerator
     private function routeComment(): string
     {
         return self::IROUTE_ROUTE_COMMENT;
+    }
+
+    /**
+     * v0.7.3 — one comment per reverse-route service (see wireGuardScript()'s
+     * $reverseRouteTargets), so each is independently addable/removable via
+     * `find comment=...` without disturbing the others. 'freeradius'
+     * produces the same literal string as IROUTE_ROUTE_COMMENT/routeComment()
+     * above on purpose — a NAS provisioned before this generalization
+     * already has an `/ip route` with that exact comment, and re-running
+     * the script must replace it in place, not leave an orphaned duplicate.
+     */
+    private function reverseRouteComment(string $label): string
+    {
+        return "boss-vpn-{$label}-route";
     }
 
     private function ruleComment(): string

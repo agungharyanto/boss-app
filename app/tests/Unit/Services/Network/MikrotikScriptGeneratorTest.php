@@ -145,7 +145,7 @@ class MikrotikScriptGeneratorTest extends TestCase
 
         $scripts = [
             $this->generator->openVpnScript($account, '7', '45.123.142.242', 1194, '172.28.0.10', 'ca-url', 'cert-url', 'key-url', 'https'),
-            $this->generator->wireGuardScript($wgAccount, '45.123.142.242', 51820, '172.28.0.10', 'pub', 'priv'),
+            $this->generator->wireGuardScript($wgAccount, '45.123.142.242', 51820, 'pub', 'priv', ['freeradius' => '172.28.0.10']),
             $this->generator->l2tpScript($l2tpAccount, '7', '45.123.142.242', '172.28.0.10', 'psk'),
         ];
 
@@ -167,7 +167,7 @@ class MikrotikScriptGeneratorTest extends TestCase
         ]);
 
         $script = $this->generator->wireGuardScript(
-            $account, '45.123.142.242', 51820, '172.28.0.10', 'SERVERPUB==', 'CLIENTPRIV==',
+            $account, '45.123.142.242', 51820, 'SERVERPUB==', 'CLIENTPRIV==', ['freeradius' => '172.28.0.10'],
         );
 
         $this->assertStringContainsString('private-key="CLIENTPRIV=="', $script);
@@ -176,6 +176,84 @@ class MikrotikScriptGeneratorTest extends TestCase
         $this->assertStringContainsString('address=172.23.195.10/32', $script);
         // No full-tunnel 0.0.0.0/0 allowed-address anywhere.
         $this->assertStringNotContainsString('0.0.0.0/0', $script);
+        $this->assertStringContainsString('/ip route add dst-address=172.28.0.10/32 gateway=boss-vpn-wireguard comment="boss-vpn-freeradius-route"', $script);
+    }
+
+    /**
+     * v0.7.3 amendment: the original single whole-subnet route
+     * (`boss-vpn-tr069-route`) was found dead on a real router — a NAS's
+     * tr069_management_subnet IS its own local LAN, so RouterOS's connected
+     * route to it always wins over anything pointed at the tunnel. Fixed by
+     * routing back to each SERVICE that actually initiates traffic toward a
+     * CPE behind the NAS (GenieACS NBI/CWMP), same per-/32 treatment
+     * FreeRADIUS already got — never a whole-subnet route again.
+     */
+    public function test_wireguard_script_adds_a_reverse_route_and_allowed_address_entry_per_service(): void
+    {
+        $account = $this->vpnAccount([
+            'username' => 'nas-1',
+            'protocol' => VpnProtocol::WireGuard,
+            'internal_ip' => '172.23.195.2',
+        ]);
+
+        $script = $this->generator->wireGuardScript(
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==',
+            ['freeradius' => '172.28.0.10', 'genieacs-nbi' => '172.28.0.31', 'genieacs-cwmp' => '172.28.0.30'],
+        );
+
+        $this->assertStringContainsString('allowed-address=172.28.0.10/32,172.28.0.31/32,172.28.0.30/32', $script);
+        $this->assertStringContainsString('/ip route add dst-address=172.28.0.10/32 gateway=boss-vpn-wireguard comment="boss-vpn-freeradius-route"', $script);
+        $this->assertStringContainsString('/ip route add dst-address=172.28.0.31/32 gateway=boss-vpn-wireguard comment="boss-vpn-genieacs-nbi-route"', $script);
+        $this->assertStringContainsString('/ip route add dst-address=172.28.0.30/32 gateway=boss-vpn-wireguard comment="boss-vpn-genieacs-cwmp-route"', $script);
+        // The dead whole-subnet route/comment must never appear again.
+        $this->assertStringNotContainsString('boss-vpn-tr069-route', $script);
+        $this->assertStringNotContainsString('10.1.0.0/20', $script);
+    }
+
+    /**
+     * The VPN node's own tunnel gateway (.1 of its subnet_cidr, e.g.
+     * 172.23.195.1) must be an accepted allowed-address SOURCE — GenieACS
+     * traffic arrives at the router already MASQUERADEd onto this address
+     * by the wireguard container's own entrypoint (see
+     * docker/wireguard/entrypoint.sh's TR069_MANAGEMENT_SUBNET MASQUERADE
+     * rule), not GenieACS's real container IP. Without this, WireGuard's
+     * own cryptokey routing drops the packet before RouterOS ever sees it,
+     * independent of any /ip route.
+     */
+    public function test_wireguard_script_admits_the_vpn_nodes_own_masquerade_source_when_provided(): void
+    {
+        $account = $this->vpnAccount([
+            'username' => 'nas-1',
+            'protocol' => VpnProtocol::WireGuard,
+            'internal_ip' => '172.23.195.2',
+        ]);
+
+        $script = $this->generator->wireGuardScript(
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==',
+            ['freeradius' => '172.28.0.10', 'genieacs-nbi' => '172.28.0.31'],
+            vpnNodeTunnelIp: '172.23.195.1',
+        );
+
+        $this->assertStringContainsString('allowed-address=172.28.0.10/32,172.28.0.31/32,172.23.195.1/32', $script);
+        // No /ip route needed for this one — the router only needs to
+        // ACCEPT packets sourced from it, never SEND anything to it.
+        $this->assertStringNotContainsString('dst-address=172.23.195.1/32', $script);
+    }
+
+    public function test_wireguard_script_omits_vpn_node_tunnel_ip_from_allowed_address_when_not_provided(): void
+    {
+        $account = $this->vpnAccount([
+            'username' => 'nas-1',
+            'protocol' => VpnProtocol::WireGuard,
+            'internal_ip' => '172.23.195.2',
+        ]);
+
+        $script = $this->generator->wireGuardScript(
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==',
+            ['freeradius' => '172.28.0.10'],
+        );
+
+        $this->assertStringContainsString('allowed-address=172.28.0.10/32 ', $script);
     }
 
     public function test_openvpn_script_has_no_autoswitch_block_when_only_one_node_online(): void
@@ -237,7 +315,8 @@ class MikrotikScriptGeneratorTest extends TestCase
         $account = $this->vpnAccount(['username' => 'nas-42', 'protocol' => VpnProtocol::WireGuard, 'internal_ip' => '172.23.195.10']);
 
         $script = $this->generator->wireGuardScript(
-            $account, '45.123.142.242', 51820, '172.28.0.10', 'SERVERPUB==', 'CLIENTPRIV==',
+            $account, '45.123.142.242', 51820, 'SERVERPUB==', 'CLIENTPRIV==',
+            ['freeradius' => '172.28.0.10'],
             [51820, 51821, 51822],
         );
 

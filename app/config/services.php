@@ -114,8 +114,19 @@ return [
     // isolation is the security boundary (see docker-compose.yml's
     // genieacs-nbi service comment), so this is just the internal
     // container-to-container URL, never exposed to the host.
+    //
+    // cwmp_internal_ip/nbi_internal_ip (v0.7.3) are the pinned boss-network
+    // IPs from GENIEACS_CWMP_INTERNAL_IP/GENIEACS_NBI_INTERNAL_IP (see
+    // .env.example) — used by MikrotikScriptGenerator::wireGuardScript() to
+    // add the NAS-side reverse route + allowed-address entry each of them
+    // needs for GenieACS Connection Request to reach a CPE behind the NAS
+    // (same reasoning as freeradius_internal_ip above, one entry per
+    // service that needs to be reachable FROM the router through the
+    // tunnel, not just FreeRADIUS).
     'genieacs' => [
         'nbi_url' => env('GENIEACS_NBI_URL', 'http://genieacs-nbi:7557'),
+        'cwmp_internal_ip' => env('GENIEACS_CWMP_INTERNAL_IP'),
+        'nbi_internal_ip' => env('GENIEACS_NBI_INTERNAL_IP'),
     ],
 
 ];

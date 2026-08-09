@@ -38,4 +38,17 @@ class CidrRangeTest extends TestCase
 
         CidrRange::usableHostAddresses('not-a-cidr');
     }
+
+    public function test_gateway_address_is_the_reserved_dot_one(): void
+    {
+        $this->assertSame('172.23.194.1', CidrRange::gatewayAddress('172.23.194.0/24'));
+        $this->assertSame('172.23.200.1', CidrRange::gatewayAddress('172.23.200.0/29'));
+    }
+
+    public function test_gateway_address_invalid_cidr_throws(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        CidrRange::gatewayAddress('not-a-cidr');
+    }
 }

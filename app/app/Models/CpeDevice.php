@@ -10,6 +10,7 @@ use Database\Factories\CpeDeviceFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class CpeDevice extends Model
 {
@@ -54,5 +55,13 @@ class CpeDevice extends Model
     public function workOrderDevice(): BelongsTo
     {
         return $this->belongsTo(WorkOrderDevice::class);
+    }
+
+    /**
+     * Remote action audit trail (v0.7.4) — see App\Models\CpeActionLog.
+     */
+    public function actionLogs(): HasMany
+    {
+        return $this->hasMany(CpeActionLog::class);
     }
 }

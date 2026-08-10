@@ -263,18 +263,24 @@ class RolesAndPermissionsSeeder extends Seeder
     }
 
     /**
-     * v0.7.1 GenieACS Core — read-only this sprint (binding is fully
-     * automatic from Installation, no manual create/manage action exists
-     * yet), so only a `.view` permission, no `.manage`. Reseller access to
-     * their own devices goes through CpeDevicePolicy's
-     * BelongsToResellerScope check, same as odps/nas — not a Spatie
-     * permission per reseller.
+     * v0.7.1 GenieACS Core — read-only originally (binding is fully
+     * automatic from Installation, no manual create/manage action existed
+     * yet), so only a `.view` permission at first.
+     *
+     * v0.7.4 adds `cpe_devices.manage` (reboot / WiFi credential remote
+     * actions) — same reseller-ownership carve-out as odps/nas/
+     * whatsapp_gateway: an admin with `.manage` can act on every device
+     * including direct/no-reseller ones, and a reseller's own active
+     * `reseller_users` membership (owner OR staff) can act on that
+     * reseller's own devices via CpeDevicePolicy::manage(), without needing
+     * this Spatie permission at all.
      */
     private function seedGenieAcsPermissions(): void
     {
         Permission::firstOrCreate(['name' => 'cpe_devices.view', 'guard_name' => 'web']);
+        Permission::firstOrCreate(['name' => 'cpe_devices.manage', 'guard_name' => 'web']);
 
-        Role::findByName('super_admin', 'web')->givePermissionTo('cpe_devices.view');
+        Role::findByName('super_admin', 'web')->givePermissionTo(['cpe_devices.view', 'cpe_devices.manage']);
     }
 
     /**

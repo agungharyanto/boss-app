@@ -1632,8 +1632,52 @@ way this section assumes once those lines are applied for real.
 **Out of scope this sprint, unchanged from v0.7.2's framing**: the actual
 remote-action features this routing exists to enable (reboot, SSID push)
 were never this sprint's scope — this sprint is purely the network
-prerequisite. Real GenieACS Remote Actions work should not start until the
-verification above is actually done.
+prerequisite. **Amendment (v0.7.4)**: contrary to the last sentence above,
+remote-action work started anyway, deliberately, without waiting for the
+verification above — see the v0.7.4 section immediately below for why that
+was a safe, correct call rather than skipping this sprint's own advice.
+
+## GenieACS Remote Actions (v0.7.4)
+
+Built deliberately in "not instant" mode, explicitly WITHOUT waiting for
+v0.7.3's still-pending end-to-end verification above — see
+`App\Services\Network\CpeActionService`'s own docblock for the full
+reasoning. In short: every action writes a `cpe_action_logs` row (status
+`queued`) before attempting anything, `GenieAcsClientService::sendTask()`
+always tries GenieACS's `connection_request` too (harmless failure, free
+win if v0.7.3 happens to already work for a given device), and a
+`connection_request` failure is never treated as this module's own
+failure — only a genuine enqueue failure (bad/missing `genieacs_device_id`,
+no matching `cpe_parameter_maps` row, GenieACS itself rejecting the
+request) is. Consequence worth remembering: **once v0.7.3's TODO is
+actually confirmed, v0.7.4 becomes instant with zero code changes** — the
+mechanism has been live since this sprint's first commit, it just hasn't
+had a working Connection Request to actually ride on yet.
+
+**TR-069 password fields read back empty by design — don't mistake this for
+a missing mapping.** Confirmed on the same real ZTE F663NV3.1 already used
+throughout the v0.7.x cluster: `WLANConfiguration.1.KeyPassphrase` and
+`WLANConfiguration.1.PreSharedKey.1.PreSharedKey` are both present,
+`_writable: true`, and both read as an empty string — while
+`WLANConfiguration.1.SSID` on the exact same device reads a real value
+(`'RUMAHVIA'`). This is standard CPE security behavior (many vendors never
+echo a passphrase back on `GetParameterValues`), not evidence the path is
+wrong or undiscovered. Because of this, `cpe_parameter_maps`'
+`wifi_password` row for this device is deliberately left unverified
+(`verified_at` null) — there's no real non-empty value to confirm against,
+and no `setParameterValues` write against this exact path has been
+confirmed to actually change a device's WiFi password yet. Flip it to
+verified only once a real write is confirmed, not just because the path
+looks structurally correct.
+
+**Never store a real password in `cpe_action_logs.parameters`** —
+`CpeActionService::setWifiCredentials()` stores `password_changed: true` +
+`new_password_fingerprint` (a plain `hash('sha256', $password)`,
+deliberately unsalted) instead. This is an audit fingerprint ("did this
+change to the same value as an earlier entry?"), not a credential store —
+the real credential only ever lives on the device/GenieACS, which is also
+exactly why there's no meaningful "old_password" to log even if we wanted
+to: the field above proves BOSS App never had it to begin with.
 
 ## Architecture
 

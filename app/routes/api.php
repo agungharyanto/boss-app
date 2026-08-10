@@ -142,10 +142,18 @@ Route::prefix('v1')->group(function () {
             Route::post('nas/{nas}/vpn-account', [VpnAccountController::class, 'provision']);
             Route::post('vpn-accounts/{vpn_account}/revoke', [VpnAccountController::class, 'revoke']);
 
-            // v0.7.1 GenieACS — read-only, no store/update/destroy (binding
-            // otomatis lewat CpeBindingService, bukan endpoint create).
+            // v0.7.1 GenieACS — read-only for the device ROW itself, no
+            // store/update/destroy (binding otomatis lewat
+            // CpeBindingService, bukan endpoint create).
             Route::get('cpe-devices', [CpeDeviceController::class, 'index']);
             Route::get('cpe-devices/{cpe_device}', [CpeDeviceController::class, 'show']);
+
+            // v0.7.4 Remote Actions — task "diantre", bukan instan (lihat
+            // CLAUDE.md "GenieACS Connection Request Routing (v0.7.3)" untuk
+            // kenapa Connection Request belum bisa diandalkan).
+            Route::post('cpe-devices/{cpe_device}/actions/reboot', [CpeDeviceController::class, 'reboot']);
+            Route::post('cpe-devices/{cpe_device}/actions/wifi', [CpeDeviceController::class, 'setWifi']);
+            Route::get('cpe-devices/{cpe_device}/actions', [CpeDeviceController::class, 'actions']);
         });
 
         // Admin-only tax engine catalog/reporting — no reseller.context needed.

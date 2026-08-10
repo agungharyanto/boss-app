@@ -663,14 +663,16 @@ di environment ini).
 Endpoint di bawah ada di dalam grup middleware `reseller.context` — scoping
 otomatis lewat `BelongsToResellerScope` pada model `CpeDevice`, pola sama
 dengan `nas`/`odps`: reseller (owner/staff) hanya melihat perangkat CPE
-miliknya sendiri; ISP admin (permission `cpe_devices.view`) melihat semuanya
-termasuk yang direct (tanpa reseller). **Tidak ada endpoint create/update/
-delete** — satu-satunya cara sebuah baris `cpe_devices` tercipta adalah
-otomatis lewat `CpeBindingService::bindFromWorkOrder()`, dipanggil dari hook
-di `WorkOrderService::complete()` (best-effort — kegagalan binding tidak
-pernah menggagalkan penyelesaian work order itu sendiri). Tidak ada input
-manual admin untuk binding device, sesuai keputusan yang dikunci saat
-planning sprint ini.
+miliknya sendiri; ISP admin (permission `cpe_devices.view`/`.manage`)
+melihat semuanya termasuk yang direct (tanpa reseller). **Baris `cpe_devices`
+itu sendiri tidak punya endpoint create/update/delete** — satu-satunya cara
+sebuah baris tercipta adalah otomatis lewat
+`CpeBindingService::bindFromWorkOrder()`, dipanggil dari hook di
+`WorkOrderService::complete()` (best-effort — kegagalan binding tidak pernah
+menggagalkan penyelesaian work order itu sendiri). Tidak ada input manual
+admin untuk binding device, sesuai keputusan yang dikunci saat planning
+sprint ini. **Aksi remote ke device yang sudah ter-bind** (reboot, ganti
+WiFi) ada mulai v0.7.4 — lihat "GenieACS Remote Actions (v0.7.4)" di bawah.
 
 ### `GET /cpe-devices` · `GET /cpe-devices/{cpe_device}`
 
@@ -738,3 +740,60 @@ ada). Contoh nyata pertama yang sudah diverifikasi: ZTE F663NV3.1
 (`oui=F86CE1`, `product_class=F663NV3a`) — `rx_power_dbm`/`tx_power_dbm`
 lewat `InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig.
 {RXPower,TXPower}`, formula `sff8472_optical_log10`.
+
+## GenieACS Remote Actions (v0.7.4)
+
+**Status jujur, bukan basa-basi**: task di bawah selalu berhasil "terkirim"
+(masuk antrean GenieACS) selama device pernah punya `genieacs_device_id` dan
+mapping parameter yang relevan ada — itu **bukan** konfirmasi bahwa device
+sudah benar-benar mengeksekusinya. `status=delivered` berarti task
+ter-enqueue di `genieacs-nbi` (task dokumen nyata dengan `_id`), titik.
+GenieACS SELALU mencoba Connection Request (`?connection_request`) supaya
+device dapat perintah ini instan kalau memang bisa dijangkau — tapi jalur
+itu (v0.7.3) **belum dikonfirmasi jalan end-to-end** terhadap hardware asli
+(lihat CLAUDE.md "GenieACS Connection Request Routing (v0.7.3)"), jadi
+respons endpoint ini TIDAK PERNAH mengklaim "berhasil sekarang juga" —
+selalu "perintah terkirim, akan diterapkan saat device terhubung
+berikutnya". Kalau Connection Request kebetulan berhasil, perintah memang
+bisa langsung berlaku — endpoint ini cuma tidak menjanjikannya.
+
+Otorisasi: `manage()` di `CpeDevicePolicy` — permission `cpe_devices.manage`
+(admin, akses semua device termasuk direct), atau membership
+`reseller_users` aktif (owner ATAU staff) untuk device milik reseller itu
+sendiri. Sama pola dengan `nas`/`odps` — bukan permission per-reseller.
+
+### `POST /cpe-devices/{cpe_device}/actions/reboot`
+
+Tidak ada body. Menulis `cpe_action_logs` (status `queued`), kirim task
+`{"name": "reboot"}` ke GenieACS lewat `GenieAcsClientService::sendTask()`,
+update ke `delivered` (task ter-enqueue) atau `failed` (device belum punya
+`genieacs_device_id`, atau GenieACS menolak request-nya — bukan sekadar
+Connection Request-nya gagal, itu tidak masalah). Response: `CpeActionLogResource`
++ `message` yang jujur soal status ini.
+
+### `POST /cpe-devices/{cpe_device}/actions/wifi`
+
+Body: `ssid` (opsional, string, maks 32 karakter) dan/atau `password`
+(opsional, string, 8-63 karakter — panjang standar WPA-PSK) — **minimal
+salah satu wajib diisi** (`required_without` satu sama lain). Path parameter
+TR-069 yang dipakai diambil dari `cpe_parameter_maps` (`wifi_ssid`/
+`wifi_password`), dicocokkan lewat OUI+ProductClass device itu — kalau
+mapping belum ada untuk model device tersebut, log tetap tercatat tapi
+`status=failed` dengan `failed_reason` yang jelas (bukan exception mentah ke
+caller). Password **tidak pernah** disimpan plaintext di `parameters` —
+hanya fingerprint sha256 (`new_password_fingerprint`) + flag
+`password_changed`, murni buat audit "apakah ini sama dengan perubahan
+sebelumnya", bukan penyimpanan kredensial yang bisa dibaca ulang. Kalau
+`ssid` DAN `password` sama-sama diisi, keduanya dikirim sebagai SATU task
+GenieACS (`setParameterValues` dengan 2 entry) — bukan dua task terpisah —
+supaya tidak ada risiko dua field itu mendarat di dua sesi Inform berbeda.
+
+### `GET /cpe-devices/{cpe_device}/actions`
+
+Riwayat aksi (paginated, `?per_page=`) untuk satu device, terbaru dulu.
+Response `CpeActionLogResource`: `action_type`/`action_type_label`,
+`parameters` (redacted seperti di atas), `genieacs_task_id`, `status`/
+`status_label`, `failed_reason`, `performed_by_name`, `created_at`,
+`completed_at` (kapan log ini mencapai status akhir `delivered`/`failed` —
+**bukan** kapan device selesai mengeksekusi, BOSS App tidak punya cara
+mengetahui itu sprint ini).

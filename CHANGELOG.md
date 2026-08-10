@@ -3,6 +3,78 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.7.4 — GenieACS Remote Actions (Reboot + WiFi SSID/Password)
+
+Sub-sprint keempat cluster v0.7.0. **Dibangun sengaja dalam mode "tidak
+instan"** — keputusan sadar Agung saat planning: tidak menunggu v0.7.3
+(Connection Request routing) terverifikasi dulu, karena task
+queue+audit log ini tetap berguna dan benar terlepas dari itu. Setiap
+aksi SELALU mencoba `connection_request` GenieACS juga (harmless kalau
+gagal, gratis kalau kebetulan berhasil) — **tidak perlu perubahan kode
+sama sekali** begitu v0.7.3 terbukti jalan; instant-push otomatis aktif
+dengan sendirinya lewat mekanisme yang sudah ada sejak hari pertama
+sprint ini (`GenieAcsClientService::sendTask()`'s default
+`connectionRequest=true`).
+
+- **`cpe_action_logs`** (tenant/reseller-scoped, pola sama persis dengan
+  `whatsapp_message_logs`): `cpe_device_id`, `performed_by`,
+  `action_type` (`reboot`/`set_ssid`/`set_password`), `parameters` (json,
+  password TIDAK PERNAH plaintext — lihat di bawah), `genieacs_task_id`,
+  `status` (`queued`/`delivered`/`failed`), `failed_reason`,
+  `completed_at`.
+- **`App\Services\Network\CpeActionService`** — `reboot()`/
+  `setWifiCredentials()`: tulis log dulu (status `queued`) SEBELUM
+  mencoba apa pun ke GenieACS, supaya jejak audit selalu ada walau
+  langkah berikutnya gagal total. `status=delivered` berarti task
+  berhasil masuk antrean `genieacs-nbi` (dokumen task nyata dengan
+  `_id`) — **bukan** konfirmasi perangkat sudah menjalankannya, BOSS App
+  tidak punya cara mengetahui itu sprint ini. `status=failed` HANYA untuk
+  kegagalan enqueue itu sendiri (device belum punya `genieacs_device_id`,
+  mapping parameter tidak ada, atau GenieACS menolak request) — kegagalan
+  `connection_request` semata (device sedang tidak reachable) tetap
+  `delivered`, sesuai constraint desain resmi.
+- **`GenieAcsClientService::sendTask()`** (baru) — general-purpose task
+  enqueue, selalu menyertakan `?connection_request` secara default.
+  `->throw()` cuma trigger di kegagalan HTTP nyata (4xx/5xx dari
+  genieacs-nbi), bukan di reason-phrase "Device is offline" yang tetap
+  HTTP 202 dengan task `_id` valid (perilaku nyata GenieACS, dikonfirmasi
+  manual saat investigasi v0.7.3).
+- **`cpe_parameter_maps` diperluas**: `wifi_ssid`/`wifi_password` untuk
+  ZTE F663NV3.1 (`oui=F86CE1`, `product_class=F663NV3a`).
+  `wifi_ssid` → `WLANConfiguration.1.SSID`, **verified** (nilai nyata
+  `'RUMAHVIA'` terbaca dari tree tersimpan device, `_writable=true`).
+  `wifi_password` → `WLANConfiguration.1.KeyPassphrase`, path
+  ada+`_writable=true` tapi **sengaja TIDAK ditandai verified** — device
+  selalu mengembalikan string kosong untuk field password saat dibaca
+  (perilaku keamanan CPE yang umum, bukan gap discovery), jadi tidak ada
+  nilai nyata untuk dicocokkan, dan belum ada percobaan
+  `setParameterValues` nyata yang dikonfirmasi berhasil.
+- **Password tidak pernah plaintext di `cpe_action_logs`** — hanya
+  `password_changed: true` + `new_password_fingerprint` (SHA-256, sengaja
+  tanpa salt supaya tetap bisa dibandingkan "apakah sama dengan
+  perubahan sebelumnya"; kredensial asli cuma pernah ada di perangkat/
+  GenieACS, tabel ini bukan credential store). Kalau SSID dan password
+  diubah bersamaan, keduanya dikirim sebagai SATU task GenieACS
+  (`setParameterValues` dengan 2 entry), bukan dua task terpisah.
+- **API**: `POST /cpe-devices/{id}/actions/reboot`,
+  `POST /cpe-devices/{id}/actions/wifi` (ssid/password opsional, minimal
+  satu wajib), `GET /cpe-devices/{id}/actions`. Otorisasi lewat
+  `CpeDevicePolicy::manage()` (permission `cpe_devices.manage` baru, atau
+  membership `reseller_users` aktif — owner ATAU staff — untuk device
+  reseller sendiri, pola sama `nas`/`odps`).
+- **UI Livewire** (`/cpe-devices`): tombol Reboot (`wire:confirm` — pesan
+  jelas soal pelanggan terputus sebentar) dan modal Ganti WiFi
+  (`wire:confirm` di tombol submit — pesan soal perangkat pelanggan
+  mungkin perlu connect ulang), plus modal Riwayat Aksi. Pesan hasil
+  SELALU jujur ("perintah terkirim, akan diterapkan saat perangkat
+  terhubung berikutnya") — tidak pernah "berhasil reboot"/kata yang
+  menyiratkan eksekusi instan sudah dikonfirmasi.
+- **Test**: 24 test baru (9 `CpeActionServiceTest`, 8
+  `CpeDeviceActionApiTest`, 7 tambahan di `CpeDeviceIndexLivewireTest` —
+  termasuk regression test eksplisit yang mengecek pesan hasil TIDAK
+  pernah mengandung kata "berhasil") — full regression 374 test di repo
+  tetap hijau.
+
 ## v0.7.3 — GenieACS Connection Request Routing (implementasi selesai — verifikasi akhir PENDING)
 
 Sub-sprint ketiga cluster v0.7.0. **Status jujur**: implementasi inti selesai

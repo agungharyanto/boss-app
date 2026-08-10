@@ -104,4 +104,42 @@ class GenieAcsClientService
             'tr069_root' => null,
         ];
     }
+
+    /**
+     * Queues a task for a device — e.g. `['name' => 'reboot']` or
+     * `['name' => 'setParameterValues', 'parameterValues' => [[$path,
+     * $value, $type], ...]]` (GenieACS's own NBI task shapes). $connectionRequest
+     * is v0.7.3's still-unverified instant-push mechanism — see
+     * App\Services\Network\CpeActionService's own docblock for why this
+     * class deliberately never claims the RESULT of the connection request
+     * attempt means anything: confirmed for real (manual `POST
+     * /devices/{id}/tasks?connection_request` during the v0.7.3
+     * investigation) that GenieACS still returns a real task `_id` (HTTP
+     * 202, reason phrase "Device is offline") even when the connection
+     * request itself fails outright — the task is enqueued either way and
+     * runs on the device's next natural Inform if the instant push didn't
+     * land. `->throw()` here means only the ENQUEUE failing (a genuine
+     * HTTP 4xx/5xx from genieacs-nbi, e.g. malformed device id) raises —
+     * never something callers should conflate with the device being
+     * offline, which is a normal, harmless outcome of this call.
+     *
+     * @param  array<string, mixed>  $taskPayload
+     * @return array{task_id: ?string, connection_request_ok: bool, http_status: int}
+     */
+    public function sendTask(string $deviceId, array $taskPayload, bool $connectionRequest = true): array
+    {
+        $path = '/devices/'.rawurlencode($deviceId).'/tasks'.($connectionRequest ? '?connection_request' : '');
+
+        $response = Http::baseUrl($this->baseUrl)->post($path, $taskPayload)->throw();
+
+        return [
+            'task_id' => $response->json('_id'),
+            // GenieACS returns 200 only when the connection request itself
+            // reached the device and the task ran immediately; 202 means
+            // merely queued for the next Inform. Neither is proof the
+            // device finished executing the task.
+            'connection_request_ok' => $response->status() === 200,
+            'http_status' => $response->status(),
+        ];
+    }
 }

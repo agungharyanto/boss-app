@@ -165,6 +165,28 @@ class WorkOrderService
         ]);
     }
 
+    /**
+     * v0.7.5 — records the technician-relayed SSID/WiFi password on the
+     * scanned device row, later pushed to the real CPE by
+     * App\Services\Network\CpeBindingService::provisionWifiIfPending() once
+     * this device is actually known to GenieACS. $data only ever contains
+     * whichever of `ssid`/`wifi_password` the caller actually sent
+     * (ProvisionWorkOrderDeviceRequest's `sometimes` rules + `validated()`
+     * already filter this) — a genuine partial update, never clobbers an
+     * already-recorded field with null just because this call didn't
+     * resupply it.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    public function provisionDeviceWifi(WorkOrder $workOrder, WorkOrderDevice $device, array $data): WorkOrderDevice
+    {
+        abort_unless($device->work_order_id === $workOrder->id, 404);
+
+        $device->update($data);
+
+        return $device->fresh();
+    }
+
     private function assertReadyToComplete(WorkOrder $workOrder): void
     {
         $existingTypes = $workOrder->photos()->pluck('type')->map(fn (WorkOrderPhotoType $type) => $type->value)->unique();

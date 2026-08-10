@@ -164,7 +164,8 @@
                                 </span>
                             </div>
                             <div class="text-xs text-gray-400 mt-1">
-                                {{ $log->created_at->diffForHumans() }} · {{ __('oleh') }} {{ $log->performedBy?->name ?? '—' }}
+                                {{ $log->created_at->diffForHumans() }} · {{ __('oleh') }}
+                                {{ $log->performed_by === null ? __('Sistem (auto-provisioning)') : ($log->performedBy?->name ?? '—') }}
                             </div>
                             @if ($log->action_type->value === 'set_ssid' && isset($log->parameters['new_ssid']))
                                 <div class="text-xs text-gray-600 mt-1">{{ __('SSID baru') }}: {{ $log->parameters['new_ssid'] }}</div>

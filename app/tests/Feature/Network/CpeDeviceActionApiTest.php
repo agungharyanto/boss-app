@@ -167,4 +167,29 @@ class CpeDeviceActionApiTest extends TestCase
         $response->assertOk();
         $this->assertCount(1, $response->json('data'));
     }
+
+    /**
+     * v0.7.5 — an auto-provisioning log (performed_by null,
+     * CpeBindingService's hook) must render as "Sistem (auto-provisioning)"
+     * in the API response, not a blank/null name.
+     */
+    public function test_actions_history_shows_sistem_auto_provisioning_for_a_null_actor_log(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $device = CpeDevice::factory()->forReseller($reseller)->create();
+        $owner = $this->resellerOwner($tenant, $reseller);
+
+        CpeActionLog::factory()->for($device, 'cpeDevice')->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => $reseller->id,
+            'performed_by' => null,
+            'parameters' => ['triggered_by' => 'auto_provisioning_binding'],
+        ]);
+
+        $response = $this->actingAs($owner)->getJson("/api/v1/cpe-devices/{$device->id}/actions");
+
+        $response->assertOk();
+        $this->assertSame('Sistem (auto-provisioning)', $response->json('data.0.performed_by_name'));
+    }
 }

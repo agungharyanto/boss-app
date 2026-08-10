@@ -4,6 +4,7 @@ namespace Tests\Feature\Network;
 
 use App\Livewire\Network\CpeDeviceIndex;
 use App\Models\CpeActionLog;
+use App\Models\CpeConnectedHost;
 use App\Models\CpeDevice;
 use App\Models\CpeParameterMap;
 use App\Models\Tenant;
@@ -202,5 +203,58 @@ class CpeDeviceIndexLivewireTest extends TestCase
             ->call('openHistoryModal', $device->id)
             ->assertSee('Terkirim ke GenieACS')
             ->assertDontSee('should-not-appear');
+    }
+
+    public function test_connected_hosts_modal_shows_this_devices_hosts_only(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+        $otherDevice = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+
+        CpeConnectedHost::factory()->create([
+            'cpe_device_id' => $device->id,
+            'tenant_id' => $tenant->id,
+            'hostname' => 'MyPhoneVisible',
+        ]);
+        CpeConnectedHost::factory()->create([
+            'cpe_device_id' => $otherDevice->id,
+            'tenant_id' => $tenant->id,
+            'hostname' => 'ShouldNotAppear',
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CpeDeviceIndex::class)
+            ->call('openHostsModal', $device->id)
+            ->assertSee('MyPhoneVisible')
+            ->assertDontSee('ShouldNotAppear');
+    }
+
+    public function test_connected_hosts_active_only_toggle_filters_out_inactive_hosts(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+
+        CpeConnectedHost::factory()->create([
+            'cpe_device_id' => $device->id,
+            'tenant_id' => $tenant->id,
+            'hostname' => 'ActivePhone',
+            'is_active' => true,
+        ]);
+        CpeConnectedHost::factory()->create([
+            'cpe_device_id' => $device->id,
+            'tenant_id' => $tenant->id,
+            'hostname' => 'LongGoneLaptop',
+            'is_active' => false,
+        ]);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(CpeDeviceIndex::class)
+            ->call('openHostsModal', $device->id)
+            ->assertSee('ActivePhone')
+            ->assertSee('LongGoneLaptop');
+
+        $component->set('hostsActiveOnly', true)
+            ->assertSee('ActivePhone')
+            ->assertDontSee('LongGoneLaptop');
     }
 }

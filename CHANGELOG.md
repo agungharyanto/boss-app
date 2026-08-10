@@ -3,6 +3,84 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.7.6 — GenieACS Connected Clients (dengan histori)
+
+Sub-sprint keenam cluster v0.7.0. Baca object TR-069 `LANDevice.{i}.
+Hosts.Host.{n}` (client yang terhubung ke WiFi/LAN CPE) — **histori, bukan
+snapshot**: satu baris per `(cpe_device_id, mac_address)` di
+`cpe_connected_hosts`, tidak pernah satu baris per poll (menghindari tabel
+membengkak tak terkendali). `first_seen_at` cuma diisi sekali; `last_seen_at`
+di-update tiap MAC itu masih muncul; `is_active` jadi `false` (baris
+**tidak pernah dihapus**) begitu MAC yang sebelumnya tercatat tidak muncul
+lagi di satu poll — `hostname`/`ip_address` hanya ditimpa kalau poll saat
+itu punya nilai baru, supaya device yang sesaat melapor `HostName` kosong
+tidak menghapus nama yang sudah diketahui.
+
+- **`App\Services\Network\CpeConnectedHostsService::syncFromGenieAcs()`**
+  — baca data yang **sudah tersimpan** di GenieACS, tidak pernah memicu
+  `refreshObject`/Connection Request sendiri (sama posture seperti
+  discovery v0.7.4/v0.7.5). Command terjadwal
+  `cpe:sync-connected-hosts` (5 menit, pola sama persis `cpe:reconcile`
+  v0.7.1) memanggilnya untuk tiap `CpeDevice` berstatus `online`,
+  per-device best-effort — satu device gagal tidak menghentikan yang
+  lain.
+- **Field standar `Active`/`HostName`/`IPAddress`/`MACAddress`
+  dikonfirmasi ada di DUA vendor berbeda**, bukan diasumsikan dari satu
+  device saja: ZTE F663NV3.1 (5 host tercatat, `HostName` terisi di
+  semuanya — tidak kosong seperti dugaan awal) DAN Huawei EG8141A5 (2
+  host, plus field vendor-spesifik `X_HW_*` yang tidak ada di ZTE).
+  Field-field standar itulah yang jadi basis parsing generik lintas
+  vendor.
+- **Nomor instance `Host.{n}` TERBUKTI tidak stabil/tidak berurutan di
+  hardware nyata** — ZTE melaporkan indeks `7/10/11/67/68`, Huawei
+  melaporkan `1/2`. `mac_address`, bukan `{n}`, adalah satu-satunya kunci
+  identitas yang aman (sesuai unique constraint tabel ini).
+- **API**: `GET /cpe-devices/{id}/connected-hosts` (+`?active_only=true`),
+  read-only murni — tidak ada endpoint yang memicu sync apa pun.
+- **UI Livewire**: tombol "Client" baru di `/cpe-devices`, modal tabel
+  host dengan toggle "aktif saja" dan badge visual aktif/tidak aktif.
+- **Temuan sampingan di luar scope sprint ini, dicatat buat sesi
+  verifikasi nanti**: tree GenieACS milik Huawei EG8141A5 ternyata sudah
+  jauh lebih lengkap dari investigasi v0.7.3/v0.7.4 terakhir (dulu cuma 8
+  parameter, sekarang ribuan termasuk `WLANConfiguration` dan `Hosts`) —
+  bisa jadi sinyal Connection Request v0.7.3 sebenarnya sudah jalan,
+  belum dikonfirmasi, tidak dikejar lebih jauh sesuai arahan.
+- **Test**: 13 test baru (6 service, 1 command, 4 API, 2 Livewire) — full
+  regression 404 test di repo tetap hijau.
+
+## v0.7.5 — GenieACS Auto-Provisioning (SSID/Password saja)
+
+Sub-sprint kelima cluster v0.7.0. Scope dipersempit dari rencana awal
+setelah verifikasi: **PPPoE (username/password RADIUS) TIDAK termasuk**
+— kredensial itu ternyata tidak tersimpan di alur instalasi mana pun
+(`work_order_devices` cuma MAC/serial, tidak ada link balik
+`radcheck`→work order). Scope jadi SSID/password WiFi saja, reuse penuh
+`App\Services\Network\CpeActionService` (v0.7.4).
+
+- **Tidak ada mekanisme input teknisi sama sekali** — WhatsApp bot masih
+  outbound-only (v0.4.0), Mobile App belum dibangun (v0.11.0 backlog).
+  v0.7.5 karena itu terpaksa mencakup jalur input CS/admin manual
+  (`PATCH /work-orders/{id}/devices/{device}/provisioning` — partial
+  update sungguhan, isi SSID sekarang password menyusul tanpa saling
+  menghapus — plus halaman `App\Livewire\Installation\WorkOrderShow`,
+  Livewire pertama untuk modul Installation sejak v0.5.0) sebagai
+  **bridge sementara**, ditandai eksplisit di kode/docs bukan UI teknisi
+  final.
+- **`App\Services\Network\CpeBindingService::provisionWifiIfPending()`**
+  — hook baru dipanggil dari DUA titik: `bindFromWorkOrder()` (binding
+  langsung online) dan `reconcilePending()` (job terjadwal berhasil
+  match). `cpe_devices.wifi_provisioned_at` jadi guard anti-duplikat,
+  hanya ke-set kalau push benar-benar `delivered` — **tidak ada retry
+  otomatis** kalau gagal, CS perlu push manual lewat tombol "Ganti WiFi"
+  v0.7.4.
+- **Tidak ada actor manusia untuk aksi auto-provisioning** —
+  `cpe_action_logs.performed_by` sengaja dijadikan nullable (dikonfirmasi
+  Agung: lebih jujur daripada user sistem palsu), `parameters.
+  triggered_by` (`auto_provisioning_binding`/`auto_provisioning_
+  reconciliation`) bedain sumbernya, UI/API menampilkan **"Sistem
+  (auto-provisioning)"**.
+- **Test**: 17 test baru — full regression 391 test tetap hijau.
+
 ## v0.7.4 — GenieACS Remote Actions (Reboot + WiFi SSID/Password)
 
 Sub-sprint keempat cluster v0.7.0. **Dibangun sengaja dalam mode "tidak

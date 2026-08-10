@@ -159,6 +159,10 @@ Route::prefix('v1')->group(function () {
             Route::post('cpe-devices/{cpe_device}/actions/reboot', [CpeDeviceController::class, 'reboot']);
             Route::post('cpe-devices/{cpe_device}/actions/wifi', [CpeDeviceController::class, 'setWifi']);
             Route::get('cpe-devices/{cpe_device}/actions', [CpeDeviceController::class, 'actions']);
+
+            // v0.7.6 — read-only, populated by the scheduled
+            // cpe:sync-connected-hosts command (never triggered per-request).
+            Route::get('cpe-devices/{cpe_device}/connected-hosts', [CpeDeviceController::class, 'connectedHosts']);
         });
 
         // Admin-only tax engine catalog/reporting — no reseller.context needed.

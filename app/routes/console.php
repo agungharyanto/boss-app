@@ -5,6 +5,7 @@ use App\Console\Commands\MarkOverdueInvoices;
 use App\Console\Commands\ReconcileCpeDevices;
 use App\Console\Commands\SendWhatsappDueReminders;
 use App\Console\Commands\SendWhatsappSuspendedReminders;
+use App\Console\Commands\SyncCpeConnectedHosts;
 use App\Console\Commands\VpnCheckNodeHealth;
 use App\Console\Commands\WhatsappCheckSessionHealth;
 use Illuminate\Foundation\Inspiring;
@@ -37,3 +38,9 @@ Schedule::command(VpnCheckNodeHealth::class)->everyMinute();
 // docblock). 5 minutes is plenty for "device physically powers on and dials
 // home" — this isn't a liveness/failover check needing tight polling.
 Schedule::command(ReconcileCpeDevices::class)->everyFiveMinutes();
+
+// v0.7.6 Connected Clients — reads whatever GenieACS already has stored for
+// each online device's Hosts.Host object (never forces a refreshObject/
+// connection_request itself). Same 5-minute cadence as the reconciliation
+// job above — connected-client churn doesn't need tighter polling than that.
+Schedule::command(SyncCpeConnectedHosts::class)->everyFiveMinutes();

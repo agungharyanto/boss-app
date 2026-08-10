@@ -4,16 +4,21 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\RebootCpeDeviceRequest;
+use App\Http\Requests\SetCpeWifiCredentialsRequest;
+use App\Http\Resources\CpeActionLogResource;
 use App\Http\Resources\CpeDeviceResource;
 use App\Models\CpeDevice;
+use App\Services\Network\CpeActionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
- * Read-only this sprint (v0.7.1) — no store/update/destroy at all. Binding
- * is fully automatic via CpeBindingService::bindFromWorkOrder(), never a
+ * The device ROW itself is read-only (no store/update/destroy) — binding is
+ * fully automatic via CpeBindingService::bindFromWorkOrder(), never a
  * user-facing create action, per the locked decision "otomatis dari
- * Installation, bukan input admin".
+ * Installation, bukan input admin". reboot()/setWifi()/actions() (v0.7.4)
+ * act ON an already-bound device, not on the row's own fields.
  */
 class CpeDeviceController extends Controller
 {
@@ -50,5 +55,62 @@ class CpeDeviceController extends Controller
         $this->authorize('view', $cpeDevice);
 
         return $this->success(new CpeDeviceResource($cpeDevice->load(['customer', 'reseller'])));
+    }
+
+    /**
+     * Always 200 with the CpeActionLog, whether delivery ended up
+     * `delivered` or `failed` — the log ITSELF is the source of truth for
+     * what happened, an HTTP error code here would wrongly suggest the API
+     * call itself was malformed. `message` is deliberately honest either
+     * way: never "berhasil reboot", only that the command was sent.
+     */
+    public function reboot(RebootCpeDeviceRequest $request, CpeDevice $cpeDevice, CpeActionService $service): JsonResponse
+    {
+        $log = $service->reboot($cpeDevice, $request->user());
+
+        return $this->success(
+            new CpeActionLogResource($log),
+            $log->status->value === 'delivered'
+                ? 'Perintah reboot terkirim — perangkat akan reboot saat menerima perintah ini (instan kalau Connection Request berhasil, atau saat koneksi berikutnya kalau tidak).'
+                : 'Perintah reboot GAGAL dikirim.'
+        );
+    }
+
+    public function setWifi(SetCpeWifiCredentialsRequest $request, CpeDevice $cpeDevice, CpeActionService $service): JsonResponse
+    {
+        $log = $service->setWifiCredentials(
+            $cpeDevice,
+            $request->validated('ssid'),
+            $request->validated('password'),
+            $request->user(),
+        );
+
+        return $this->success(
+            new CpeActionLogResource($log),
+            $log->status->value === 'delivered'
+                ? 'Perintah ganti WiFi terkirim — akan diterapkan saat perangkat menerima perintah ini (instan kalau Connection Request berhasil, atau saat koneksi berikutnya kalau tidak).'
+                : 'Perintah ganti WiFi GAGAL dikirim.'
+        );
+    }
+
+    public function actions(Request $request, CpeDevice $cpeDevice): JsonResponse
+    {
+        $this->authorize('view', $cpeDevice);
+
+        $logs = $cpeDevice->actionLogs()
+            ->with('performedBy')
+            ->latest()
+            ->paginate($request->integer('per_page', 15));
+
+        return $this->success(
+            CpeActionLogResource::collection($logs->items()),
+            'Riwayat aksi perangkat CPE',
+            ['pagination' => [
+                'current_page' => $logs->currentPage(),
+                'per_page' => $logs->perPage(),
+                'total' => $logs->total(),
+                'last_page' => $logs->lastPage(),
+            ]]
+        );
     }
 }

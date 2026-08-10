@@ -20,7 +20,8 @@
 | v0.7.1  | Network         | GenieACS Core                 | Deploy GenieACS+MongoDB, auto-binding device dari Installation (work_order_devices), CpeDevice model + API + UI list read-only | Selesai |
 | v0.7.2  | Network         | GenieACS Vendor Mapping       | Mapping parameter per-vendor (`cpe_parameter_maps`), resolve RX/TX power via `refreshObject` — refresh on-demand lewat Connection Request/tunnel VPN masih diblokir, lihat catatan v0.7.3 | Selesai |
 | v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Implementasi selesai — verifikasi akhir pending |
-| v0.7.4  | Network         | GenieACS Auto-Provisioning    | Provisioning otomatis, digerbang oleh status binding (`cpe_devices.bound_at`, disiapkan sejak v0.7.1)                          | Backlog |
+| v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Selesai |
+| v0.7.5  | Network         | GenieACS Auto-Provisioning    | Provisioning otomatis, digerbang oleh status binding (`cpe_devices.bound_at`, disiapkan sejak v0.7.1) — slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions (aslinya direncanakan jadi isi v0.7.3, lihat catatan v0.7.3) | Backlog |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
@@ -212,12 +213,15 @@ berbagi satu `freeradius`/VPN node (posisi operasional saat ini: satu
 deployment BOSS App = satu ISP, sama seperti `payment_gateway_settings`/
 `whatsapp_gateway` "direct" session — didokumentasikan di CLAUDE.md).
 
-## v0.7.0 dipecah jadi sub-cluster v0.7.1-v0.7.4 (dikonfirmasi Agung saat v0.7.1 dimulai)
+## v0.7.0 dipecah jadi sub-cluster v0.7.1-v0.7.5 (dikonfirmasi Agung saat v0.7.1 dimulai; digeser dari v0.7.1-v0.7.4 ke v0.7.1-v0.7.5 saat v0.7.4 selesai — lihat catatan v0.7.4 di bawah)
 
 Sama pola dengan `v0.6.0` → `v0.6.1`-`v0.6.5`: `v0.7.0` (GenieACS, satu baris)
-dipecah jadi 4 sub-versi karena scope-nya juga besar dan berlapis (deploy
-dasar → mapping per-vendor → aksi remote real-time → provisioning otomatis,
-masing-masing punya dependency teknis ke yang sebelumnya). **BOSS-002 relaxed
+dipecah jadi sub-versi karena scope-nya juga besar dan berlapis (deploy
+dasar → mapping per-vendor → routing prasyarat jaringan → aksi remote →
+provisioning otomatis, masing-masing punya dependency teknis ke yang
+sebelumnya — awalnya direncanakan 4 sub-versi, jadi 5 setelah routing
+prasyarat jaringan ternyata perlu sub-versinya sendiri, lihat catatan v0.7.3
+di bawah). **BOSS-002 relaxed
 untuk cluster `v0.7.x` ini** — sub-versi boleh berjalan berurutan dalam satu
 alur kerja tanpa commit/tag terpisah tiap sub-versi kalau memang lebih
 efisien, beda dari `v0.6.x` yang tiap sub-versi ditag sendiri-sendiri
@@ -370,7 +374,46 @@ ulang tes TCP mentah (`nc -zv` dari `genieacs-nbi` ke kedua device) dan
 retry Connection Request kedua task di atas, buktikan Connection Request
 benar-benar sampai (bukan cuma tunnel handshake hidup). Sampai itu
 dikonfirmasi, anggap fitur ini "implementasi selesai, belum terbukti
-jalan" — bukan "selesai".
+jalan" — bukan "selesai". **Amendment saat v0.7.4 ditutup**: TODO ini
+sengaja BELUM dikerjakan — Agung memutuskan lanjut ke v0.7.4 duluan,
+karena task queue + audit log v0.7.4 tetap berguna dan benar terlepas dari
+status v0.7.3 (lihat catatan v0.7.4 di bawah untuk kenapa ini aman).
+
+**v0.7.4 (GenieACS Remote Actions) selesai** — sengaja dibangun dalam mode
+"tidak instan" TANPA menunggu TODO v0.7.3 di atas selesai lebih dulu,
+keputusan sadar Agung: `App\Services\Network\CpeActionService` (`reboot()`/
+`setWifiCredentials()`) selalu menulis `cpe_action_logs` dulu (status
+`queued`) sebelum mengirim apa pun ke GenieACS, lalu update ke `delivered`
+(task berhasil masuk antrean) atau `failed` (enqueue-nya sendiri yang
+gagal — device belum punya `genieacs_device_id`, mapping parameter tidak
+ada, atau GenieACS menolak). `GenieAcsClientService::sendTask()` SELALU
+mencoba `connection_request` juga (default `true`) — kegagalannya (device
+tidak reachable, sama seperti temuan investigasi v0.7.3) tidak pernah
+dianggap gagal, cuma berarti perintah baru diterapkan di Inform
+berikutnya. Konsekuensi penting: **begitu TODO v0.7.3 di atas selesai dan
+Connection Request terbukti jalan, v0.7.4 otomatis jadi instan tanpa
+perubahan kode sama sekali** — mekanismenya sudah ada sejak hari pertama
+sprint ini, cuma belum pernah berhasil karena v0.7.3 belum terverifikasi.
+
+`cpe_parameter_maps` diperluas dengan `wifi_ssid`/`wifi_password` untuk ZTE
+F663NV3.1 — `wifi_ssid` terverifikasi penuh (path + nilai nyata `'RUMAHVIA'`
+terbaca dari tree device yang sudah tersimpan). `wifi_password` **sengaja
+tidak ditandai verified** — device ini (dan device TR-069 pada umumnya)
+selalu mengembalikan string kosong untuk field password saat dibaca
+(perilaku keamanan CPE standar, bukan gap discovery), jadi tidak ada nilai
+nyata untuk dicocokkan, dan belum ada percobaan `setParameterValues` nyata
+yang dikonfirmasi berhasil mengubah password sungguhan. Password sendiri
+tidak pernah disimpan plaintext di `cpe_action_logs` — hanya fingerprint
+SHA-256 buat keperluan audit "apakah sama dengan perubahan sebelumnya".
+
+**Definition of Done v0.7.4 sengaja TIDAK mencakup "device benar-benar
+tereksekusi"** — itu di luar kendali BOSS App sampai Connection Request
+v0.7.3 terverifikasi (dan bahkan setelah itu, BOSS App tetap tidak akan
+tahu device sudah selesai menjalankan task tanpa mekanisme konfirmasi
+device-side yang belum dibangun). Scope yang selesai dan teruji: task
+berhasil diantre + tercatat di audit log + UI jujur soal status ini —
+itulah yang membuat v0.7.4 boleh ditandai "Selesai" meski v0.7.3 sendiri
+masih "verifikasi akhir pending".
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

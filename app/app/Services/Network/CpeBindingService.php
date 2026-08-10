@@ -2,12 +2,15 @@
 
 namespace App\Services\Network;
 
+use App\Enums\CpeActionStatus;
 use App\Enums\CpeDeviceStatus;
 use App\Enums\WorkOrderDeviceType;
 use App\Exceptions\CpeBindingException;
 use App\Models\CpeDevice;
 use App\Models\WorkOrder;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 /**
  * Turns a completed WorkOrder's scanned device(s) into a `cpe_devices` row —
@@ -42,6 +45,7 @@ class CpeBindingService
 {
     public function __construct(
         private readonly GenieAcsClientService $client,
+        private readonly CpeActionService $cpeAction,
     ) {}
 
     public function bindFromWorkOrder(WorkOrder $workOrder): CpeDevice
@@ -75,10 +79,14 @@ class CpeBindingService
             $attributes = array_merge($attributes, $this->attributesFromGenieAcsDevice($genieAcsDevice));
         }
 
-        return CpeDevice::updateOrCreate(
+        $cpeDevice = CpeDevice::updateOrCreate(
             ['work_order_device_id' => $device->id],
             $attributes
         );
+
+        $this->provisionWifiIfPending($cpeDevice, 'auto_provisioning_binding');
+
+        return $cpeDevice;
     }
 
     /**
@@ -104,10 +112,62 @@ class CpeBindingService
             }
 
             $cpeDevice->update($this->attributesFromGenieAcsDevice($genieAcsDevice));
+            $this->provisionWifiIfPending($cpeDevice, 'auto_provisioning_reconciliation');
             $reconciled++;
         }
 
         return $reconciled;
+    }
+
+    /**
+     * v0.7.5 — pushes a work order device's technician-input SSID/password
+     * (`work_order_devices.ssid`/`wifi_password`, captured via the bridge
+     * endpoint `PATCH /work-orders/{id}/devices/{device}/provisioning` —
+     * see docs/API.md "GenieACS Auto-Provisioning (v0.7.5)") to the device
+     * the moment it's actually known to GenieACS, from EITHER caller above.
+     * `$triggeredBy` distinguishes which one in the resulting
+     * CpeActionLog.parameters — useful when reading the history panel later,
+     * not load-bearing for the guard itself.
+     *
+     * Best-effort — same "catch, log, never let this break the caller's own
+     * job" posture as every other GenieACS side-effect hook in this codebase
+     * (WhatsappGatewayService::buildAndQueue(), and this class's own call
+     * from WorkOrderService::complete()). `wifi_provisioned_at` is set ONLY
+     * on a genuine `delivered` result — not merely "we attempted it" — so a
+     * failed attempt (e.g. no cpe_parameter_maps row for this vendor/model)
+     * stays visibly null and can still be pushed by hand later via the
+     * v0.7.4 "Ganti WiFi" UI/API, rather than silently pretending it's done.
+     * Note there's no automatic retry path if THIS one attempt fails: a
+     * CpeDevice only reaches Online once, and reconcilePending()'s own query
+     * only ever looks at `pending_first_connect` rows.
+     */
+    private function provisionWifiIfPending(CpeDevice $cpeDevice, string $triggeredBy): void
+    {
+        if ($cpeDevice->genieacs_device_id === null || $cpeDevice->wifi_provisioned_at !== null) {
+            return;
+        }
+
+        $workOrderDevice = $cpeDevice->workOrderDevice;
+
+        if ($workOrderDevice === null || ($workOrderDevice->ssid === null && $workOrderDevice->wifi_password === null)) {
+            return;
+        }
+
+        try {
+            $log = $this->cpeAction->setWifiCredentials(
+                $cpeDevice,
+                $workOrderDevice->ssid,
+                $workOrderDevice->wifi_password,
+                null,
+                $triggeredBy,
+            );
+
+            if ($log->status === CpeActionStatus::Delivered) {
+                $cpeDevice->update(['wifi_provisioned_at' => now()]);
+            }
+        } catch (Throwable $e) {
+            Log::warning("CpeBindingService: auto-provisioning WiFi gagal untuk CpeDevice #{$cpeDevice->id} — {$e->getMessage()}");
+        }
     }
 
     private function findByStoredSerial(string $serialNumber): ?array

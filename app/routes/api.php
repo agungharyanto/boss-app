@@ -117,6 +117,11 @@ Route::prefix('v1')->group(function () {
             Route::post('work-orders/{work_order}/start', [WorkOrderController::class, 'start']);
             Route::post('work-orders/{work_order}/photos', [WorkOrderController::class, 'storePhoto']);
             Route::post('work-orders/{work_order}/devices', [WorkOrderController::class, 'storeDevice']);
+            // v0.7.5 — bridge endpoint, separate from storeDevice() above
+            // (scan) because SSID/password arrives at a different moment
+            // (often a later phone call, not at scan time). See
+            // ProvisionWorkOrderDeviceRequest's own docblock.
+            Route::patch('work-orders/{work_order}/devices/{device}/provisioning', [WorkOrderController::class, 'provisionDevice']);
             Route::post('work-orders/{work_order}/complete', [WorkOrderController::class, 'complete']);
             Route::post('work-orders/{work_order}/cancel', [WorkOrderController::class, 'cancel']);
 

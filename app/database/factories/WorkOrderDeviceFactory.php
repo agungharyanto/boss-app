@@ -32,4 +32,13 @@ class WorkOrderDeviceFactory extends Factory
     {
         return $this->state(fn () => ['work_order_id' => $workOrder->id]);
     }
+
+    /**
+     * v0.7.5 — technician-relayed WiFi credentials, as if already recorded
+     * via ProvisionWorkOrderDeviceRequest.
+     */
+    public function withWifiCredentials(string $ssid = 'RumahTest', string $wifiPassword = 'password123'): static
+    {
+        return $this->state(fn () => ['ssid' => $ssid, 'wifi_password' => $wifiPassword]);
+    }
 }

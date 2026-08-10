@@ -30,6 +30,7 @@ class CpeDevice extends Model
         'status',
         'last_inform_at',
         'bound_at',
+        'wifi_provisioned_at',
     ];
 
     protected function casts(): array
@@ -39,6 +40,7 @@ class CpeDevice extends Model
             'status' => CpeDeviceStatus::class,
             'last_inform_at' => 'datetime',
             'bound_at' => 'datetime',
+            'wifi_provisioned_at' => 'datetime',
         ];
     }
 

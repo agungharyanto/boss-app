@@ -21,7 +21,7 @@
 | v0.7.2  | Network         | GenieACS Vendor Mapping       | Mapping parameter per-vendor (`cpe_parameter_maps`), resolve RX/TX power via `refreshObject` — refresh on-demand lewat Connection Request/tunnel VPN masih diblokir, lihat catatan v0.7.3 | Selesai |
 | v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Implementasi selesai — verifikasi akhir pending |
 | v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Selesai |
-| v0.7.5  | Network         | GenieACS Auto-Provisioning    | Provisioning otomatis, digerbang oleh status binding (`cpe_devices.bound_at`, disiapkan sejak v0.7.1) — slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions (aslinya direncanakan jadi isi v0.7.3, lihat catatan v0.7.3) | Backlog |
+| v0.7.5  | Network         | GenieACS Auto-Provisioning (SSID/Password) | Reuse `CpeActionService` (v0.7.4) — SSID/password hasil input teknisi (`work_order_devices.ssid`/`wifi_password`, direkam CS lewat bridge endpoint sementara) otomatis didorong ke device begitu dikenal GenieACS, lewat hook di `CpeBindingService` (binding ATAU reconciliation). PPPoE di luar scope ini, item roadmap terpisah. Slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions | Implementasi selesai — verifikasi UI komprehensif dijadwalkan sebelum v0.8 |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
@@ -414,6 +414,39 @@ device-side yang belum dibangun). Scope yang selesai dan teruji: task
 berhasil diantre + tercatat di audit log + UI jujur soal status ini —
 itulah yang membuat v0.7.4 boleh ditandai "Selesai" meski v0.7.3 sendiri
 masih "verifikasi akhir pending".
+
+**v0.7.5 (GenieACS Auto-Provisioning — SSID/Password saja) selesai** —
+scope dipersempit dari rencana awal setelah verifikasi: PPPoE (username/
+password RADIUS) TIDAK termasuk, karena kredensial itu ternyata sama
+sekali tidak tersimpan di alur instalasi manapun (`work_order_devices`
+cuma MAC/serial, tidak ada link balik `radcheck`→work order) — jadi
+scope-nya SSID/password WiFi saja, reuse penuh `CpeActionService` (v0.7.4).
+Ditemukan juga saat verifikasi: **tidak ada mekanisme input teknisi sama
+sekali** — WhatsApp bot masih outbound-only (v0.4.0), Mobile App belum
+dibangun (masih v0.11.0 backlog) — jadi v0.7.5 terpaksa mencakup jalur
+input CS/admin manual (`PATCH /work-orders/{id}/devices/{device}/
+provisioning` + halaman `WorkOrderShow`, Livewire pertama untuk modul
+Installation) sebagai BRIDGE sementara, ditandai eksplisit di kode/docs
+bukan UI teknisi final.
+
+Push otomatis terjadi lewat `CpeBindingService::provisionWifiIfPending()`,
+dipanggil dari DUA titik (`bindFromWorkOrder()` saat binding langsung
+online, `reconcilePending()` saat job terjadwal berhasil match) — log
+`cpe_action_logs`-nya punya `performed_by` NULL (tidak ada aktor manusia
+untuk aksi otomatis ini; `cpe_action_logs.performed_by` sengaja dijadikan
+nullable, dikonfirmasi Agung lebih jujur daripada user sistem palsu) +
+`parameters.triggered_by` (`auto_provisioning_binding`/
+`auto_provisioning_reconciliation`) buat bedain sumbernya di riwayat aksi.
+`cpe_devices.wifi_provisioned_at` jadi guard anti-duplikat, hanya ke-set
+kalau push benar-benar `delivered` — **tidak ada retry otomatis** kalau
+gagal (device yang sudah `online` tidak pernah disentuh lagi oleh
+`reconcilePending()`), CS perlu push manual lewat tombol "Ganti WiFi"
+v0.7.4 untuk kasus itu.
+
+**Sama seperti v0.7.4**: implementasi + 391 test regresi hijau, tapi UI
+(halaman `WorkOrderShow`, alur isi SSID/password) belum pernah dicoba
+langsung di browser — masuk sesi verifikasi UI komprehensif yang sama
+dengan v0.7.3/v0.7.4 sebelum mulai v0.8.
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\RebootCpeDeviceRequest;
 use App\Http\Requests\SetCpeWifiCredentialsRequest;
 use App\Http\Resources\CpeActionLogResource;
+use App\Http\Resources\CpeConnectedHostResource;
 use App\Http\Resources\CpeDeviceResource;
 use App\Models\CpeDevice;
 use App\Services\Network\CpeActionService;
@@ -110,6 +111,33 @@ class CpeDeviceController extends Controller
                 'per_page' => $logs->perPage(),
                 'total' => $logs->total(),
                 'last_page' => $logs->lastPage(),
+            ]]
+        );
+    }
+
+    /**
+     * `?active_only=true` filters to currently-active hosts only — default
+     * (no param, or any other value) returns the full history including
+     * hosts marked inactive by App\Services\Network\CpeConnectedHostsService.
+     * Sorted `last_seen_at` desc either way — most recently seen first.
+     */
+    public function connectedHosts(Request $request, CpeDevice $cpeDevice): JsonResponse
+    {
+        $this->authorize('view', $cpeDevice);
+
+        $hosts = $cpeDevice->connectedHosts()
+            ->when($request->boolean('active_only'), fn ($query) => $query->where('is_active', true))
+            ->orderByDesc('last_seen_at')
+            ->paginate($request->integer('per_page', 15));
+
+        return $this->success(
+            CpeConnectedHostResource::collection($hosts->items()),
+            'Daftar client TR-069 perangkat CPE',
+            ['pagination' => [
+                'current_page' => $hosts->currentPage(),
+                'per_page' => $hosts->perPage(),
+                'total' => $hosts->total(),
+                'last_page' => $hosts->lastPage(),
             ]]
         );
     }

@@ -1679,6 +1679,24 @@ the real credential only ever lives on the device/GenieACS, which is also
 exactly why there's no meaningful "old_password" to log even if we wanted
 to: the field above proves BOSS App never had it to begin with.
 
+## GenieACS Connected Clients (v0.7.6)
+
+**TR-069 instance numbers under a dynamic object are not stable or
+sequential across devices — never treat `{n}` in a path like
+`LANDevice.{i}.Hosts.Host.{n}` as an identity, only as a transient index.**
+Confirmed on two real devices before `cpe_connected_hosts` was designed: a
+live ZTE F663NV3.1 reported host instances `7/10/11/67/68`, a live Huawei
+EG8141A5 reported `1/2` — vendor-assigned, arbitrary, no guarantee of
+staying the same for the same physical client across polls. `mac_address`
+is the only safe key for anything that needs to track "the same device
+over time" from a dynamic TR-069 object — `App\Services\Network\
+CpeConnectedHostsService::syncFromGenieAcs()` iterates whatever keys
+`Hosts.Host` happens to have, keyed on `MACAddress`, never on the loop
+index. Worth checking for the same gotcha before building any future
+feature that walks another dynamic TR-069 array (WLANConfiguration
+instances, WANConnectionDevice instances, etc.) — this is a real device
+behavior, not specific to Hosts.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

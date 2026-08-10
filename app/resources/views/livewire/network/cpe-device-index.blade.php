@@ -66,6 +66,9 @@
                                 <button wire:click="openHistoryModal({{ $device->id }})" class="text-primary hover:underline">
                                     {{ __('Riwayat') }}
                                 </button>
+                                <button wire:click="openHostsModal({{ $device->id }})" class="text-primary hover:underline">
+                                    {{ __('Client') }}
+                                </button>
                                 @can('manage', $device)
                                     <button
                                         wire:click="reboot({{ $device->id }})"
@@ -184,6 +187,67 @@
 
                 <div class="pt-2">
                     <button wire:click="closeHistoryModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
+                        {{ __('Tutup') }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    @endif
+
+    {{-- CLIENT TERHUBUNG MODAL (v0.7.6) — histori TR-069 Hosts.Host,
+         diisi command terjadwal, bukan dipicu dari sini. --}}
+    @if ($showHostsModal)
+        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeHostsModal">
+            <div class="bg-white rounded-md p-6 w-full max-w-2xl space-y-4 max-h-[80vh] overflow-y-auto">
+                <h2 class="font-medium">{{ __('Client Terhubung') }}</h2>
+                <p class="text-xs text-gray-500">
+                    {{ __('Disinkronkan otomatis tiap beberapa menit dari data TR-069 (Hosts) yang sudah tersimpan di GenieACS — bukan snapshot real-time. Host yang sudah lama tidak terlihat tetap tercatat, ditandai tidak aktif.') }}
+                </p>
+
+                <label class="flex items-center gap-2 text-xs text-gray-600">
+                    <input type="checkbox" wire:model.live="hostsActiveOnly">
+                    {{ __('Tampilkan yang aktif saja') }}
+                </label>
+
+                <div class="overflow-x-auto border border-gray-200 rounded-md">
+                    <table class="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Hostname') }}</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('MAC') }}</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('IP') }}</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status') }}</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pertama Terlihat') }}</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Terakhir Terlihat') }}</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-100">
+                            @forelse ($connectedHosts as $host)
+                                <tr wire:key="connected-host-{{ $host->id }}">
+                                    <td class="px-3 py-2 text-gray-800">{{ $host->hostname ?? '—' }}</td>
+                                    <td class="px-3 py-2 text-gray-600 font-mono text-xs">{{ $host->mac_address }}</td>
+                                    <td class="px-3 py-2 text-gray-600">{{ $host->ip_address ?? '—' }}</td>
+                                    <td class="px-3 py-2">
+                                        <span class="px-2 py-0.5 rounded-full text-xs {{ $host->is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500' }}">
+                                            {{ $host->is_active ? __('Aktif') : __('Tidak Aktif') }}
+                                        </span>
+                                    </td>
+                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $host->first_seen_at->diffForHumans() }}</td>
+                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $host->last_seen_at->diffForHumans() }}</td>
+                                </tr>
+                            @empty
+                                <tr>
+                                    <td colspan="6" class="px-3 py-6 text-center text-sm text-gray-500">
+                                        {{ __('Belum ada client tercatat untuk perangkat ini.') }}
+                                    </td>
+                                </tr>
+                            @endforelse
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="pt-2">
+                    <button wire:click="closeHostsModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
                         {{ __('Tutup') }}
                     </button>
                 </div>

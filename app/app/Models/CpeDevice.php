@@ -66,4 +66,12 @@ class CpeDevice extends Model
     {
         return $this->hasMany(CpeActionLog::class);
     }
+
+    /**
+     * TR-069 Hosts.Host history (v0.7.6) — see App\Models\CpeConnectedHost.
+     */
+    public function connectedHosts(): HasMany
+    {
+        return $this->hasMany(CpeConnectedHost::class);
+    }
 }

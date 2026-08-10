@@ -20,7 +20,7 @@
 | v0.7.1  | Network         | GenieACS Core                 | Deploy GenieACS+MongoDB, auto-binding device dari Installation (work_order_devices), CpeDevice model + API + UI list read-only | Selesai |
 | v0.7.2  | Network         | GenieACS Vendor Mapping       | Mapping parameter per-vendor (`cpe_parameter_maps`), resolve RX/TX power via `refreshObject` — refresh on-demand lewat Connection Request/tunnel VPN masih diblokir, lihat catatan v0.7.3 | Selesai |
 | v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Implementasi selesai — verifikasi akhir pending |
-| v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Selesai |
+| v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Implementasi selesai — verifikasi UI komprehensif dijadwalkan sebelum v0.8 |
 | v0.7.5  | Network         | GenieACS Auto-Provisioning    | Provisioning otomatis, digerbang oleh status binding (`cpe_devices.bound_at`, disiapkan sejak v0.7.1) — slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions (aslinya direncanakan jadi isi v0.7.3, lihat catatan v0.7.3) | Backlog |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
@@ -412,8 +412,19 @@ v0.7.3 terverifikasi (dan bahkan setelah itu, BOSS App tetap tidak akan
 tahu device sudah selesai menjalankan task tanpa mekanisme konfirmasi
 device-side yang belum dibangun). Scope yang selesai dan teruji: task
 berhasil diantre + tercatat di audit log + UI jujur soal status ini —
-itulah yang membuat v0.7.4 boleh ditandai "Selesai" meski v0.7.3 sendiri
-masih "verifikasi akhir pending".
+implementasi dan 374 test regresi (lalu 391 setelah v0.7.5) hijau.
+
+**Amendment — verifikasi UI ditunda ke akhir cluster, bukan diklaim
+selesai** (dikonfirmasi Agung): tombol Reboot/Ganti WiFi di `/cpe-devices`
+belum pernah dicoba langsung di browser. Daripada verifikasi UI
+sepotong-sepotong per sub-versi, satu sesi tes komprehensif dijadwalkan
+sebelum mulai v0.8 — mencakup v0.7.3 (retest Connection Request), v0.7.4
+(tombol Reboot/Ganti WiFi ini), DAN v0.7.5 (alur provisioning) sekaligus.
+Status tabel di atas karena itu **"Implementasi selesai — verifikasi UI
+komprehensif dijadwalkan sebelum v0.8"**, bukan "Selesai" polos — sama
+polanya dengan v0.7.3. Branch tetap di-merge ke `develop`/`main` dan
+di-tag sekarang supaya branch tidak menumpuk, bukan berarti klaim fully
+verified.
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

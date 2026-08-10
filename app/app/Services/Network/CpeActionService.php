@@ -65,8 +65,17 @@ class CpeActionService
      * separate tasks) — applies atomically on the device's next Inform
      * rather than risking the two fields landing across two different
      * Inform cycles.
+     *
+     * $actor is nullable (v0.7.5) — App\Services\Network\CpeBindingService's
+     * auto-provisioning hook (binding/reconciliation) has no human actor at
+     * all, confirmed with Agung: nullable + "Sistem (auto-provisioning)" in
+     * the UI is more honest than a fake system user. $triggeredBy is a free
+     * label recorded in `parameters['triggered_by']` for exactly that case
+     * (`auto_provisioning_binding`/`auto_provisioning_reconciliation`) —
+     * null for a real UI/API-triggered call, where the actor itself already
+     * answers "who did this".
      */
-    public function setWifiCredentials(CpeDevice $device, ?string $ssid, ?string $password, User $actor): CpeActionLog
+    public function setWifiCredentials(CpeDevice $device, ?string $ssid, ?string $password, ?User $actor, ?string $triggeredBy = null): CpeActionLog
     {
         if ($ssid === null && $password === null) {
             throw new InvalidArgumentException('Minimal salah satu dari ssid/password harus diisi.');
@@ -87,6 +96,10 @@ class CpeActionService
             // table, so this isn't standing in for a login-credential hash.
             $parameters['password_changed'] = true;
             $parameters['new_password_fingerprint'] = hash('sha256', $password);
+        }
+
+        if ($triggeredBy !== null) {
+            $parameters['triggered_by'] = $triggeredBy;
         }
 
         $actionType = $ssid !== null ? CpeActionType::SetSsid : CpeActionType::SetPassword;
@@ -111,13 +124,13 @@ class CpeActionService
         return $log->fresh();
     }
 
-    private function createLog(CpeDevice $device, User $actor, CpeActionType $actionType, ?array $parameters): CpeActionLog
+    private function createLog(CpeDevice $device, ?User $actor, CpeActionType $actionType, ?array $parameters): CpeActionLog
     {
         return CpeActionLog::create([
             'cpe_device_id' => $device->id,
             'tenant_id' => $device->tenant_id,
             'reseller_id' => $device->reseller_id,
-            'performed_by' => $actor->id,
+            'performed_by' => $actor?->id,
             'action_type' => $actionType,
             'parameters' => $parameters,
             'status' => CpeActionStatus::Queued,

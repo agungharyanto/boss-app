@@ -7,6 +7,7 @@ use App\Enums\WorkOrderPhotoType;
 use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\AssignWorkOrderRequest;
+use App\Http\Requests\ProvisionWorkOrderDeviceRequest;
 use App\Http\Requests\StoreWorkOrderDeviceRequest;
 use App\Http\Requests\StoreWorkOrderPhotoRequest;
 use App\Http\Requests\StoreWorkOrderRequest;
@@ -15,6 +16,7 @@ use App\Http\Resources\WorkOrderResource;
 use App\Models\Subscription;
 use App\Models\Technician;
 use App\Models\WorkOrder;
+use App\Models\WorkOrderDevice;
 use App\Services\Installation\WorkOrderPhotoService;
 use App\Services\Installation\WorkOrderService;
 use Illuminate\Http\JsonResponse;
@@ -128,6 +130,22 @@ class WorkOrderController extends Controller
         );
 
         return $this->success($device, 'Perangkat berhasil dicatat', [], 201);
+    }
+
+    /**
+     * v0.7.5 bridge endpoint — see ProvisionWorkOrderDeviceRequest's own
+     * docblock for why this is CS/admin manual input, not a technician
+     * self-service form. genieacs_device_id/wifi_provisioned_at aren't
+     * touched here at all — this only records the credential; the actual
+     * push happens later, from CpeBindingService, once the device is known
+     * to GenieACS (may already have happened by binding time, or may still
+     * be pending — this endpoint doesn't need to know which).
+     */
+    public function provisionDevice(ProvisionWorkOrderDeviceRequest $request, WorkOrder $work_order, WorkOrderDevice $device, WorkOrderService $service): JsonResponse
+    {
+        $updated = $service->provisionDeviceWifi($work_order, $device, $request->validated());
+
+        return $this->success($updated, 'Kredensial WiFi tercatat — akan didorong ke perangkat begitu dikenal GenieACS.');
     }
 
     public function complete(WorkOrder $work_order, WorkOrderService $service): JsonResponse

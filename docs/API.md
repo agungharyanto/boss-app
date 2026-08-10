@@ -483,6 +483,33 @@ Laravel 12 — bukan `storage/app/public`, tidak bisa diakses publik).
 Body: `device_type` (`ont`/`router`/`ap`), `mac_address`, `serial_number`.
 Bisa dipanggil berkali-kali (tidak ada batas jumlah device per work order).
 
+### `PATCH /work-orders/{work_order}/devices/{device}/provisioning` (v0.7.5)
+
+**Jalur input sementara (bridge), BUKAN form self-service teknisi** — CS/
+admin yang input manual dari info yang direlai teknisi lewat telepon/WA
+personal. UI teknisi lapangan sesungguhnya (WhatsApp bot 2 arah atau Mobile
+App) masih backlog terpisah (v0.11.0 dkk) — lihat catatan di
+`ProvisionWorkOrderDeviceRequest`.
+
+Body (keduanya opsional, **minimal salah satu wajib diisi tiap call**,
+tapi TIDAK saling mewajibkan satu sama lain seperti endpoint v0.7.4 —
+partial update sungguhan, bisa isi SSID sekarang dan password menyusul di
+call terpisah tanpa menghapus yang sudah tersimpan):
+- `ssid` (string, maks 32 karakter)
+- `wifi_password` (string, 8-63 karakter — disimpan encrypted di
+  `work_order_devices.wifi_password`, kredensial asli bukan hash, karena
+  memang perlu dikirim ke device nanti)
+
+Endpoint ini **hanya mencatat**, tidak memicu push ke device sama sekali —
+push sungguhan terjadi belakangan lewat
+`CpeBindingService::provisionWifiIfPending()` begitu device ini dikenal
+GenieACS (baik langsung saat binding, atau lewat reconciliation job kalau
+saat binding device masih `pending_first_connect`). Kalau device sudah
+lebih dulu dikenal GenieACS SEBELUM endpoint ini dipanggil (mis. teknisi
+telepon CS setelah instalasi kelar), push tidak terjadi otomatis lagi
+(tidak ada trigger baru) — CS pakai tombol "Ganti WiFi" manual dari v0.7.4
+di `/cpe-devices` untuk kasus itu.
+
 ### `POST /work-orders/{work_order}/complete`
 
 Transisi ke `completed`, port ODP jadi `used`. **Ditolak** (422,
@@ -796,4 +823,35 @@ Response `CpeActionLogResource`: `action_type`/`action_type_label`,
 `status_label`, `failed_reason`, `performed_by_name`, `created_at`,
 `completed_at` (kapan log ini mencapai status akhir `delivered`/`failed` —
 **bukan** kapan device selesai mengeksekusi, BOSS App tidak punya cara
-mengetahui itu sprint ini).
+mengetahui itu sprint ini). `performed_by_name` bisa berisi **"Sistem
+(auto-provisioning)"** (bukan nama user) — lihat "GenieACS Auto-Provisioning
+(v0.7.5)" di bawah.
+
+## GenieACS Auto-Provisioning (v0.7.5)
+
+**Bukan endpoint REST baru** (selain satu bridge endpoint di section
+Installation di atas — `PATCH /work-orders/{work_order}/devices/{device}/
+provisioning`) — ini reuse penuh `CpeActionService` (v0.7.4) lewat hook baru
+di `App\Services\Network\CpeBindingService`, dipanggil otomatis dari dua
+titik: `bindFromWorkOrder()` (saat work order selesai dan device langsung
+dikenal GenieACS) dan `reconcilePending()` (saat job terjadwal `cpe:reconcile`
+berhasil mencocokkan device `pending_first_connect`).
+
+**Tidak ada actor manusia untuk aksi ini** — `cpe_action_logs.performed_by`
+jadi nullable khusus untuk kasus ini (dikonfirmasi Agung: lebih jujur
+daripada bikin user sistem palsu). Baris log otomatis punya
+`parameters.triggered_by` bernilai `auto_provisioning_binding` atau
+`auto_provisioning_reconciliation`, dan `performed_by_name` di
+`CpeActionLogResource`/riwayat aksi UI menampilkan **"Sistem
+(auto-provisioning)"**, bukan nama user.
+
+**Guard anti-duplikat**: `cpe_devices.wifi_provisioned_at` (nullable,
+di-set HANYA saat `CpeActionLog` hasil push ini berstatus `delivered` —
+bukan sekadar "sudah dicoba") — kedua titik hook di atas sama-sama
+mengecek ini masih `null` sebelum push, dan sebuah `CpeDevice` cuma
+pernah melewati salah satu dari dua titik hook itu sekali (device yang
+sudah `online` tidak pernah disentuh `reconcilePending()` lagi). Kalau
+push pertama gagal (mis. `cpe_parameter_maps` belum ada untuk model
+device itu), `wifi_provisioned_at` sengaja dibiarkan `null` — **tidak ada
+retry otomatis** untuk device yang sudah `online`, CS perlu push manual
+lewat tombol "Ganti WiFi" (v0.7.4) di `/cpe-devices`.

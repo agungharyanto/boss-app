@@ -7,7 +7,9 @@ use App\Enums\Tr069Root;
 use App\Enums\WorkOrderDeviceType;
 use App\Enums\WorkOrderPhotoType;
 use App\Enums\WorkOrderStatus;
+use App\Models\CpeActionLog;
 use App\Models\CpeDevice;
+use App\Models\CpeParameterMap;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
 use App\Models\WorkOrderPhoto;
@@ -130,6 +132,195 @@ class CpeBindingServiceTest extends TestCase
 
         $this->assertSame(0, $reconciled);
         $this->assertSame(CpeDeviceStatus::PendingFirstConnect, $cpeDevice->fresh()->status);
+    }
+
+    private function fakeWifiParameterMaps(string $oui = 'AABBCC', string $productClass = 'ONT'): void
+    {
+        CpeParameterMap::factory()->create([
+            'oui' => $oui,
+            'product_class' => $productClass,
+            'parameter_key' => 'wifi_ssid',
+            'parameter_path' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID',
+        ]);
+        CpeParameterMap::factory()->create([
+            'oui' => $oui,
+            'product_class' => $productClass,
+            'parameter_key' => 'wifi_password',
+            'parameter_path' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase',
+        ]);
+    }
+
+    /**
+     * v0.7.5 — binding time: the work order device already carries
+     * technician-relayed ssid/wifi_password, AND GenieACS already knows the
+     * device (so bindFromWorkOrder() lands it Online in one go) — the push
+     * must happen right there, not wait for reconciliation.
+     */
+    public function test_binding_provisions_wifi_when_device_is_immediately_online_and_credentials_recorded(): void
+    {
+        $this->fakeWifiParameterMaps();
+        Http::fake([
+            'genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-wo-1'], 202),
+            '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNWIFI001', 'AABBCC-ONT-SNWIFI001')], 200),
+        ]);
+
+        $workOrder = WorkOrder::factory()->inProgress()->create();
+        foreach (WorkOrderPhotoType::cases() as $type) {
+            WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType($type)->create();
+        }
+        WorkOrderDevice::factory()->forWorkOrder($workOrder)->withWifiCredentials('RumahBaru', 'password123')->create([
+            'device_type' => WorkOrderDeviceType::Ont,
+            'serial_number' => 'SNWIFI001',
+        ]);
+
+        app(WorkOrderService::class)->complete($workOrder->fresh());
+
+        $cpeDevice = CpeDevice::where('serial_number', 'SNWIFI001')->firstOrFail();
+        $this->assertNotNull($cpeDevice->wifi_provisioned_at);
+
+        $this->assertDatabaseHas('cpe_action_logs', [
+            'cpe_device_id' => $cpeDevice->id,
+            'status' => 'delivered',
+            'performed_by' => null,
+        ]);
+        $log = CpeActionLog::where('cpe_device_id', $cpeDevice->id)->firstOrFail();
+        $this->assertSame('auto_provisioning_binding', $log->parameters['triggered_by']);
+        $this->assertSame('RumahBaru', $log->parameters['new_ssid']);
+    }
+
+    /**
+     * The mirror case: device NOT yet known to GenieACS at binding time
+     * (stays pending_first_connect, no provisioning attempt yet), THEN
+     * reconcilePending() matches it later — that's where the push must
+     * happen, tagged with the reconciliation trigger label, not the binding
+     * one.
+     */
+    public function test_reconcile_pending_provisions_wifi_once_matched(): void
+    {
+        $this->fakeWifiParameterMaps();
+        $foundDevice = $this->fakeGenieAcsDevice('SNWIFISLOW', 'AABBCC-ONT-SNWIFISLOW');
+
+        // Http::fake() called ONCE for the whole test, on purpose — a
+        // second Http::fake() call mid-test was found to leave the OLDER
+        // stub still matching first for genieacs-nbi:7557/devices*, so the
+        // "not found yet" response from binding time kept intercepting the
+        // reconcile-time GET too. A response sequence lets the SAME URL
+        // pattern answer differently across the two calls this test makes
+        // to it: not-found during bindFromWorkOrder(), found during
+        // reconcilePending() (once for findByStoredSerial, once more for
+        // CpeActionService's own independent findDeviceById() lookup).
+        Http::fake([
+            'genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-wo-2'], 202),
+            // Anchored to `?query=` specifically (not a bare `devices*`
+            // wildcard) — found necessary: a broad `devices*` pattern also
+            // matches the /tasks POST url above
+            // (`devices/{id}/tasks?connection_request`), silently stealing
+            // from this sequence and exhausting it early. 4 GET calls total
+            // across the whole test: bindFromWorkOrder()'s findByStoredSerial
+            // (not found yet), then at reconcile time — findByStoredSerial,
+            // attributesFromGenieAcsDevice()'s own getStandardIdentity() (a
+            // second, independent findDeviceById call), and
+            // CpeActionService::resolveOuiProductClass()'s own
+            // findDeviceById — all three "found" once GenieACS knows it.
+            'genieacs-nbi:7557/devices?query=*' => Http::sequence()
+                ->push([], 200)
+                ->push([$foundDevice], 200)
+                ->push([$foundDevice], 200)
+                ->push([$foundDevice], 200),
+        ]);
+
+        $workOrder = WorkOrder::factory()->inProgress()->create();
+        foreach (WorkOrderPhotoType::cases() as $type) {
+            WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType($type)->create();
+        }
+        WorkOrderDevice::factory()->forWorkOrder($workOrder)->withWifiCredentials('RumahLambat', 'password456')->create([
+            'device_type' => WorkOrderDeviceType::Ont,
+            'serial_number' => 'SNWIFISLOW',
+        ]);
+
+        app(WorkOrderService::class)->complete($workOrder->fresh());
+
+        $cpeDevice = CpeDevice::where('serial_number', 'SNWIFISLOW')->firstOrFail();
+        $this->assertSame(CpeDeviceStatus::PendingFirstConnect, $cpeDevice->status);
+        $this->assertNull($cpeDevice->wifi_provisioned_at);
+        // Nothing attempted yet — no cpe_action_logs row at all.
+        $this->assertDatabaseCount('cpe_action_logs', 0);
+
+        app(CpeBindingService::class)->reconcilePending();
+
+        $cpeDevice->refresh();
+        $this->assertNotNull($cpeDevice->wifi_provisioned_at);
+        $log = CpeActionLog::where('cpe_device_id', $cpeDevice->id)->firstOrFail();
+        $this->assertSame('auto_provisioning_reconciliation', $log->parameters['triggered_by']);
+    }
+
+    public function test_binding_does_not_attempt_provisioning_when_no_wifi_credentials_recorded(): void
+    {
+        Http::fake([
+            '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNNOCRED001', 'AABBCC-ONT-SNNOCRED001')], 200),
+        ]);
+
+        $workOrder = $this->readyWorkOrder('SNNOCRED001');
+
+        app(WorkOrderService::class)->complete($workOrder);
+
+        $cpeDevice = CpeDevice::where('serial_number', 'SNNOCRED001')->firstOrFail();
+        $this->assertNull($cpeDevice->wifi_provisioned_at);
+        $this->assertDatabaseCount('cpe_action_logs', 0);
+    }
+
+    public function test_binding_does_not_reprovision_a_device_that_was_already_provisioned(): void
+    {
+        $this->fakeWifiParameterMaps();
+        Http::fake([
+            'genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-wo-3'], 202),
+            '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNDUPCHECK', 'AABBCC-ONT-SNDUPCHECK')], 200),
+        ]);
+
+        $workOrder = WorkOrder::factory()->inProgress()->create();
+        $workOrderDevice = WorkOrderDevice::factory()->forWorkOrder($workOrder)->withWifiCredentials()->create([
+            'device_type' => WorkOrderDeviceType::Ont,
+            'serial_number' => 'SNDUPCHECK',
+        ]);
+
+        // Call the binding service directly twice — same real-world race
+        // this guard exists for (bindFromWorkOrder() at completion time,
+        // reconcilePending() on its own 5-minute cycle, could both reach a
+        // freshly-online device depending on timing).
+        app(CpeBindingService::class)->bindFromWorkOrder($workOrder->fresh());
+        app(CpeBindingService::class)->bindFromWorkOrder($workOrder->fresh());
+
+        $this->assertDatabaseCount('cpe_action_logs', 1);
+    }
+
+    public function test_binding_leaves_wifi_provisioned_at_null_when_the_push_itself_fails(): void
+    {
+        // No CpeParameterMap rows at all — setWifiCredentials() will fail
+        // to resolve a path, landing the CpeActionLog as `failed`.
+        Http::fake([
+            '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNPUSHFAIL', 'AABBCC-ONT-SNPUSHFAIL')], 200),
+        ]);
+
+        $workOrder = WorkOrder::factory()->inProgress()->create();
+        foreach (WorkOrderPhotoType::cases() as $type) {
+            WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType($type)->create();
+        }
+        WorkOrderDevice::factory()->forWorkOrder($workOrder)->withWifiCredentials()->create([
+            'device_type' => WorkOrderDeviceType::Ont,
+            'serial_number' => 'SNPUSHFAIL',
+        ]);
+
+        // Binding itself must still succeed even though the wifi push fails
+        // (best-effort, per WorkOrderService::complete()'s own posture).
+        $result = app(WorkOrderService::class)->complete($workOrder->fresh());
+        $this->assertSame(WorkOrderStatus::Completed, $result->status);
+
+        $cpeDevice = CpeDevice::where('serial_number', 'SNPUSHFAIL')->firstOrFail();
+        $this->assertNull($cpeDevice->wifi_provisioned_at);
+        $this->assertDatabaseHas('cpe_action_logs', [
+            'cpe_device_id' => $cpeDevice->id,
+            'status' => 'failed',
+        ]);
     }
 
     public function test_get_standard_identity_falls_back_from_tr098_to_tr181_root(): void

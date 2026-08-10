@@ -8,6 +8,7 @@ use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
+use App\Livewire\Installation\WorkOrderShow;
 use App\Livewire\Network\CpeDeviceIndex;
 use App\Livewire\Network\CpeParameterMapIndex;
 use App\Livewire\Network\NasIndex;
@@ -69,6 +70,7 @@ Route::middleware('auth')->name('web.')->group(function () {
         Route::get('/nas', NasIndex::class)->name('nas.index');
         Route::get('/vpn-script-generator', VpnScriptGenerator::class)->name('vpn-script-generator.index');
         Route::get('/cpe-devices', CpeDeviceIndex::class)->name('cpe-devices.index');
+        Route::get('/work-orders/{work_order}', WorkOrderShow::class)->name('work-orders.show');
     });
 
     Route::get('/resellers', ResellerIndex::class)->name('resellers.index');

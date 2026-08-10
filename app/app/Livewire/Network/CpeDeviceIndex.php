@@ -4,6 +4,7 @@ namespace App\Livewire\Network;
 
 use App\Enums\CpeActionStatus;
 use App\Models\CpeActionLog;
+use App\Models\CpeConnectedHost;
 use App\Models\CpeDevice;
 use App\Services\Network\CpeActionService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
@@ -14,8 +15,12 @@ use Livewire\WithPagination;
  * v0.7.1: read-only. v0.7.4 adds remote actions (reboot, ganti WiFi) + a
  * per-device action history panel — `manage()` on CpeDevicePolicy gates
  * both new buttons, `view()` still gates the history panel (same as the
- * list itself). BelongsToResellerScope on CpeDevice already handles list
- * scoping automatically, same as NasIndex — no manual filter needed here.
+ * list itself). v0.7.6 adds a connected-clients panel (TR-069 Hosts.Host
+ * history) — `view()`-gated too, fully read-only, populated only by
+ * App\Console\Commands\SyncCpeConnectedHosts's own schedule, never by a
+ * user action in this component. BelongsToResellerScope on CpeDevice
+ * already handles list scoping automatically, same as NasIndex — no manual
+ * filter needed here.
  *
  * Every action here is deliberately "not instant" in its own MESSAGING even
  * though the underlying service always tries GenieACS's connection_request
@@ -43,6 +48,12 @@ class CpeDeviceIndex extends Component
     public ?int $historyDeviceId = null;
 
     public bool $showHistoryModal = false;
+
+    public ?int $hostsDeviceId = null;
+
+    public bool $showHostsModal = false;
+
+    public bool $hostsActiveOnly = false;
 
     public function mount(): void
     {
@@ -120,6 +131,27 @@ class CpeDeviceIndex extends Component
         $this->historyDeviceId = null;
     }
 
+    /**
+     * Read-only, same `view` gate as the history modal — no manage()
+     * needed, this data was never something a user triggers (it's synced by
+     * App\Console\Commands\SyncCpeConnectedHosts on its own schedule).
+     */
+    public function openHostsModal(int $deviceId): void
+    {
+        $device = CpeDevice::findOrFail($deviceId);
+        $this->authorize('view', $device);
+
+        $this->hostsDeviceId = $deviceId;
+        $this->hostsActiveOnly = false;
+        $this->showHostsModal = true;
+    }
+
+    public function closeHostsModal(): void
+    {
+        $this->showHostsModal = false;
+        $this->hostsDeviceId = null;
+    }
+
     private function flashActionResult(CpeActionLog $log): void
     {
         if ($log->status === CpeActionStatus::Delivered) {
@@ -152,9 +184,19 @@ class CpeDeviceIndex extends Component
                 ->get()
             : collect();
 
+        $connectedHosts = $this->hostsDeviceId !== null
+            ? CpeConnectedHost::query()
+                ->where('cpe_device_id', $this->hostsDeviceId)
+                ->when($this->hostsActiveOnly, fn ($query) => $query->where('is_active', true))
+                ->orderByDesc('last_seen_at')
+                ->limit(50)
+                ->get()
+            : collect();
+
         return view('livewire.network.cpe-device-index', [
             'devices' => $devices,
             'historyLogs' => $historyLogs,
+            'connectedHosts' => $connectedHosts,
         ]);
     }
 }

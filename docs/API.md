@@ -855,3 +855,37 @@ push pertama gagal (mis. `cpe_parameter_maps` belum ada untuk model
 device itu), `wifi_provisioned_at` sengaja dibiarkan `null` — **tidak ada
 retry otomatis** untuk device yang sudah `online`, CS perlu push manual
 lewat tombol "Ganti WiFi" (v0.7.4) di `/cpe-devices`.
+
+## GenieACS Connected Clients (v0.7.6)
+
+Baca object TR-069 `LANDevice.{i}.Hosts.Host.{n}` (client yang terhubung ke
+WiFi/LAN device) — **read-only murni dari sisi API**, tidak ada endpoint
+yang memicu sync. Data diisi oleh command terjadwal
+`cpe:sync-connected-hosts` (tiap 5 menit, pola sama `cpe:reconcile` v0.7.1),
+lewat `App\Services\Network\CpeConnectedHostsService::syncFromGenieAcs()` —
+membaca data yang **sudah tersimpan** di GenieACS, tidak pernah memicu
+`refreshObject`/Connection Request sendiri.
+
+**Bukan snapshot, histori** — satu baris per `(cpe_device_id, mac_address)`
+di `cpe_connected_hosts`, tidak pernah satu baris per poll (menghindari
+tabel membengkak tak terkendali). `first_seen_at` cuma diisi sekali saat
+MAC address itu pertama kali muncul; `last_seen_at` di-update tiap kali
+MAC itu masih muncul di poll; `is_active` jadi `false` (baris **tidak
+dihapus**) begitu MAC yang sebelumnya tercatat tidak muncul lagi di satu
+poll. `hostname`/`ip_address` hanya ditimpa kalau poll saat itu punya
+nilai baru — device yang sesaat melaporkan `HostName` kosong tidak
+menghapus nama yang sudah diketahui sebelumnya.
+
+**Nomor instance `Host.{n}` TERBUKTI tidak stabil/tidak berurutan di
+hardware nyata** (dikonfirmasi langsung: ZTE F663NV3.1 melaporkan indeks
+7/10/11/67/68, Huawei EG8141A5 melaporkan 1/2) — `mac_address` adalah
+satu-satunya kunci identitas yang aman dipakai, sesuai unique constraint
+tabel ini.
+
+### `GET /cpe-devices/{cpe_device}/connected-hosts`
+
+List (paginated, `?per_page=`) semua host — aktif maupun histori,
+diurutkan `last_seen_at` terbaru dulu. Query param `?active_only=true`
+membatasi ke yang `is_active` saja. Response `CpeConnectedHostResource`:
+`mac_address`, `hostname` (nullable), `ip_address` (nullable),
+`is_active`, `first_seen_at`, `last_seen_at`.

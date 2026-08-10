@@ -22,6 +22,7 @@
 | v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Implementasi selesai — verifikasi akhir pending |
 | v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Implementasi selesai — verifikasi UI komprehensif dijadwalkan sebelum v0.8 |
 | v0.7.5  | Network         | GenieACS Auto-Provisioning (SSID/Password) | Reuse `CpeActionService` (v0.7.4) — SSID/password hasil input teknisi (`work_order_devices.ssid`/`wifi_password`, direkam CS lewat bridge endpoint sementara) otomatis didorong ke device begitu dikenal GenieACS, lewat hook di `CpeBindingService` (binding ATAU reconciliation). PPPoE di luar scope ini, item roadmap terpisah. Slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions | Implementasi selesai — verifikasi UI komprehensif dijadwalkan sebelum v0.8 |
+| v0.7.6  | Network         | GenieACS Connected Clients (dengan histori) | Baca TR-069 `Hosts.Host` (client WiFi/LAN terhubung) — histori per `(device, MAC)` di `cpe_connected_hosts`, bukan snapshot per poll, sync command terjadwal 5 menit dari data yang sudah tersimpan GenieACS (tidak memicu refresh sendiri) | Implementasi selesai — verifikasi UI komprehensif dijadwalkan sebelum v0.8 |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
@@ -213,7 +214,7 @@ berbagi satu `freeradius`/VPN node (posisi operasional saat ini: satu
 deployment BOSS App = satu ISP, sama seperti `payment_gateway_settings`/
 `whatsapp_gateway` "direct" session — didokumentasikan di CLAUDE.md).
 
-## v0.7.0 dipecah jadi sub-cluster v0.7.1-v0.7.5 (dikonfirmasi Agung saat v0.7.1 dimulai; digeser dari v0.7.1-v0.7.4 ke v0.7.1-v0.7.5 saat v0.7.4 selesai — lihat catatan v0.7.4 di bawah)
+## v0.7.0 dipecah jadi sub-cluster v0.7.1-v0.7.6 (dikonfirmasi Agung saat v0.7.1 dimulai; digeser dari v0.7.1-v0.7.4 ke v0.7.1-v0.7.5 saat v0.7.4 selesai, lalu ke v0.7.1-v0.7.6 saat v0.7.6 ditambahkan — lihat catatan v0.7.4/v0.7.6 di bawah)
 
 Sama pola dengan `v0.6.0` → `v0.6.1`-`v0.6.5`: `v0.7.0` (GenieACS, satu baris)
 dipecah jadi sub-versi karena scope-nya juga besar dan berlapis (deploy
@@ -458,6 +459,45 @@ v0.7.4 untuk kasus itu.
 (halaman `WorkOrderShow`, alur isi SSID/password) belum pernah dicoba
 langsung di browser — masuk sesi verifikasi UI komprehensif yang sama
 dengan v0.7.3/v0.7.4 sebelum mulai v0.8.
+
+**v0.7.6 (GenieACS Connected Clients) selesai** — baca object TR-069
+`LANDevice.{i}.Hosts.Host.{n}` (client WiFi/LAN yang terhubung ke CPE).
+Desain sengaja **histori, bukan snapshot**: `App\Services\Network\
+CpeConnectedHostsService::syncFromGenieAcs()` upsert satu baris per
+`(cpe_device_id, mac_address)` di `cpe_connected_hosts` — bukan satu baris
+per poll (hindari tabel membengkak) — `first_seen_at` diisi sekali,
+`last_seen_at` di-update tiap MAC masih muncul, `is_active` jadi `false`
+(baris tidak pernah dihapus) begitu MAC yang sebelumnya tercatat hilang
+dari satu poll. Command terjadwal `cpe:sync-connected-hosts` (5 menit,
+pola sama `cpe:reconcile` v0.7.1) yang memanggilnya — **tidak pernah
+memicu `refreshObject`/Connection Request sendiri**, cuma baca data yang
+sudah tersimpan GenieACS, sama posture seperti discovery v0.7.4/v0.7.5.
+
+Field standar `Active`/`HostName`/`IPAddress`/`MACAddress` dikonfirmasi
+ada di DUA vendor nyata sebelum migration ditulis (bukan diasumsikan dari
+satu device) — ZTE F663NV3.1 (5 host, `HostName` terisi semua) dan Huawei
+EG8141A5 (2 host, plus field vendor `X_HW_*` yang tidak ada di ZTE).
+Ditemukan juga: **nomor instance `Host.{n}` TIDAK stabil/tidak
+berurutan** antar device (ZTE: 7/10/11/67/68, Huawei: 1/2) — makanya
+`mac_address`, bukan `{n}`, jadi satu-satunya kunci identitas yang aman,
+sesuai unique constraint tabel ini sejak awal desain.
+
+**Temuan sampingan saat Langkah 0 (v0.7.6), di luar scope sprint ini —
+dicatat buat sesi verifikasi komprehensif nanti, TIDAK dikejar sekarang
+sesuai arahan eksplisit**: tree GenieACS milik Huawei EG8141A5 ternyata
+sudah jauh lebih lengkap dari investigasi v0.7.3/v0.7.4 terakhir (dulu
+cuma 8 parameter leaf tanpa `WLANConfiguration`/`Hosts` sama sekali,
+sekarang ribuan leaf termasuk keduanya, `_lastInform` jauh lebih baru).
+**Ini bisa jadi sinyal Connection Request v0.7.3 sebenarnya sudah mulai
+jalan** (device dapat tree lebih lengkap dari Inform biasa atau dari
+Connection Request yang berhasil — belum dibedakan) — **belum
+dikonfirmasi**, jangan diasumsikan v0.7.3 terbukti selesai hanya dari
+temuan ini. Relevan untuk jadi titik awal saat sesi tes komprehensif
+v0.7.3-v0.7.6 nanti.
+
+Implementasi + 404 test regresi hijau, tapi UI (tombol "Client", modal
+tabel host) belum pernah dicoba langsung di browser — masuk sesi
+verifikasi yang sama dengan v0.7.3-v0.7.5 sebelum mulai v0.8.
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

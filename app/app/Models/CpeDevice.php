@@ -26,8 +26,10 @@ class CpeDevice extends Model
         'manufacturer',
         'model_name',
         'serial_number',
+        'import_match_confidence',
         'tr069_root',
         'status',
+        'status_changed_at',
         'last_inform_at',
         'bound_at',
         'wifi_provisioned_at',
@@ -38,6 +40,7 @@ class CpeDevice extends Model
         return [
             'tr069_root' => Tr069Root::class,
             'status' => CpeDeviceStatus::class,
+            'status_changed_at' => 'datetime',
             'last_inform_at' => 'datetime',
             'bound_at' => 'datetime',
             'wifi_provisioned_at' => 'datetime',

@@ -20,6 +20,25 @@ interface RouterOsGateway
     public function ping(Nas $nas): array;
 
     /**
+     * Real ICMP ping (`/ping address=... count=...`) issued FROM $nas's own
+     * router toward $targetIp — not a connection attempt from boss-app
+     * itself. Built for App\Services\Network\CpeDeviceStatusSyncService:
+     * checking a CPE's reachability from boss-app directly over the
+     * WireGuard hub-and-spoke tunnel never worked (confirmed empirically —
+     * even genieacs-cwmp, which the v0.7.3 routing work specifically
+     * targeted, times out reaching a real CPE's TR-069 management IP), but
+     * the NAS router itself sits directly on the CPE's own local VLAN with
+     * no tunnel involved at all.
+     *
+     * Requires the RouterOS API user's group to include the `test` policy
+     * category (ping falls under `test`, not `write`) — the existing
+     * `boss-app-api` group deliberately excludes it (see
+     * RouterOsApiGateway::API_USER_POLICY's own docblock); a real router
+     * grant is needed before this returns anything but false.
+     */
+    public function pingHost(Nas $nas, string $targetIp, int $count = 2): bool;
+
+    /**
      * Creates/replaces a dedicated, restricted-policy API user on the
      * router (group `boss-app-api`, idempotently ensured) — v0.6.5.
      * Connects using $connectAsUsername/$connectAsPassword, which is

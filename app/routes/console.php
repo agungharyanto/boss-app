@@ -1,11 +1,13 @@
 <?php
 
+use App\Console\Commands\AutoMatchLegacyDevices;
 use App\Console\Commands\GenerateDueInvoices;
 use App\Console\Commands\MarkOverdueInvoices;
 use App\Console\Commands\ReconcileCpeDevices;
 use App\Console\Commands\SendWhatsappDueReminders;
 use App\Console\Commands\SendWhatsappSuspendedReminders;
 use App\Console\Commands\SyncCpeConnectedHosts;
+use App\Console\Commands\SyncCpeDeviceStatus;
 use App\Console\Commands\VpnCheckNodeHealth;
 use App\Console\Commands\WhatsappCheckSessionHealth;
 use Illuminate\Foundation\Inspiring;
@@ -44,3 +46,17 @@ Schedule::command(ReconcileCpeDevices::class)->everyFiveMinutes();
 // connection_request itself). Same 5-minute cadence as the reconciliation
 // job above — connected-client churn doesn't need tighter polling than that.
 Schedule::command(SyncCpeConnectedHosts::class)->everyFiveMinutes();
+
+// Legacy MixRadius import follow-up — matches a GenieACS device to a
+// legacy customer via legacy_mac_customer_map the moment it becomes visible
+// in GenieACS (now or any time in the future), continuously, unlike the
+// one-shot 28-device import batch. Slower cadence than the two jobs above —
+// see App\Console\Commands\AutoMatchLegacyDevices's own docblock for why.
+Schedule::command(AutoMatchLegacyDevices::class)->everyFifteenMinutes();
+
+// Closes the gap where cpe_devices.status/last_inform_at were only ever
+// written once, at bind/reconcile time, and never refreshed again — see
+// App\Services\Network\CpeDeviceStatusSyncService's own docblock. Same
+// cadence as the legacy matcher above, for the same "not time-sensitive
+// enough to need the 5-minute jobs' tighter polling" reasoning.
+Schedule::command(SyncCpeDeviceStatus::class)->everyFifteenMinutes();

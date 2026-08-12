@@ -40,6 +40,58 @@ class RouterOsApiGateway implements RouterOsGateway
         }
     }
 
+    public function pingHost(Nas $nas, string $targetIp, int $count = 2): bool
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                // RouterOS itself paces /ping at ~1s per attempt regardless
+                // of reachability (it always completes count attempts, never
+                // hangs indefinitely) — this just needs enough headroom for
+                // that plus the connection handshake itself.
+                'timeout' => $count + 5,
+            ]);
+
+            $query = new Query('/ping');
+            $query->equal('address', $targetIp)->equal('count', (string) $count);
+
+            $replies = $client->query($query)->read();
+
+            foreach ($replies as $reply) {
+                // A successful ICMP reply carries a round-trip `time` field;
+                // a timed-out attempt doesn't — this is the standard way to
+                // tell the two apart in RouterOS's own /ping output.
+                if (isset($reply['time'])) {
+                    return true;
+                }
+
+                // The router rejected the command outright (e.g. the API
+                // user's group policy doesn't include `test`, which /ping
+                // requires) — a real ["after"]["message"] trap, confirmed
+                // against this exact router: "not enough permissions (9)".
+                // Distinct from "no reply within count attempts" and worth
+                // its own log line so this doesn't silently masquerade as
+                // every device being offline.
+                $trapMessage = $reply['after']['message'] ?? null;
+
+                if ($trapMessage !== null) {
+                    Log::warning("RouterOsApiGateway: /ping ditolak router untuk NAS #{$nas->id} ({$nas->mikrotik_ip}) — {$trapMessage}");
+
+                    return false;
+                }
+            }
+
+            return false;
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal ping {$targetIp} via NAS #{$nas->id} ({$nas->mikrotik_ip}): {$e->getMessage()}");
+
+            return false;
+        }
+    }
+
     /**
      * Restricted group policy: read+api+password (password = allowed to
      * change its OWN password, needed for self-rotation later — see

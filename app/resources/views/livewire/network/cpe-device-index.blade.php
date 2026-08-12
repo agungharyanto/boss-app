@@ -1,257 +1,213 @@
+@push('styles')
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/datatables/2.3.7/css/jquery.dataTables.min.css">
+@endpush
+
 <div class="p-6 max-w-6xl mx-auto">
     <div class="flex items-center justify-between mb-6">
         <h1 class="text-2xl font-semibold text-gray-800">{{ __('Perangkat CPE') }}</h1>
+
+        <div class="flex items-center gap-2 text-sm">
+            <label for="pollInterval" class="text-gray-500">{{ __('Auto-reload') }}</label>
+            <select id="pollInterval" class="rounded-md border-gray-300 shadow-sm text-sm">
+                @foreach ($this->pollIntervalOptions() as $value => $label)
+                    <option value="{{ $value }}">{{ $label }}</option>
+                @endforeach
+            </select>
+        </div>
     </div>
 
-    @if (session('status'))
-        <div class="mb-4 text-sm text-green-600">{{ session('status') }}</div>
-    @endif
-    @if (session('actionError'))
-        <div class="mb-4 text-sm text-red-600">{{ session('actionError') }}</div>
-    @endif
-
-    <div class="mb-4">
-        <input
-            type="text" wire:model.live.debounce.300ms="search"
-            placeholder="{{ __('Cari nama pelanggan atau nomor serial...') }}"
-            class="w-full rounded-md border-gray-300 shadow-sm"
-        >
-    </div>
+    <div id="cpe-flash" class="mb-4 text-sm hidden"></div>
 
     <div class="overflow-x-auto border border-gray-200 rounded-md">
-        <table class="min-w-full divide-y divide-gray-200">
+        <table id="cpe-devices-table" class="min-w-full divide-y divide-gray-200 text-sm">
             <thead class="bg-gray-50">
                 <tr>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pelanggan') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Manufacturer / Model') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Serial Number') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Last Inform') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Aksi') }}</th>
+                    <th></th>
+                    <th>{{ __('Pelanggan') }}</th>
+                    <th>{{ __('Manufacturer / Model') }}</th>
+                    <th>{{ __('Serial Number') }}</th>
+                    <th>{{ __('MAC Address') }}</th>
+                    <th>{{ __('RX Power') }}</th>
+                    <th>{{ __('Online Duration') }}</th>
+                    <th>{{ __('Uptime Modem') }}</th>
+                    <th>{{ __('Status') }}</th>
                 </tr>
             </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                @forelse ($devices as $device)
-                    <tr wire:key="cpe-device-{{ $device->id }}">
-                        <td class="px-4 py-2 text-sm text-gray-800">
-                            {{ $device->customer?->name ?? '—' }}
-                            @if ($device->reseller)
-                                <span class="block text-xs text-gray-400">{{ $device->reseller->name }}</span>
-                            @endif
-                        </td>
-                        <td class="px-4 py-2 text-sm text-gray-600">
-                            {{ $device->manufacturer ?? '—' }}
-                            @if ($device->model_name)
-                                <span class="block text-xs text-gray-400">{{ $device->model_name }}</span>
-                            @endif
-                        </td>
-                        <td class="px-4 py-2 text-sm text-gray-600 font-mono">{{ $device->serial_number }}</td>
-                        <td class="px-4 py-2 text-sm">
-                            @php
-                                $statusColor = match ($device->status->value) {
-                                    'online' => 'bg-green-100 text-green-700',
-                                    'offline' => 'bg-red-100 text-red-700',
-                                    default => 'bg-yellow-100 text-yellow-700',
-                                };
-                            @endphp
-                            <span class="px-2 py-0.5 rounded-full text-xs {{ $statusColor }}">
-                                {{ $device->status->label() }}
-                            </span>
-                        </td>
-                        <td class="px-4 py-2 text-sm text-gray-600">
-                            {{ $device->last_inform_at?->diffForHumans() ?? '—' }}
-                        </td>
-                        <td class="px-4 py-2 text-sm whitespace-nowrap">
-                            <div class="flex items-center gap-3">
-                                <button wire:click="openHistoryModal({{ $device->id }})" class="text-primary hover:underline">
-                                    {{ __('Riwayat') }}
-                                </button>
-                                <button wire:click="openHostsModal({{ $device->id }})" class="text-primary hover:underline">
-                                    {{ __('Client') }}
-                                </button>
-                                @can('manage', $device)
-                                    <button
-                                        wire:click="reboot({{ $device->id }})"
-                                        wire:confirm="Yakin reboot perangkat ini? Pelanggan akan terputus sebentar sampai perangkat menyala kembali. Perintah ini TIDAK instan — diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil)."
-                                        wire:loading.attr="disabled"
-                                        class="text-primary hover:underline"
-                                    >
-                                        {{ __('Reboot') }}
-                                    </button>
-                                    <button wire:click="openWifiModal({{ $device->id }})" class="text-primary hover:underline">
-                                        {{ __('Ganti WiFi') }}
-                                    </button>
-                                @endcan
-                            </div>
-                        </td>
-                    </tr>
-                @empty
-                    <tr>
-                        <td colspan="6" class="px-4 py-6 text-center text-sm text-gray-500">
-                            {{ __('Belum ada perangkat CPE.') }}
-                        </td>
-                    </tr>
-                @endforelse
-            </tbody>
+            <tbody></tbody>
         </table>
     </div>
-
-    <div class="mt-4">
-        {{ $devices->links() }}
-    </div>
-
-    {{-- GANTI WIFI MODAL — SSID dan/atau password baru. Konfirmasi WAJIB
-         ada di tombol submit (bukan saat modal dibuka), karena baru di
-         situ ada niat nyata untuk mengubah sesuatu. --}}
-    @if ($showWifiModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeWifiModal">
-            <div class="bg-white rounded-md p-6 w-full max-w-md space-y-4">
-                <h2 class="font-medium">{{ __('Ganti WiFi') }}</h2>
-                <p class="text-xs text-gray-500">
-                    {{ __('Isi salah satu atau keduanya. Perintah ini TIDAK instan — diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil).') }}
-                </p>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">{{ __('SSID Baru') }}</label>
-                    <input type="text" wire:model="wifiSsid" maxlength="32" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
-                    @error('wifiSsid') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">{{ __('Password Baru') }}</label>
-                    <input type="password" wire:model="wifiPassword" maxlength="63" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
-                    <p class="text-xs text-gray-400 mt-1">{{ __('8-63 karakter (standar WPA-PSK).') }}</p>
-                    @error('wifiPassword') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
-                </div>
-
-                <div class="flex items-center gap-3 pt-2">
-                    <button
-                        wire:click="submitWifi"
-                        wire:confirm="Yakin ganti SSID/password WiFi? Semua perangkat pelanggan yang sudah terhubung mungkin perlu connect ulang setelah perubahan diterapkan."
-                        wire:loading.attr="disabled"
-                        class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm"
-                    >
-                        {{ __('Kirim Perintah') }}
-                    </button>
-                    <button wire:click="closeWifiModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
-                        {{ __('Batal') }}
-                    </button>
-                </div>
-            </div>
-        </div>
-    @endif
-
-    {{-- RIWAYAT AKSI MODAL --}}
-    @if ($showHistoryModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeHistoryModal">
-            <div class="bg-white rounded-md p-6 w-full max-w-2xl space-y-4 max-h-[80vh] overflow-y-auto">
-                <h2 class="font-medium">{{ __('Riwayat Aksi') }}</h2>
-                <p class="text-xs text-gray-500">
-                    {{ __('"Terkirim ke GenieACS" berarti perintah berhasil masuk antrean — BUKAN konfirmasi perangkat sudah menjalankannya.') }}
-                </p>
-
-                <div class="divide-y divide-gray-100">
-                    @forelse ($historyLogs as $log)
-                        <div class="py-3 text-sm" wire:key="action-log-{{ $log->id }}">
-                            <div class="flex items-center justify-between">
-                                <span class="font-medium">{{ $log->action_type->label() }}</span>
-                                @php
-                                    $logStatusColor = match ($log->status->value) {
-                                        'delivered' => 'bg-blue-100 text-blue-700',
-                                        'failed' => 'bg-red-100 text-red-700',
-                                        default => 'bg-yellow-100 text-yellow-700',
-                                    };
-                                @endphp
-                                <span class="px-2 py-0.5 rounded-full text-xs {{ $logStatusColor }}">
-                                    {{ $log->status->label() }}
-                                </span>
-                            </div>
-                            <div class="text-xs text-gray-400 mt-1">
-                                {{ $log->created_at->diffForHumans() }} · {{ __('oleh') }}
-                                {{ $log->performed_by === null ? __('Sistem (auto-provisioning)') : ($log->performedBy?->name ?? '—') }}
-                            </div>
-                            @if ($log->action_type->value === 'set_ssid' && isset($log->parameters['new_ssid']))
-                                <div class="text-xs text-gray-600 mt-1">{{ __('SSID baru') }}: {{ $log->parameters['new_ssid'] }}</div>
-                            @endif
-                            @if (($log->parameters['password_changed'] ?? false))
-                                <div class="text-xs text-gray-600 mt-1">{{ __('Password diubah') }}</div>
-                            @endif
-                            @if ($log->status->value === 'failed' && $log->failed_reason)
-                                <div class="text-xs text-red-600 mt-1">{{ $log->failed_reason }}</div>
-                            @endif
-                        </div>
-                    @empty
-                        <p class="text-sm text-gray-500 py-4">{{ __('Belum ada aksi tercatat untuk perangkat ini.') }}</p>
-                    @endforelse
-                </div>
-
-                <div class="pt-2">
-                    <button wire:click="closeHistoryModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
-                        {{ __('Tutup') }}
-                    </button>
-                </div>
-            </div>
-        </div>
-    @endif
-
-    {{-- CLIENT TERHUBUNG MODAL (v0.7.6) — histori TR-069 Hosts.Host,
-         diisi command terjadwal, bukan dipicu dari sini. --}}
-    @if ($showHostsModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeHostsModal">
-            <div class="bg-white rounded-md p-6 w-full max-w-2xl space-y-4 max-h-[80vh] overflow-y-auto">
-                <h2 class="font-medium">{{ __('Client Terhubung') }}</h2>
-                <p class="text-xs text-gray-500">
-                    {{ __('Disinkronkan otomatis tiap beberapa menit dari data TR-069 (Hosts) yang sudah tersimpan di GenieACS — bukan snapshot real-time. Host yang sudah lama tidak terlihat tetap tercatat, ditandai tidak aktif.') }}
-                </p>
-
-                <label class="flex items-center gap-2 text-xs text-gray-600">
-                    <input type="checkbox" wire:model.live="hostsActiveOnly">
-                    {{ __('Tampilkan yang aktif saja') }}
-                </label>
-
-                <div class="overflow-x-auto border border-gray-200 rounded-md">
-                    <table class="min-w-full divide-y divide-gray-200 text-sm">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Hostname') }}</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('MAC') }}</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('IP') }}</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status') }}</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pertama Terlihat') }}</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Terakhir Terlihat') }}</th>
-                            </tr>
-                        </thead>
-                        <tbody class="bg-white divide-y divide-gray-100">
-                            @forelse ($connectedHosts as $host)
-                                <tr wire:key="connected-host-{{ $host->id }}">
-                                    <td class="px-3 py-2 text-gray-800">{{ $host->hostname ?? '—' }}</td>
-                                    <td class="px-3 py-2 text-gray-600 font-mono text-xs">{{ $host->mac_address }}</td>
-                                    <td class="px-3 py-2 text-gray-600">{{ $host->ip_address ?? '—' }}</td>
-                                    <td class="px-3 py-2">
-                                        <span class="px-2 py-0.5 rounded-full text-xs {{ $host->is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500' }}">
-                                            {{ $host->is_active ? __('Aktif') : __('Tidak Aktif') }}
-                                        </span>
-                                    </td>
-                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $host->first_seen_at->diffForHumans() }}</td>
-                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $host->last_seen_at->diffForHumans() }}</td>
-                                </tr>
-                            @empty
-                                <tr>
-                                    <td colspan="6" class="px-3 py-6 text-center text-sm text-gray-500">
-                                        {{ __('Belum ada client tercatat untuk perangkat ini.') }}
-                                    </td>
-                                </tr>
-                            @endforelse
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="pt-2">
-                    <button wire:click="closeHostsModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
-                        {{ __('Tutup') }}
-                    </button>
-                </div>
-            </div>
-        </div>
-    @endif
 </div>
+
+@push('scripts')
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/datatables/2.3.7/js/jquery.dataTables.min.js"></script>
+    <script>
+        (function () {
+            const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+
+            function cpeFlash(message, isError) {
+                const el = document.getElementById('cpe-flash');
+                el.textContent = message;
+                el.classList.remove('hidden', 'text-green-600', 'text-red-600');
+                el.classList.add(isError ? 'text-red-600' : 'text-green-600');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+
+            async function cpeFetch(url, options) {
+                options = options || {};
+                options.headers = Object.assign({
+                    'X-CSRF-TOKEN': csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json',
+                }, options.headers || {});
+                const response = await fetch(url, options);
+                const body = await response.json().catch(() => ({}));
+                return { ok: response.ok, status: response.status, body: body };
+            }
+
+            const table = $('#cpe-devices-table').DataTable({
+                processing: true,
+                serverSide: true,
+                ajax: '{{ route('web.cpe-devices.internal.datatable') }}',
+                lengthMenu: [10, 15, 25, 50],
+                pageLength: 15,
+                order: [],
+                columns: [
+                    {
+                        data: null, orderable: false, className: 'cpe-expand-cell text-center cursor-pointer',
+                        defaultContent: '<span class="text-primary">+</span>',
+                    },
+                    { data: 'customer_name', name: 'customer_name' },
+                    {
+                        data: null, orderable: true, name: 'manufacturer',
+                        render: (data, type, row) => [row.manufacturer, row.model_name].filter(Boolean).join(' ') || '—',
+                    },
+                    { data: 'serial_number', name: 'serial_number' },
+                    { data: 'mac_address', orderable: false, render: (d) => d ?? '-' },
+                    {
+                        data: 'rx_power_dbm', orderable: false,
+                        render: (d) => d !== null ? Number(d).toFixed(2) + ' dBm' : '-',
+                    },
+                    { data: 'online_duration_text', name: 'online_duration_text' },
+                    {
+                        data: 'device_uptime_seconds', orderable: false,
+                        render: function (seconds) {
+                            if (seconds === null) return '-';
+                            const totalMinutes = Math.floor(seconds / 60);
+                            const days = Math.floor(totalMinutes / 1440);
+                            const hours = Math.floor((totalMinutes % 1440) / 60);
+                            const minutes = totalMinutes % 60;
+                            return days > 0 ? `${days}h ${hours}j` : `${hours}j ${minutes}m`;
+                        },
+                    },
+                    {
+                        data: 'status_value', name: 'status_value',
+                        render: function (value, type, row) {
+                            const colors = { online: 'bg-green-100 text-green-700', offline: 'bg-red-100 text-red-700' };
+                            const color = colors[value] || 'bg-yellow-100 text-yellow-700';
+                            return `<span class="px-2 py-0.5 rounded-full text-xs ${color}">${row.status_label}</span>`;
+                        },
+                    },
+                ],
+            });
+
+            $('#cpe-devices-table tbody').on('click', 'td.cpe-expand-cell', function () {
+                const tr = $(this).closest('tr');
+                const row = table.row(tr);
+                const rowData = row.data();
+
+                if (row.child.isShown()) {
+                    row.child.hide();
+                    $(this).find('span').text('+');
+                    return;
+                }
+
+                $(this).find('span').text('…');
+                row.child('<div class="p-4 text-sm text-gray-400">{{ __('Memuat...') }}</div>').show();
+
+                fetch(`/api/internal/cpe-devices/${rowData.id}/detail`, {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                })
+                    .then((r) => r.text())
+                    .then((html) => {
+                        row.child(html).show();
+                        $(this).find('span').text('−');
+                    });
+            });
+
+            window.cpeReboot = function (id) {
+                if (!confirm('Yakin reboot perangkat ini? Pelanggan akan terputus sebentar sampai perangkat menyala kembali. Perintah ini TIDAK instan — diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil).')) return;
+                cpeFetch(`/api/internal/cpe-devices/${id}/reboot`, { method: 'POST' }).then(({ ok, body }) => {
+                    cpeFlash(body.message, !ok);
+                });
+            };
+
+            window.cpeSubmitWifi = function (id) {
+                const ssid = document.getElementById(`cpe-wifi-ssid-${id}`).value;
+                const password = document.getElementById(`cpe-wifi-password-${id}`).value;
+                const errorEl = document.getElementById(`cpe-wifi-error-${id}`);
+                errorEl.textContent = '';
+                if (!ssid && !password) {
+                    errorEl.textContent = 'Isi SSID atau password.';
+                    return;
+                }
+                if (!confirm('Yakin ganti SSID/password WiFi? Semua perangkat pelanggan yang sudah terhubung mungkin perlu connect ulang setelah perubahan diterapkan.')) return;
+                cpeFetch(`/api/internal/cpe-devices/${id}/wifi`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ssid: ssid || null, password: password || null }),
+                }).then(({ ok, body }) => {
+                    if (!ok && body.errors) {
+                        errorEl.textContent = Object.values(body.errors).flat().join(' ');
+                        return;
+                    }
+                    cpeFlash(body.message, !ok);
+                });
+            };
+
+            window.cpeRemove = function (id, customerName) {
+                if (!confirm(`Yakin unbind device ini dari ${customerName}? Pasangan ini tidak akan di-match otomatis lagi.`)) return;
+                cpeFetch(`/api/internal/cpe-devices/${id}`, { method: 'DELETE' }).then(({ ok, body }) => {
+                    cpeFlash(body.message, !ok);
+                    if (ok) table.ajax.reload(null, false);
+                });
+            };
+
+            window.cpeReplaceModem = function (id, oldSerial) {
+                const serial = document.getElementById(`cpe-replacement-serial-${id}`).value;
+                const errorEl = document.getElementById(`cpe-replace-error-${id}`);
+                errorEl.textContent = '';
+                if (!serial) {
+                    errorEl.textContent = 'Serial number baru wajib diisi.';
+                    return;
+                }
+                if (!confirm(`Yakin ganti modem? Device lama (${oldSerial}) akan dilepas dari pelanggan ini.`)) return;
+                cpeFetch(`/api/internal/cpe-devices/${id}/replace-modem`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ serial_number: serial }),
+                }).then(({ ok, body }) => {
+                    if (!ok && body.errors) {
+                        errorEl.textContent = Object.values(body.errors).flat().join(' ');
+                        return;
+                    }
+                    cpeFlash(body.message, !ok);
+                    if (ok) table.ajax.reload(null, false);
+                });
+            };
+
+            // Auto-reload — plain setInterval calling DataTables' own
+            // ajax.reload(), never a full page reload. Off by default so a
+            // page nobody is actively watching doesn't keep hitting the
+            // server for no reason.
+            let pollTimer = null;
+            document.getElementById('pollInterval').addEventListener('change', function (e) {
+                if (pollTimer) clearInterval(pollTimer);
+                const seconds = parseInt(e.target.value, 10);
+                if (!Number.isNaN(seconds) && seconds > 0) {
+                    pollTimer = setInterval(() => table.ajax.reload(null, false), seconds * 1000);
+                }
+            });
+        })();
+    </script>
+@endpush

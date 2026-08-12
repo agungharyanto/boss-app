@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\ResellerStatus;
 use App\Models\Concerns\BelongsToTenant;
+use App\Support\NameToCodeDeriver;
 use Database\Factories\ResellerFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -21,6 +22,7 @@ class Reseller extends Model
         'tenant_id',
         'name',
         'slug',
+        'code',
         'invoice_code',
         'email',
         'phone',
@@ -45,6 +47,20 @@ class Reseller extends Model
             // alnum-only prefix from the slug, capped at 12 chars so
             // "INV/{code}/2026/08/000123" stays a reasonable length.
             $reseller->invoice_code ??= strtoupper(substr(preg_replace('/[^a-z0-9]/i', '', $reseller->slug), 0, 12));
+
+            // `code` is a separate concept from invoice_code (CID's
+            // building block, not invoice numbering) — never overrides an
+            // explicitly-set code, silently leaves it null if name is
+            // blank.
+            if (blank($reseller->code) && filled($reseller->name)) {
+                $reseller->code = NameToCodeDeriver::deriveUnique(
+                    $reseller->name,
+                    fn (string $candidate) => self::withoutGlobalScopes()
+                        ->where('tenant_id', $reseller->tenant_id)
+                        ->where('code', $candidate)
+                        ->exists()
+                );
+            }
         });
     }
 

@@ -1,5 +1,8 @@
 <?php
 
+use App\Http\Controllers\Api\Internal\CpeDeviceActionController;
+use App\Http\Controllers\Api\Internal\CpeDeviceDatatableController;
+use App\Http\Controllers\Api\Internal\CpeDeviceDetailController;
 use App\Http\Controllers\VpnScriptDownloadController;
 use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
@@ -70,6 +73,23 @@ Route::middleware('auth')->name('web.')->group(function () {
         Route::get('/nas', NasIndex::class)->name('nas.index');
         Route::get('/vpn-script-generator', VpnScriptGenerator::class)->name('vpn-script-generator.index');
         Route::get('/cpe-devices', CpeDeviceIndex::class)->name('cpe-devices.index');
+
+        // v0.7.6-follow-up — support endpoints for the /cpe-devices
+        // DataTables list (server-side sort/search/pagination + child-row
+        // detail/actions). Deliberately in routes/web.php despite the
+        // /api/internal/ URI prefix — these are same-page AJAX calls from
+        // an already-authenticated browser SESSION, not Sanctum API token
+        // consumers (no config/sanctum.php stateful-domain setup exists in
+        // this project), so they need the web middleware group's session
+        // auth + CSRF, not routes/api.php's stateless "api" group.
+        Route::prefix('api/internal/cpe-devices')->name('cpe-devices.internal.')->group(function () {
+            Route::get('/datatable', CpeDeviceDatatableController::class)->name('datatable');
+            Route::get('/{cpe_device}/detail', [CpeDeviceDetailController::class, 'show'])->name('detail');
+            Route::post('/{cpe_device}/reboot', [CpeDeviceActionController::class, 'reboot'])->name('reboot');
+            Route::post('/{cpe_device}/wifi', [CpeDeviceActionController::class, 'wifi'])->name('wifi');
+            Route::post('/{cpe_device}/replace-modem', [CpeDeviceActionController::class, 'replaceModem'])->name('replace-modem');
+            Route::delete('/{cpe_device}', [CpeDeviceActionController::class, 'destroy'])->name('destroy');
+        });
         Route::get('/work-orders/{work_order}', WorkOrderShow::class)->name('work-orders.show');
     });
 

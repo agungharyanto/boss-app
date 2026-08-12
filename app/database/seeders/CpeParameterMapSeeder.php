@@ -59,6 +59,155 @@ class CpeParameterMapSeeder extends Seeder
                 'verified_against_device_id' => 'F86CE1-F663NV3a-ZICG296C2E7B',
                 'notes' => 'Raw 17100 -> 2.33 dBm, squarely inside normal GPON ONT TX power range.',
             ],
+            // Found and fixed post-v0.7.4: 1C25E1 (CIOT) and A4F33B (ZICG)
+            // GM220-S/M63X XPON devices ALSO report through the same
+            // X_CT-COM_GponInterfaceConfig object as the F86CE1 rows above
+            // (confirmed empirically once the "default" GenieACS preset
+            // started requesting it) — but no catalog row ever existed for
+            // them, so /cpe-devices' RX/TX columns silently showed "-" for
+            // every non-F86CE1 device despite GenieACS already having real
+            // data cached. Root-caused by checking CpeParameterResolverService
+            // ::resolveForDevice() directly (empty result for both OUIs),
+            // not by guessing — the raw GenieACS data alone isn't what the
+            // UI reads.
+            [
+                'oui' => '1C25E1',
+                'product_class' => 'GM220-S',
+                'parameter_key' => 'rx_power_dbm',
+                'parameter_path' => 'InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig.RXPower',
+                'value_type' => 'xsd:int',
+                'conversion_formula' => CpeParameterConversionFormula::Sff8472OpticalLog10,
+                'conversion_params' => ['scale' => 0.0001],
+                'verified_at' => now(),
+                'verified_against_device_id' => '1C25E1-GM220%2DS-CIOTXA3D4200',
+                'notes' => 'Raw 41 -> -23.87 dBm, real device (Asep Mulyadi). Same X_CT-COM_GponInterfaceConfig object family as F86CE1, same scale.',
+            ],
+            [
+                'oui' => '1C25E1',
+                'product_class' => 'GM220-S',
+                'parameter_key' => 'tx_power_dbm',
+                'parameter_path' => 'InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig.TXPower',
+                'value_type' => 'xsd:int',
+                'conversion_formula' => CpeParameterConversionFormula::Sff8472OpticalLog10,
+                'conversion_params' => ['scale' => 0.0001],
+                'verified_at' => now(),
+                'verified_against_device_id' => '1C25E1-GM220%2DS-CIOTXA3D4200',
+                'notes' => 'Raw 17338 -> 2.39 dBm, real device (Asep Mulyadi), normal GPON TX range.',
+            ],
+            [
+                'oui' => 'A4F33B',
+                'product_class' => 'M63X XPON',
+                'parameter_key' => 'rx_power_dbm',
+                'parameter_path' => 'InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig.RXPower',
+                'value_type' => 'xsd:int',
+                'conversion_formula' => CpeParameterConversionFormula::Sff8472OpticalLog10,
+                'conversion_params' => ['scale' => 0.0001],
+                'verified_at' => now(),
+                'verified_against_device_id' => 'A4F33B-M63X%20XPON-ZICG297CA0C7',
+                'notes' => 'Raw 23 -> -26.38 dBm, real device. Same X_CT-COM_GponInterfaceConfig object family as F86CE1/1C25E1, same scale.',
+            ],
+            [
+                'oui' => 'A4F33B',
+                'product_class' => 'M63X XPON',
+                'parameter_key' => 'tx_power_dbm',
+                'parameter_path' => 'InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig.TXPower',
+                'value_type' => 'xsd:int',
+                'conversion_formula' => CpeParameterConversionFormula::Sff8472OpticalLog10,
+                'conversion_params' => ['scale' => 0.0001],
+                'verified_at' => now(),
+                'verified_against_device_id' => 'A4F33B-M63X%20XPON-ZICG297CA0C7',
+                'notes' => 'Raw 18197 -> 2.60 dBm, real device, normal GPON TX range.',
+            ],
+            // Modem uptime (v0.7.6-follow-up) — a genuinely STANDARD TR-069
+            // path (DeviceInfo.UpTime, no vendor prefix at all), unlike
+            // RX/TX which needs a vendor-specific object. Raw value is
+            // already plain seconds (xsd:unsignedInt), so Raw formula (no
+            // conversion) is correct, not a placeholder like the
+            // wifi_ssid/wifi_password rows below.
+            [
+                'oui' => '1C25E1',
+                'product_class' => 'GM220-S',
+                'parameter_key' => 'device_uptime_seconds',
+                'parameter_path' => 'InternetGatewayDevice.DeviceInfo.UpTime',
+                'value_type' => 'xsd:unsignedInt',
+                'conversion_formula' => CpeParameterConversionFormula::Raw,
+                'conversion_params' => null,
+                'verified_at' => now(),
+                'verified_against_device_id' => '1C25E1-GM220%2DS-CIOT10D62710',
+                'notes' => 'Raw 6567 (~1j49m) — real device, fresh timestamp matching a real Inform right after adding this declare() to the preset.',
+            ],
+            // Found post-Detail-modal-redesign: the uptime row above was
+            // only ever added for 1C25E1/GM220-S — F86CE1/F663NV3a and
+            // A4F33B/M63X XPON already had rx/tx_power_dbm rows (proving
+            // GenieACS already had fresh data cached for them) but NO
+            // device_uptime_seconds row at all, so "Uptime Modem" silently
+            // showed "-" for those two vendor families regardless of how
+            // often they informed. Root-caused by checking the raw
+            // DeviceInfo.UpTime value directly on an already-RX-resolved
+            // device (F86CE1: raw 14336 ≈ 3j58m; A4F33B/M63X XPON: raw
+            // 14548 ≈ 4j2m, both fresh timestamps) before concluding this
+            // was a missing-catalog-row bug and not a timing issue.
+            [
+                'oui' => 'F86CE1',
+                'product_class' => 'F663NV3a',
+                'parameter_key' => 'device_uptime_seconds',
+                'parameter_path' => 'InternetGatewayDevice.DeviceInfo.UpTime',
+                'value_type' => 'xsd:unsignedInt',
+                'conversion_formula' => CpeParameterConversionFormula::Raw,
+                'conversion_params' => null,
+                'verified_at' => now(),
+                'verified_against_device_id' => 'F86CE1-F663NV3a-ZICG2970FA5C',
+                'notes' => 'Raw 14336 (~3j58m) — real device (Juhaeni), fresh timestamp.',
+            ],
+            [
+                'oui' => 'A4F33B',
+                'product_class' => 'M63X XPON',
+                'parameter_key' => 'device_uptime_seconds',
+                'parameter_path' => 'InternetGatewayDevice.DeviceInfo.UpTime',
+                'value_type' => 'xsd:unsignedInt',
+                'conversion_formula' => CpeParameterConversionFormula::Raw,
+                'conversion_params' => null,
+                'verified_at' => now(),
+                'verified_against_device_id' => 'A4F33B-M63X%20XPON-ZICG297CA0C7',
+                'notes' => 'Raw 14548 (~4j2m) — real device, fresh timestamp.',
+            ],
+            // Same missing-catalog-row class of bug, found the same way for
+            // rx/tx this time: A4F33B/GM219 (Sadi) already had real,
+            // fresh RX/TX data cached in GenieACS (raw RX 24 -> -26.20 dBm,
+            // raw TX 15488 -> 1.90 dBm) but no catalog row existed for this
+            // specific product_class at all — A4F33B/GM220-S and
+            // A4F33B/M63X XPON did, A4F33B/GM219 didn't. Confirmed via
+            // CpeParameterResolverService's own live GenieACS query, not
+            // assumed from the other A4F33B rows.
+            [
+                'oui' => 'A4F33B',
+                'product_class' => 'GM219',
+                'parameter_key' => 'rx_power_dbm',
+                'parameter_path' => 'InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig.RXPower',
+                'value_type' => 'xsd:int',
+                'conversion_formula' => CpeParameterConversionFormula::Sff8472OpticalLog10,
+                'conversion_params' => ['scale' => 0.0001],
+                'verified_at' => now(),
+                'verified_against_device_id' => 'A4F33B-GM219-ZICG29637EA7',
+                'notes' => 'Raw 24 -> -26.20 dBm, real device (Sadi).',
+            ],
+            [
+                'oui' => 'A4F33B',
+                'product_class' => 'GM219',
+                'parameter_key' => 'tx_power_dbm',
+                'parameter_path' => 'InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig.TXPower',
+                'value_type' => 'xsd:int',
+                'conversion_formula' => CpeParameterConversionFormula::Sff8472OpticalLog10,
+                'conversion_params' => ['scale' => 0.0001],
+                'verified_at' => now(),
+                'verified_against_device_id' => 'A4F33B-GM219-ZICG29637EA7',
+                'notes' => 'Raw 15488 -> 1.90 dBm, real device (Sadi), normal GPON TX range.',
+            ],
+            // A4F33B/GM220-S is STILL not added — that device has not
+            // informed since the preset went live (tree still thin, no
+            // X_CT-COM_GponInterfaceConfig object present as of this
+            // seeding) — no real data to verify against yet.
+
             // v0.7.4 (Remote Actions) — unlike the two rows above, these are
             // plain strings, never passed through ParameterConversionService
             // (App\Services\Network\CpeActionService reads parameter_path

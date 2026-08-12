@@ -4,7 +4,10 @@
     {{-- Profil --}}
     <div class="p-4 border border-gray-200 rounded-md">
         <div class="flex items-center justify-between mb-3">
-            <h1 class="text-xl font-semibold text-gray-800">{{ $customer->name }}</h1>
+            <div>
+                <h1 class="text-xl font-semibold text-gray-800">{{ $customer->name }}</h1>
+                <p class="text-sm text-gray-500 font-mono">{{ $customer->cid ?? '— (CID belum tersedia)' }}</p>
+            </div>
             <span class="px-2 py-1 text-xs rounded-full bg-gray-100">{{ $customer->status->label() }}</span>
         </div>
 

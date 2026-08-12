@@ -101,6 +101,47 @@ class CpeParameterResolverService
         return $result;
     }
 
+    private const MAC_PARAMETER_KEY = 'mac_address';
+
+    private const RX_PARAMETER_KEY = 'rx_power_dbm';
+
+    private const TX_PARAMETER_KEY = 'tx_power_dbm';
+
+    private const UPTIME_PARAMETER_KEY = 'device_uptime_seconds';
+
+    /**
+     * The one place MAC/RX/TX/uptime get pulled out of resolveForDevice()'s
+     * generic keyed-by-parameter_key result into the fixed shape every UI
+     * surface actually wants — was originally duplicated inline in
+     * App\Livewire\Network\CpeDeviceIndex, extracted here once the
+     * DataTables list/detail endpoints needed the exact same four values
+     * too. Never throws — a null genieacs id, a resolve failure, or a
+     * missing catalog row all just come back as null fields.
+     *
+     * @return array{mac_address: ?string, rx_power_dbm: ?float, tx_power_dbm: ?float, device_uptime_seconds: ?float}
+     */
+    public function resolveDeviceSummary(?string $genieAcsDeviceId): array
+    {
+        $empty = ['mac_address' => null, 'rx_power_dbm' => null, 'tx_power_dbm' => null, 'device_uptime_seconds' => null];
+
+        if ($genieAcsDeviceId === null) {
+            return $empty;
+        }
+
+        try {
+            $resolved = $this->resolveForDevice($genieAcsDeviceId);
+        } catch (\Throwable) {
+            return $empty;
+        }
+
+        return [
+            'mac_address' => $resolved[self::MAC_PARAMETER_KEY]['raw_value'] ?? null,
+            'rx_power_dbm' => $resolved[self::RX_PARAMETER_KEY]['value'] ?? null,
+            'tx_power_dbm' => $resolved[self::TX_PARAMETER_KEY]['value'] ?? null,
+            'device_uptime_seconds' => $resolved[self::UPTIME_PARAMETER_KEY]['value'] ?? null,
+        ];
+    }
+
     /**
      * Walks a dot-separated TR-069 path into GenieACS's own nested
      * `{"_value": ...}` leaf shape (see GenieAcsClientService's own

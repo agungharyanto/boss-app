@@ -1531,11 +1531,10 @@ not solved by more time on this same approach**:
 
 ## GenieACS Connection Request Routing (v0.7.3) — implementation done, end-to-end verification PENDING
 
-**Amendment (branch `v0.7.x-testing-refinements`, not yet merged/tagged) —
-VERIFIED, this section's "PENDING" title is now stale**: the retest this
-section calls for below was finally run for real. Short version — it
-works; see "GenieACS Testing Refinements & Status Sync Redesign
-(v0.7.x-testing-refinements)" near the end of this file for the full
+**Amendment (v0.7.7, merged/tagged) — VERIFIED, this section's "PENDING"
+title is now stale**: the retest this section calls for below was finally
+run for real. Short version — it works; see "GenieACS Testing Refinements &
+Status Sync Redesign (v0.7.7)" near the end of this file for the full
 account, including a real false lead this same investigation produced and
 had to walk back (don't re-add a route to a WireGuard node's tunnel
 gateway IP without new evidence — see that section). The two specific
@@ -1710,14 +1709,14 @@ feature that walks another dynamic TR-069 array (WLANConfiguration
 instances, WANConnectionDevice instances, etc.) — this is a real device
 behavior, not specific to Hosts.
 
-## GenieACS Testing Refinements & Status Sync Redesign (v0.7.x-testing-refinements)
+## GenieACS Testing Refinements & Status Sync Redesign (v0.7.7)
 
-**Branch status: NOT merged/tagged.** One "wip" commit (`fa6b0ca`) plus a
-large amount of further uncommitted work (this whole section's worth) sits
-on top of it. Don't treat anything here as `main`/tagged history — see
-`docs/ROADMAP.md`'s own "Branch `v0.7.x-testing-refinements`" section for
-the sprint-level summary; this section is the technical-gotcha detail for
-future debugging, same split as every other `## GenieACS ...` section
+**Merged and tagged.** This work was built on branch
+`v0.7.x-testing-refinements` (starting from the "wip" commit `fa6b0ca`),
+then merged into `develop` → `main` and tagged `v0.7.7` — see
+`docs/ROADMAP.md`'s own entry for the sprint-level summary; this section is
+the technical-gotcha detail for future debugging, same split as every other
+`## GenieACS ...` section
 above.
 
 **v0.7.3 Connection Request is now genuinely verified, after a real false
@@ -1864,6 +1863,220 @@ is new scope for a later sprint, not assumed here", still true). There's
 also no "look up WorkOrder by device serial number" endpoint —
 `index()` only filters by `status`. Both are real gaps to close as part of
 `v0.12.0`, not something to design/build yet.
+
+## Network Navigation Restructure & OLT Credential Registry (v0.8.1)
+
+**Built as a same-branch addendum to the still-open `v0.8.1-librenms-install`
+sprint** — the LibreNMS install/device-onboarding work itself (own MariaDB,
+own token auth, 4 real devices) is further along in that same branch but not
+yet documented here, pending the multi-hour resource-usage monitoring gate
+its own DoD requires; a full `## LibreNMS ...` CLAUDE.md section lands once
+that report is written, not before. This section covers only the addendum:
+sidebar nav restructure + a new OLT credential registry, both merged into
+the same unmerged/untagged branch, not split out.
+
+**Sidebar nav restructure**: `resources/views/components/sidebar.blade.php`'s
+`network` cluster gained an optional `children` key per top-level link — a
+link with `children` renders as a chevron-toggle group (`x-data="{ subOpen:
+... }"`, open/closed state persisted per-group in `localStorage` under
+`sidebar-subgroup-{id}`) instead of a plain `<a>`; a link with no `children`
+key still renders the old way, so this is additive, not a rewrite of every
+nav item. Applied to: **NAS** (child: Script Generator), **OLT** (new
+sibling top-level item, deliberately NOT nested under NAS — OLT hardware is
+independent of any one NAS, an OLT registry entry merely references a NAS
+as its access path), **Perangkat CPE** (child: Cek Status Device, listed
+first in the group).
+
+**New OLT Credential Registry** (`olt_manufacturers` → `olt_models` →
+`olt_devices`, page `/olt-devices`, component `App\Livewire\Network\
+OltDeviceIndex`): manufacturer/model master data (a model carries
+`supported_pon_type` — `Gpon`/`Epon`/`GponEpon`, `App\Enums\OltPonType`) is
+addable inline via quick-add modals on the same page, no separate CRUD
+screens. `olt_devices` is tenant+reseller scoped (`BelongsToTenant`,
+`BelongsToResellerScope` — same nullable-`reseller_id` "direct row" pattern
+already used by `whatsapp_sessions`/`customers.reseller_id`/`nas`), and
+requires both a `nas_id` FK and an `olt_model_id` FK, both
+`restrictOnDelete()` (an OLT registry row is meaningless without an access
+path or a model). `OltDevicePolicy` mirrors `NasPolicy` exactly:
+`olt_devices.view`/`.manage` (super_admin, seeded in
+`RolesAndPermissionsSeeder::seedOltDevicePermissions()`) for full access, or
+an active `reseller_users` membership for a reseller's own OLTs.
+
+**Credential encryption reuses `Nas`'s existing pattern exactly — no new
+encryption mechanism was written for this module, per explicit instruction**.
+`access_protocol` (`App\Enums\OltAccessProtocol`: `Telnet`/`Ssh` only —
+**not** `Snmp`, see next paragraph) gates which of two CLI-admin credential
+groups apply (telnet or ssh username+port+password); every secret-bearing
+column (`telnet_password`, `ssh_password`, `snmp_ro_community`,
+`snmp_rw_community`) is a plain `text` column with Eloquent's `'encrypted'`
+cast, and all four are listed in `OltDevice::$hidden` so they never
+serialize even for an authorized admin. `OltDeviceDatatableController`
+additionally whitelists its JSON output columns explicitly
+(`->only([...])`) — a second, independent layer against ever leaking a
+credential through the list view, the same belt-and-suspenders posture as
+`NasResource`'s `has_api_password`/`has_radius_secret`-boolean-only shape.
+
+**SNMP is deliberately NOT one of the `access_protocol` choices (addendum
+#2, same v0.8.1 branch) — a real UX bug from the first cut of this form is
+why.** SNMP fields used to live inside the same per-protocol conditional
+block as Telnet/SSH, mutually exclusive with them — so switching Access
+Protocol from Telnet to SNMP (or vice versa) silently wiped whatever had
+just been typed into the other block, because both shared the same "only
+render the block matching the current selection" Blade logic. Root
+modeling mistake: SNMP is a monitoring protocol independent of how an
+admin logs into the OLT's CLI, not a third alternative to Telnet/SSH.
+Fixed by giving SNMP its own always-on, unconditional form section
+(`App\Livewire\Network\OltDeviceIndex`'s SNMP fields are no longer inside
+any `if ($accessProtocol === ...)` branch, in the Blade view or in
+`save()`'s validation/data-assignment), positioned above the Access
+Protocol section — `snmp_version`/`snmp_port`/`snmp_ro_community` are
+required on every OLT regardless of which CLI protocol it uses;
+`snmp_rw_community` stays optional. `snmp_ro_community`'s "required" rule
+only actually applies on **create** (`$this->editingOltDeviceId === null`)
+— on edit it follows the same blank-means-unchanged masked-secret
+convention as `telnet_password`/`ssh_password`, so re-saving an existing
+OLT never forces re-typing a community string that's already stored.
+
+**`create()` auto-generates both SNMP community strings the moment the
+form opens** (`Str::password(16)`, Laravel's own secure-random-password
+helper — no hand-rolled generator), pre-filling `snmpRoCommunity`/
+`snmpRwCommunity` so they're never blank by default, matching the
+SmartOLT-style reference UI Agung pointed to. Both stay fully editable — a
+technician who already configured a specific community string manually on
+the physical OLT can type over the generated one — and each has its own
+"Regenerate" button (`regenerateSnmpRoCommunity()`/
+`regenerateSnmpRwCommunity()`) to redraw a fresh random value on demand.
+The community input fields render as plain `type="text"`, not
+`type="password"` — unlike telnet/ssh passwords (which the admin already
+knows and is typing in from memory), a generated community string is
+useless if the technician can't read/copy it to go configure the same
+value manually on the OLT itself (see the scope note below — this form
+only **stores** the value, it never pushes it to the device). **No
+existing `olt_devices` rows needed migrating when this changed** — checked
+directly (`OltDevice::where('access_protocol', 'snmp')->count()`) before
+making the change; the table was still empty, still awaiting Agung's real
+credential entry.
+
+**Explicitly out of scope, unchanged from the original addendum's
+framing**: this module never pushes the SNMP community (or anything else)
+to the OLT over Telnet/SSH — a technician must already have configured (or
+will separately configure) the matching community string directly on the
+device's own management interface. This form's only job is to record what
+LibreNMS should poll with; automatic config-push is future OMCI-adjacent
+scope, not attempted here.
+
+**Test Connection pings the OLT's IP FROM the selected NAS, never directly
+from boss-app** — `OltDeviceService::testConnection()` calls the exact same
+`RouterOsGateway::pingHost()` interface `NasService::testConnection()`
+already uses; no new router-connection code was written for this module.
+Reasoning is identical to the `CpeDeviceStatusSyncService` redesign in the
+v0.7.7 section above: under BOSS App's multi-tenant SaaS model, boss-app
+itself has no network path to an ISP's internal OLT management LAN — only
+that ISP's own NAS, reachable over the already-provisioned VPN tunnel, does.
+`OltDeviceService::isPrivateIp()`
+(`filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE)`) rejects
+any public IP at save time — an OLT's management IP is by definition on a
+private ISP-internal LAN, never directly internet-routable, so a public IP
+here is always a data-entry mistake, not a hypothetical worth tolerating.
+**No SSH/Telnet login-level test this sprint, ping-only** — Test Connection
+proves L3 reachability from the NAS to the OLT, nothing about whether the
+entered credentials actually authenticate; deliberately out of scope per
+the sprint brief, noted here so it isn't mistaken for a stronger guarantee.
+
+**Save is hard-blocked until Test Connection has passed for the exact
+current `(nas_id, ip_address)` pair** — `OltDeviceIndex` tracks
+`testPassedForKey = "{$nasId}|{$ipAddress}"`, set only by a successful
+`testConnection()` call; the `updated(string $property)` lifecycle hook
+invalidates it the instant either field changes afterward (re-typing the
+IP, or switching the NAS dropdown), so a passed test can never be silently
+carried over to a different pair by editing one field after the other.
+Editing an existing row re-derives this gate from the persisted
+`last_connection_test_result`/`last_connection_test_message` **only when
+the persisted result is a success** — a persisted `failed` (or no test ever
+recorded) leaves the gate closed and requires a fresh Test Connection
+rather than half-trusting stale failure data. **Real bug caught by this
+exact edge case while testing**: an early version of `edit()` set
+`testPassedForKey` unconditionally for any row being edited, which crashed
+`save()` (null array-offset access on `testConnectionResult`) the moment a
+row with no in-memory test result was saved without re-testing — fixed by
+only trusting a genuinely-persisted `success`, covered by
+`OltDeviceIndexLivewireTest::
+test_changing_ip_after_a_passed_test_invalidates_it_and_re_blocks_save` and
+its sibling cases.
+
+**3 real OLTs (ZTE C300, HSGQ-G02ID/GPON, HSGQ-E04ID/EPON) are entered by
+Agung directly through this new UI, not seeded or guessed** — same
+"don't guess real credentials" posture as every other real-hardware secret
+in this codebase (Xendit keys, the WhatsApp HMAC secret, NAS/VPN PSKs). As
+of addendum #3 below, 2 of the 3 are already entered and Test-Connection-
+verified (ZTE C300 as `c300.kaliwungu.bajastu.id`, HSGQ-E04ID as
+`HSGQ-E04ID-CILED`, both via NAS `test-x86-bajastu`) — HSGQ-G02ID (GPON)
+is still pending. Once all 3 are entered, the original v0.8.1 sprint scope
+(onboard these 3 OLTs into LibreNMS via its API, verify real polling data,
+then the multi-hour resource-usage monitoring gate) resumes.
+
+**Addendum #3 (same branch, 3 more real bugs found by Agung testing the
+form in the browser) — a real Livewire+DataTables DOM-morph conflict, a
+missing delete path for master data, and a plaintext-password toggle.**
+
+1. **The OLT list silently stayed empty after every successful save, with
+   zero console errors** — confirmed for real with a headless Playwright
+   run against this dev server (login → edit an OLT → save → inspect the
+   live `#olt-devices-table` DOM without any manual page reload): the
+   `<tbody>` reverted to the pristine, empty, server-rendered Blade markup
+   every time. Root cause: `OltDeviceIndex`'s create/edit form and its
+   DataTables-driven list live in the SAME Livewire component, so every
+   `save()`/`delete()` (which touches many public properties, not just the
+   ones that changed) triggers a full Livewire DOM morph over the WHOLE
+   component tree — including the `<table>` DataTables had already
+   transformed client-side (wrapped in its own `.dataTables_wrapper`,
+   populated with AJAX-fetched rows). Livewire's morph doesn't know
+   DataTables did that; it reconciles the live DOM back toward the
+   server's freshly-rendered HTML, which is always the pristine empty
+   `<table><tbody></tbody></table>` from the Blade source — wiping
+   DataTables' rows/wrapper regardless of whether `table.ajax.reload()`
+   also fires via the existing `olt-device-saved` dispatch/`x-on:...window`
+   listener (see the "New OLT Credential Registry" paragraph above — that
+   plumbing was already correct, it just wasn't enough on its own). Fixed
+   with `wire:ignore` on the list's outer `<div>` (Livewire's own
+   documented answer for "a third-party JS library owns this subtree,
+   never morph it") — confirmed fixed with the same Playwright script
+   re-run after the fix: the renamed value appeared in the live table with
+   no manual reload. This is a real, general gotcha for this codebase: **any
+   future page combining a reactive Livewire form with a DataTables list in
+   the SAME component needs `wire:ignore` on the DataTables container from
+   the start** — `CpeDeviceIndex` (the only other DataTables+Livewire page)
+   never hit this because it has no state-changing form/save() at all, not
+   because it solved the problem.
+2. **Manufacturer/Model master data had no delete path** — the existing
+   "+" quick-add modals were extended into "manage" modals (same modal,
+   now also lists existing rows with a `wire:confirm`-gated "Hapus" link,
+   the exact same `text-red-600 hover:underline` + `wire:confirm="..."`
+   pattern already used by `customer-show.blade.php`'s contact delete —
+   reused, not reinvented). Referential integrity: `deleteModel()` checks
+   `OltDevice::withoutGlobalScopes()->where('olt_model_id', $id)->count()`
+   deliberately WITHOUT tenant/reseller scoping — `olt_models`/
+   `olt_manufacturers` are platform-level master data (same posture as
+   `payment_gateway_channels`), so "is this still in use" must mean across
+   every tenant, never just what the acting admin's own session can see.
+   `deleteManufacturer()` takes a deliberately simpler/stricter rule
+   instead of relying on `olt_models`' DB-level `cascadeOnDelete()` (see
+   that migration) chained through `olt_devices`' `restrictOnDelete()`: a
+   manufacturer can only be deleted while it has ZERO models under it,
+   full stop — no silent cascade-delete of models the user never explicitly
+   asked to remove, matching the sprint's own "create+delete only, no more
+   complex master-data CRUD" scope limit. Deleting a manufacturer/model
+   that's currently selected in the open form clears that selection rather
+   than leaving it pointing at a now-nonexistent id.
+3. **`telnet_password`/`ssh_password` had no show/hide toggle** (unlike the
+   SNMP community fields, which are plain `type="text"` by design — see
+   above). Checked first for an existing toggle component to reuse (login
+   form, other credential forms) — none exists anywhere in this app, so a
+   small inline Alpine `x-data="{ showPw: false }"` + `:type="showPw ?
+   'text' : 'password'"` toggle was added directly on both fields (a
+   "Lihat"/"Sembunyikan" button, same `border-gray-300 hover:bg-gray-50`
+   styling as the SNMP "Regenerate" buttons) rather than building a new
+   reusable component for what is, so far, exactly two fields.
 
 ## Architecture
 

@@ -713,6 +713,133 @@ services:
     # port. Add one deliberately later if admins actually need routine
     # browser access to it.
 
+  librenms-db:
+    image: mariadb:10
+    container_name: librenms-db
+    restart: unless-stopped
+    command:
+      - "mysqld"
+      - "--innodb-file-per-table=1"
+      - "--lower-case-table-names=0"
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_unicode_ci"
+    environment:
+      TZ: Asia/Jakarta
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_DATABASE: ${LIBRENMS_DB_NAME}
+      MYSQL_USER: ${LIBRENMS_DB_USER}
+      MYSQL_PASSWORD: ${LIBRENMS_DB_PASSWORD}
+    volumes:
+      - librenms_db_data:/var/lib/mysql
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    networks:
+      - boss-network
+    # v0.8.1 — own separate MariaDB instance (BOSS-009: never boss-postgresql,
+    # which is PostgreSQL anyway and LibreNMS requires MySQL/MariaDB — no
+    # cross-database joins, same posture as freeradius-db/mongo). Port 3306
+    # deliberately NOT exposed to the host (RULE BOSS-010).
+
+  librenms-redis:
+    image: redis:7.2-alpine
+    container_name: librenms-redis
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Jakarta
+    networks:
+      - boss-network
+    # v0.8.1 — LibreNMS's own cache/session store, deliberately separate
+    # from boss-redis (used for boss-app's queues/cache/sessions) — same
+    # "never share a datastore across unrelated services" posture as
+    # librenms-db above, avoids any risk of key-eviction interference
+    # between the two completely different workloads. No host port.
+
+  librenms:
+    image: librenms/librenms:latest
+    container_name: librenms
+    hostname: librenms
+    restart: unless-stopped
+    # Required by the official image itself for SNMP/ICMP-based discovery
+    # and polling (raw sockets) — same class of requirement as
+    # genieacs-cwmp/genieacs-nbi's NET_ADMIN above, just for a different
+    # underlying reason (SNMP/ping, not routing table manipulation).
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      TZ: Asia/Jakarta
+      PUID: "1000"
+      PGID: "1000"
+      DB_HOST: librenms-db
+      DB_NAME: ${LIBRENMS_DB_NAME}
+      DB_USER: ${LIBRENMS_DB_USER}
+      DB_PASSWORD: ${LIBRENMS_DB_PASSWORD}
+      DB_TIMEOUT: "60"
+      REDIS_HOST: librenms-redis
+      CACHE_DRIVER: redis
+    volumes:
+      - librenms_data:/data
+      # Deliberately NO /etc/localtime or /etc/timezone bind mount here,
+      # unlike every other service in this file — real bug found bringing
+      # this up: the official librenms/docker image's own init script
+      # (03-config.sh) tries to CREATE the /etc/localtime symlink itself
+      # from the TZ env var above; a read-only bind mount at that same
+      # path makes that `ln` fail ("Resource busy"), which crash-loops the
+      # whole container (s6-init treats it as a fatal init script
+      # failure). The other services' pattern assumes an image with no
+      # opinion of its own about /etc/localtime — this image has one.
+    depends_on:
+      - librenms-db
+      - librenms-redis
+    networks:
+      - boss-network
+    # v0.8.1 — web UI + core app. Deliberately NO host port published here
+    # (unlike the official example's `8000:8000`) — same posture as
+    # genieacs-ui above (BOSS-010 minimal-public-surface): reach it via
+    # `docker compose exec librenms ...` for CLI/API-token work, or an SSH
+    # tunnel to port 8000 on boss-network for occasional browser access
+    # during this evaluation sprint. Revisit only if v0.8.2 deliberately
+    # wires it behind boss-nginx as a real, permanent public surface.
+
+  librenms-dispatcher:
+    image: librenms/librenms:latest
+    container_name: librenms-dispatcher
+    hostname: librenms-dispatcher
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      TZ: Asia/Jakarta
+      PUID: "1000"
+      PGID: "1000"
+      DB_HOST: librenms-db
+      DB_NAME: ${LIBRENMS_DB_NAME}
+      DB_USER: ${LIBRENMS_DB_USER}
+      DB_PASSWORD: ${LIBRENMS_DB_PASSWORD}
+      DB_TIMEOUT: "60"
+      REDIS_HOST: librenms-redis
+      CACHE_DRIVER: redis
+      DISPATCHER_NODE_ID: dispatcher1
+      SIDECAR_DISPATCHER: "1"
+    volumes:
+      - librenms_data:/data
+      # No /etc/localtime bind mount — same real crash-loop bug as the
+      # librenms service above, see its own comment for the full story.
+    depends_on:
+      - librenms
+      - librenms-redis
+    networks:
+      - boss-network
+    # v0.8.1 — the actual SNMP poller (SIDECAR_DISPATCHER=1). Without this
+    # container, `librenms` alone serves the web UI but never polls a
+    # single device — confirmed from the official librenms/docker compose
+    # reference, which always ships this as a separate sidecar. msmtpd/
+    # syslogng/snmptrapd sidecars deliberately NOT added — out of scope
+    # for this install-and-onboard-only sprint (no email alerting, no
+    # syslog/trap ingestion needed to prove basic uptime/interface polling
+    # works).
+
   boss-postgresql:
     image: postgres:16-alpine
     container_name: boss-postgresql
@@ -780,3 +907,5 @@ volumes:
   vpn_l2tp_secrets:
   mongo_data:
   freeradius_nas_config:
+  librenms_db_data:
+  librenms_data:

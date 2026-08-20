@@ -38,15 +38,16 @@ class CpeDeviceDatatableController extends Controller
     {
         $this->authorize('viewAny', CpeDevice::class);
 
-        // Narrow eager-loads (id+name only) — the customer relation
+        // Narrow eager-loads (id+name+cid only) — the customer relation
         // otherwise carries nik (an `encrypted` cast, decrypted to
         // plaintext the moment it's accessed/serialized) and other PII that
         // has no business ever reaching this JSON response.
-        $query = CpeDevice::query()->with(['customer:id,name', 'reseller:id,name']);
+        $query = CpeDevice::query()->with(['customer:id,name,cid', 'reseller:id,name']);
 
         return DataTables::eloquent($query)
             ->addColumn('id', fn (CpeDevice $d) => $d->id)
             ->addColumn('customer_name', fn (CpeDevice $d) => $d->customer?->name ?? '—')
+            ->addColumn('customer_cid', fn (CpeDevice $d) => $d->customer?->cid)
             ->addColumn('reseller_name', fn (CpeDevice $d) => $d->reseller?->name)
             ->addColumn('mac_address', fn (CpeDevice $d) => $this->summaryFor($d, $resolver)['mac_address'])
             ->addColumn('rx_power_dbm', fn (CpeDevice $d) => $this->summaryFor($d, $resolver)['rx_power_dbm'])
@@ -86,7 +87,7 @@ class CpeDeviceDatatableController extends Controller
             // (and everything else on the row) to the browser. Only these
             // fields, ever.
             ->only([
-                'id', 'customer_name', 'reseller_name', 'manufacturer', 'model_name',
+                'id', 'customer_name', 'customer_cid', 'reseller_name', 'manufacturer', 'model_name',
                 'serial_number', 'mac_address', 'rx_power_dbm', 'device_uptime_seconds',
                 'online_duration_text', 'status_value', 'status_label',
             ])

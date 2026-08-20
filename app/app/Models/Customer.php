@@ -134,4 +134,9 @@ class Customer extends Model
     {
         return $this->hasMany(WorkOrder::class);
     }
+
+    public function cpeDevices(): HasMany
+    {
+        return $this->hasMany(CpeDevice::class);
+    }
 }

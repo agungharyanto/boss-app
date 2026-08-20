@@ -4,7 +4,6 @@ namespace Tests\Feature\Network;
 
 use App\Models\CpeActionLog;
 use App\Models\CpeDevice;
-use App\Models\CpeParameterMap;
 use App\Models\Customer;
 use App\Models\Tenant;
 use App\Models\User;
@@ -107,12 +106,6 @@ class CpeDeviceActionControllerTest extends TestCase
     public function test_wifi_submits_and_logs_delivered(): void
     {
         $this->fakeGenieAcsEnqueue();
-        CpeParameterMap::factory()->create([
-            'oui' => 'F86CE1',
-            'product_class' => 'F663NV3a',
-            'parameter_key' => 'wifi_ssid',
-            'parameter_path' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID',
-        ]);
         $tenant = Tenant::factory()->create();
         $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id, 'genieacs_device_id' => 'F86CE1-F663NV3a-ZICG296C2E7B']);
 
@@ -122,6 +115,140 @@ class CpeDeviceActionControllerTest extends TestCase
 
         $this->assertStringContainsString('terkirim', $response->json('message'));
         $this->assertDatabaseHas('cpe_action_logs', ['cpe_device_id' => $device->id, 'status' => 'delivered']);
+    }
+
+    /**
+     * 2026-08-17: per-SSID "Ganti WiFi" on the standalone detail page —
+     * `ssid_index` in the request must land on the exact WLANConfiguration
+     * instance targeted, defaulting to 1 when omitted (see
+     * test_wifi_submits_and_logs_delivered above, which omits it).
+     */
+    public function test_wifi_with_ssid_index_targets_that_wlan_configuration_instance(): void
+    {
+        $this->fakeGenieAcsEnqueue();
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id, 'genieacs_device_id' => 'F86CE1-F663NV3a-ZICG296C2E7B']);
+
+        $this->actingAs($this->admin($tenant))
+            ->postJson("/api/internal/cpe-devices/{$device->id}/wifi", ['ssid' => 'TokenWifi', 'ssid_index' => 4])
+            ->assertOk();
+
+        $this->assertDatabaseHas('cpe_action_logs', [
+            'cpe_device_id' => $device->id,
+            'status' => 'delivered',
+        ]);
+        $log = CpeActionLog::where('cpe_device_id', $device->id)->firstOrFail();
+        $this->assertSame(4, $log->parameters['ssid_index']);
+
+        Http::assertSent(function ($request) {
+            if (! str_contains($request->url(), '/tasks')) {
+                return true;
+            }
+
+            return $request['parameterValues'] === [
+                ['InternetGatewayDevice.LANDevice.1.WLANConfiguration.4.SSID', 'TokenWifi', 'xsd:string'],
+            ];
+        });
+    }
+
+    public function test_wifi_rejects_ssid_index_out_of_range(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($this->admin($tenant))
+            ->postJson("/api/internal/cpe-devices/{$device->id}/wifi", ['ssid' => 'x', 'ssid_index' => 0])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['ssid_index']);
+    }
+
+    public function test_ssid_enabled_toggles_and_logs_delivered(): void
+    {
+        $this->fakeGenieAcsEnqueue();
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id, 'genieacs_device_id' => 'F86CE1-F663NV3a-ZICG296C2E7B']);
+
+        $response = $this->actingAs($this->admin($tenant))
+            ->postJson("/api/internal/cpe-devices/{$device->id}/ssid-enabled", ['ssid_index' => 4, 'enabled' => false])
+            ->assertOk();
+
+        $this->assertStringContainsString('terkirim', $response->json('message'));
+        $this->assertDatabaseHas('cpe_action_logs', [
+            'cpe_device_id' => $device->id,
+            'action_type' => 'set_ssid_enabled',
+            'status' => 'delivered',
+        ]);
+
+        Http::assertSent(function ($request) {
+            if (! str_contains($request->url(), '/tasks')) {
+                return true;
+            }
+
+            return $request['parameterValues'] === [
+                ['InternetGatewayDevice.LANDevice.1.WLANConfiguration.4.Enable', false, 'xsd:boolean'],
+            ];
+        });
+    }
+
+    public function test_ssid_enabled_requires_ssid_index_and_enabled(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($this->admin($tenant))
+            ->postJson("/api/internal/cpe-devices/{$device->id}/ssid-enabled", [])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['ssid_index', 'enabled']);
+    }
+
+    public function test_view_only_user_cannot_toggle_ssid_enabled(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+        $viewer = User::factory()->create(['tenant_id' => $tenant->id]);
+        $viewer->givePermissionTo(Permission::firstOrCreate(['name' => 'cpe_devices.view', 'guard_name' => 'web']));
+
+        $this->actingAs($viewer)
+            ->postJson("/api/internal/cpe-devices/{$device->id}/ssid-enabled", ['ssid_index' => 1, 'enabled' => true])
+            ->assertForbidden();
+    }
+
+    public function test_sync_now_returns_the_envelope_and_creates_a_delivered_log_with_both_task_ids(): void
+    {
+        $this->fakeGenieAcsEnqueue();
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id, 'genieacs_device_id' => 'F86CE1-F663NV3a-ZICG296C2E7B']);
+
+        $response = $this->actingAs($this->admin($tenant))
+            ->postJson("/api/internal/cpe-devices/{$device->id}/sync-now")
+            ->assertOk();
+
+        $this->assertStringContainsString('terkirim', $response->json('message'));
+        $this->assertDatabaseHas('cpe_action_logs', [
+            'cpe_device_id' => $device->id,
+            'action_type' => 'sync_now',
+            'status' => 'delivered',
+        ]);
+
+        Http::assertSent(function ($request) {
+            if (! str_contains($request->url(), '/tasks')) {
+                return true;
+            }
+
+            return $request['name'] === 'refreshObject';
+        });
+    }
+
+    public function test_view_only_user_cannot_sync_now(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+        $viewer = User::factory()->create(['tenant_id' => $tenant->id]);
+        $viewer->givePermissionTo(Permission::firstOrCreate(['name' => 'cpe_devices.view', 'guard_name' => 'web']));
+
+        $this->actingAs($viewer)
+            ->postJson("/api/internal/cpe-devices/{$device->id}/sync-now")
+            ->assertForbidden();
     }
 
     public function test_destroy_unbinds_and_writes_a_rejection_row(): void

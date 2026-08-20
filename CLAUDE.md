@@ -1531,6 +1531,19 @@ not solved by more time on this same approach**:
 
 ## GenieACS Connection Request Routing (v0.7.3) — implementation done, end-to-end verification PENDING
 
+**Amendment (branch `v0.7.x-testing-refinements`, not yet merged/tagged) —
+VERIFIED, this section's "PENDING" title is now stale**: the retest this
+section calls for below was finally run for real. Short version — it
+works; see "GenieACS Testing Refinements & Status Sync Redesign
+(v0.7.x-testing-refinements)" near the end of this file for the full
+account, including a real false lead this same investigation produced and
+had to walk back (don't re-add a route to a WireGuard node's tunnel
+gateway IP without new evidence — see that section). The two specific
+device IDs cited below (`6a7897028f1edd3ee0656c81`/
+`6a789984a542ad1c34df1865`) turned out to be stale/non-existent — GenieACS
+device `_id`s in this fleet all follow the `OUI-ProductClass-Serial`
+format, never that hex-string shape; don't chase those exact IDs again.
+
 **Honest status, don't upgrade this to "done" without rechecking first**: the
 network plumbing below is implemented and unit/feature-tested, and three real
 infrastructure bugs were found and fixed while building it — but the actual
@@ -1696,6 +1709,161 @@ index. Worth checking for the same gotcha before building any future
 feature that walks another dynamic TR-069 array (WLANConfiguration
 instances, WANConnectionDevice instances, etc.) — this is a real device
 behavior, not specific to Hosts.
+
+## GenieACS Testing Refinements & Status Sync Redesign (v0.7.x-testing-refinements)
+
+**Branch status: NOT merged/tagged.** One "wip" commit (`fa6b0ca`) plus a
+large amount of further uncommitted work (this whole section's worth) sits
+on top of it. Don't treat anything here as `main`/tagged history — see
+`docs/ROADMAP.md`'s own "Branch `v0.7.x-testing-refinements`" section for
+the sprint-level summary; this section is the technical-gotcha detail for
+future debugging, same split as every other `## GenieACS ...` section
+above.
+
+**v0.7.3 Connection Request is now genuinely verified, after a real false
+lead along the way.** `nc -zv` from `genieacs-nbi` toward two specific CPE
+IPs (the ones cited in the v0.7.3 section above) kept timing out — looked
+like proof of a routing gap. It wasn't: those two IPs were stale (~2-week-old
+DHCP leases nothing holds anymore), confirmed absent from all 220 devices'
+*current* `ConnectionRequestURL` values pulled fresh from GenieACS. Retested
+against real, currently-reported URLs: 5/5 ZTE F663NV3a succeeded
+immediately; 8/8 Huawei EG8141A5 succeeded within 3 retries (first attempt
+to a given IP occasionally timed out — likely ARP-cache-miss latency on the
+router's own local segment, not a tunnel problem; every retry to an
+already-tried IP succeeded instantly). A route to a WireGuard node's own
+tunnel gateway IP (`$vpnNodeTunnelIp` in `MikrotikScriptGenerator::
+wireGuardScript()`) was briefly added, reasoning by analogy from an
+already-proven fact (allowed-address doesn't populate RouterOS's routing
+table) — reverted same day once real testing showed Connection Request
+succeeds with zero router-side changes beyond the existing allowed-address
+entry. **Lesson: always confirm a CPE's CURRENT `ConnectionRequestURL` from
+GenieACS itself before treating a timeout against a remembered IP as
+evidence of anything** — see the method's own docblock for the full,
+corrected account.
+
+**`connection_request` via `GenieAcsClientService::sendTask()` is
+asynchronous, not synchronous — its HTTP 200/202 status is NOT a reliable
+same-request online/offline signal.** genieacs-nbi's own internal wait
+(`CONNECTION_REQUEST_TIMEOUT`, default 2000ms, NOT overridable via a
+request query param — confirmed by decompiling `bin/genieacs-nbi`'s own
+config-key table) is far shorter than real observed CPE response latency.
+Measured across 8 real devices, using the CPE's own `informEvent` containing
+`"6 CONNECTION REQUEST"` as the only reliable proof the push (not a
+coincidental periodic timer) caused the Inform: delays ranged **0.7s to
+60.0s**. Worse: a device can be demonstrably online (steady periodic
+Informs every 60s, confirmed over 3+ minutes) while its `connection_request`
+**never once succeeds** — likely a per-device `cwmp.connectionRequestAuth`
+credential mismatch, not a network problem. Treating `connection_request`
+success as the sole online signal would misclassify such a device as
+offline forever.
+
+**Real genieacs-nbi bug: `getParameterValues` with an EMPTY
+`parameterNames` array crashes the worker outright** —
+`Error: Missing 'parameterNames' property`, confirmed live via
+`docker compose logs genieacs-nbi`. The worker auto-respawns (PM2-style,
+"Worker died" → "Worker listening" within seconds) so it's self-healing,
+but every affected request fails until then. Never send an empty
+`parameterNames` array to `sendTask()` — always a real, non-empty parameter
+path (e.g. `{root}.DeviceInfo.SerialNumber`, a required TR-069 field
+present on every vendor).
+
+**`App\Services\Network\CpeDeviceStatusSyncService` was rebuilt from
+scratch** — the real goal all along was boss-app checking CPE reachability
+over its OWN tunnel path (boss-app → WireGuard → CPE), never delegating to
+a customer's own router API (a dependency this product, meant to be sold to
+multiple ISPs, can't scale on). Confirmed directly (read-only `ip route`/
+`nc` checks from inside the real `boss-app` container) that boss-app itself
+has **zero** route/firewall access to a NAS's TR-069 management subnet —
+only `genieacs-cwmp`/`genieacs-nbi` have the v0.7.3 firewall exception.
+Widening that to `boss-app` (new `NET_ADMIN` capability, new iptables rule,
+new persistent route) was explicitly rejected in favor of reusing
+`genieacs-nbi`'s already-working path instead — no new attack surface, same
+mechanism `CpeActionService` already uses. Given the async-timing finding
+above, the final design is a **hybrid, two-phase check**, not a simple
+probe-and-wait:
+1. A device whose GenieACS-reported `_lastInform` is already fresher than
+   5 minutes is marked online directly — no probe sent at all. This means a
+   device with steady periodic Informs is never at the mercy of a broken
+   `connection_request` path for it specifically (closes the "online but
+   connection_request never succeeds" gap above).
+2. Only genuinely stale devices get an active probe: fire
+   `connection_request` (via a real, non-empty `getParameterValues` target)
+   for all of them, `Sleep::for(90)->seconds()` (Laravel's `Sleep` facade —
+   `Sleep::fake()` in tests, no real 90s wait), then re-check `_lastInform`
+   once more; a device whose `_lastInform` advanced past the moment the
+   probe was sent is online, otherwise offline. 90s covers the 60s worst
+   case measured above with margin.
+
+`RouterOsGateway::pingHost()` (v0.6.1) is **not removed** — it's simply no
+longer called from this service. Verified for real against the live fleet
+(185 devices with a `genieacs_device_id`): online count went 119 → 159 in
+one run (the old router-ping approach was under-counting real online
+devices), and `nas.last_ping_at` for the vantage-point NAS stayed
+completely unchanged across the run — zero ping traffic left the server,
+confirming the architectural goal.
+
+**Real-customer end-to-end verification of v0.7.4/v0.7.5, done deliberately
+against production data (Agung's explicit call, with a documented revert
+plan)**: customer Natofik (`085291591491`, `cpe_devices` serial
+`ZICG298E1389`, ZTE F663NV3a) — original SSID `"DESA"` read and recorded
+first. Two real gotchas hit along the way, both now fixed/documented so a
+future rebind doesn't repeat them:
+- **`cpe:auto-match-legacy-devices` (currently sped up to a 30s poll
+  interval, see `docker-compose.yml`'s `boss-scheduler` comment — normally
+  slower) races a deliberate unbind.** Deleting a `cpe_devices` row for a
+  device that still exists in GenieACS with a matching serial gets
+  auto-recreated within seconds by this scheduled job. A clean
+  unbind-then-rebind (e.g. to exercise `CpeBindingService::
+  bindFromWorkOrder()` fresh, avoiding its `genieacs_device_id` unique-
+  constraint collision with an already-bound legacy row) must delete AND
+  immediately rebind in the same script execution — not two separate steps
+  with any real gap between them.
+- **`work_orders.subscription_id` is NOT NULL** — there is no way to create
+  a bare `WorkOrder` without a real `Subscription` row, even via direct
+  Eloquent (`createFromSubscription()` really is the only path the schema
+  allows). A customer with no subscription (this one, a legacy-MixRadius
+  import) needs one created first. Made safe for a real customer by setting
+  `status = SubscriptionStatus::Cancelled` (not `Active`) and
+  `monthly_amount = 0` — confirmed directly from `GenerateDueInvoices`'s own
+  query (`->where('status', SubscriptionStatus::Active->value)`) that only
+  `Active` subscriptions are ever billed, so this combination is safe
+  against the invoice-generation cron by two independent means, not just
+  one.
+
+Result: `cpe_action_logs` showed the exact expected auto-provisioning
+signature (`performed_by: null`, `parameters.triggered_by:
+"auto_provisioning_binding"`, `status: delivered`,
+`new_password_fingerprint` — never the plaintext), SSID genuinely changed
+on the device (confirmed via the next real periodic Inform, not just the
+task's own "delivered" status), then reverted via the real "Ganti WiFi"
+manual UI/API path (`performed_by` a real admin user id, no
+`triggered_by` key — a visibly different signature from the automatic
+path, useful for anyone reading the action-log history later) — also
+confirmed via a real periodic Inform. All test-only scaffolding
+(`Subscription`/`WorkOrder`/`WorkOrderDevice`) was deleted afterward;
+`cpe_devices`'s binding to Natofik was deliberately kept (that's the
+correct, wanted end state), and `cpe_action_logs` rows were deliberately
+NOT deleted (permanent audit trail, not test scaffolding). **The test
+password (`TestQA12345`) was never reverted** — TR-069 genuinely can't read
+back a password to restore it, this is a known, accepted limitation, not an
+oversight; Natofik needs to be told via CS/WhatsApp to set their own new
+WiFi password.
+
+**`docs/API.md`'s WorkOrder REST API is real and Sanctum-token-reachable
+today, but has no technician-scoped auth yet** — checked while researching
+what a future WhatsApp-bot-driven technician flow (see `v0.12.0` in
+`docs/ROADMAP.md`) would need. Every `/api/v1/work-orders*` route sits
+behind `auth:sanctum` + `reseller.context` (derived automatically from the
+caller's own `reseller_users` membership, no extra header needed) — so an
+external service CAN call it today with a valid token. But
+`WorkOrderPolicy` only grants access via `work_orders.manage`/`.view`
+(admin-wide) or an active `reseller_users` membership — the existing
+`teknisi` Spatie role gets neither automatically (same gap already noted in
+the Installation v0.5.0 section above: "a technician's own scoped access...
+is new scope for a later sprint, not assumed here", still true). There's
+also no "look up WorkOrder by device serial number" endpoint —
+`index()` only filters by `status`. Both are real gaps to close as part of
+`v0.12.0`, not something to design/build yet.
 
 ## Architecture
 

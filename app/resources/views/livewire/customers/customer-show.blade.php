@@ -71,6 +71,51 @@
         </div>
     @endif
 
+    {{-- Device CPE --}}
+    <div class="p-4 border border-gray-200 rounded-md">
+        <h2 class="text-sm font-semibold text-gray-700 mb-3">Device CPE</h2>
+
+        @if (session('device_bound_message'))
+            <p class="text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2 mb-3">
+                {{ session('device_bound_message') }}
+            </p>
+        @endif
+
+        @if ($cpeDevice)
+            <dl class="grid grid-cols-2 gap-2 text-sm mb-2">
+                <dt class="text-gray-500">Serial Number</dt>
+                <dd class="text-gray-800 font-mono">{{ $cpeDevice->serial_number }}</dd>
+                <dt class="text-gray-500">Status</dt>
+                <dd class="text-gray-800">{{ $cpeDevice->status->label() }}</dd>
+            </dl>
+            <p class="text-xs text-gray-500">
+                Sudah ter-bind ke device ini. Mau ganti perangkat? Pakai
+                <a href="{{ route('web.cpe-devices.index') }}" class="text-primary hover:underline">"Ganti Modem" di Perangkat CPE</a>,
+                bukan form di halaman ini — supaya tidak ada dua jalur yang bisa saling tabrakan untuk customer yang sudah punya device.
+            </p>
+        @else
+            <p class="text-sm text-gray-500 mb-3">Customer ini belum punya device CPE ter-bind.</p>
+
+            @if ($canAddDevice)
+                @if ($showAddDeviceForm)
+                    <form wire:submit="bindDevice" class="p-3 bg-gray-50 rounded-md space-y-2">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Serial Number</label>
+                            <input type="text" wire:model="newDeviceSerial" placeholder="mis. ZTEGCB399CEB" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm font-mono text-sm">
+                            @error('newDeviceSerial') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                        </div>
+                        <div class="flex gap-2">
+                            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">Bind Device</button>
+                            <button type="button" wire:click="cancelAddDeviceForm" class="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300">Batal</button>
+                        </div>
+                    </form>
+                @else
+                    <button wire:click="openAddDeviceForm" class="text-sm text-primary hover:underline">+ Tambah Device CPE</button>
+                @endif
+            @endif
+        @endif
+    </div>
+
     {{-- Kontak keluarga --}}
     <div class="p-4 border border-gray-200 rounded-md">
         <div class="flex items-center justify-between mb-3">

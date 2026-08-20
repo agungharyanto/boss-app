@@ -7,7 +7,7 @@ use App\Models\CpeActionLog;
 use App\Models\CpeConnectedHost;
 use App\Models\CpeDevice;
 use App\Models\CpeParameterMap;
-use App\Models\Customer;
+use App\Models\Reseller;
 use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -71,7 +71,16 @@ class CpeDeviceDetailControllerTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_manage_admin_sees_reboot_ganti_wifi_ganti_modem_and_remove(): void
+    /**
+     * "Ganti WiFi"/"Ganti Modem" moved out of this shared partial entirely
+     * (2026-08-17) — per-SSID inline on the standalone /cpe-devices/{id}
+     * page's own WiFi/SSID table, and next to Serial Number respectively
+     * (see CpeDeviceShowPageTest) — the child-row fragment (superseded by
+     * that page, kept only for its own existing coverage) never had a
+     * WiFi/SSID table or a Serial Number row to relocate them into, so it
+     * now only shows Reboot/Remove for a manage-capable admin.
+     */
+    public function test_manage_admin_sees_reboot_and_remove(): void
     {
         $tenant = Tenant::factory()->create();
         $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
@@ -82,9 +91,8 @@ class CpeDeviceDetailControllerTest extends TestCase
 
         $response->assertSee('cpeReboot('.$device->id.')', false);
         $response->assertSee('cpeRemove('.$device->id.',', false);
-        $response->assertSee('cpeReplaceModem('.$device->id.',', false);
-        $response->assertSee('Ganti WiFi');
-        $response->assertSee('Ganti Modem');
+        $response->assertDontSee('Ganti WiFi');
+        $response->assertDontSee('Ganti Modem');
     }
 
     public function test_detail_shows_resolved_mac_rx_tx_and_uptime(): void
@@ -172,8 +180,8 @@ class CpeDeviceDetailControllerTest extends TestCase
     public function test_a_reseller_cannot_view_another_resellers_device_detail(): void
     {
         $tenant = Tenant::factory()->create();
-        $resellerA = \App\Models\Reseller::factory()->create(['tenant_id' => $tenant->id]);
-        $resellerB = \App\Models\Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $resellerA = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $resellerB = Reseller::factory()->create(['tenant_id' => $tenant->id]);
         $deviceB = CpeDevice::factory()->forReseller($resellerB)->create();
         $ownerA = User::factory()->create(['tenant_id' => $tenant->id]);
         $resellerA->users()->attach($ownerA->id, ['role' => 'owner', 'status' => 'active']);

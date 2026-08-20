@@ -3,6 +3,42 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## [BELUM DI-TAG] Branch `v0.7.x-testing-refinements` — sesi verifikasi + refinement pasca v0.7.6
+
+**Bukan entri versi resmi** — dicatat lebih awal dari biasanya (branch ini
+belum di-commit penuh, belum di-merge, belum di-tag) supaya sesi/chat
+berikutnya (termasuk kickoff v0.12.0) punya rujukan akurat. Pindahkan ke
+judul versi yang sesuai begitu tag sungguhan dibuat. Detail lengkap dan
+alasan tiap keputusan ada di `docs/ROADMAP.md` bagian
+"Branch v0.7.x-testing-refinements".
+
+Ringkasan singkat (lihat ROADMAP.md untuk detail teknis penuh):
+- **Verifikasi nyata**: v0.7.3 Connection Request terbukti jalan (5/5 ZTE +
+  8/8 Huawei via `nc -zv` + `informEvent="6 CONNECTION REQUEST"` di log
+  genieacs-cwmp); v0.7.4 Ganti WiFi dan v0.7.5 Auto-Provisioning
+  terverifikasi end-to-end ke device pelanggan asli (Natofik,
+  `ZICG298E1389`), SSID diubah lalu direvert, keduanya terkonfirmasi lewat
+  periodic inform sungguhan.
+- **Fitur baru**: status Online/Offline dirombak dari router-ping jadi
+  hybrid GenieACS `_lastInform`+`connection_request` (`RouterOsGateway::
+  pingHost()` tetap ada, cuma tidak dipakai lagi di jalur ini); DataTables
+  UI + halaman Detail terpisah untuk `/cpe-devices`; Remove/Ganti Modem;
+  Cek Status Device (self-service diagnostic 4-tahap); auto-matching
+  legacy device berkelanjutan (`cpe:auto-match-legacy-devices`); resolusi
+  MAC via `pppoeMac` + multi-WAN index dinamis.
+- **Data**: import penuh 561 customer MixRadius (2 gagal, NIK bentrok —
+  belum diselidiki), NIK encryption, CID auto-generate.
+- **Infrastruktur**: preset default GenieACS baru (auto-refresh terjadwal
+  SSID/password/MAC/UpTime/Connected Hosts), DHCP Option 43 (infra,
+  membawa ~70 device baru ke GenieACS), fix `MikrotikScriptGenerator`
+  (`comment=` di semua baris `add`, konfirmasi format CIDR `/32` bukan bug
+  kita).
+- **PPPoE (`radcheck`) provisioning + API/otorisasi teknisi-bot** —
+  dikonfirmasi eksplisit di luar scope v0.7.5, diberi nomor **v0.12.0**.
+- **Known gaps terbuka**: 2 customer gagal import; ~20-an kombinasi vendor
+  kecil belum ada RX Power; verifikasi UI browser v0.7.3-v0.7.6 belum
+  pernah dicoba Agung langsung.
+
 ## v0.7.6 — GenieACS Connected Clients (dengan histori)
 
 Sub-sprint keenam cluster v0.7.0. Baca object TR-069 `LANDevice.{i}.

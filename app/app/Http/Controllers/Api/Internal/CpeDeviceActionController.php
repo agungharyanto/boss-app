@@ -6,7 +6,9 @@ use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\RebootCpeDeviceRequest;
 use App\Http\Requests\ReplaceCpeModemRequest;
+use App\Http\Requests\SetCpeSsidEnabledRequest;
 use App\Http\Requests\SetCpeWifiCredentialsRequest;
+use App\Http\Requests\SyncCpeDeviceNowRequest;
 use App\Http\Resources\CpeActionLogResource;
 use App\Models\CpeDevice;
 use App\Services\Network\CpeActionService;
@@ -52,6 +54,7 @@ class CpeDeviceActionController extends Controller
             $request->validated('ssid'),
             $request->validated('password'),
             $request->user(),
+            $request->validated('ssid_index') ?? 1,
         );
 
         return $this->success(
@@ -59,6 +62,50 @@ class CpeDeviceActionController extends Controller
             $log->status->value === 'delivered'
                 ? 'Perintah ganti WiFi terkirim — akan diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil). Ini BUKAN konfirmasi perangkat sudah menjalankannya.'
                 : 'Perintah ganti WiFi GAGAL dikirim: '.$log->failed_reason
+        );
+    }
+
+    /**
+     * SSID Aktif/Nonaktif toggle (2026-08-17) — the "are you sure" gate for
+     * disabling a currently-in-use SSID lives entirely client-side (see
+     * cpe-devices/show.blade.php's cpeToggleSsid()), same posture as every
+     * other destructive-ish confirm() in this module (reboot, remove).
+     */
+    public function ssidEnabled(SetCpeSsidEnabledRequest $request, CpeDevice $cpeDevice, CpeActionService $service): JsonResponse
+    {
+        $log = $service->setSsidEnabled(
+            $cpeDevice,
+            (int) $request->validated('ssid_index'),
+            (bool) $request->validated('enabled'),
+            $request->user(),
+        );
+
+        $verb = $request->validated('enabled') ? 'aktifkan' : 'nonaktifkan';
+
+        return $this->success(
+            new CpeActionLogResource($log),
+            $log->status->value === 'delivered'
+                ? "Perintah {$verb} SSID terkirim — akan diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil). Ini BUKAN konfirmasi perangkat sudah menjalankannya."
+                : "Perintah {$verb} SSID GAGAL dikirim: ".$log->failed_reason
+        );
+    }
+
+    /**
+     * "Sync Sekarang" (2026-08-19) — see CpeActionService::syncNow()'s own
+     * docblock. Success ("delivered") here only ever means "at least one
+     * of the two refreshObject tasks enqueued" — same honest framing as
+     * every other action in this controller, never claimed as proof the
+     * device has actually re-synced anything yet.
+     */
+    public function syncNow(SyncCpeDeviceNowRequest $request, CpeDevice $cpeDevice, CpeActionService $service): JsonResponse
+    {
+        $log = $service->syncNow($cpeDevice, $request->user());
+
+        return $this->success(
+            new CpeActionLogResource($log),
+            $log->status->value === 'delivered'
+                ? 'Perintah sync terkirim — data terbaru akan masuk saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil). Refresh halaman ini beberapa saat lagi untuk melihat hasilnya.'
+                : 'Perintah sync GAGAL dikirim: '.$log->failed_reason
         );
     }
 

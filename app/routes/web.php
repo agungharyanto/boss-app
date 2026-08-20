@@ -13,6 +13,7 @@ use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
 use App\Livewire\Installation\WorkOrderShow;
 use App\Livewire\Network\CpeDeviceIndex;
+use App\Livewire\Network\CpeDeviceStatusCheck;
 use App\Livewire\Network\CpeParameterMapIndex;
 use App\Livewire\Network\NasIndex;
 use App\Livewire\Network\VpnScriptGenerator;
@@ -73,6 +74,14 @@ Route::middleware('auth')->name('web.')->group(function () {
         Route::get('/nas', NasIndex::class)->name('nas.index');
         Route::get('/vpn-script-generator', VpnScriptGenerator::class)->name('vpn-script-generator.index');
         Route::get('/cpe-devices', CpeDeviceIndex::class)->name('cpe-devices.index');
+        Route::get('/cpe-devices/status-check', CpeDeviceStatusCheck::class)->name('cpe-devices.status-check');
+
+        // Standalone detail page (2026-08-16, replaces the DataTables
+        // child-row expand interaction — see CpeDeviceDetailController's
+        // own docblock). Must be registered AFTER /cpe-devices/status-check
+        // above so that literal segment doesn't get swallowed by this
+        // {cpe_device} wildcard.
+        Route::get('/cpe-devices/{cpe_device}', [CpeDeviceDetailController::class, 'page'])->name('cpe-devices.show');
 
         // v0.7.6-follow-up — support endpoints for the /cpe-devices
         // DataTables list (server-side sort/search/pagination + child-row
@@ -85,8 +94,11 @@ Route::middleware('auth')->name('web.')->group(function () {
         Route::prefix('api/internal/cpe-devices')->name('cpe-devices.internal.')->group(function () {
             Route::get('/datatable', CpeDeviceDatatableController::class)->name('datatable');
             Route::get('/{cpe_device}/detail', [CpeDeviceDetailController::class, 'show'])->name('detail');
+            Route::get('/{cpe_device}/pppoe-password', [CpeDeviceDetailController::class, 'pppoePassword'])->name('pppoe-password');
             Route::post('/{cpe_device}/reboot', [CpeDeviceActionController::class, 'reboot'])->name('reboot');
             Route::post('/{cpe_device}/wifi', [CpeDeviceActionController::class, 'wifi'])->name('wifi');
+            Route::post('/{cpe_device}/ssid-enabled', [CpeDeviceActionController::class, 'ssidEnabled'])->name('ssid-enabled');
+            Route::post('/{cpe_device}/sync-now', [CpeDeviceActionController::class, 'syncNow'])->name('sync-now');
             Route::post('/{cpe_device}/replace-modem', [CpeDeviceActionController::class, 'replaceModem'])->name('replace-modem');
             Route::delete('/{cpe_device}', [CpeDeviceActionController::class, 'destroy'])->name('destroy');
         });

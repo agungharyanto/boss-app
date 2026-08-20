@@ -5,30 +5,17 @@ namespace Tests\Feature\Network;
 use App\Enums\CpeActionStatus;
 use App\Enums\CpeActionType;
 use App\Models\CpeDevice;
-use App\Models\CpeParameterMap;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\Network\CpeActionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class CpeActionServiceTest extends TestCase
 {
     use RefreshDatabase;
-
-    private function fakeZteDeviceIdentity(): array
-    {
-        return [
-            '_id' => 'F86CE1-F663NV3a-ZICG296C2E7B',
-            '_deviceId' => [
-                '_Manufacturer' => 'ZICG',
-                '_OUI' => 'F86CE1',
-                '_ProductClass' => 'F663NV3a',
-                '_SerialNumber' => 'ZICG296C2E7B',
-            ],
-        ];
-    }
 
     private function device(array $attributes = []): CpeDevice
     {
@@ -108,12 +95,6 @@ class CpeActionServiceTest extends TestCase
      */
     public function test_reboot_is_still_delivered_when_connection_request_itself_fails(): void
     {
-        // Real GenieACS behavior (confirmed manually during the v0.7.3
-        // investigation): a 202 with reason phrase "Device is offline" and
-        // a real task _id in the body — connection_request failed, but the
-        // task itself is genuinely enqueued. sendTask() only looks at the
-        // numeric status + body, never the reason phrase text, so a plain
-        // 202 response is sufficient to exercise this path.
         Http::fake([
             'genieacs-nbi:7557/devices/*/tasks*' => Http::response([
                 '_id' => 'genieacs-task-2', 'name' => 'reboot',
@@ -138,19 +119,18 @@ class CpeActionServiceTest extends TestCase
         app(CpeActionService::class)->setWifiCredentials($device, null, null, $actor);
     }
 
-    public function test_set_ssid_only_resolves_path_and_sends_a_single_parameter_value(): void
+    /**
+     * 2026-08-17: setWifiCredentials() no longer consults `cpe_parameter_maps`
+     * at all for wifi_ssid/wifi_password — WLANConfiguration.{n}.SSID/
+     * KeyPassphrase is standard TR-069, confirmed identical across every
+     * vendor OUI in this fleet during the multi-SSID discovery work, so the
+     * path is built directly from $ssidIndex. No findDeviceById() call
+     * happens anymore either (no OUI/ProductClass lookup needed) — only the
+     * /tasks fake is needed here now, unlike before this change.
+     */
+    public function test_set_ssid_defaults_to_index_1_when_not_given(): void
     {
-        CpeParameterMap::factory()->create([
-            'oui' => 'F86CE1',
-            'product_class' => 'F663NV3a',
-            'parameter_key' => 'wifi_ssid',
-            'parameter_path' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID',
-        ]);
-
-        Http::fake([
-            'genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-3'], 202),
-            'genieacs-nbi:7557/devices*' => Http::response([$this->fakeZteDeviceIdentity()], 200),
-        ]);
+        Http::fake(['genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-3'], 202)]);
 
         $device = $this->device();
         $actor = $this->actor($device);
@@ -159,7 +139,7 @@ class CpeActionServiceTest extends TestCase
 
         $this->assertSame(CpeActionType::SetSsid, $log->action_type);
         $this->assertSame(CpeActionStatus::Delivered, $log->status);
-        $this->assertSame(['new_ssid' => 'RumahBaru'], $log->parameters);
+        $this->assertSame(['ssid_index' => 1, 'new_ssid' => 'RumahBaru'], $log->parameters);
 
         Http::assertSent(function ($request) {
             if (! str_contains($request->url(), '/tasks')) {
@@ -173,19 +153,55 @@ class CpeActionServiceTest extends TestCase
         });
     }
 
+    #[DataProvider('ssidIndexProvider')]
+    public function test_set_ssid_targets_the_given_ssid_index(int $ssidIndex): void
+    {
+        Http::fake(['genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task'], 202)]);
+
+        $device = $this->device();
+        $actor = $this->actor($device);
+
+        $log = app(CpeActionService::class)->setWifiCredentials($device, 'TokenWifi', 'passwordbaru', $actor, $ssidIndex);
+
+        $this->assertSame($ssidIndex, $log->parameters['ssid_index']);
+
+        Http::assertSent(function ($request) use ($ssidIndex) {
+            if (! str_contains($request->url(), '/tasks')) {
+                return true;
+            }
+
+            return $request['parameterValues'] === [
+                ["InternetGatewayDevice.LANDevice.1.WLANConfiguration.{$ssidIndex}.SSID", 'TokenWifi', 'xsd:string'],
+                ["InternetGatewayDevice.LANDevice.1.WLANConfiguration.{$ssidIndex}.KeyPassphrase", 'passwordbaru', 'xsd:string'],
+            ];
+        });
+    }
+
+    /**
+     * @return array<string, array{int}>
+     */
+    public static function ssidIndexProvider(): array
+    {
+        return [
+            'index 1 (main SSID)' => [1],
+            'index 4 (TOKEN WIFI, real fleet-observed index)' => [4],
+            'index 5 (5GHz, real fleet-observed index)' => [5],
+        ];
+    }
+
+    public function test_set_ssid_index_below_1_throws(): void
+    {
+        $device = $this->device();
+        $actor = $this->actor($device);
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        app(CpeActionService::class)->setWifiCredentials($device, 'x', null, $actor, 0);
+    }
+
     public function test_set_password_only_never_stores_plaintext_password_in_the_log(): void
     {
-        CpeParameterMap::factory()->create([
-            'oui' => 'F86CE1',
-            'product_class' => 'F663NV3a',
-            'parameter_key' => 'wifi_password',
-            'parameter_path' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase',
-        ]);
-
-        Http::fake([
-            'genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-4'], 202),
-            'genieacs-nbi:7557/devices*' => Http::response([$this->fakeZteDeviceIdentity()], 200),
-        ]);
+        Http::fake(['genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-4'], 202)]);
 
         $device = $this->device();
         $actor = $this->actor($device);
@@ -201,23 +217,7 @@ class CpeActionServiceTest extends TestCase
 
     public function test_setting_both_ssid_and_password_sends_one_task_with_two_parameter_values(): void
     {
-        CpeParameterMap::factory()->create([
-            'oui' => 'F86CE1',
-            'product_class' => 'F663NV3a',
-            'parameter_key' => 'wifi_ssid',
-            'parameter_path' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID',
-        ]);
-        CpeParameterMap::factory()->create([
-            'oui' => 'F86CE1',
-            'product_class' => 'F663NV3a',
-            'parameter_key' => 'wifi_password',
-            'parameter_path' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase',
-        ]);
-
-        Http::fake([
-            'genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-5'], 202),
-            'genieacs-nbi:7557/devices*' => Http::response([$this->fakeZteDeviceIdentity()], 200),
-        ]);
+        Http::fake(['genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-5'], 202)]);
 
         $device = $this->device();
         $actor = $this->actor($device);
@@ -244,12 +244,20 @@ class CpeActionServiceTest extends TestCase
         $this->assertSame(1, $tasksSent);
     }
 
-    public function test_set_wifi_credentials_fails_gracefully_when_parameter_mapping_is_missing(): void
+    public function test_set_wifi_credentials_fails_gracefully_when_device_has_no_genieacs_id_yet(): void
     {
-        // No CpeParameterMap row created at all for this OUI/product_class.
-        Http::fake([
-            'genieacs-nbi:7557/devices*' => Http::response([$this->fakeZteDeviceIdentity()], 200),
-        ]);
+        $device = $this->device(['genieacs_device_id' => null]);
+        $actor = $this->actor($device);
+
+        $log = app(CpeActionService::class)->setWifiCredentials($device, 'RumahBaru', null, $actor);
+
+        $this->assertSame(CpeActionStatus::Failed, $log->status);
+        $this->assertNotNull($log->failed_reason);
+    }
+
+    public function test_set_wifi_credentials_fails_when_genieacs_enqueue_itself_errors(): void
+    {
+        Http::fake(['genieacs-nbi:7557/devices/*/tasks*' => Http::response(['error' => 'bad request'], 400)]);
 
         $device = $this->device();
         $actor = $this->actor($device);
@@ -257,6 +265,145 @@ class CpeActionServiceTest extends TestCase
         $log = app(CpeActionService::class)->setWifiCredentials($device, 'RumahBaru', null, $actor);
 
         $this->assertSame(CpeActionStatus::Failed, $log->status);
-        $this->assertStringContainsString('wifi_ssid', $log->failed_reason);
+        $this->assertNotNull($log->failed_reason);
+    }
+
+    public function test_set_ssid_enabled_true_writes_a_delivered_log_and_sends_the_enable_leaf(): void
+    {
+        Http::fake(['genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-6'], 202)]);
+
+        $device = $this->device();
+        $actor = $this->actor($device);
+
+        $log = app(CpeActionService::class)->setSsidEnabled($device, 4, true, $actor);
+
+        $this->assertSame(CpeActionType::SetSsidEnabled, $log->action_type);
+        $this->assertSame(CpeActionStatus::Delivered, $log->status);
+        $this->assertSame(['ssid_index' => 4, 'enabled' => true], $log->parameters);
+
+        Http::assertSent(function ($request) {
+            if (! str_contains($request->url(), '/tasks')) {
+                return true;
+            }
+
+            return $request['parameterValues'] === [
+                ['InternetGatewayDevice.LANDevice.1.WLANConfiguration.4.Enable', true, 'xsd:boolean'],
+            ];
+        });
+    }
+
+    public function test_set_ssid_enabled_false_sends_the_disable_leaf(): void
+    {
+        Http::fake(['genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-7'], 202)]);
+
+        $device = $this->device();
+        $actor = $this->actor($device);
+
+        $log = app(CpeActionService::class)->setSsidEnabled($device, 1, false, $actor);
+
+        $this->assertSame(['ssid_index' => 1, 'enabled' => false], $log->parameters);
+
+        Http::assertSent(function ($request) {
+            if (! str_contains($request->url(), '/tasks')) {
+                return true;
+            }
+
+            return $request['parameterValues'] === [
+                ['InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable', false, 'xsd:boolean'],
+            ];
+        });
+    }
+
+    public function test_set_ssid_enabled_fails_gracefully_when_genieacs_enqueue_errors(): void
+    {
+        Http::fake(['genieacs-nbi:7557/devices/*/tasks*' => Http::response(['error' => 'bad request'], 400)]);
+
+        $device = $this->device();
+        $actor = $this->actor($device);
+
+        $log = app(CpeActionService::class)->setSsidEnabled($device, 1, false, $actor);
+
+        $this->assertSame(CpeActionStatus::Failed, $log->status);
+        $this->assertNotNull($log->failed_reason);
+    }
+
+    public function test_set_ssid_enabled_index_below_1_throws(): void
+    {
+        $device = $this->device();
+        $actor = $this->actor($device);
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        app(CpeActionService::class)->setSsidEnabled($device, 0, true, $actor);
+    }
+
+    public function test_sync_now_sends_wan_and_lan_refresh_object_tasks_and_is_delivered(): void
+    {
+        Http::fake(['genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-sync'], 202)]);
+
+        $device = $this->device();
+        $actor = $this->actor($device);
+
+        $log = app(CpeActionService::class)->syncNow($device, $actor);
+
+        $this->assertSame(CpeActionType::SyncNow, $log->action_type);
+        $this->assertSame(CpeActionStatus::Delivered, $log->status);
+        $this->assertSame(['wan' => 'genieacs-task-sync', 'lan' => 'genieacs-task-sync'], $log->parameters['task_ids']);
+        $this->assertSame('genieacs-task-sync,genieacs-task-sync', $log->genieacs_task_id);
+
+        $tasksSent = 0;
+        Http::assertSent(function ($request) use (&$tasksSent) {
+            if (! str_contains($request->url(), '/tasks')) {
+                return true;
+            }
+
+            $tasksSent++;
+
+            return $request['name'] === 'refreshObject'
+                && in_array($request['objectName'], ['InternetGatewayDevice.WANDevice', 'InternetGatewayDevice.LANDevice'], true);
+        });
+        $this->assertSame(2, $tasksSent);
+    }
+
+    public function test_sync_now_is_still_delivered_when_only_one_of_the_two_tasks_enqueues(): void
+    {
+        Http::fake([
+            'genieacs-nbi:7557/devices/*/tasks*' => Http::sequence()
+                ->push(['_id' => 'genieacs-task-wan-ok'], 202)
+                ->push(['error' => 'bad request'], 400),
+        ]);
+
+        $device = $this->device();
+        $actor = $this->actor($device);
+
+        $log = app(CpeActionService::class)->syncNow($device, $actor);
+
+        $this->assertSame(CpeActionStatus::Delivered, $log->status);
+        $this->assertSame(['wan' => 'genieacs-task-wan-ok'], $log->parameters['task_ids']);
+        $this->assertArrayHasKey('lan', $log->parameters['errors']);
+    }
+
+    public function test_sync_now_fails_gracefully_when_both_tasks_fail_to_enqueue(): void
+    {
+        Http::fake(['genieacs-nbi:7557/devices/*/tasks*' => Http::response(['error' => 'bad request'], 400)]);
+
+        $device = $this->device();
+        $actor = $this->actor($device);
+
+        $log = app(CpeActionService::class)->syncNow($device, $actor);
+
+        $this->assertSame(CpeActionStatus::Failed, $log->status);
+        $this->assertNotNull($log->failed_reason);
+    }
+
+    public function test_sync_now_fails_gracefully_when_device_has_no_genieacs_id_yet(): void
+    {
+        $device = $this->device(['genieacs_device_id' => null]);
+        $actor = $this->actor($device);
+
+        $log = app(CpeActionService::class)->syncNow($device, $actor);
+
+        $this->assertSame(CpeActionStatus::Failed, $log->status);
+        $this->assertNotNull($log->failed_reason);
     }
 }

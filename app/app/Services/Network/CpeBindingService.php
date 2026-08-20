@@ -250,7 +250,7 @@ class CpeBindingService
                 $workOrderDevice->ssid,
                 $workOrderDevice->wifi_password,
                 null,
-                $triggeredBy,
+                triggeredBy: $triggeredBy,
             );
 
             if ($log->status === CpeActionStatus::Delivered) {

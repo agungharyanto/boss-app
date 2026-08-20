@@ -9,7 +9,6 @@ use App\Enums\WorkOrderPhotoType;
 use App\Enums\WorkOrderStatus;
 use App\Models\CpeActionLog;
 use App\Models\CpeDevice;
-use App\Models\CpeParameterMap;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
 use App\Models\WorkOrderPhoto;
@@ -134,22 +133,6 @@ class CpeBindingServiceTest extends TestCase
         $this->assertSame(CpeDeviceStatus::PendingFirstConnect, $cpeDevice->fresh()->status);
     }
 
-    private function fakeWifiParameterMaps(string $oui = 'AABBCC', string $productClass = 'ONT'): void
-    {
-        CpeParameterMap::factory()->create([
-            'oui' => $oui,
-            'product_class' => $productClass,
-            'parameter_key' => 'wifi_ssid',
-            'parameter_path' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID',
-        ]);
-        CpeParameterMap::factory()->create([
-            'oui' => $oui,
-            'product_class' => $productClass,
-            'parameter_key' => 'wifi_password',
-            'parameter_path' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase',
-        ]);
-    }
-
     /**
      * v0.7.5 — binding time: the work order device already carries
      * technician-relayed ssid/wifi_password, AND GenieACS already knows the
@@ -158,7 +141,6 @@ class CpeBindingServiceTest extends TestCase
      */
     public function test_binding_provisions_wifi_when_device_is_immediately_online_and_credentials_recorded(): void
     {
-        $this->fakeWifiParameterMaps();
         Http::fake([
             'genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-wo-1'], 202),
             '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNWIFI001', 'AABBCC-ONT-SNWIFI001')], 200),
@@ -197,7 +179,6 @@ class CpeBindingServiceTest extends TestCase
      */
     public function test_reconcile_pending_provisions_wifi_once_matched(): void
     {
-        $this->fakeWifiParameterMaps();
         $foundDevice = $this->fakeGenieAcsDevice('SNWIFISLOW', 'AABBCC-ONT-SNWIFISLOW');
 
         // Http::fake() called ONCE for the whole test, on purpose — a
@@ -271,7 +252,6 @@ class CpeBindingServiceTest extends TestCase
 
     public function test_binding_does_not_reprovision_a_device_that_was_already_provisioned(): void
     {
-        $this->fakeWifiParameterMaps();
         Http::fake([
             'genieacs-nbi:7557/devices/*/tasks*' => Http::response(['_id' => 'genieacs-task-wo-3'], 202),
             '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNDUPCHECK', 'AABBCC-ONT-SNDUPCHECK')], 200),
@@ -295,9 +275,13 @@ class CpeBindingServiceTest extends TestCase
 
     public function test_binding_leaves_wifi_provisioned_at_null_when_the_push_itself_fails(): void
     {
-        // No CpeParameterMap rows at all — setWifiCredentials() will fail
-        // to resolve a path, landing the CpeActionLog as `failed`.
+        // setWifiCredentials() (2026-08-17) no longer depends on a
+        // CpeParameterMap row at all — the failure trigger here is now a
+        // genuine GenieACS enqueue error (the /tasks endpoint itself
+        // rejecting the request), matching how every other "push failed"
+        // test in this codebase simulates the failure.
         Http::fake([
+            'genieacs-nbi:7557/devices/*/tasks*' => Http::response(['error' => 'bad request'], 400),
             '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNPUSHFAIL', 'AABBCC-ONT-SNPUSHFAIL')], 200),
         ]);
 

@@ -1,6 +1,5 @@
 <?php
 
-use App\Console\Commands\AutoMatchLegacyDevices;
 use App\Console\Commands\GenerateDueInvoices;
 use App\Console\Commands\MarkOverdueInvoices;
 use App\Console\Commands\ReconcileCpeDevices;
@@ -50,9 +49,30 @@ Schedule::command(SyncCpeConnectedHosts::class)->everyFiveMinutes();
 // Legacy MixRadius import follow-up — matches a GenieACS device to a
 // legacy customer via legacy_mac_customer_map the moment it becomes visible
 // in GenieACS (now or any time in the future), continuously, unlike the
-// one-shot 28-device import batch. Slower cadence than the two jobs above —
-// see App\Console\Commands\AutoMatchLegacyDevices's own docblock for why.
-Schedule::command(AutoMatchLegacyDevices::class)->everyFifteenMinutes();
+// one-shot 28-device import batch.
+//
+// Deliberately NOT registered via Schedule::command()->everyX() here —
+// its cadence is configurable at runtime (CPE_AUTO_MATCH_INTERVAL_SECONDS,
+// root .env, currently 30s while Agung manually adds TR-069 profiles
+// per-ONT and wants fast feedback; steady-state default is 60s), which can
+// go below Laravel's 1-minute scheduler granularity. Laravel DOES support
+// sub-minute frequencies (Schedule::everyThirtySeconds() etc, confirmed
+// available in this project's Laravel 12), but ScheduleRunCommand's own
+// repeatEvents() loops only until Carbon::now()->endOfMinute() from
+// whenever THAT schedule:run invocation started — correct for real cron
+// (which fires a fresh invocation aligned to every minute boundary), but
+// boss-scheduler's entrypoint (docker-compose.yml) is "while true; do
+// schedule:run; sleep 60; done", NOT cron — each invocation can start at
+// any offset within a minute, so the sub-minute repeat window would be
+// unpredictable (anywhere from ~0 to ~60s) and drift, never a clean
+// steady 30s cadence. Confirmed by reading
+// vendor/laravel/framework/.../ScheduleRunCommand.php directly, not
+// assumed. Handled instead by a second, independent while-loop in
+// boss-scheduler's own entrypoint that calls this command directly on its
+// own configurable interval — see docker-compose.yml's boss-scheduler
+// service comment and AutoMatchLegacyDevicesScheduleTest for the
+// regression guard against accidentally re-adding a duplicate/conflicting
+// Schedule::command() registration here.
 
 // Closes the gap where cpe_devices.status/last_inform_at were only ever
 // written once, at bind/reconcile time, and never refreshed again — see

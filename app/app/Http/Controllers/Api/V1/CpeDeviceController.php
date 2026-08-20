@@ -84,6 +84,7 @@ class CpeDeviceController extends Controller
             $request->validated('ssid'),
             $request->validated('password'),
             $request->user(),
+            $request->validated('ssid_index') ?? 1,
         );
 
         return $this->success(

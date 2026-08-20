@@ -117,7 +117,8 @@ class MikrotikScriptGenerator
 
         /interface ovpn-client add name={$ifaceName} connect-to={$publicIp} port={$port} protocol=udp \\
             certificate={$certFile} user={$account->username} verify-server-certificate=no \\
-            cipher=aes256-gcm auth=sha256 add-default-route=no disabled=no
+            cipher=aes256-gcm auth=sha256 add-default-route=no disabled=no \\
+            comment="BOSS App - OpenVPN client NAS {$account->username}"
 
         # Isolasi routing: HANYA traffic ke FreeRADIUS yang lewat tunnel ini.
         # Routing default NAS produksi TIDAK disentuh (add-default-route=no
@@ -187,9 +188,43 @@ class MikrotikScriptGenerator
      * of a Connection Request would have been silently dropped by
      * WireGuard itself, before RouterOS's own firewall/routing ever saw
      * it, regardless of how many /ip route lines existed. $vpnNodeTunnelIp
-     * is that address — added to allowed-address (not to the route list;
-     * the router never needs to SEND anything to it, only ACCEPT packets
-     * sourced from it).
+     * is that address — added to allowed-address so the router ACCEPTS
+     * packets sourced from it.
+     *
+     * **False lead, corrected same day — do NOT re-add a route for
+     * $vpnNodeTunnelIp without new real evidence.** A route to
+     * $vpnNodeTunnelIp (label `node-gateway`) was briefly added here,
+     * reasoning by analogy from the allowed-address finding above: `nc -zv`
+     * from genieacs-nbi toward two specific CPE IPs (10.1.12.87:7547,
+     * 10.1.13.229:58000) kept timing out, which looked like proof a route
+     * was missing. It wasn't — those two IPs turned out to be STALE
+     * (DHCP-leased management IPs from the original v0.7.3 investigation,
+     * ~2 weeks earlier, that no device holds anymore — confirmed absent
+     * from all 220 devices' current `ConnectionRequestURL` values pulled
+     * fresh from GenieACS). Retesting against real, currently-reported
+     * ConnectionRequestURLs (5 ZTE F663NV3a, 8 Huawei EG8141A5) succeeded
+     * for every single device — 5/5 ZTE on the first attempt, 8/8 Huawei
+     * within 3 retries (the first attempt to a given IP occasionally timed
+     * out, most likely ARP-cache-miss latency on the router's local segment
+     * exceeding nc's own connect timeout — every retry to an already-tried
+     * IP succeeded instantly) — **with zero code or router changes applied
+     * beyond the allowed-address fix already in place**. So Connection
+     * Request routing was never actually broken; the `node-gateway` route
+     * was reverted. Lesson: always confirm a CPE's CURRENT
+     * ConnectionRequestURL from GenieACS itself before treating a timeout
+     * against a remembered IP as evidence of anything.
+     *
+     * **`/ip address add` here has ALWAYS used a single CIDR `/32` value,
+     * never a separate `network=` parameter** — checked via `git log -p`
+     * back to this method's introduction (v0.6.3) to be sure before
+     * assuming otherwise. A real `test-x86-bajastu` config found showing
+     * Address/Network as two split fields (`172.23.195.2` /
+     * `172.23.195.1`) did not come from this generator — it was applied
+     * outside BOSS App (manually). `/32` is also the deliberately correct
+     * choice, not just what happens to be generated: a wider mask (e.g.
+     * `/30`) would make RouterOS auto-add a connected route for the whole
+     * subnet, which would defeat the explicit per-service reverse-route
+     * isolation this method exists to enforce.
      */
     public function wireGuardScript(
         VpnAccount $account,
@@ -245,14 +280,17 @@ class MikrotikScriptGenerator
 
         {$cleanup}
 
-        /interface wireguard add name={$ifaceName} private-key="{$clientPrivateKey}" disabled=no
+        /interface wireguard add name={$ifaceName} private-key="{$clientPrivateKey}" disabled=no \\
+            comment="BOSS App - WireGuard interface NAS {$account->username}"
 
         /interface wireguard peers add interface={$ifaceName} public-key="{$serverPublicKey}" \\
             endpoint-address={$publicIp} endpoint-port={$port} \\
-            allowed-address={$allowedAddress} persistent-keepalive=25s
+            allowed-address={$allowedAddress} persistent-keepalive=25s \\
+            comment="BOSS App - WireGuard peer NAS {$account->username}"
 
         /ip address remove [find interface="{$ifaceName}"]
-        /ip address add address={$account->internal_ip}/32 interface={$ifaceName}
+        /ip address add address={$account->internal_ip}/32 interface={$ifaceName} \\
+            comment="BOSS App - WAN VPN address NAS {$account->username}"
 
         # allowed-address di atas HANYA filter kripto/interface — TIDAK
         # otomatis mengisi routing table (dibuktikan lewat tes ping asli:
@@ -287,7 +325,8 @@ class MikrotikScriptGenerator
 
         /interface l2tp-client add name={$ifaceName} connect-to={$publicIp} \\
             user={$account->username} password="{$account->password}" \\
-            ipsec-secret="{$psk}" use-ipsec=yes add-default-route=no disabled=no
+            ipsec-secret="{$psk}" use-ipsec=yes add-default-route=no disabled=no \\
+            comment="BOSS App - L2TP/IPsec client NAS {$account->username}"
 
         # Isolasi routing — sama pola dengan OpenVPN (l2tp-client juga tidak
         # punya mekanisme AllowedIPs bawaan seperti WireGuard).
@@ -452,9 +491,9 @@ class MikrotikScriptGenerator
         # gagal 3x ping berturut-turut, pindah ke node lain (siklus
         # {$minPort}..{$maxPort}, urutan dari VpnServersSeeder v0.6.4).
         /system script remove [find name={$scriptName}]
-        /system script add name={$scriptName} source="{$sourceOneLiner}"
+        /system script add name={$scriptName} source="{$sourceOneLiner}" comment="BOSS App - auto-switch logic {$ifaceName}"
         /system scheduler remove [find name={$schedulerName}]
-        /system scheduler add name={$schedulerName} interval=30s on-event="{$scriptName}"
+        /system scheduler add name={$schedulerName} interval=30s on-event="{$scriptName}" comment="BOSS App - auto-switch scheduler {$ifaceName}"
         SCRIPT;
     }
 

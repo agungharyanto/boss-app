@@ -1,8 +1,81 @@
 @push('styles')
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/datatables/2.3.7/css/jquery.dataTables.min.css">
+    @include('components.datatable-styles')
+    <style>
+        /* Page-specific column widths — kept here rather than in the
+           reusable partial since these depend on this exact column set.
+           Tuned so the 9 columns fit within Tailwind's lg: (1024px)
+           breakpoint without scrollX (Bagian C) — verified empirically at
+           1024px with the real w-64 sidebar, not just eyeballed. */
+        #cpe-devices-table.dataTable {
+            table-layout: fixed;
+            width: 100% !important;
+        }
+
+        #cpe-devices-table th:nth-child(1),
+        #cpe-devices-table td:nth-child(1) { width: 56px; }
+
+        #cpe-devices-table th:nth-child(2),
+        #cpe-devices-table td:nth-child(2) { width: 15%; }
+
+        /* Status is fixed short text ("Online"/"Offline") — never needs
+           real truncation room, so it gets just enough to render the badge
+           comfortably and nothing more (freed up for the columns that
+           actually need it). */
+        #cpe-devices-table th:nth-child(3),
+        #cpe-devices-table td:nth-child(3) { width: 7%; }
+
+        #cpe-devices-table th:nth-child(4),
+        #cpe-devices-table td:nth-child(4) { width: 14%; }
+
+        #cpe-devices-table th:nth-child(5),
+        #cpe-devices-table td:nth-child(5) { width: 15%; }
+
+        /* MAC Address is "-" for most of this fleet today (documented
+           vendor-tree limitation, see CLAUDE.md's GenieACS Connected
+           Clients section) — narrower on purpose, the column stays for
+           when it does resolve. */
+        #cpe-devices-table th:nth-child(6),
+        #cpe-devices-table td:nth-child(6) { width: 11%; }
+
+        #cpe-devices-table th:nth-child(7),
+        #cpe-devices-table td:nth-child(7) { width: 11%; }
+
+        #cpe-devices-table th:nth-child(8),
+        #cpe-devices-table td:nth-child(8) { width: 12%; }
+
+        #cpe-devices-table th:nth-child(9),
+        #cpe-devices-table td:nth-child(9) { width: 11%; }
+
+        /* Headers wrap onto 2 lines rather than getting cut with an
+           ellipsis — at 1024px the fixed % column widths above are tight
+           enough that a forced single-line header would overlap its
+           neighbor; a natural 2-line wrap reads better than "MANUFACT...".
+           Data cells (below) still truncate to one line — a value like a
+           serial number genuinely losing meaning if wrapped. */
+        #cpe-devices-table th {
+            white-space: normal;
+            line-height: 1.2;
+            vertical-align: bottom;
+        }
+
+        /* Single-line truncation for every column EXCEPT Pelanggan (column
+           2), which stacks name + CID on two lines on purpose, and Status
+           (column 3), whose badge must never get an ellipsis cut through
+           it. */
+        #cpe-devices-table td:not(:nth-child(2)):not(:nth-child(3)) {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #cpe-devices-table td:nth-child(2) {
+            overflow: hidden;
+        }
+    </style>
 @endpush
 
-<div class="p-6 max-w-6xl mx-auto">
+<div class="p-6 w-full">
     <div class="flex items-center justify-between mb-6">
         <h1 class="text-2xl font-semibold text-gray-800">{{ __('Perangkat CPE') }}</h1>
 
@@ -16,21 +89,21 @@
         </div>
     </div>
 
-    <div id="cpe-flash" class="mb-4 text-sm hidden"></div>
-
+    {{-- overflow-x-auto only actually engages below lg: once the fixed
+         column widths above stop fitting — see Bagian C. --}}
     <div class="overflow-x-auto border border-gray-200 rounded-md">
-        <table id="cpe-devices-table" class="min-w-full divide-y divide-gray-200 text-sm">
-            <thead class="bg-gray-50">
+        <table id="cpe-devices-table" class="min-w-full divide-y divide-gray-200 text-xs">
+            <thead class="bg-gray-50 text-gray-500 uppercase tracking-wider">
                 <tr>
                     <th></th>
                     <th>{{ __('Pelanggan') }}</th>
+                    <th>{{ __('Status') }}</th>
                     <th>{{ __('Manufacturer / Model') }}</th>
                     <th>{{ __('Serial Number') }}</th>
                     <th>{{ __('MAC Address') }}</th>
                     <th>{{ __('RX Power') }}</th>
                     <th>{{ __('Online Duration') }}</th>
                     <th>{{ __('Uptime Modem') }}</th>
-                    <th>{{ __('Status') }}</th>
                 </tr>
             </thead>
             <tbody></tbody>
@@ -43,47 +116,57 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/datatables/2.3.7/js/jquery.dataTables.min.js"></script>
     <script>
         (function () {
-            const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
-
-            function cpeFlash(message, isError) {
-                const el = document.getElementById('cpe-flash');
-                el.textContent = message;
-                el.classList.remove('hidden', 'text-green-600', 'text-red-600');
-                el.classList.add(isError ? 'text-red-600' : 'text-green-600');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            }
-
-            async function cpeFetch(url, options) {
-                options = options || {};
-                options.headers = Object.assign({
-                    'X-CSRF-TOKEN': csrfToken,
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Accept': 'application/json',
-                }, options.headers || {});
-                const response = await fetch(url, options);
-                const body = await response.json().catch(() => ({}));
-                return { ok: response.ok, status: response.status, body: body };
-            }
-
             const table = $('#cpe-devices-table').DataTable({
                 processing: true,
                 serverSide: true,
+                autoWidth: false,
                 ajax: '{{ route('web.cpe-devices.internal.datatable') }}',
                 lengthMenu: [10, 15, 25, 50],
                 pageLength: 15,
                 order: [],
                 columns: [
                     {
-                        data: null, orderable: false, className: 'cpe-expand-cell text-center cursor-pointer',
-                        defaultContent: '<span class="text-primary">+</span>',
+                        data: 'id', orderable: false, className: 'text-center',
+                        render: (id) => `<a href="/cpe-devices/${id}" class="text-primary hover:underline">{{ __('Detail') }}</a>`,
                     },
-                    { data: 'customer_name', name: 'customer_name' },
+                    {
+                        data: 'customer_name', name: 'customer_name',
+                        render: function (data, type, row) {
+                            if (type !== 'display') return data;
+                            const name = data ?? '—';
+                            const cid = row.customer_cid
+                                ? `<div class="text-[11px] text-gray-400 font-mono truncate" title="${row.customer_cid}">${row.customer_cid}</div>`
+                                : '';
+                            return `<div class="truncate" title="${name}">${name}</div>${cid}`;
+                        },
+                    },
+                    {
+                        data: 'status_value', name: 'status_value',
+                        render: function (value, type, row) {
+                            if (type !== 'display') return value;
+                            const colors = { online: 'bg-green-100 text-green-700', offline: 'bg-red-100 text-red-700' };
+                            const color = colors[value] || 'bg-yellow-100 text-yellow-700';
+                            return `<span class="px-2 py-0.5 rounded-full text-xs ${color}">${row.status_label}</span>`;
+                        },
+                    },
                     {
                         data: null, orderable: true, name: 'manufacturer',
-                        render: (data, type, row) => [row.manufacturer, row.model_name].filter(Boolean).join(' ') || '—',
+                        render: (data, type, row) => {
+                            const text = [row.manufacturer, row.model_name].filter(Boolean).join(' ') || '—';
+                            return type === 'display' ? `<span title="${text}">${text}</span>` : text;
+                        },
                     },
-                    { data: 'serial_number', name: 'serial_number' },
-                    { data: 'mac_address', orderable: false, render: (d) => d ?? '-' },
+                    {
+                        data: 'serial_number', name: 'serial_number',
+                        render: (data, type) => type === 'display' ? `<span title="${data}">${data}</span>` : data,
+                    },
+                    {
+                        data: 'mac_address', orderable: false,
+                        render: (d, type) => {
+                            const text = d ?? '-';
+                            return type === 'display' ? `<span title="${text}">${text}</span>` : text;
+                        },
+                    },
                     {
                         data: 'rx_power_dbm', orderable: false,
                         render: (d) => d !== null ? Number(d).toFixed(2) + ' dBm' : '-',
@@ -100,101 +183,14 @@
                             return days > 0 ? `${days}h ${hours}j` : `${hours}j ${minutes}m`;
                         },
                     },
-                    {
-                        data: 'status_value', name: 'status_value',
-                        render: function (value, type, row) {
-                            const colors = { online: 'bg-green-100 text-green-700', offline: 'bg-red-100 text-red-700' };
-                            const color = colors[value] || 'bg-yellow-100 text-yellow-700';
-                            return `<span class="px-2 py-0.5 rounded-full text-xs ${color}">${row.status_label}</span>`;
-                        },
-                    },
                 ],
             });
 
-            $('#cpe-devices-table tbody').on('click', 'td.cpe-expand-cell', function () {
-                const tr = $(this).closest('tr');
-                const row = table.row(tr);
-                const rowData = row.data();
-
-                if (row.child.isShown()) {
-                    row.child.hide();
-                    $(this).find('span').text('+');
-                    return;
-                }
-
-                $(this).find('span').text('…');
-                row.child('<div class="p-4 text-sm text-gray-400">{{ __('Memuat...') }}</div>').show();
-
-                fetch(`/api/internal/cpe-devices/${rowData.id}/detail`, {
-                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
-                })
-                    .then((r) => r.text())
-                    .then((html) => {
-                        row.child(html).show();
-                        $(this).find('span').text('−');
-                    });
-            });
-
-            window.cpeReboot = function (id) {
-                if (!confirm('Yakin reboot perangkat ini? Pelanggan akan terputus sebentar sampai perangkat menyala kembali. Perintah ini TIDAK instan — diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil).')) return;
-                cpeFetch(`/api/internal/cpe-devices/${id}/reboot`, { method: 'POST' }).then(({ ok, body }) => {
-                    cpeFlash(body.message, !ok);
-                });
-            };
-
-            window.cpeSubmitWifi = function (id) {
-                const ssid = document.getElementById(`cpe-wifi-ssid-${id}`).value;
-                const password = document.getElementById(`cpe-wifi-password-${id}`).value;
-                const errorEl = document.getElementById(`cpe-wifi-error-${id}`);
-                errorEl.textContent = '';
-                if (!ssid && !password) {
-                    errorEl.textContent = 'Isi SSID atau password.';
-                    return;
-                }
-                if (!confirm('Yakin ganti SSID/password WiFi? Semua perangkat pelanggan yang sudah terhubung mungkin perlu connect ulang setelah perubahan diterapkan.')) return;
-                cpeFetch(`/api/internal/cpe-devices/${id}/wifi`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ssid: ssid || null, password: password || null }),
-                }).then(({ ok, body }) => {
-                    if (!ok && body.errors) {
-                        errorEl.textContent = Object.values(body.errors).flat().join(' ');
-                        return;
-                    }
-                    cpeFlash(body.message, !ok);
-                });
-            };
-
-            window.cpeRemove = function (id, customerName) {
-                if (!confirm(`Yakin unbind device ini dari ${customerName}? Pasangan ini tidak akan di-match otomatis lagi.`)) return;
-                cpeFetch(`/api/internal/cpe-devices/${id}`, { method: 'DELETE' }).then(({ ok, body }) => {
-                    cpeFlash(body.message, !ok);
-                    if (ok) table.ajax.reload(null, false);
-                });
-            };
-
-            window.cpeReplaceModem = function (id, oldSerial) {
-                const serial = document.getElementById(`cpe-replacement-serial-${id}`).value;
-                const errorEl = document.getElementById(`cpe-replace-error-${id}`);
-                errorEl.textContent = '';
-                if (!serial) {
-                    errorEl.textContent = 'Serial number baru wajib diisi.';
-                    return;
-                }
-                if (!confirm(`Yakin ganti modem? Device lama (${oldSerial}) akan dilepas dari pelanggan ini.`)) return;
-                cpeFetch(`/api/internal/cpe-devices/${id}/replace-modem`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ serial_number: serial }),
-                }).then(({ ok, body }) => {
-                    if (!ok && body.errors) {
-                        errorEl.textContent = Object.values(body.errors).flat().join(' ');
-                        return;
-                    }
-                    cpeFlash(body.message, !ok);
-                    if (ok) table.ajax.reload(null, false);
-                });
-            };
+            // Row actions (Reboot/Ganti WiFi/Ganti Modem/Remove/Riwayat/Client
+            // Terhubung) moved to the standalone /cpe-devices/{id} page
+            // (2026-08-16) — the "Detail" column above is now a plain link,
+            // not a DataTables child-row trigger. See cpe-devices/show.blade.php
+            // for that page's own copy of these action handlers.
 
             // Auto-reload — plain setInterval calling DataTables' own
             // ajax.reload(), never a full page reload. Off by default so a

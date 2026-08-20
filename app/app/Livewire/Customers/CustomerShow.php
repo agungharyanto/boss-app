@@ -8,11 +8,14 @@ use App\Actions\Customers\UpdateCustomerContactAction;
 use App\Actions\Customers\UpdateCustomerStatusAction;
 use App\Enums\ContactAccessLevel;
 use App\Enums\CustomerStatus;
+use App\Models\CpeDevice;
 use App\Models\Customer;
 use App\Models\CustomerContact;
+use App\Services\Network\CpeBindingService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Attributes\Validate;
 use Livewire\Component;
+use Throwable;
 
 class CustomerShow extends Component
 {
@@ -56,6 +59,11 @@ class CustomerShow extends Component
     public bool $contactCanReceiveNotifications = true;
 
     public bool $contactIsAuthorized = false;
+
+    public bool $showAddDeviceForm = false;
+
+    #[Validate('required|string|max:255')]
+    public string $newDeviceSerial = '';
 
     public function mount(Customer $customer): void
     {
@@ -187,6 +195,67 @@ class CustomerShow extends Component
         $contact->delete();
     }
 
+    public function openAddDeviceForm(): void
+    {
+        $this->authorize('create', [CpeDevice::class, $this->customer->reseller]);
+
+        $this->newDeviceSerial = '';
+        $this->resetErrorBag('newDeviceSerial');
+        $this->showAddDeviceForm = true;
+    }
+
+    public function cancelAddDeviceForm(): void
+    {
+        $this->newDeviceSerial = '';
+        $this->resetErrorBag('newDeviceSerial');
+        $this->showAddDeviceForm = false;
+    }
+
+    /**
+     * The first manual bind path that doesn't go through a WorkOrder
+     * (bindFromWorkOrder()) or the legacy importer
+     * (ImportLegacyCpeBindings/LegacyDeviceMatcherService) — for a customer
+     * like Sartimin who has zero cpe_devices rows and no work order to
+     * bind from. Reuses CpeBindingService::bindFromLegacyImport() as-is
+     * (the exact same method "Ganti Modem" on /cpe-devices already calls),
+     * not a new binding code path — it already does exactly what's needed
+     * here: look up the serial in GenieACS if known, create a
+     * pending_first_connect row if not (never fails hard just because the
+     * device hasn't informed yet), bind to this customer.
+     */
+    public function bindDevice(CpeBindingService $service): void
+    {
+        $this->authorize('create', [CpeDevice::class, $this->customer->reseller]);
+
+        if ($this->customer->cpeDevices()->exists()) {
+            $this->addError('newDeviceSerial', 'Customer ini sudah punya device ter-bind — pakai "Ganti Modem" di /cpe-devices kalau mau mengganti.');
+
+            return;
+        }
+
+        $this->validate(['newDeviceSerial' => 'required|string|max:255']);
+
+        try {
+            $device = $service->bindFromLegacyImport($this->customer, trim($this->newDeviceSerial), null);
+        } catch (Throwable $e) {
+            $this->addError('newDeviceSerial', 'Gagal bind device: '.$e->getMessage());
+
+            return;
+        }
+
+        $this->showAddDeviceForm = false;
+        $this->newDeviceSerial = '';
+
+        session()->flash(
+            'device_bound_message',
+            $device->genieacs_device_id !== null
+                ? 'Device berhasil di-bind dan sudah dikenali GenieACS.'
+                : 'Device berhasil di-bind, tapi belum pernah terlihat di GenieACS — statusnya "Menunggu Koneksi Pertama" sampai dia inform pertama kali.'
+        );
+
+        $this->customer->refresh();
+    }
+
     public function render()
     {
         $this->customer->refresh();
@@ -201,6 +270,8 @@ class CustomerShow extends Component
             'availableTransitions' => $availableTransitions,
             'accessLevels' => ContactAccessLevel::cases(),
             'canManage' => auth()->user()->can('update', $this->customer),
+            'cpeDevice' => $this->customer->cpeDevices()->first(),
+            'canAddDevice' => auth()->user()->can('create', [CpeDevice::class, $this->customer->reseller]),
         ]);
     }
 }

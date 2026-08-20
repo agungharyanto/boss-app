@@ -27,6 +27,11 @@ class NasApiUserProvisioningServiceTest extends TestCase
                 return ['online' => true, 'message' => null];
             }
 
+
+            public function pingHost(Nas $nas, string $targetIp, int $count = 2): bool
+            {
+                return true;
+            }
             public function provisionApiUser(Nas $nas, string $connectAsUsername, string $connectAsPassword, string $newApiUsername, string $newApiPassword): array
             {
                 return ['success' => $this->success, 'message' => $this->message];

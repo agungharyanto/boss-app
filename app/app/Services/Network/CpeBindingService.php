@@ -6,9 +6,12 @@ use App\Enums\CpeActionStatus;
 use App\Enums\CpeDeviceStatus;
 use App\Enums\WorkOrderDeviceType;
 use App\Exceptions\CpeBindingException;
+use App\Models\CpeBindingRejection;
 use App\Models\CpeDevice;
+use App\Models\Customer;
 use App\Models\WorkOrder;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -90,6 +93,94 @@ class CpeBindingService
     }
 
     /**
+     * v0.7.6-follow-up — binds a CpeDevice straight from a legacy MixRadius
+     * serial-to-customer match (see App\Console\Commands\ImportLegacyCpeBindings),
+     * not from a WorkOrder. There's no `work_order_device_id` to key
+     * updateOrCreate() on here, so the match key is `(tenant_id,
+     * serial_number)` instead — safe because a legacy-imported serial never
+     * collides with a real work-order-scanned one in practice, and re-running
+     * the import command stays idempotent against its own previous run.
+     * Same "don't fail hard if GenieACS hasn't seen this serial yet" posture
+     * as bindFromWorkOrder() — ReconcileCpeDevices picks it up later.
+     */
+    public function bindFromLegacyImport(
+        Customer $customer,
+        string $serialNumber,
+        ?string $matchConfidence,
+    ): CpeDevice {
+        $attributes = [
+            'tenant_id' => $customer->tenant_id,
+            'customer_id' => $customer->id,
+            'reseller_id' => $customer->reseller_id,
+            'serial_number' => $serialNumber,
+            'import_match_confidence' => $matchConfidence,
+            'bound_at' => now(),
+        ];
+
+        $genieAcsDevice = $this->findByStoredSerial($serialNumber);
+
+        if ($genieAcsDevice === null) {
+            $attributes['genieacs_device_id'] = null;
+            $attributes['status'] = CpeDeviceStatus::PendingFirstConnect;
+        } else {
+            $attributes = array_merge($attributes, $this->attributesFromGenieAcsDevice($genieAcsDevice));
+        }
+
+        return CpeDevice::withoutGlobalScopes()->updateOrCreate(
+            ['tenant_id' => $customer->tenant_id, 'serial_number' => $serialNumber],
+            $attributes
+        );
+    }
+
+    /**
+     * Unbinds a wrongly-matched device from its customer — deletes the
+     * cpe_devices row AND records the (genieacs_device_id, customer_id)
+     * pair in cpe_binding_rejections so App\Services\Network\
+     * LegacyDeviceMatcherService's next scheduled run never re-creates the
+     * exact same wrong match. Extracted here (was originally inline in
+     * App\Livewire\Network\CpeDeviceIndex) once a second UI (the DataTables
+     * child row's internal API endpoint) needed the exact same behavior —
+     * business logic belongs in a service, not duplicated across two
+     * controllers/components (BOSS-006).
+     */
+    public function unbindWithRejection(CpeDevice $device, ?int $rejectedByUserId): void
+    {
+        DB::transaction(function () use ($device, $rejectedByUserId) {
+            CpeBindingRejection::create([
+                'tenant_id' => $device->tenant_id,
+                'genieacs_device_id' => $device->genieacs_device_id,
+                'customer_id' => $device->customer_id,
+                'rejected_at' => now(),
+                'rejected_by' => $rejectedByUserId,
+            ]);
+
+            $device->delete();
+        });
+    }
+
+    /**
+     * Intentional hardware swap (customer's modem physically replaced) —
+     * unbinds the old cpe_devices row (no cpe_binding_rejections entry,
+     * unlike unbindWithRejection() above — a modem swap isn't "this match
+     * was wrong", so the pair must stay free to legitimately re-match a
+     * future replacement for the same customer) and re-binds the same
+     * customer to the newly-typed serial number via bindFromLegacyImport()
+     * — it already does exactly "find this serial in GenieACS if known,
+     * create a pending_first_connect row if not, bind to $customer" with no
+     * changes needed here.
+     */
+    public function replaceModem(CpeDevice $oldDevice, string $newSerialNumber): CpeDevice
+    {
+        $customer = $oldDevice->customer;
+
+        return DB::transaction(function () use ($oldDevice, $customer, $newSerialNumber) {
+            $oldDevice->delete();
+
+            return $this->bindFromLegacyImport($customer, $newSerialNumber, null);
+        });
+    }
+
+    /**
      * Called periodically (see App\Console\Commands\ReconcileCpeDevices) —
      * matches any `pending_first_connect` CpeDevice against GenieACS by
      * serial number, for the common case of a device being scanned/bound
@@ -159,7 +250,7 @@ class CpeBindingService
                 $workOrderDevice->ssid,
                 $workOrderDevice->wifi_password,
                 null,
-                $triggeredBy,
+                triggeredBy: $triggeredBy,
             );
 
             if ($log->status === CpeActionStatus::Delivered) {

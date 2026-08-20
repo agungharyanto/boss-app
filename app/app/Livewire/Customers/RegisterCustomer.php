@@ -3,6 +3,7 @@
 namespace App\Livewire\Customers;
 
 use App\Models\Agent;
+use App\Models\Customer;
 use App\Services\RegistrationService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Validation\Rule;
@@ -56,6 +57,16 @@ class RegisterCustomer extends Component
         $data = $this->validate();
         $data['nik'] = $data['nik'] ?: null;
         $data['package'] = $data['package'] ?: null;
+
+        // Mirrors StoreRegistrationRequest's nik_hash-based uniqueness
+        // check (Api/V1/RegistrationController's own entry point) — nik
+        // itself is an `encrypted` cast, so a plain Rule::unique('customers',
+        // 'nik') would never actually catch a duplicate.
+        if ($data['nik'] && Customer::nikAlreadyExists($data['nik'], auth()->user()->tenant_id)) {
+            $this->addError('nik', 'NIK sudah terdaftar.');
+
+            return;
+        }
 
         if ($this->linkedAgent) {
             $this->validate(['selectedAgentId' => 'required']);

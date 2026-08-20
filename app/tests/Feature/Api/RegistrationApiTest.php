@@ -104,6 +104,50 @@ class RegistrationApiTest extends TestCase
         $this->assertDatabaseMissing('customers', ['name' => 'Budi Santoso']);
     }
 
+    public function test_duplicate_nik_within_the_same_tenant_is_rejected(): void
+    {
+        $user = $this->userWithRole('sales_internal');
+
+        $this->actingAs($user)->postJson('/api/v1/registrations', [
+            'name' => 'Ahmad Saefulloh',
+            'address' => 'Jl. Merdeka No. 1',
+            'phone_number' => '081234567801',
+            'nik' => '3201012501990001',
+        ])->assertCreated();
+
+        $response = $this->actingAs($user)->postJson('/api/v1/registrations', [
+            'name' => 'Nama Lain',
+            'address' => 'Jl. Merdeka No. 2',
+            'phone_number' => '081234567802',
+            'nik' => '3201012501990001',
+        ]);
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['nik']);
+    }
+
+    public function test_same_nik_is_allowed_across_different_tenants(): void
+    {
+        $userA = $this->userWithRole('sales_internal');
+        $userB = $this->userWithRole('sales_internal');
+
+        $this->actingAs($userA)->postJson('/api/v1/registrations', [
+            'name' => 'Pelanggan Tenant A',
+            'address' => 'Jl. Merdeka No. 1',
+            'phone_number' => '081234567803',
+            'nik' => '3201012501990001',
+        ])->assertCreated();
+
+        $response = $this->actingAs($userB)->postJson('/api/v1/registrations', [
+            'name' => 'Pelanggan Tenant B',
+            'address' => 'Jl. Merdeka No. 2',
+            'phone_number' => '081234567804',
+            'nik' => '3201012501990001',
+        ]);
+
+        $response->assertCreated();
+    }
+
     public function test_missing_required_fields_are_rejected(): void
     {
         $user = $this->userWithRole('sales_internal');

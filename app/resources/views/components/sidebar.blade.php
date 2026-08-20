@@ -74,6 +74,13 @@
                 auth()->user()->can('viewAny', \App\Models\CpeDevice::class)
                     ? ['route' => 'web.cpe-devices.index', 'label' => __('Perangkat CPE')]
                     : null,
+                // Admin-only (cpe_devices.view directly, not the reseller
+                // carve-out CpeDevicePolicy::viewAny() also allows) —
+                // exposes legacy-import/matching internals not meant for
+                // reseller users.
+                auth()->user()->can('cpe_devices.view')
+                    ? ['route' => 'web.cpe-devices.status-check', 'label' => __('Cek Status Device')]
+                    : null,
             ]),
         ],
         [

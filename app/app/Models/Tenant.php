@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\NameToCodeDeriver;
 use Database\Factories\TenantFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -16,6 +17,7 @@ class Tenant extends Model
         'uuid',
         'name',
         'slug',
+        'code',
         'is_active',
     ];
 
@@ -30,6 +32,16 @@ class Tenant extends Model
     {
         static::creating(function (self $tenant) {
             $tenant->uuid ??= (string) Str::uuid();
+
+            // Never overrides an explicitly-set code. Silently leaves code
+            // null if name is blank — code is nullable precisely so this
+            // never blocks tenant creation.
+            if (blank($tenant->code) && filled($tenant->name)) {
+                $tenant->code = NameToCodeDeriver::deriveUnique(
+                    $tenant->name,
+                    fn (string $candidate) => self::where('code', $candidate)->exists()
+                );
+            }
         });
     }
 }

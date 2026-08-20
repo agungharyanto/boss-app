@@ -107,6 +107,25 @@ iptables -A FORWARD -i eth0 -o wg0 -s "$FREERADIUS_INTERNAL_IP" -j ACCEPT
 # points at a specific node's boss-network IP and needs updating by hand
 # if the account moves.
 if [ -n "$TR069_MANAGEMENT_SUBNET" ]; then
+    # Found missing 2026-08-19, during the Connection Request (v0.7.3)
+    # investigation: AllowedIPs on the peer entry only governs WireGuard's
+    # own cryptokey routing (which peer to encrypt for / which decrypted
+    # source to accept) — it does NOT, by itself, make the KERNEL choose
+    # wg0 as the outbound interface for a packet destined into
+    # $TR069_MANAGEMENT_SUBNET. Without this explicit route, genieacs-nbi's
+    # connection_request packets never even reached this node's -o wg0
+    # iptables rules above (confirmed via tcpdump + iptables counters: the
+    # packet arrived on eth0 with the exact right src/dst, but 0 hits on
+    # every -o wg0 rule, all matching the FORWARD DROP policy instead,
+    # because the kernel's routing decision picked eth0's default route,
+    # never wg0, before iptables was even consulted). `replace`, not `add`
+    # — wg0 is recreated fresh every container start (see the comment
+    # above `ip link add dev wg0`), so this must be idempotent across a
+    # plain `docker restart` reusing the same netns, same reasoning as the
+    # genieacs entrypoint's own `ip route replace` for the mirror route on
+    # the genieacs-cwmp/genieacs-nbi side.
+    ip route replace "$TR069_MANAGEMENT_SUBNET" dev wg0
+
     if [ -n "$GENIEACS_CWMP_INTERNAL_IP" ]; then
         iptables -A FORWARD -i eth0 -o wg0 -s "$GENIEACS_CWMP_INTERNAL_IP" -d "$TR069_MANAGEMENT_SUBNET" -j ACCEPT
     fi

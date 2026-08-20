@@ -6,7 +6,6 @@ use App\Enums\CpeActionStatus;
 use App\Enums\CpeActionType;
 use App\Models\CpeActionLog;
 use App\Models\CpeDevice;
-use App\Models\CpeParameterMap;
 use App\Models\User;
 use Closure;
 use InvalidArgumentException;
@@ -74,14 +73,35 @@ class CpeActionService
      * (`auto_provisioning_binding`/`auto_provisioning_reconciliation`) —
      * null for a real UI/API-triggered call, where the actor itself already
      * answers "who did this".
+     *
+     * $ssidIndex (2026-08-17, per-SSID "Ganti WiFi" on the CPE detail page)
+     * — which WLANConfiguration instance this targets, defaults to 1 (the
+     * primary SSID, matching every existing caller's prior hardcoded
+     * behavior: the API v1 endpoint and CpeBindingService's auto-provisioning
+     * hook both only ever meant "the main SSID", never asked about others).
+     * Builds the TR-069 path directly (InternetGatewayDevice.LANDevice.1.
+     * WLANConfiguration.{ssidIndex}.SSID/KeyPassphrase) instead of going
+     * through the `cpe_parameter_maps` catalog the way rx_power_dbm/
+     * tx_power_dbm still do — same reasoning already established for MAC/
+     * PPPoE resolution (see CpeParameterResolverService): this is a fixed,
+     * standard TR-069 object confirmed identical across every vendor OUI in
+     * this fleet during the multi-WAN/multi-SSID discovery work, not a
+     * vendor-specific quantity needing a per-OUI catalog row. The one
+     * pre-existing catalog row for this (F86CE1/F663NV3a, hardcoded to
+     * WLANConfiguration.1) is now unused dead data, not a fallback — this
+     * method no longer consults `cpe_parameter_maps` at all.
      */
-    public function setWifiCredentials(CpeDevice $device, ?string $ssid, ?string $password, ?User $actor, ?string $triggeredBy = null): CpeActionLog
+    public function setWifiCredentials(CpeDevice $device, ?string $ssid, ?string $password, ?User $actor, int $ssidIndex = 1, ?string $triggeredBy = null): CpeActionLog
     {
         if ($ssid === null && $password === null) {
             throw new InvalidArgumentException('Minimal salah satu dari ssid/password harus diisi.');
         }
 
-        $parameters = [];
+        if ($ssidIndex < 1) {
+            throw new InvalidArgumentException('ssidIndex harus >= 1.');
+        }
+
+        $parameters = ['ssid_index' => $ssidIndex];
 
         if ($ssid !== null) {
             $parameters['new_ssid'] = $ssid;
@@ -105,21 +125,125 @@ class CpeActionService
         $actionType = $ssid !== null ? CpeActionType::SetSsid : CpeActionType::SetPassword;
         $log = $this->createLog($device, $actor, $actionType, $parameters);
 
-        $this->attemptDelivery($log, $device, function () use ($device, $ssid, $password) {
-            [$oui, $productClass] = $this->resolveOuiProductClass($device);
-
+        $this->attemptDelivery($log, $device, function () use ($ssid, $password, $ssidIndex) {
             $parameterValues = [];
 
             if ($ssid !== null) {
-                $parameterValues[] = [$this->requirePath($oui, $productClass, 'wifi_ssid'), $ssid, 'xsd:string'];
+                $parameterValues[] = [$this->wlanConfigurationPath($ssidIndex, 'SSID'), $ssid, 'xsd:string'];
             }
 
             if ($password !== null) {
-                $parameterValues[] = [$this->requirePath($oui, $productClass, 'wifi_password'), $password, 'xsd:string'];
+                $parameterValues[] = [$this->wlanConfigurationPath($ssidIndex, 'KeyPassphrase'), $password, 'xsd:string'];
             }
 
             return ['name' => 'setParameterValues', 'parameterValues' => $parameterValues];
         });
+
+        return $log->fresh();
+    }
+
+    /**
+     * Enable/disable a single SSID (2026-08-17) — same fixed-path reasoning
+     * as setWifiCredentials() above, pushing a single boolean leaf. Never
+     * throws for an "already in that state" call — GenieACS/the device
+     * itself is the source of truth for the CURRENT value, this method
+     * always just sends the requested one; UI-level confirmation (this is
+     * the actual guard against an accidental disable) lives entirely in
+     * the caller, not here.
+     */
+    public function setSsidEnabled(CpeDevice $device, int $ssidIndex, bool $enabled, ?User $actor): CpeActionLog
+    {
+        if ($ssidIndex < 1) {
+            throw new InvalidArgumentException('ssidIndex harus >= 1.');
+        }
+
+        $log = $this->createLog($device, $actor, CpeActionType::SetSsidEnabled, [
+            'ssid_index' => $ssidIndex,
+            'enabled' => $enabled,
+        ]);
+
+        $this->attemptDelivery($log, $device, fn () => [
+            'name' => 'setParameterValues',
+            'parameterValues' => [[$this->wlanConfigurationPath($ssidIndex, 'Enable'), $enabled, 'xsd:boolean']],
+        ]);
+
+        return $log->fresh();
+    }
+
+    private function wlanConfigurationPath(int $ssidIndex, string $leaf): string
+    {
+        return sprintf('InternetGatewayDevice.LANDevice.1.WLANConfiguration.%d.%s', $ssidIndex, $leaf);
+    }
+
+    /**
+     * "Sync Sekarang" (2026-08-19) — an on-demand nudge to re-discover this
+     * device's own WAN/LAN parameter subtree right now, instead of waiting
+     * for its own periodic Inform to naturally re-sync (the same
+     * `refreshObject` mechanism used manually, over and over, throughout
+     * this whole GenieACS investigation — this button is that same manual
+     * tinker step turned into a real UI feature). Two SEPARATE tasks
+     * (WANDevice covers RX/TX/MAC/PPPoE; LANDevice covers WiFi/SSID/
+     * connected hosts) rather than one root-level refresh — a full root
+     * refreshObject risks GenieACS's own `too_many_commits` fault on a
+     * device with a large tree (seen for real during the RX Power discovery
+     * work), and neither WAN nor LAN alone covers everything this page
+     * shows.
+     *
+     * Deliberately NOT built on attemptDelivery() — that helper assumes
+     * exactly one task per log entry (one genieacs_task_id column). Success
+     * here means "at least one of the two enqueued", matching this
+     * feature's own framing as a best-effort nudge, not an atomic
+     * operation — a partial sync (e.g. WAN refreshed but LAN's own enqueue
+     * hit a transient GenieACS error) is still more useful than nothing.
+     */
+    public function syncNow(CpeDevice $device, ?User $actor): CpeActionLog
+    {
+        $log = $this->createLog($device, $actor, CpeActionType::SyncNow, null);
+
+        if ($device->genieacs_device_id === null) {
+            $log->update([
+                'status' => CpeActionStatus::Failed,
+                'failed_reason' => 'Device belum pernah terhubung ke GenieACS (genieacs_device_id kosong) — tidak bisa mengirim task.',
+                'completed_at' => now(),
+            ]);
+
+            return $log->fresh();
+        }
+
+        $targets = [
+            'wan' => 'InternetGatewayDevice.WANDevice',
+            'lan' => 'InternetGatewayDevice.LANDevice',
+        ];
+        $taskIds = [];
+        $errors = [];
+
+        foreach ($targets as $label => $objectName) {
+            try {
+                $result = $this->genieAcsClient->sendTask($device->genieacs_device_id, [
+                    'name' => 'refreshObject',
+                    'objectName' => $objectName,
+                ]);
+                $taskIds[$label] = $result['task_id'];
+            } catch (Throwable $e) {
+                $errors[$label] = substr($e->getMessage(), 0, 200);
+            }
+        }
+
+        if ($taskIds === []) {
+            $log->update([
+                'status' => CpeActionStatus::Failed,
+                'failed_reason' => 'Semua refreshObject task gagal dikirim: '.json_encode($errors),
+                'parameters' => ['errors' => $errors],
+                'completed_at' => now(),
+            ]);
+        } else {
+            $log->update([
+                'status' => CpeActionStatus::Delivered,
+                'genieacs_task_id' => implode(',', $taskIds),
+                'parameters' => array_filter(['task_ids' => $taskIds, 'errors' => $errors !== [] ? $errors : null]),
+                'completed_at' => now(),
+            ]);
+        }
 
         return $log->fresh();
     }
@@ -167,41 +291,5 @@ class CpeActionService
                 'completed_at' => now(),
             ]);
         }
-    }
-
-    /**
-     * @return array{0: string, 1: string} [oui, productClass]
-     */
-    private function resolveOuiProductClass(CpeDevice $device): array
-    {
-        $genieAcsDevice = $this->genieAcsClient->findDeviceById($device->genieacs_device_id);
-
-        if ($genieAcsDevice === null) {
-            throw new RuntimeException('Device tidak ditemukan di GenieACS (genieacs_device_id sudah tidak valid).');
-        }
-
-        $oui = $genieAcsDevice['_deviceId']['_OUI'] ?? null;
-        $productClass = $genieAcsDevice['_deviceId']['_ProductClass'] ?? null;
-
-        if ($oui === null || $productClass === null) {
-            throw new RuntimeException('_deviceId._OUI/_ProductClass tidak lengkap di data GenieACS untuk device ini.');
-        }
-
-        return [$oui, $productClass];
-    }
-
-    private function requirePath(string $oui, string $productClass, string $parameterKey): string
-    {
-        $path = CpeParameterMap::query()
-            ->where('oui', $oui)
-            ->where('product_class', $productClass)
-            ->where('parameter_key', $parameterKey)
-            ->value('parameter_path');
-
-        if ($path === null) {
-            throw new RuntimeException("Parameter mapping '{$parameterKey}' belum ada di cpe_parameter_maps untuk OUI={$oui}/ProductClass={$productClass}.");
-        }
-
-        return $path;
     }
 }

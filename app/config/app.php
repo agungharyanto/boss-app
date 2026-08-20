@@ -123,4 +123,18 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | NIK HMAC Key
+    |--------------------------------------------------------------------------
+    |
+    | Deterministic HMAC key used to derive customers.nik_hash from a
+    | plaintext NIK, so a unique-per-tenant NIK can still be looked up
+    | after customers.nik itself became an `encrypted` (randomized) cast.
+    | Deliberately separate from APP_KEY — see .env.example.
+    |
+    */
+
+    'nik_hmac_key' => env('NIK_HMAC_KEY'),
+
 ];

@@ -19,10 +19,11 @@
 | v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator (diverifikasi race-safe nyata) + CoA/Disconnect + fix `require_message_authenticator` per-NAS (akar masalah sesungguhnya) — sesi PPPoE nyata pertama berhasil end-to-end lewat FreeRADIUS produksi, config router sepenuhnya hasil generate resmi BOSS App | Selesai |
 | v0.7.1  | Network         | GenieACS Core                 | Deploy GenieACS+MongoDB, auto-binding device dari Installation (work_order_devices), CpeDevice model + API + UI list read-only | Selesai |
 | v0.7.2  | Network         | GenieACS Vendor Mapping       | Mapping parameter per-vendor (`cpe_parameter_maps`), resolve RX/TX power via `refreshObject` — refresh on-demand lewat Connection Request/tunnel VPN masih diblokir, lihat catatan v0.7.3 | Selesai |
-| v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Connection Request terverifikasi nyata (5/5 ZTE + 8/8 Huawei, `informEvent` bertanda "6 CONNECTION REQUEST" di log genieacs-cwmp) — di branch `v0.7.x-testing-refinements`, belum di-merge/tag |
-| v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Ganti WiFi terverifikasi ke device pelanggan asli (Natofik, `ZICG298E1389`) — di branch `v0.7.x-testing-refinements`, belum di-merge/tag |
-| v0.7.5  | Network         | GenieACS Auto-Provisioning (SSID/Password) | Reuse `CpeActionService` (v0.7.4) — SSID/password hasil input teknisi (`work_order_devices.ssid`/`wifi_password`, direkam CS lewat bridge endpoint sementara) otomatis didorong ke device begitu dikenal GenieACS, lewat hook di `CpeBindingService` (binding ATAU reconciliation). PPPoE di luar scope ini, item roadmap terpisah (diberi nomor `v0.12.0` — lihat amendment di atas). Slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions | Auto-provisioning terverifikasi end-to-end nyata ke device pelanggan asli — di branch `v0.7.x-testing-refinements`, belum di-merge/tag |
+| v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Selesai — Connection Request terverifikasi nyata (5/5 ZTE + 8/8 Huawei, `informEvent` bertanda "6 CONNECTION REQUEST" di log genieacs-cwmp) |
+| v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Selesai — Ganti WiFi terverifikasi ke device pelanggan asli (Natofik, `ZICG298E1389`) |
+| v0.7.5  | Network         | GenieACS Auto-Provisioning (SSID/Password) | Reuse `CpeActionService` (v0.7.4) — SSID/password hasil input teknisi (`work_order_devices.ssid`/`wifi_password`, direkam CS lewat bridge endpoint sementara) otomatis didorong ke device begitu dikenal GenieACS, lewat hook di `CpeBindingService` (binding ATAU reconciliation). PPPoE di luar scope ini, item roadmap terpisah (diberi nomor `v0.12.0` — lihat amendment di atas). Slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions | Selesai — Auto-provisioning terverifikasi end-to-end nyata ke device pelanggan asli |
 | v0.7.6  | Network         | GenieACS Connected Clients (dengan histori) | Baca TR-069 `Hosts.Host` (client WiFi/LAN terhubung) — histori per `(device, MAC)` di `cpe_connected_hosts`, bukan snapshot per poll, sync command terjadwal 5 menit dari data yang sudah tersimpan GenieACS (tidak memicu refresh sendiri) | Implementasi selesai — verifikasi UI browser masih belum dicoba Agung langsung |
+| v0.7.7  | Network         | GenieACS Testing Refinements  | Verifikasi nyata v0.7.3-v0.7.5 ke device pelanggan asli, status Online/Offline dirombak jadi hybrid GenieACS (bukan router-ping), DataTables UI + halaman Detail, Remove/Ganti Modem, Cek Status Device, auto-matching legacy berkelanjutan, import 561 customer MixRadius, NIK encryption + CID — lihat bagian "Branch v0.7.x-testing-refinements" di bawah untuk detail lengkap | Selesai |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
@@ -515,14 +516,13 @@ Implementasi + 404 test regresi hijau, tapi UI (tombol "Client", modal
 tabel host) belum pernah dicoba langsung di browser — masuk sesi
 verifikasi yang sama dengan v0.7.3-v0.7.5 sebelum mulai v0.8.
 
-## Branch `v0.7.x-testing-refinements` — sesi verifikasi + refinement pasca v0.7.6 (BELUM di-merge/tag)
+## v0.7.7 — GenieACS Testing Refinements (branch `v0.7.x-testing-refinements`, merged + tagged 2026-08-20)
 
 Sesi verifikasi komprehensif yang dijanjikan di catatan v0.7.3-v0.7.6 di atas
 akhirnya dijalankan, sekaligus membuka beberapa refinement/fitur baru yang
-ditemukan perlu selama proses itu. **Status per commit ini masih 1 commit
-"wip" (`fa6b0ca`) + sejumlah besar perubahan belum di-commit di working
-tree** — belum di-merge ke `develop`/`main`, belum di-tag. Jangan anggap
-selesai/final sampai commit+merge+tag benar-benar terjadi (BOSS-002).
+ditemukan perlu selama proses itu. Commit `a90c3b4` (di atas commit "wip"
+`fa6b0ca`), di-merge ke `develop` (`a3bd380`) lalu `main` (`b603053`),
+di-tag `v0.7.7`. BOSS-002 terpenuhi — commit, merge, tag semua berhasil.
 
 **Verifikasi nyata yang akhirnya terjadi**:
 - **v0.7.3 Connection Request TERBUKTI jalan** — 5/5 device ZTE F663NV3a

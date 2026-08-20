@@ -1531,11 +1531,10 @@ not solved by more time on this same approach**:
 
 ## GenieACS Connection Request Routing (v0.7.3) — implementation done, end-to-end verification PENDING
 
-**Amendment (branch `v0.7.x-testing-refinements`, not yet merged/tagged) —
-VERIFIED, this section's "PENDING" title is now stale**: the retest this
-section calls for below was finally run for real. Short version — it
-works; see "GenieACS Testing Refinements & Status Sync Redesign
-(v0.7.x-testing-refinements)" near the end of this file for the full
+**Amendment (v0.7.7) — VERIFIED, this section's "PENDING" title is now
+stale**: the retest this section calls for below was finally run for real.
+Short version — it works; see "GenieACS Testing Refinements & Status Sync
+Redesign (v0.7.7)" near the end of this file for the full
 account, including a real false lead this same investigation produced and
 had to walk back (don't re-add a route to a WireGuard node's tunnel
 gateway IP without new evidence — see that section). The two specific
@@ -1710,12 +1709,12 @@ feature that walks another dynamic TR-069 array (WLANConfiguration
 instances, WANConnectionDevice instances, etc.) — this is a real device
 behavior, not specific to Hosts.
 
-## GenieACS Testing Refinements & Status Sync Redesign (v0.7.x-testing-refinements)
+## GenieACS Testing Refinements & Status Sync Redesign (v0.7.7)
 
-**Branch status: NOT merged/tagged.** One "wip" commit (`fa6b0ca`) plus a
-large amount of further uncommitted work (this whole section's worth) sits
-on top of it. Don't treat anything here as `main`/tagged history — see
-`docs/ROADMAP.md`'s own "Branch `v0.7.x-testing-refinements`" section for
+Merged to `develop`/`main` and tagged `v0.7.7` on 2026-08-20 (commit
+`a90c3b4` on branch `v0.7.x-testing-refinements`, on top of the earlier
+"wip" commit `fa6b0ca`; merge commits `a3bd380`/`b603053`). See
+`docs/ROADMAP.md`'s own "v0.7.7 — GenieACS Testing Refinements" section for
 the sprint-level summary; this section is the technical-gotcha detail for
 future debugging, same split as every other `## GenieACS ...` section
 above.

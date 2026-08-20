@@ -43,6 +43,11 @@ class NasIndexLivewireTest extends TestCase
                 return ['online' => $this->online, 'message' => $this->message];
             }
 
+
+            public function pingHost(Nas $nas, string $targetIp, int $count = 2): bool
+            {
+                return true;
+            }
             public function provisionApiUser(Nas $nas, string $connectAsUsername, string $connectAsPassword, string $newApiUsername, string $newApiPassword): array
             {
                 return ['success' => $this->provisionSuccess, 'message' => $this->provisionSuccess ? null : 'invalid admin credential'];

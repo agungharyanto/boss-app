@@ -9,6 +9,7 @@ enum RegistrationChannel: string
     case Teknisi = 'teknisi';
     case Freelance = 'freelance';
     case SelfService = 'self';
+    case LegacyImport = 'legacy_import';
 
     public function label(): string
     {
@@ -18,6 +19,7 @@ enum RegistrationChannel: string
             self::Teknisi => 'Teknisi',
             self::Freelance => 'Freelance',
             self::SelfService => 'Self-service',
+            self::LegacyImport => 'Impor Legacy',
         };
     }
 }

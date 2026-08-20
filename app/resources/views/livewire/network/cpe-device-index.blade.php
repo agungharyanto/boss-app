@@ -1,257 +1,209 @@
-<div class="p-6 max-w-6xl mx-auto">
+@push('styles')
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/datatables/2.3.7/css/jquery.dataTables.min.css">
+    @include('components.datatable-styles')
+    <style>
+        /* Page-specific column widths — kept here rather than in the
+           reusable partial since these depend on this exact column set.
+           Tuned so the 9 columns fit within Tailwind's lg: (1024px)
+           breakpoint without scrollX (Bagian C) — verified empirically at
+           1024px with the real w-64 sidebar, not just eyeballed. */
+        #cpe-devices-table.dataTable {
+            table-layout: fixed;
+            width: 100% !important;
+        }
+
+        #cpe-devices-table th:nth-child(1),
+        #cpe-devices-table td:nth-child(1) { width: 56px; }
+
+        #cpe-devices-table th:nth-child(2),
+        #cpe-devices-table td:nth-child(2) { width: 15%; }
+
+        /* Status is fixed short text ("Online"/"Offline") — never needs
+           real truncation room, so it gets just enough to render the badge
+           comfortably and nothing more (freed up for the columns that
+           actually need it). */
+        #cpe-devices-table th:nth-child(3),
+        #cpe-devices-table td:nth-child(3) { width: 7%; }
+
+        #cpe-devices-table th:nth-child(4),
+        #cpe-devices-table td:nth-child(4) { width: 14%; }
+
+        #cpe-devices-table th:nth-child(5),
+        #cpe-devices-table td:nth-child(5) { width: 15%; }
+
+        /* MAC Address is "-" for most of this fleet today (documented
+           vendor-tree limitation, see CLAUDE.md's GenieACS Connected
+           Clients section) — narrower on purpose, the column stays for
+           when it does resolve. */
+        #cpe-devices-table th:nth-child(6),
+        #cpe-devices-table td:nth-child(6) { width: 11%; }
+
+        #cpe-devices-table th:nth-child(7),
+        #cpe-devices-table td:nth-child(7) { width: 11%; }
+
+        #cpe-devices-table th:nth-child(8),
+        #cpe-devices-table td:nth-child(8) { width: 12%; }
+
+        #cpe-devices-table th:nth-child(9),
+        #cpe-devices-table td:nth-child(9) { width: 11%; }
+
+        /* Headers wrap onto 2 lines rather than getting cut with an
+           ellipsis — at 1024px the fixed % column widths above are tight
+           enough that a forced single-line header would overlap its
+           neighbor; a natural 2-line wrap reads better than "MANUFACT...".
+           Data cells (below) still truncate to one line — a value like a
+           serial number genuinely losing meaning if wrapped. */
+        #cpe-devices-table th {
+            white-space: normal;
+            line-height: 1.2;
+            vertical-align: bottom;
+        }
+
+        /* Single-line truncation for every column EXCEPT Pelanggan (column
+           2), which stacks name + CID on two lines on purpose, and Status
+           (column 3), whose badge must never get an ellipsis cut through
+           it. */
+        #cpe-devices-table td:not(:nth-child(2)):not(:nth-child(3)) {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #cpe-devices-table td:nth-child(2) {
+            overflow: hidden;
+        }
+    </style>
+@endpush
+
+<div class="p-6 w-full">
     <div class="flex items-center justify-between mb-6">
         <h1 class="text-2xl font-semibold text-gray-800">{{ __('Perangkat CPE') }}</h1>
+
+        <div class="flex items-center gap-2 text-sm">
+            <label for="pollInterval" class="text-gray-500">{{ __('Auto-reload') }}</label>
+            <select id="pollInterval" class="rounded-md border-gray-300 shadow-sm text-sm">
+                @foreach ($this->pollIntervalOptions() as $value => $label)
+                    <option value="{{ $value }}">{{ $label }}</option>
+                @endforeach
+            </select>
+        </div>
     </div>
 
-    @if (session('status'))
-        <div class="mb-4 text-sm text-green-600">{{ session('status') }}</div>
-    @endif
-    @if (session('actionError'))
-        <div class="mb-4 text-sm text-red-600">{{ session('actionError') }}</div>
-    @endif
-
-    <div class="mb-4">
-        <input
-            type="text" wire:model.live.debounce.300ms="search"
-            placeholder="{{ __('Cari nama pelanggan atau nomor serial...') }}"
-            class="w-full rounded-md border-gray-300 shadow-sm"
-        >
-    </div>
-
+    {{-- overflow-x-auto only actually engages below lg: once the fixed
+         column widths above stop fitting — see Bagian C. --}}
     <div class="overflow-x-auto border border-gray-200 rounded-md">
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
+        <table id="cpe-devices-table" class="min-w-full divide-y divide-gray-200 text-xs">
+            <thead class="bg-gray-50 text-gray-500 uppercase tracking-wider">
                 <tr>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pelanggan') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Manufacturer / Model') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Serial Number') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Last Inform') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Aksi') }}</th>
+                    <th></th>
+                    <th>{{ __('Pelanggan') }}</th>
+                    <th>{{ __('Status') }}</th>
+                    <th>{{ __('Manufacturer / Model') }}</th>
+                    <th>{{ __('Serial Number') }}</th>
+                    <th>{{ __('MAC Address') }}</th>
+                    <th>{{ __('RX Power') }}</th>
+                    <th>{{ __('Online Duration') }}</th>
+                    <th>{{ __('Uptime Modem') }}</th>
                 </tr>
             </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                @forelse ($devices as $device)
-                    <tr wire:key="cpe-device-{{ $device->id }}">
-                        <td class="px-4 py-2 text-sm text-gray-800">
-                            {{ $device->customer?->name ?? '—' }}
-                            @if ($device->reseller)
-                                <span class="block text-xs text-gray-400">{{ $device->reseller->name }}</span>
-                            @endif
-                        </td>
-                        <td class="px-4 py-2 text-sm text-gray-600">
-                            {{ $device->manufacturer ?? '—' }}
-                            @if ($device->model_name)
-                                <span class="block text-xs text-gray-400">{{ $device->model_name }}</span>
-                            @endif
-                        </td>
-                        <td class="px-4 py-2 text-sm text-gray-600 font-mono">{{ $device->serial_number }}</td>
-                        <td class="px-4 py-2 text-sm">
-                            @php
-                                $statusColor = match ($device->status->value) {
-                                    'online' => 'bg-green-100 text-green-700',
-                                    'offline' => 'bg-red-100 text-red-700',
-                                    default => 'bg-yellow-100 text-yellow-700',
-                                };
-                            @endphp
-                            <span class="px-2 py-0.5 rounded-full text-xs {{ $statusColor }}">
-                                {{ $device->status->label() }}
-                            </span>
-                        </td>
-                        <td class="px-4 py-2 text-sm text-gray-600">
-                            {{ $device->last_inform_at?->diffForHumans() ?? '—' }}
-                        </td>
-                        <td class="px-4 py-2 text-sm whitespace-nowrap">
-                            <div class="flex items-center gap-3">
-                                <button wire:click="openHistoryModal({{ $device->id }})" class="text-primary hover:underline">
-                                    {{ __('Riwayat') }}
-                                </button>
-                                <button wire:click="openHostsModal({{ $device->id }})" class="text-primary hover:underline">
-                                    {{ __('Client') }}
-                                </button>
-                                @can('manage', $device)
-                                    <button
-                                        wire:click="reboot({{ $device->id }})"
-                                        wire:confirm="Yakin reboot perangkat ini? Pelanggan akan terputus sebentar sampai perangkat menyala kembali. Perintah ini TIDAK instan — diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil)."
-                                        wire:loading.attr="disabled"
-                                        class="text-primary hover:underline"
-                                    >
-                                        {{ __('Reboot') }}
-                                    </button>
-                                    <button wire:click="openWifiModal({{ $device->id }})" class="text-primary hover:underline">
-                                        {{ __('Ganti WiFi') }}
-                                    </button>
-                                @endcan
-                            </div>
-                        </td>
-                    </tr>
-                @empty
-                    <tr>
-                        <td colspan="6" class="px-4 py-6 text-center text-sm text-gray-500">
-                            {{ __('Belum ada perangkat CPE.') }}
-                        </td>
-                    </tr>
-                @endforelse
-            </tbody>
+            <tbody></tbody>
         </table>
     </div>
-
-    <div class="mt-4">
-        {{ $devices->links() }}
-    </div>
-
-    {{-- GANTI WIFI MODAL — SSID dan/atau password baru. Konfirmasi WAJIB
-         ada di tombol submit (bukan saat modal dibuka), karena baru di
-         situ ada niat nyata untuk mengubah sesuatu. --}}
-    @if ($showWifiModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeWifiModal">
-            <div class="bg-white rounded-md p-6 w-full max-w-md space-y-4">
-                <h2 class="font-medium">{{ __('Ganti WiFi') }}</h2>
-                <p class="text-xs text-gray-500">
-                    {{ __('Isi salah satu atau keduanya. Perintah ini TIDAK instan — diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil).') }}
-                </p>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">{{ __('SSID Baru') }}</label>
-                    <input type="text" wire:model="wifiSsid" maxlength="32" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
-                    @error('wifiSsid') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">{{ __('Password Baru') }}</label>
-                    <input type="password" wire:model="wifiPassword" maxlength="63" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
-                    <p class="text-xs text-gray-400 mt-1">{{ __('8-63 karakter (standar WPA-PSK).') }}</p>
-                    @error('wifiPassword') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
-                </div>
-
-                <div class="flex items-center gap-3 pt-2">
-                    <button
-                        wire:click="submitWifi"
-                        wire:confirm="Yakin ganti SSID/password WiFi? Semua perangkat pelanggan yang sudah terhubung mungkin perlu connect ulang setelah perubahan diterapkan."
-                        wire:loading.attr="disabled"
-                        class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm"
-                    >
-                        {{ __('Kirim Perintah') }}
-                    </button>
-                    <button wire:click="closeWifiModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
-                        {{ __('Batal') }}
-                    </button>
-                </div>
-            </div>
-        </div>
-    @endif
-
-    {{-- RIWAYAT AKSI MODAL --}}
-    @if ($showHistoryModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeHistoryModal">
-            <div class="bg-white rounded-md p-6 w-full max-w-2xl space-y-4 max-h-[80vh] overflow-y-auto">
-                <h2 class="font-medium">{{ __('Riwayat Aksi') }}</h2>
-                <p class="text-xs text-gray-500">
-                    {{ __('"Terkirim ke GenieACS" berarti perintah berhasil masuk antrean — BUKAN konfirmasi perangkat sudah menjalankannya.') }}
-                </p>
-
-                <div class="divide-y divide-gray-100">
-                    @forelse ($historyLogs as $log)
-                        <div class="py-3 text-sm" wire:key="action-log-{{ $log->id }}">
-                            <div class="flex items-center justify-between">
-                                <span class="font-medium">{{ $log->action_type->label() }}</span>
-                                @php
-                                    $logStatusColor = match ($log->status->value) {
-                                        'delivered' => 'bg-blue-100 text-blue-700',
-                                        'failed' => 'bg-red-100 text-red-700',
-                                        default => 'bg-yellow-100 text-yellow-700',
-                                    };
-                                @endphp
-                                <span class="px-2 py-0.5 rounded-full text-xs {{ $logStatusColor }}">
-                                    {{ $log->status->label() }}
-                                </span>
-                            </div>
-                            <div class="text-xs text-gray-400 mt-1">
-                                {{ $log->created_at->diffForHumans() }} · {{ __('oleh') }}
-                                {{ $log->performed_by === null ? __('Sistem (auto-provisioning)') : ($log->performedBy?->name ?? '—') }}
-                            </div>
-                            @if ($log->action_type->value === 'set_ssid' && isset($log->parameters['new_ssid']))
-                                <div class="text-xs text-gray-600 mt-1">{{ __('SSID baru') }}: {{ $log->parameters['new_ssid'] }}</div>
-                            @endif
-                            @if (($log->parameters['password_changed'] ?? false))
-                                <div class="text-xs text-gray-600 mt-1">{{ __('Password diubah') }}</div>
-                            @endif
-                            @if ($log->status->value === 'failed' && $log->failed_reason)
-                                <div class="text-xs text-red-600 mt-1">{{ $log->failed_reason }}</div>
-                            @endif
-                        </div>
-                    @empty
-                        <p class="text-sm text-gray-500 py-4">{{ __('Belum ada aksi tercatat untuk perangkat ini.') }}</p>
-                    @endforelse
-                </div>
-
-                <div class="pt-2">
-                    <button wire:click="closeHistoryModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
-                        {{ __('Tutup') }}
-                    </button>
-                </div>
-            </div>
-        </div>
-    @endif
-
-    {{-- CLIENT TERHUBUNG MODAL (v0.7.6) — histori TR-069 Hosts.Host,
-         diisi command terjadwal, bukan dipicu dari sini. --}}
-    @if ($showHostsModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeHostsModal">
-            <div class="bg-white rounded-md p-6 w-full max-w-2xl space-y-4 max-h-[80vh] overflow-y-auto">
-                <h2 class="font-medium">{{ __('Client Terhubung') }}</h2>
-                <p class="text-xs text-gray-500">
-                    {{ __('Disinkronkan otomatis tiap beberapa menit dari data TR-069 (Hosts) yang sudah tersimpan di GenieACS — bukan snapshot real-time. Host yang sudah lama tidak terlihat tetap tercatat, ditandai tidak aktif.') }}
-                </p>
-
-                <label class="flex items-center gap-2 text-xs text-gray-600">
-                    <input type="checkbox" wire:model.live="hostsActiveOnly">
-                    {{ __('Tampilkan yang aktif saja') }}
-                </label>
-
-                <div class="overflow-x-auto border border-gray-200 rounded-md">
-                    <table class="min-w-full divide-y divide-gray-200 text-sm">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Hostname') }}</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('MAC') }}</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('IP') }}</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status') }}</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pertama Terlihat') }}</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Terakhir Terlihat') }}</th>
-                            </tr>
-                        </thead>
-                        <tbody class="bg-white divide-y divide-gray-100">
-                            @forelse ($connectedHosts as $host)
-                                <tr wire:key="connected-host-{{ $host->id }}">
-                                    <td class="px-3 py-2 text-gray-800">{{ $host->hostname ?? '—' }}</td>
-                                    <td class="px-3 py-2 text-gray-600 font-mono text-xs">{{ $host->mac_address }}</td>
-                                    <td class="px-3 py-2 text-gray-600">{{ $host->ip_address ?? '—' }}</td>
-                                    <td class="px-3 py-2">
-                                        <span class="px-2 py-0.5 rounded-full text-xs {{ $host->is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500' }}">
-                                            {{ $host->is_active ? __('Aktif') : __('Tidak Aktif') }}
-                                        </span>
-                                    </td>
-                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $host->first_seen_at->diffForHumans() }}</td>
-                                    <td class="px-3 py-2 text-xs text-gray-400">{{ $host->last_seen_at->diffForHumans() }}</td>
-                                </tr>
-                            @empty
-                                <tr>
-                                    <td colspan="6" class="px-3 py-6 text-center text-sm text-gray-500">
-                                        {{ __('Belum ada client tercatat untuk perangkat ini.') }}
-                                    </td>
-                                </tr>
-                            @endforelse
-                        </tbody>
-                    </table>
-                </div>
-
-                <div class="pt-2">
-                    <button wire:click="closeHostsModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
-                        {{ __('Tutup') }}
-                    </button>
-                </div>
-            </div>
-        </div>
-    @endif
 </div>
+
+@push('scripts')
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/datatables/2.3.7/js/jquery.dataTables.min.js"></script>
+    <script>
+        (function () {
+            const table = $('#cpe-devices-table').DataTable({
+                processing: true,
+                serverSide: true,
+                autoWidth: false,
+                ajax: '{{ route('web.cpe-devices.internal.datatable') }}',
+                lengthMenu: [10, 15, 25, 50],
+                pageLength: 15,
+                order: [],
+                columns: [
+                    {
+                        data: 'id', orderable: false, className: 'text-center',
+                        render: (id) => `<a href="/cpe-devices/${id}" class="text-primary hover:underline">{{ __('Detail') }}</a>`,
+                    },
+                    {
+                        data: 'customer_name', name: 'customer_name',
+                        render: function (data, type, row) {
+                            if (type !== 'display') return data;
+                            const name = data ?? '—';
+                            const cid = row.customer_cid
+                                ? `<div class="text-[11px] text-gray-400 font-mono truncate" title="${row.customer_cid}">${row.customer_cid}</div>`
+                                : '';
+                            return `<div class="truncate" title="${name}">${name}</div>${cid}`;
+                        },
+                    },
+                    {
+                        data: 'status_value', name: 'status_value',
+                        render: function (value, type, row) {
+                            if (type !== 'display') return value;
+                            const colors = { online: 'bg-green-100 text-green-700', offline: 'bg-red-100 text-red-700' };
+                            const color = colors[value] || 'bg-yellow-100 text-yellow-700';
+                            return `<span class="px-2 py-0.5 rounded-full text-xs ${color}">${row.status_label}</span>`;
+                        },
+                    },
+                    {
+                        data: null, orderable: true, name: 'manufacturer',
+                        render: (data, type, row) => {
+                            const text = [row.manufacturer, row.model_name].filter(Boolean).join(' ') || '—';
+                            return type === 'display' ? `<span title="${text}">${text}</span>` : text;
+                        },
+                    },
+                    {
+                        data: 'serial_number', name: 'serial_number',
+                        render: (data, type) => type === 'display' ? `<span title="${data}">${data}</span>` : data,
+                    },
+                    {
+                        data: 'mac_address', orderable: false,
+                        render: (d, type) => {
+                            const text = d ?? '-';
+                            return type === 'display' ? `<span title="${text}">${text}</span>` : text;
+                        },
+                    },
+                    {
+                        data: 'rx_power_dbm', orderable: false,
+                        render: (d) => d !== null ? Number(d).toFixed(2) + ' dBm' : '-',
+                    },
+                    { data: 'online_duration_text', name: 'online_duration_text' },
+                    {
+                        data: 'device_uptime_seconds', orderable: false,
+                        render: function (seconds) {
+                            if (seconds === null) return '-';
+                            const totalMinutes = Math.floor(seconds / 60);
+                            const days = Math.floor(totalMinutes / 1440);
+                            const hours = Math.floor((totalMinutes % 1440) / 60);
+                            const minutes = totalMinutes % 60;
+                            return days > 0 ? `${days}h ${hours}j` : `${hours}j ${minutes}m`;
+                        },
+                    },
+                ],
+            });
+
+            // Row actions (Reboot/Ganti WiFi/Ganti Modem/Remove/Riwayat/Client
+            // Terhubung) moved to the standalone /cpe-devices/{id} page
+            // (2026-08-16) — the "Detail" column above is now a plain link,
+            // not a DataTables child-row trigger. See cpe-devices/show.blade.php
+            // for that page's own copy of these action handlers.
+
+            // Auto-reload — plain setInterval calling DataTables' own
+            // ajax.reload(), never a full page reload. Off by default so a
+            // page nobody is actively watching doesn't keep hitting the
+            // server for no reason.
+            let pollTimer = null;
+            document.getElementById('pollInterval').addEventListener('change', function (e) {
+                if (pollTimer) clearInterval(pollTimer);
+                const seconds = parseInt(e.target.value, 10);
+                if (!Number.isNaN(seconds) && seconds > 0) {
+                    pollTimer = setInterval(() => table.ajax.reload(null, false), seconds * 1000);
+                }
+            });
+        })();
+    </script>
+@endpush

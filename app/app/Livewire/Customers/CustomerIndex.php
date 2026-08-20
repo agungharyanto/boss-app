@@ -59,8 +59,13 @@ class CustomerIndex extends Component
     {
         $customers = Customer::query()
             ->when($this->search, fn ($query) => $query->where(function ($q) {
-                $q->where('name', 'like', "%{$this->search}%")
-                    ->orWhere('phone_number', 'like', "%{$this->search}%");
+                // whereRaw('LOWER(...) LIKE ?') instead of a plain 'like' —
+                // Postgres LIKE is case-sensitive by default, and this stays
+                // portable to sqlite (what the test suite runs on) too,
+                // unlike 'ilike' which sqlite doesn't understand.
+                $needle = '%'.mb_strtolower($this->search).'%';
+                $q->whereRaw('LOWER(name) LIKE ?', [$needle])
+                    ->orWhereRaw('LOWER(phone_number) LIKE ?', [$needle]);
             }))
             ->when($this->statusFilter, fn ($query) => $query->where('status', $this->statusFilter))
             ->latest()

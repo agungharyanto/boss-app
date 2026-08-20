@@ -219,6 +219,15 @@ class MikrotikScriptGeneratorTest extends TestCase
      * rule), not GenieACS's real container IP. Without this, WireGuard's
      * own cryptokey routing drops the packet before RouterOS ever sees it,
      * independent of any /ip route.
+     *
+     * **False lead, corrected same day**: a route for $vpnNodeTunnelIp was
+     * briefly added (and this test briefly asserted it existed), reasoned
+     * by analogy from this exact allowed-address finding. Real end-to-end
+     * testing against genuinely current CPE ConnectionRequestURLs (not
+     * stale, ~2-week-old IPs) proved Connection Request succeeds with zero
+     * router-side changes beyond allowed-address — see
+     * MikrotikScriptGenerator::wireGuardScript()'s own docblock for the
+     * full story. Reverted to the original, evidence-backed assertion.
      */
     public function test_wireguard_script_admits_the_vpn_nodes_own_masquerade_source_when_provided(): void
     {
@@ -237,6 +246,7 @@ class MikrotikScriptGeneratorTest extends TestCase
         $this->assertStringContainsString('allowed-address=172.28.0.10/32,172.28.0.31/32,172.23.195.1/32', $script);
         // No /ip route needed for this one — the router only needs to
         // ACCEPT packets sourced from it, never SEND anything to it.
+        // (Confirmed for real, not just reasoned about — see docblock.)
         $this->assertStringNotContainsString('dst-address=172.23.195.1/32', $script);
     }
 
@@ -364,5 +374,76 @@ class MikrotikScriptGeneratorTest extends TestCase
 
         $this->assertStringNotContainsString('/user ', $script);
         $this->assertStringNotContainsString('/user group', $script);
+    }
+
+    /**
+     * A real test-x86-bajastu router config was found with WireGuard's
+     * `/ip address` split into two separate Address+Network fields
+     * (172.23.195.2 / 172.23.195.1) instead of a single CIDR value.
+     * Confirmed via `git log -p` that this generator has NEVER emitted a
+     * `network=` parameter — this test locks that in going forward, and
+     * also locks in the CIDR mask staying `/32` specifically (not widened
+     * to e.g. `/30`, which would make RouterOS auto-add a connected route
+     * for the whole subnet and defeat the reverse-route isolation this
+     * script exists to enforce).
+     */
+    public function test_wireguard_script_ip_address_line_is_single_cidr_value_never_a_separate_network_param(): void
+    {
+        $account = $this->vpnAccount([
+            'username' => 'nas-1',
+            'protocol' => VpnProtocol::WireGuard,
+            'internal_ip' => '172.23.195.2',
+        ]);
+
+        $script = $this->generator->wireGuardScript(
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==',
+            ['freeradius' => '172.28.0.10'],
+        );
+
+        $this->assertStringContainsString('/ip address add address=172.23.195.2/32 interface=boss-vpn-wireguard', $script);
+        $this->assertStringNotContainsString('network=', $script);
+    }
+
+    /**
+     * Every persistent `add` command generated across all 3 client
+     * protocols and the RADIUS setup script must carry a `comment=` —
+     * makes every BOSS App-managed router object identifiable at a glance
+     * (Winbox/CLI) and distinguishable from anything applied manually
+     * outside the system, same motivation as the investigation above.
+     */
+    public function test_every_generated_add_command_carries_a_comment(): void
+    {
+        $ovpnAccount = $this->vpnAccount(['username' => 'nas-42', 'protocol' => VpnProtocol::OpenVpn]);
+        $wgAccount = $this->vpnAccount(['username' => 'nas-42', 'protocol' => VpnProtocol::WireGuard, 'internal_ip' => '172.23.195.5']);
+        $l2tpAccount = $this->vpnAccount(['username' => 'nas-42', 'protocol' => VpnProtocol::L2tpIpsec, 'password' => 'pw']);
+        $nas = $this->nas(['name' => 'NAS Gambir', 'radius_secret' => 'secret', 'auth_port' => 20000, 'acct_port' => 20001]);
+
+        $ovpnScript = $this->generator->openVpnScript(
+            $ovpnAccount, '7', '45.123.142.242', 1194, '172.28.0.10',
+            'ca-url', 'cert-url', 'key-url', 'https', [1194, 1195],
+        );
+        $wgScript = $this->generator->wireGuardScript(
+            $wgAccount, '45.123.142.242', 51820, 'pub', 'priv',
+            ['freeradius' => '172.28.0.10'], [51820, 51821],
+        );
+        $l2tpScript = $this->generator->l2tpScript($l2tpAccount, '7', '45.123.142.242', '172.28.0.10', 'psk');
+        $radiusScript = $this->generator->radiusScript($nas, '172.28.0.10');
+
+        $this->assertStringContainsString('comment="BOSS App - OpenVPN client NAS nas-42"', $ovpnScript);
+        $this->assertStringContainsString('comment="boss-vpn-freeradius-route"', $ovpnScript);
+        $this->assertStringContainsString('comment="BOSS App - auto-switch logic boss-vpn-openvpn"', $ovpnScript);
+        $this->assertStringContainsString('comment="BOSS App - auto-switch scheduler boss-vpn-openvpn"', $ovpnScript);
+
+        $this->assertStringContainsString('comment="BOSS App - WireGuard interface NAS nas-42"', $wgScript);
+        $this->assertStringContainsString('comment="BOSS App - WireGuard peer NAS nas-42"', $wgScript);
+        $this->assertStringContainsString('comment="BOSS App - WAN VPN address NAS nas-42"', $wgScript);
+        $this->assertStringContainsString('comment="boss-vpn-freeradius-route"', $wgScript);
+        $this->assertStringContainsString('comment="BOSS App - auto-switch logic boss-vpn-wireguard"', $wgScript);
+        $this->assertStringContainsString('comment="BOSS App - auto-switch scheduler boss-vpn-wireguard"', $wgScript);
+
+        $this->assertStringContainsString('comment="BOSS App - L2TP/IPsec client NAS nas-42"', $l2tpScript);
+        $this->assertStringContainsString('comment="boss-vpn-freeradius-route"', $l2tpScript);
+
+        $this->assertStringContainsString('comment="boss-radius"', $radiusScript);
     }
 }

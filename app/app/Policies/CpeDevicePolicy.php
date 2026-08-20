@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Enums\ResellerUserStatus;
 use App\Models\CpeDevice;
+use App\Models\Reseller;
 use App\Models\ResellerUser;
 use App\Models\User;
 
@@ -41,6 +42,24 @@ class CpeDevicePolicy
         }
 
         return $cpeDevice->reseller_id !== null && $this->belongsToReseller($user, $cpeDevice->reseller_id);
+    }
+
+    /**
+     * For a not-yet-existing CpeDevice — used by the "Tambah Device CPE"
+     * form on a customer's own detail page (v0.7.6-follow-up), the first
+     * manual bind path that doesn't go through a WorkOrder or the legacy
+     * importer. Pass the target customer's own reseller via
+     * $this->authorize('create', [CpeDevice::class, $customer->reseller]),
+     * same pattern as OdpPolicy::create()/NasPolicy::create() — $reseller
+     * null means "a direct/no-reseller customer", admin-only.
+     */
+    public function create(User $user, ?Reseller $reseller = null): bool
+    {
+        if ($user->can('cpe_devices.manage')) {
+            return true;
+        }
+
+        return $reseller !== null && $this->belongsToReseller($user, $reseller->id);
     }
 
     private function belongsToReseller(User $user, int $resellerId): bool

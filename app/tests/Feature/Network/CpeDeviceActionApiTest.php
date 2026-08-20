@@ -4,7 +4,6 @@ namespace Tests\Feature\Network;
 
 use App\Models\CpeActionLog;
 use App\Models\CpeDevice;
-use App\Models\CpeParameterMap;
 use App\Models\Reseller;
 use App\Models\Tenant;
 use App\Models\User;
@@ -132,12 +131,6 @@ class CpeDeviceActionApiTest extends TestCase
     public function test_wifi_endpoint_accepts_ssid_only_and_delivers(): void
     {
         $this->fakeGenieAcsEnqueue();
-        CpeParameterMap::factory()->create([
-            'oui' => 'F86CE1',
-            'product_class' => 'F663NV3a',
-            'parameter_key' => 'wifi_ssid',
-            'parameter_path' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID',
-        ]);
         $tenant = Tenant::factory()->create();
         $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
         $device = CpeDevice::factory()->forReseller($reseller)->create(['genieacs_device_id' => 'F86CE1-F663NV3a-ZICG296C2E7B']);

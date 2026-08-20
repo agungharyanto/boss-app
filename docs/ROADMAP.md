@@ -19,14 +19,15 @@
 | v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator (diverifikasi race-safe nyata) + CoA/Disconnect + fix `require_message_authenticator` per-NAS (akar masalah sesungguhnya) — sesi PPPoE nyata pertama berhasil end-to-end lewat FreeRADIUS produksi, config router sepenuhnya hasil generate resmi BOSS App | Selesai |
 | v0.7.1  | Network         | GenieACS Core                 | Deploy GenieACS+MongoDB, auto-binding device dari Installation (work_order_devices), CpeDevice model + API + UI list read-only | Selesai |
 | v0.7.2  | Network         | GenieACS Vendor Mapping       | Mapping parameter per-vendor (`cpe_parameter_maps`), resolve RX/TX power via `refreshObject` — refresh on-demand lewat Connection Request/tunnel VPN masih diblokir, lihat catatan v0.7.3 | Selesai |
-| v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Implementasi selesai — verifikasi akhir pending |
-| v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Implementasi selesai — verifikasi UI komprehensif dijadwalkan sebelum v0.8 |
-| v0.7.5  | Network         | GenieACS Auto-Provisioning (SSID/Password) | Reuse `CpeActionService` (v0.7.4) — SSID/password hasil input teknisi (`work_order_devices.ssid`/`wifi_password`, direkam CS lewat bridge endpoint sementara) otomatis didorong ke device begitu dikenal GenieACS, lewat hook di `CpeBindingService` (binding ATAU reconciliation). PPPoE di luar scope ini, item roadmap terpisah. Slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions | Implementasi selesai — verifikasi UI komprehensif dijadwalkan sebelum v0.8 |
-| v0.7.6  | Network         | GenieACS Connected Clients (dengan histori) | Baca TR-069 `Hosts.Host` (client WiFi/LAN terhubung) — histori per `(device, MAC)` di `cpe_connected_hosts`, bukan snapshot per poll, sync command terjadwal 5 menit dari data yang sudah tersimpan GenieACS (tidak memicu refresh sendiri) | Implementasi selesai — verifikasi UI komprehensif dijadwalkan sebelum v0.8 |
+| v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Connection Request terverifikasi nyata (5/5 ZTE + 8/8 Huawei, `informEvent` bertanda "6 CONNECTION REQUEST" di log genieacs-cwmp) — di branch `v0.7.x-testing-refinements`, belum di-merge/tag |
+| v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Ganti WiFi terverifikasi ke device pelanggan asli (Natofik, `ZICG298E1389`) — di branch `v0.7.x-testing-refinements`, belum di-merge/tag |
+| v0.7.5  | Network         | GenieACS Auto-Provisioning (SSID/Password) | Reuse `CpeActionService` (v0.7.4) — SSID/password hasil input teknisi (`work_order_devices.ssid`/`wifi_password`, direkam CS lewat bridge endpoint sementara) otomatis didorong ke device begitu dikenal GenieACS, lewat hook di `CpeBindingService` (binding ATAU reconciliation). PPPoE di luar scope ini, item roadmap terpisah (diberi nomor `v0.12.0` — lihat amendment di atas). Slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions | Auto-provisioning terverifikasi end-to-end nyata ke device pelanggan asli — di branch `v0.7.x-testing-refinements`, belum di-merge/tag |
+| v0.7.6  | Network         | GenieACS Connected Clients (dengan histori) | Baca TR-069 `Hosts.Host` (client WiFi/LAN terhubung) — histori per `(device, MAC)` di `cpe_connected_hosts`, bukan snapshot per poll, sync command terjadwal 5 menit dari data yang sudah tersimpan GenieACS (tidak memicu refresh sendiri) | Implementasi selesai — verifikasi UI browser masih belum dicoba Agung langsung |
 | v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
 | v0.11.0 | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
+| v0.12.0 | Network         | PPPoE Provisioning & Technician API | Provisioning kredensial PPPoE (`radcheck`) hasil instalasi teknisi — di luar scope v0.7.5 karena `work_order_devices` tidak punya link balik ke `radcheck`. Sekalian API/otorisasi resmi teknisi/bot WhatsApp submit device (menggantikan bridge CS manual sementara dari v0.7.5) | Backlog |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
 (lihat Definition of Done di RULES.md) sebelum lanjut ke versi berikutnya.
@@ -42,6 +43,21 @@ Portal" bentrok; Mobile Self-Service Portal **digeser ke `v0.11.0`** (akhir
 backlog, setelah cluster Network selesai penuh) — bukan disisipkan di
 tengah lagi. Nomor `v0.7.0`-`v0.10.0` (GenieACS/LibreNMS/Commission/Outage)
 tidak berubah.
+
+**Amendment saat penutupan sesi v0.7.x (dikonfirmasi Agung)**: PPPoE
+provisioning (`radcheck`) + API/otorisasi resmi teknisi-bot — dua kebutuhan
+yang ditemukan lewat verifikasi v0.7.5 (lihat catatan di baris v0.7.5 dan
+CHANGELOG.md) — sengaja TIDAK dinomori `v0.7.7` meski domain-nya masih
+"Network", karena isinya (`radcheck`/`radius_db`) sebenarnya domain
+FreeRADIUS (cluster `v0.6.x`), bukan GenieACS/TR-069 (`v0.7.x`) — mencampur
+keduanya bakal melanggar pemisahan domain yang sudah sengaja dijaga sejak
+awal cluster `v0.6.x`/`v0.7.x` dipecah. Juga TIDAK menyisip di
+`v0.8.0`-`v0.10.0` karena rentang itu sudah dikunci tertulis ("tidak
+berubah", lihat paragraf di atas) untuk LibreNMS/Commission/Outage. Diberi
+nomor baru **`v0.12.0`** (setelah `v0.11.0` Mobile Self-Service Portal) —
+sama pola dengan amandemen Mobile Portal di atas: cluster baru selalu
+ditambah di akhir daftar backlog, tidak pernah menyisip ke tengah nomor
+yang sudah dikunci.
 
 **Keputusan arsitektur terkunci untuk seluruh cluster `v0.6.x`** (jangan
 dinegosiasi ulang tanpa konfirmasi eksplisit baru, BOSS-003):
@@ -498,6 +514,93 @@ v0.7.3-v0.7.6 nanti.
 Implementasi + 404 test regresi hijau, tapi UI (tombol "Client", modal
 tabel host) belum pernah dicoba langsung di browser — masuk sesi
 verifikasi yang sama dengan v0.7.3-v0.7.5 sebelum mulai v0.8.
+
+## Branch `v0.7.x-testing-refinements` — sesi verifikasi + refinement pasca v0.7.6 (BELUM di-merge/tag)
+
+Sesi verifikasi komprehensif yang dijanjikan di catatan v0.7.3-v0.7.6 di atas
+akhirnya dijalankan, sekaligus membuka beberapa refinement/fitur baru yang
+ditemukan perlu selama proses itu. **Status per commit ini masih 1 commit
+"wip" (`fa6b0ca`) + sejumlah besar perubahan belum di-commit di working
+tree** — belum di-merge ke `develop`/`main`, belum di-tag. Jangan anggap
+selesai/final sampai commit+merge+tag benar-benar terjadi (BOSS-002).
+
+**Verifikasi nyata yang akhirnya terjadi**:
+- **v0.7.3 Connection Request TERBUKTI jalan** — 5/5 device ZTE F663NV3a
+  dan 8/8 Huawei EG8141A5 (setelah retry) berhasil di-`nc -zv` ke
+  `ConnectionRequestURL` live-nya, dan `connection_request` lewat NBI
+  berhasil memicu Inform bertanda `informEvent="6 CONNECTION REQUEST"` di
+  log `genieacs-cwmp` — bukan cuma level TCP. Investigasi sempat salah arah
+  (sempat menyimpulkan perlu `/ip route` tambahan ke `172.23.195.1` di
+  router) — dikoreksi dan dicabut setelah data nyata (IP target yang
+  dipakai tes sebelumnya ternyata basi/sudah tidak dipegang device
+  manapun) membuktikan hipotesis itu salah.
+- **v0.7.4 Ganti WiFi** dan **v0.7.5 Auto-Provisioning** terverifikasi
+  end-to-end penuh terhadap device pelanggan ASLI (Natofik, `085291591491`,
+  serial `ZICG298E1389`) — SSID berhasil diubah otomatis lewat jalur
+  binding resmi (`cpe_action_logs` dengan `performed_by=null`,
+  `parameters.triggered_by=auto_provisioning_binding`,
+  `wifi_provisioned_at` ke-set), lalu di-revert lewat fitur "Ganti WiFi"
+  manual — keduanya terkonfirmasi via siklus periodic inform sungguhan,
+  bukan cuma status "delivered" di `cpe_action_logs`. Password TIDAK
+  bisa direvert (keterbatasan TR-069 yang memang sudah diketahui) —
+  customer sudah diinfokan.
+
+**Fitur baru yang ditemukan perlu, dibangun di sesi ini**:
+- **Status Online/Offline dirombak total** — desain lama
+  (`RouterOsGateway::pingHost()`, boss-app minta router meng-ping CPE)
+  diganti hybrid berbasis GenieACS sendiri (`CpeDeviceStatusSyncService`):
+  `_lastInform` < 5 menit → online langsung tanpa probe; kalau basi, baru
+  `connection_request` aktif + tunggu 90 detik (dikalibrasi dari data
+  nyata: delay konfirmasi 0.7s-60s across banyak device) + cek ulang.
+  Alasan desain diubah: tujuan awal produk ini dijual ke banyak ISP —
+  bergantung ke akses API router pelanggan cuma buat status dasar tidak
+  ideal. Hasil nyata sekali jalan: 119→159 online dari 185 device
+  (banyak false-offline dari pendekatan ping lama), tanpa traffic ping ke
+  router sama sekali (dikonfirmasi `nas.last_ping_at` tidak berubah).
+  `RouterOsGateway::pingHost()` sendiri TIDAK dihapus — tetap ada untuk
+  kebutuhan lain.
+- **DataTables UI Perangkat CPE** (`/cpe-devices`) — server-side
+  sort/search/pagination (`CpeDeviceDatatableController`), plus halaman
+  **Detail terpisah** (`CpeDeviceDetailController`), menggantikan modal
+  lama.
+- **Remove/Ganti Modem** dan **Cek Status Device** (self-service
+  diagnostic) — `CpeDeviceDiagnosticService` + Livewire
+  `CpeDeviceStatusCheck` mengekspos 4-tahap investigasi manual (GenieACS →
+  `legacy_mac_customer_map` → customer → binding) yang sebelumnya harus
+  ditelusuri lewat `tinker`, sekarang jadi halaman admin dengan alasan
+  gagal per-tahap ditampilkan eksplisit.
+- **Auto-matching berkelanjutan** — `LegacyDeviceMatcherService` + command
+  `cpe:auto-match-legacy-devices` (terjadwal 15 menit, sementara
+  dipercepat 30 detik) menggantikan batch one-shot 28-device lama.
+- **Multi-SSID/multi-WAN discovery + MAC via `pppoeMac`** —
+  `CpeParameterResolverService::resolveMacFallback()` sekarang menyusuri
+  index WAN device apa pun yang device sungguhan punya (bukan asumsi
+  tetap `.1`/`.2`) — ditemukan device nyata pakai index `2/3/4`, tanpa
+  `.1` sama sekali.
+
+**Data**: import penuh 561 customer MixRadius (`customers:import-legacy`,
+customer-only tanpa binding CPE — binding jalan terpisah lewat
+auto-matcher), NIK encryption (+`nik_hash` buat lookup), CID auto-generate
+per-tenant. **2 dari 561 customer gagal import** (bentrok NIK) — belum
+diselidiki akar penyebabnya, known gap terbuka.
+
+**Infrastruktur**: preset default GenieACS baru
+(`docker/genieacs/presets/default.js`) — auto-refresh terjadwal
+SSID/password/MAC/UpTime/Connected Hosts per device. Perubahan DHCP
+Option 43 di sisi infra (di luar git) membawa masuk ~70 device baru ke
+GenieACS sekaligus (14 kombinasi vendor RX/TX Power baru diverifikasi
+sesudahnya). Fix `MikrotikScriptGenerator`: format CIDR `/32` dikonfirmasi
+BUKAN bug kita (diverifikasi lewat `git log -p` sejak v0.6.3), `comment=`
+ditambahkan ke semua baris `add` yang belum punya.
+
+**Known gaps yang TETAP terbuka setelah sesi ini** (dicatat apa adanya,
+bukan ditutup-tutupi): 2 customer gagal import (NIK bentrok, akar
+penyebab belum diselidiki); sisa ~20-an kombinasi vendor kecil belum ada
+RX Power; verifikasi UI browser v0.7.3-v0.7.6 masih belum pernah dicoba
+Agung langsung (semua verifikasi sesi ini lewat API/tinker/`nc`, bukan
+klik UI asli); PPPoE credential provisioning (`radcheck`) dan API/
+otorisasi resmi teknisi-bot dikonfirmasi di luar scope, diberi nomor
+**v0.12.0** (lihat amendment penomoran di atas).
 
 **Dependency wajib untuk v0.3.4** (dicatat saat v0.3.2 selesai): tabel
 `subscriptions` yang lahir di v0.3.4 **harus** langsung menyertakan kolom

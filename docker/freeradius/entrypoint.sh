@@ -79,26 +79,54 @@ if ! grep -q "boss-app: accounting logging disabled" /etc/raddb/sites-enabled/de
     }' /etc/raddb/sites-enabled/default
 fi
 
-# v0.6.5 CoA/Disconnect — this container has no route to either VPN node's
-# tunnel subnet by default (boss-network only knows about 172.28.0.0/24;
-# 172.23.194.0/24 and 172.23.195.0/24 live inside openvpn's/wireguard's own
-# additional tun0/wg0 interfaces). Route via NODE1 specifically (resolved
-# by container NAME, not a hardcoded IP — docker-compose doesn't pin these
-# containers' boss-network IPs the way freeradius's own is pinned, so a
-# hardcoded IP would silently go stale across a recreate) — node1 is the
+# v0.6.5 CoA/Disconnect — this container has no route to OpenVPN's tunnel
+# subnet by default (boss-network only knows about 172.28.0.0/24;
+# 172.23.194.0/24 lives inside openvpn's own additional tun0 interface).
+# Route via NODE1 specifically (resolved by container NAME) — node1 is the
 # POOL OWNER (VpnServer::poolOwnerFor()), the only node guaranteed to
-# actually know about every account's internal_ip via OpenVPN's ccd/
-# WireGuard's shared peers dir. A NAS currently failed-over (v0.6.4 auto-
-# switch) to a SIBLING node is a known, documented gap — see
-# docker/wireguard/entrypoint.sh's matching comment on the firewall side.
-refresh_coa_routes() {
+# actually know about every OpenVPN account's internal_ip via its shared
+# ccd. A NAS currently failed-over (v0.6.4 auto-switch) to a SIBLING node
+# is a known, documented gap for OpenVPN specifically — WireGuard doesn't
+# share this limitation any more, see the fragment+reconcile loop below.
+refresh_openvpn_coa_route() {
     openvpn_ip=$(getent hosts openvpn 2>/dev/null | awk '{print $1}')
-    wireguard_ip=$(getent hosts wireguard 2>/dev/null | awk '{print $1}')
     [ -n "$openvpn_ip" ] && [ -n "${VPN_SUBNET_CIDR:-}" ] && ip route replace "$VPN_SUBNET_CIDR" via "$openvpn_ip" 2>/dev/null || true
-    [ -n "$wireguard_ip" ] && [ -n "${WG_SUBNET_CIDR:-}" ] && ip route replace "$WG_SUBNET_CIDR" via "$wireguard_ip" 2>/dev/null || true
 }
 
-refresh_coa_routes
+refresh_openvpn_coa_route
+
+# v0.8.1 fragment+reconcile (replaces the OSPF experiment AND the old
+# hardcoded-to-node1 WireGuard route this function used to have — see
+# CLAUDE.md's "OSPF Dynamic Routing"/"Fragment+Reconcile Routing"
+# sections). App\Console\Commands\VpnSyncRouteFragments (boss-app,
+# scheduled ->everyMinute()) is the source of truth for which node each
+# WireGuard NAS's tunnel is CURRENTLY connected to — it writes one file
+# per NAS to the shared vpn_wg_data volume
+# ($ROUTES_DIR/nas-{id}.conf, "<subnet> via <node_ip>" per line,
+# including the NAS's own /30 router address — exactly what CoA needs to
+# reach a WireGuard account's internal_ip). This loop just reads and
+# applies every line found, every 5s — same polling-loop idiom already
+# used for peer/address fragments in docker/wireguard/entrypoint.sh, no
+# routing protocol, no extra daemon. Read-only (:ro) mount — this
+# container never writes here, only boss-app does.
+ROUTES_DIR="${VPN_ROUTES_DIR:-/vpn-wg-data/routes}"
+
+(
+    while true; do
+        for route_file in "$ROUTES_DIR"/*.conf; do
+            [ -e "$route_file" ] || continue
+
+            while IFS= read -r line; do
+                [ -n "$line" ] || continue
+                subnet=$(echo "$line" | awk '{print $1}')
+                gateway=$(echo "$line" | awk '{print $3}')
+                [ -n "$subnet" ] && [ -n "$gateway" ] && ip route replace "$subnet" via "$gateway" 2>/dev/null
+            done < "$route_file"
+        done
+
+        sleep 5
+    done
+) &
 
 RADIUSD_PID=""
 
@@ -146,7 +174,10 @@ while true; do
     # a few seconds instead of wedging the next real save permanently.
     chgrp -R 82 "$NAS_CONFIG_DIR" 2>/dev/null || true
     chmod -R 0770 "$NAS_CONFIG_DIR" 2>/dev/null || true
-    refresh_coa_routes
+    # v0.8.1 — only the OpenVPN half needs periodic refresh here now; the
+    # WireGuard half is handled continuously by the fragment+reconcile
+    # loop above (its own independent ~5s cycle).
+    refresh_openvpn_coa_route
 
     current_fingerprint=$(config_fingerprint)
     if [ "$current_fingerprint" != "$last_fingerprint" ]; then

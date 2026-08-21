@@ -64,6 +64,11 @@ class NasServiceTest extends TestCase
             {
                 return ['success' => true, 'message' => null];
             }
+
+            public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int
+            {
+                return null;
+            }
         });
     }
 

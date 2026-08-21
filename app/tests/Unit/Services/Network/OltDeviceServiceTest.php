@@ -56,6 +56,11 @@ class OltDeviceServiceTest extends TestCase
             {
                 return ['success' => true, 'message' => null];
             }
+
+            public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int
+            {
+                return null;
+            }
         });
 
         $nas = new Nas(['name' => 'NAS Test']);
@@ -82,6 +87,11 @@ class OltDeviceServiceTest extends TestCase
             public function provisionApiUser(Nas $nas, string $a, string $b, string $c, string $d): array
             {
                 return ['success' => true, 'message' => null];
+            }
+
+            public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int
+            {
+                return null;
             }
         });
 

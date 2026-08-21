@@ -47,6 +47,11 @@ class OltDeviceIndexLivewireTest extends TestCase
                 return $this->reachable;
             }
 
+            public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int
+            {
+                return null;
+            }
+
             public function provisionApiUser(Nas $nas, string $a, string $b, string $c, string $d): array
             {
                 return ['success' => true, 'message' => null];

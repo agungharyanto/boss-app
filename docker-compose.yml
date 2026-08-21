@@ -66,6 +66,15 @@ services:
       # every other cross-container coordination in this stack. See
       # CLAUDE.md "FreeRADIUS Core & NAS Management" v0.6.5 section.
       - freeradius_nas_config:/freeradius-nas-config
+      # v0.8.2 — read-only. LibreNmsService::getTrafficHistory() shells out
+      # to `rrdtool xport --json` directly against LibreNMS's own RRD files
+      # (LibreNMS's REST API has no raw time-series JSON endpoint in this
+      # version — confirmed by reading its own routes/api.php). Same
+      # "communicate via a shared volume, no Docker socket" posture as
+      # every other cross-container coordination in this stack, this one
+      # read-only since boss-app never writes LibreNMS's own poller data.
+      # See CLAUDE.md "Dashboard Monitoring (v0.8.2)".
+      - librenms_data:/librenms-data:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro

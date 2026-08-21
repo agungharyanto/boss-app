@@ -3,6 +3,48 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.8.1 — LibreNMS Monitoring, OLT Credential Registry & Dynamic Routing (2026-08-21)
+
+Merge branch `v0.8.1-librenms-install` ke `develop` (`e47a43f`) lalu
+`main` (`c321cfa`), tag `v0.8.1` dibuat. Detail teknis lengkap ada di
+`docs/ROADMAP.md` bagian "v0.8.0-v0.8.1 — LibreNMS Install & OLT
+Onboarding" dan `CLAUDE.md` bagian "WireGuard /30 Per-NAS Tunnel Blocks",
+"OSPF Dynamic Routing", "Fragment+Reconcile Routing", "LibreNMS OLT
+Onboarding".
+
+Ringkasan singkat (lihat ROADMAP.md/CLAUDE.md untuk detail teknis penuh):
+- **LibreNMS terinstall**: router `test-x86-bajastu` + 3 OLT real (ZTE
+  C300, HSGQ-E04ID/CILEG, HSGQ-G02ID/BUMIREJA) ter-onboard dengan bukti
+  polling data nyata (uptime, port GPON, `last_polled` aktif).
+- **OLT Credential Registry** (modul baru): `olt_manufacturers`/
+  `olt_models`/`olt_devices`, plus 3 addendum bug fix (konflik DataTables+
+  Livewire DOM-morph, delete master data dengan referential integrity,
+  toggle show/hide password).
+- **Redesign addressing WireGuard**: dari satu gateway `/32` bersama
+  semua NAS ke blok `/30` sticky per-NAS.
+- **Routing dinamis — dua pendekatan dicoba**: OSPF (FRRouting) dibangun
+  penuh dan terbukti bekerja nyata (adjacency full-mesh, bertahan lewat
+  auto-switch sungguhan), lalu **dinonaktifkan secara sengaja** (kompleksitas
+  operasional tidak sepadan untuk skala satu host saat ini — kode disimpan
+  sebagai referensi). Digantikan **fragment+reconcile**: BOSS App menulis
+  fragment rute per-NAS berdasarkan node aktif sungguhan, 5 container
+  consumer baca+apply lewat polling loop sederhana.
+- **Root cause ganda ditemukan untuk kegagalan SNMP OLT**: (1) firewall
+  router (rule `drop connection-state=invalid`, dibuktikan lewat tes
+  darurat terkontrol — firewall dimatikan sementara, langsung berhasil,
+  lalu dikembalikan), dan (2) kredensial SNMP salah (community
+  auto-generated vs. community asli device — dikoreksi, SNMP langsung
+  jalan ke ketiga OLT).
+- **Known gaps terbuka (backlog eksplisit, bukan dilupakan)**: fix
+  permanen firewall rule `drop connection-state=invalid` (paling
+  prioritas — firewall sudah dikembalikan ke kondisi semula, belum ada
+  exception permanen untuk traffic BOSS App); UX form OLT Credential
+  Registry (auto-generate community SNMP menimpa nilai yang seharusnya
+  diisi manual untuk OLT lama); auto-switch flapping saat firewall
+  dimatikan sementara (belum diinvestigasi); OSPF sebagai referensi masa
+  depan (layak dipertimbangkan lagi hanya kalau node VPN pindah ke server
+  fisik terpisah).
+
 ## v0.7.7 — GenieACS Testing Refinements (2026-08-20)
 
 Merge branch `v0.7.x-testing-refinements` ke `develop` lalu `main`, tag

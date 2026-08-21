@@ -16,6 +16,7 @@ use App\Livewire\Installation\WorkOrderShow;
 use App\Livewire\Network\CpeDeviceIndex;
 use App\Livewire\Network\CpeDeviceStatusCheck;
 use App\Livewire\Network\CpeParameterMapIndex;
+use App\Livewire\Network\MonitoringIndex;
 use App\Livewire\Network\NasIndex;
 use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\VpnScriptGenerator;
@@ -117,4 +118,10 @@ Route::middleware('auth')->name('web.')->group(function () {
     Route::get('/settings/theme', ThemeSettings::class)->name('settings.theme');
     Route::get('/settings/payment-gateway', PaymentGatewaySettings::class)->name('settings.payment-gateway');
     Route::get('/cpe-parameter-maps', CpeParameterMapIndex::class)->name('cpe-parameter-maps.index');
+
+    // v0.8.2 — platform-level, same posture as /cpe-parameter-maps above:
+    // LibreNMS monitors the ISP's own infra (router + OLTs), not per-
+    // tenant/reseller data, so this deliberately sits outside the
+    // reseller.context group.
+    Route::get('/monitoring', MonitoringIndex::class)->name('monitoring.index');
 });

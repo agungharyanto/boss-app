@@ -42,6 +42,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedGenieAcsPermissions();
         $this->seedCpeParameterMapPermissions();
         $this->seedOltDevicePermissions();
+        $this->seedMonitoringPermissions();
     }
 
     /**
@@ -319,5 +320,19 @@ class RolesAndPermissionsSeeder extends Seeder
             'cpe_parameter_maps.view',
             'cpe_parameter_maps.manage',
         ]);
+    }
+
+    /**
+     * v0.8.2 Dashboard Monitoring — view-only (LibreNmsService only ever
+     * reads, never mutates LibreNMS's own state), platform-level like
+     * cpe_parameter_maps above. Unlike that one, `noc` also gets it —
+     * monitoring the ISP's own infra is that role's whole purpose.
+     */
+    private function seedMonitoringPermissions(): void
+    {
+        Permission::firstOrCreate(['name' => 'monitoring.view', 'guard_name' => 'web']);
+
+        Role::findByName('super_admin', 'web')->givePermissionTo('monitoring.view');
+        Role::findByName('noc', 'web')->givePermissionTo('monitoring.view');
     }
 }

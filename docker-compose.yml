@@ -253,6 +253,10 @@ services:
       # sites-enabled/default + clients.conf) and /coa-queue (CoaService
       # requests) — see docker/freeradius/entrypoint.sh.
       - freeradius_nas_config:/freeradius-nas-config
+      # v0.8.1 fragment+reconcile — read-only, this container never writes
+      # here (only boss-app's VpnSyncRouteFragments does). See CLAUDE.md's
+      # "Fragment+Reconcile Routing" section.
+      - vpn_wg_data:/vpn-wg-data:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
@@ -286,6 +290,29 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # v0.8.1 — OSPF sidecar, CONSUMER role. Learns routes from the 3
+  # frr-wireguard* nodes, never redistributes anything back. See
+  # CLAUDE.md's OSPF section.
+  # [v0.8.1 OSPF DISABLED — see CLAUDE.md "OSPF Dynamic Routing" for why. Kept for reference, not deleted.]
+  # frr-freeradius:
+  #   build:
+  #     context: ./docker/frr
+  #   container_name: frr-freeradius
+  #   restart: unless-stopped
+  #   network_mode: "service:freeradius"
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_BROADCAST
+  #     - NET_RAW
+  #     - SYS_ADMIN
+  #   environment:
+  #     FRR_ROLE: consumer
+  #     OSPF_HELLO_INTERVAL: ${OSPF_HELLO_INTERVAL:-1}
+  #     OSPF_DEAD_INTERVAL: ${OSPF_DEAD_INTERVAL:-4}
+  #     OSPF_AUTH_KEY: ${OSPF_AUTH_KEY}
+  #   depends_on:
+  #     - freeradius
 
   openvpn:
     build:
@@ -348,27 +375,76 @@ services:
     env_file:
       - .env
     networks:
-      - boss-network
+      boss-network:
+        # v0.8.1 — found genuinely unpinned while recreating this container
+        # for the infra-tunnel-block migration: unlike node2/node3 (fixed
+        # in v0.7.3 after the exact same "silently reassigned on
+        # recreate" symptom), node1 had NEVER actually been pinned despite
+        # .env.example's own comment CLAIMING it already was — container_name
+        # fixes the container's NAME, not its network IP, and nothing had
+        # recreated node1 since that comment was written to actually expose
+        # the gap. Confirmed live: recreating node1 without this silently
+        # grabbed 172.28.0.4 (wireguard-node2's own address), causing node2's
+        # own recreate to fail with "Address already in use" right after.
+        ipv4_address: ${WIREGUARD_NODE1_INTERNAL_IP}
     depends_on:
       freeradius:
         condition: service_healthy
 
-  # --- v0.6.4 multi-node pool: node2/node3 for openvpn/wireguard ---
-  #
-  # Same build context/image as node1 above — only container_name, host
-  # port, and (for openvpn) the client subnet actually differ; the
-  # entrypoint script itself is 100% shared, no per-node variant needed.
-  #
-  # OpenVPN node2/node3 share `vpn_pki` with node1 (see CLAUDE.md "Multi-
-  # Node VPN Pool (v0.6.4)" for the full rationale) — a client certificate
-  # issued once is trusted by whichever of the 3 nodes it actually
-  # connects to, which is what makes the auto-switch Mikrotik script able
-  # to just change `connect-to`/`endpoint-address` on failover instead of
-  # re-importing credentials. `depends_on: openvpn` (not just
-  # `freeradius`) is deliberate — the shared PKI's one-time bootstrap
-  # (`if [ ! -f ca.crt ]`) must finish on node1 first, or two siblings
-  # racing to init the same empty volume at once could both "win" that
-  # check simultaneously.
+  # v0.8.1 — OSPF sidecar, NODE role. network_mode: "service:wireguard"
+  # means this container has NO network config of its own at all — it
+  # fully shares wireguard's existing network namespace (same eth0, same
+  # already-pinned WIREGUARD_NODE1_INTERNAL_IP, same wg0), so routes zebra
+  # installs here apply directly to whatever actually routes packets for
+  # the wireguard container — no cross-container route-copying mechanism
+  # needed. See CLAUDE.md's OSPF section for the full design/rationale.
+  # [v0.8.1 OSPF DISABLED — see CLAUDE.md "OSPF Dynamic Routing" for why. Kept for reference, not deleted.]
+  # frr-wireguard:
+  #   build:
+  #     context: ./docker/frr
+  #   container_name: frr-wireguard
+  #   restart: unless-stopped
+  #   network_mode: "service:wireguard"
+  #   # NET_ADMIN/NET_BROADCAST/NET_RAW for OSPF itself (multicast Hello +
+  #   # kernel route table writes); SYS_ADMIN found genuinely required by
+  #   # zebra's own privilege-drop code during the resource-test phase
+  #   # (container exited immediately with "privs_init: initial
+  #   # cap_set_proc failed" until this was added — not assumed, verified).
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_BROADCAST
+  #     - NET_RAW
+  #     - SYS_ADMIN
+  #   environment:
+  #     FRR_ROLE: node
+  #     OSPF_HELLO_INTERVAL: ${OSPF_HELLO_INTERVAL:-1}
+  #     OSPF_DEAD_INTERVAL: ${OSPF_DEAD_INTERVAL:-4}
+  #     OSPF_AUTH_KEY: ${OSPF_AUTH_KEY}
+  #     HANDSHAKE_FRESH_THRESHOLD_SECONDS: "150"
+  #   volumes:
+  #     # Same peers/addresses fragment volume the wireguard container's own
+  #     # reconcile loop already reads/writes — handshake-watcher.sh derives
+  #     # each NAS's router IP from these fragments, no DB access needed.
+  #     - vpn_wg_data:/etc/wireguard
+  #   depends_on:
+  #     - wireguard
+
+  # # --- v0.6.4 multi-node pool: node2/node3 for openvpn/wireguard ---
+  # #
+  # # Same build context/image as node1 above — only container_name, host
+  # # port, and (for openvpn) the client subnet actually differ; the
+  # # entrypoint script itself is 100% shared, no per-node variant needed.
+  # #
+  # # OpenVPN node2/node3 share `vpn_pki` with node1 (see CLAUDE.md "Multi-
+  # # Node VPN Pool (v0.6.4)" for the full rationale) — a client certificate
+  # # issued once is trusted by whichever of the 3 nodes it actually
+  # # connects to, which is what makes the auto-switch Mikrotik script able
+  # # to just change `connect-to`/`endpoint-address` on failover instead of
+  # # re-importing credentials. `depends_on: openvpn` (not just
+  # # `freeradius`) is deliberate — the shared PKI's one-time bootstrap
+  # # (`if [ ! -f ca.crt ]`) must finish on node1 first, or two siblings
+  # # racing to init the same empty volume at once could both "win" that
+  # # check simultaneously.
   openvpn-node2:
     build:
       context: ./docker/openvpn
@@ -490,6 +566,30 @@ services:
       wireguard:
         condition: service_started
 
+  # v0.8.1 — OSPF sidecar, NODE role. Same shape as frr-wireguard above.
+  # [v0.8.1 OSPF DISABLED — see CLAUDE.md "OSPF Dynamic Routing" for why. Kept for reference, not deleted.]
+  # frr-wireguard-node2:
+  #   build:
+  #     context: ./docker/frr
+  #   container_name: frr-wireguard-node2
+  #   restart: unless-stopped
+  #   network_mode: "service:wireguard-node2"
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_BROADCAST
+  #     - NET_RAW
+  #     - SYS_ADMIN
+  #   environment:
+  #     FRR_ROLE: node
+  #     OSPF_HELLO_INTERVAL: ${OSPF_HELLO_INTERVAL:-1}
+  #     OSPF_DEAD_INTERVAL: ${OSPF_DEAD_INTERVAL:-4}
+  #     OSPF_AUTH_KEY: ${OSPF_AUTH_KEY}
+  #     HANDSHAKE_FRESH_THRESHOLD_SECONDS: "150"
+  #   volumes:
+  #     - vpn_wg_data:/etc/wireguard
+  #   depends_on:
+  #     - wireguard-node2
+
   wireguard-node3:
     build:
       context: ./docker/wireguard
@@ -519,6 +619,31 @@ services:
     depends_on:
       wireguard:
         condition: service_started
+
+  # v0.8.1 — OSPF sidecar, NODE role. Same shape as frr-wireguard above —
+  # this is the node test-x86-bajastu's live tunnel currently holds.
+  # [v0.8.1 OSPF DISABLED — see CLAUDE.md "OSPF Dynamic Routing" for why. Kept for reference, not deleted.]
+  # frr-wireguard-node3:
+  #   build:
+  #     context: ./docker/frr
+  #   container_name: frr-wireguard-node3
+  #   restart: unless-stopped
+  #   network_mode: "service:wireguard-node3"
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_BROADCAST
+  #     - NET_RAW
+  #     - SYS_ADMIN
+  #   environment:
+  #     FRR_ROLE: node
+  #     OSPF_HELLO_INTERVAL: ${OSPF_HELLO_INTERVAL:-1}
+  #     OSPF_DEAD_INTERVAL: ${OSPF_DEAD_INTERVAL:-4}
+  #     OSPF_AUTH_KEY: ${OSPF_AUTH_KEY}
+  #     HANDSHAKE_FRESH_THRESHOLD_SECONDS: "150"
+  #   volumes:
+  #     - vpn_wg_data:/etc/wireguard
+  #   depends_on:
+  #     - wireguard-node3
 
   l2tp:
     build:
@@ -595,9 +720,10 @@ services:
       GENIEACS_CWMP_INTERFACE: "0.0.0.0"
       GENIEACS_CWMP_PORT: "7547"
       TZ: Asia/Jakarta
-      TR069_MANAGEMENT_SUBNET: ${TR069_MANAGEMENT_SUBNET:-}
-      TR069_MANAGEMENT_GATEWAY: ${TR069_MANAGEMENT_GATEWAY:-}
     volumes:
+      # v0.8.1 fragment+reconcile — read-only, see CLAUDE.md's "Fragment+
+      # Reconcile Routing" section.
+      - vpn_wg_data:/vpn-wg-data:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
@@ -619,6 +745,27 @@ services:
     # conf.d/genieacs-cwmp.conf), same "one public entry point" posture as
     # boss-app's own port-80 traffic.
 
+  # v0.8.1 — OSPF sidecar, CONSUMER role. See frr-freeradius above.
+  # [v0.8.1 OSPF DISABLED — see CLAUDE.md "OSPF Dynamic Routing" for why. Kept for reference, not deleted.]
+  # frr-genieacs-cwmp:
+  #   build:
+  #     context: ./docker/frr
+  #   container_name: frr-genieacs-cwmp
+  #   restart: unless-stopped
+  #   network_mode: "service:genieacs-cwmp"
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_BROADCAST
+  #     - NET_RAW
+  #     - SYS_ADMIN
+  #   environment:
+  #     FRR_ROLE: consumer
+  #     OSPF_HELLO_INTERVAL: ${OSPF_HELLO_INTERVAL:-1}
+  #     OSPF_DEAD_INTERVAL: ${OSPF_DEAD_INTERVAL:-4}
+  #     OSPF_AUTH_KEY: ${OSPF_AUTH_KEY}
+  #   depends_on:
+  #     - genieacs-cwmp
+
   genieacs-nbi:
     build:
       context: ./docker/genieacs
@@ -633,9 +780,10 @@ services:
       GENIEACS_NBI_INTERFACE: "0.0.0.0"
       GENIEACS_NBI_PORT: "7557"
       TZ: Asia/Jakarta
-      TR069_MANAGEMENT_SUBNET: ${TR069_MANAGEMENT_SUBNET:-}
-      TR069_MANAGEMENT_GATEWAY: ${TR069_MANAGEMENT_GATEWAY:-}
     volumes:
+      # v0.8.1 fragment+reconcile — read-only, see CLAUDE.md's "Fragment+
+      # Reconcile Routing" section.
+      - vpn_wg_data:/vpn-wg-data:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
@@ -657,6 +805,27 @@ services:
     # isolation (container-to-container only, inside boss-network) IS its
     # security boundary. GenieAcsClientService (boss-app) reaches it at
     # http://genieacs-nbi:7557 — see config/services.php's `genieacs.nbi_url`.
+
+  # v0.8.1 — OSPF sidecar, CONSUMER role. See frr-freeradius above.
+  # [v0.8.1 OSPF DISABLED — see CLAUDE.md "OSPF Dynamic Routing" for why. Kept for reference, not deleted.]
+  # frr-genieacs-nbi:
+  #   build:
+  #     context: ./docker/frr
+  #   container_name: frr-genieacs-nbi
+  #   restart: unless-stopped
+  #   network_mode: "service:genieacs-nbi"
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_BROADCAST
+  #     - NET_RAW
+  #     - SYS_ADMIN
+  #   environment:
+  #     FRR_ROLE: consumer
+  #     OSPF_HELLO_INTERVAL: ${OSPF_HELLO_INTERVAL:-1}
+  #     OSPF_DEAD_INTERVAL: ${OSPF_DEAD_INTERVAL:-4}
+  #     OSPF_AUTH_KEY: ${OSPF_AUTH_KEY}
+  #   depends_on:
+  #     - genieacs-nbi
 
   genieacs-fs:
     build:
@@ -712,6 +881,215 @@ services:
     # or an SSH tunnel to port 3000 on boss-network if needed, not a public
     # port. Add one deliberately later if admins actually need routine
     # browser access to it.
+
+  librenms-db:
+    image: mariadb:10
+    container_name: librenms-db
+    restart: unless-stopped
+    command:
+      - "mysqld"
+      - "--innodb-file-per-table=1"
+      - "--lower-case-table-names=0"
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_unicode_ci"
+    environment:
+      TZ: Asia/Jakarta
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_DATABASE: ${LIBRENMS_DB_NAME}
+      MYSQL_USER: ${LIBRENMS_DB_USER}
+      MYSQL_PASSWORD: ${LIBRENMS_DB_PASSWORD}
+    volumes:
+      - librenms_db_data:/var/lib/mysql
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    networks:
+      - boss-network
+    # v0.8.1 — own separate MariaDB instance (BOSS-009: never boss-postgresql,
+    # which is PostgreSQL anyway and LibreNMS requires MySQL/MariaDB — no
+    # cross-database joins, same posture as freeradius-db/mongo). Port 3306
+    # deliberately NOT exposed to the host (RULE BOSS-010).
+
+  librenms-redis:
+    image: redis:7.2-alpine
+    container_name: librenms-redis
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Jakarta
+    networks:
+      - boss-network
+    # v0.8.1 — LibreNMS's own cache/session store, deliberately separate
+    # from boss-redis (used for boss-app's queues/cache/sessions) — same
+    # "never share a datastore across unrelated services" posture as
+    # librenms-db above, avoids any risk of key-eviction interference
+    # between the two completely different workloads. No host port.
+
+  librenms:
+    image: librenms/librenms:latest
+    container_name: librenms
+    hostname: librenms
+    restart: unless-stopped
+    # Required by the official image itself for SNMP/ICMP-based discovery
+    # and polling (raw sockets) — same class of requirement as
+    # genieacs-cwmp/genieacs-nbi's NET_ADMIN above, just for a different
+    # underlying reason (SNMP/ping, not routing table manipulation).
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # v0.8.1 — wraps (never replaces) the official image's own /init with a
+    # fragment+reconcile route-sync loop — this container has no custom
+    # Dockerfile of our own (official librenms/librenms:latest), so the
+    # route-adding script is bind-mounted in instead of baked into an image
+    # layer. See docker/librenms/route-init.sh for the full reasoning and
+    # CLAUDE.md's "LibreNMS OLT Onboarding"/"Fragment+Reconcile Routing"
+    # sections.
+    entrypoint: ["/route-init.sh"]
+    environment:
+      TZ: Asia/Jakarta
+      PUID: "1000"
+      PGID: "1000"
+      DB_HOST: librenms-db
+      DB_NAME: ${LIBRENMS_DB_NAME}
+      DB_USER: ${LIBRENMS_DB_USER}
+      DB_PASSWORD: ${LIBRENMS_DB_PASSWORD}
+      DB_TIMEOUT: "60"
+      REDIS_HOST: librenms-redis
+      CACHE_DRIVER: redis
+    volumes:
+      - librenms_data:/data
+      - ./docker/librenms/route-init.sh:/route-init.sh:ro
+      # v0.8.1 fragment+reconcile — read-only, see CLAUDE.md's "Fragment+
+      # Reconcile Routing" section.
+      - vpn_wg_data:/vpn-wg-data:ro
+      # Deliberately NO /etc/localtime or /etc/timezone bind mount here,
+      # unlike every other service in this file — real bug found bringing
+      # this up: the official librenms/docker image's own init script
+      # (03-config.sh) tries to CREATE the /etc/localtime symlink itself
+      # from the TZ env var above; a read-only bind mount at that same
+      # path makes that `ln` fail ("Resource busy"), which crash-loops the
+      # whole container (s6-init treats it as a fatal init script
+      # failure). The other services' pattern assumes an image with no
+      # opinion of its own about /etc/localtime — this image has one.
+    depends_on:
+      - librenms-db
+      - librenms-redis
+    networks:
+      boss-network:
+        # Static IP (v0.8.1) — inside INFRA_TUNNEL_BLOCK_CIDR (.env), same
+        # "must not silently drift on container recreation" reasoning as
+        # FREERADIUS_INTERNAL_IP/GENIEACS_*_INTERNAL_IP above. Needed here
+        # (not just on librenms-dispatcher) because `POST /api/v0/devices`'
+        # own add-time reachability check runs synchronously in THIS
+        # container, not delegated to the dispatcher — confirmed for real
+        # while diagnosing the OLT onboarding gap (a device add attempt
+        # failed with "Could not ping ..." from this exact container).
+        ipv4_address: ${LIBRENMS_INTERNAL_IP}
+    # v0.8.1 — web UI + core app. Deliberately NO host port published here
+    # (unlike the official example's `8000:8000`) — same posture as
+    # genieacs-ui above (BOSS-010 minimal-public-surface): reach it via
+    # `docker compose exec librenms ...` for CLI/API-token work, or an SSH
+    # tunnel to port 8000 on boss-network for occasional browser access
+    # during this evaluation sprint. Revisit only if v0.8.2 deliberately
+    # wires it behind boss-nginx as a real, permanent public surface.
+
+  # v0.8.1 — OSPF sidecar, CONSUMER role. See frr-freeradius above.
+  # [v0.8.1 OSPF DISABLED — see CLAUDE.md "OSPF Dynamic Routing" for why. Kept for reference, not deleted.]
+  # frr-librenms:
+  #   build:
+  #     context: ./docker/frr
+  #   container_name: frr-librenms
+  #   restart: unless-stopped
+  #   network_mode: "service:librenms"
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_BROADCAST
+  #     - NET_RAW
+  #     - SYS_ADMIN
+  #   environment:
+  #     FRR_ROLE: consumer
+  #     OSPF_HELLO_INTERVAL: ${OSPF_HELLO_INTERVAL:-1}
+  #     OSPF_DEAD_INTERVAL: ${OSPF_DEAD_INTERVAL:-4}
+  #     OSPF_AUTH_KEY: ${OSPF_AUTH_KEY}
+  #   depends_on:
+  #     - librenms
+
+  librenms-dispatcher:
+    image: librenms/librenms:latest
+    container_name: librenms-dispatcher
+    hostname: librenms-dispatcher
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # v0.8.1 — same route-init wrapper as librenms above (see its own
+    # comment + docker/librenms/route-init.sh). This is the container that
+    # actually issues the ongoing SNMP polls, so it needs this route just
+    # as much as librenms itself does for its add-time check.
+    entrypoint: ["/route-init.sh"]
+    environment:
+      TZ: Asia/Jakarta
+      PUID: "1000"
+      PGID: "1000"
+      DB_HOST: librenms-db
+      DB_NAME: ${LIBRENMS_DB_NAME}
+      DB_USER: ${LIBRENMS_DB_USER}
+      DB_PASSWORD: ${LIBRENMS_DB_PASSWORD}
+      DB_TIMEOUT: "60"
+      REDIS_HOST: librenms-redis
+      CACHE_DRIVER: redis
+      DISPATCHER_NODE_ID: dispatcher1
+      SIDECAR_DISPATCHER: "1"
+    volumes:
+      - librenms_data:/data
+      - ./docker/librenms/route-init.sh:/route-init.sh:ro
+      # v0.8.1 fragment+reconcile — read-only, see CLAUDE.md's "Fragment+
+      # Reconcile Routing" section.
+      - vpn_wg_data:/vpn-wg-data:ro
+      # No /etc/localtime bind mount — same real crash-loop bug as the
+      # librenms service above, see its own comment for the full story.
+    depends_on:
+      - librenms
+      - librenms-redis
+    networks:
+      boss-network:
+        # Static IP (v0.8.1) — inside INFRA_TUNNEL_BLOCK_CIDR (.env). This
+        # is the container that actually issues the outbound SNMP polls
+        # (librenms-service.py, SIDECAR_DISPATCHER=1), so its source IP is
+        # what the router's tunnel allowlist genuinely needs to trust for
+        # ongoing polling, same reasoning as librenms itself above for
+        # add-time reachability checks.
+        ipv4_address: ${LIBRENMS_DISPATCHER_INTERNAL_IP}
+    # v0.8.1 — the actual SNMP poller (SIDECAR_DISPATCHER=1). Without this
+    # container, `librenms` alone serves the web UI but never polls a
+    # single device — confirmed from the official librenms/docker compose
+    # reference, which always ships this as a separate sidecar. msmtpd/
+    # syslogng/snmptrapd sidecars deliberately NOT added — out of scope
+    # for this install-and-onboard-only sprint (no email alerting, no
+    # syslog/trap ingestion needed to prove basic uptime/interface polling
+    # works).
+
+  # v0.8.1 — OSPF sidecar, CONSUMER role. See frr-freeradius above. This
+  # is the container that actually issues the SNMP polls, so it needs the
+  # OSPF-learned OLT route just as much as librenms itself does for its
+  # add-time reachability check.
+  # [v0.8.1 OSPF DISABLED — see CLAUDE.md "OSPF Dynamic Routing" for why. Kept for reference, not deleted.]
+  # frr-librenms-dispatcher:
+  #   build:
+  #     context: ./docker/frr
+  #   container_name: frr-librenms-dispatcher
+  #   restart: unless-stopped
+  #   network_mode: "service:librenms-dispatcher"
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_BROADCAST
+  #     - NET_RAW
+  #     - SYS_ADMIN
+  #   environment:
+  #     FRR_ROLE: consumer
+  #     OSPF_HELLO_INTERVAL: ${OSPF_HELLO_INTERVAL:-1}
+  #     OSPF_DEAD_INTERVAL: ${OSPF_DEAD_INTERVAL:-4}
+  #     OSPF_AUTH_KEY: ${OSPF_AUTH_KEY}
+  #   depends_on:
+  #     - librenms-dispatcher
 
   boss-postgresql:
     image: postgres:16-alpine
@@ -780,3 +1158,5 @@ volumes:
   vpn_l2tp_secrets:
   mongo_data:
   freeradius_nas_config:
+  librenms_db_data:
+  librenms_data:

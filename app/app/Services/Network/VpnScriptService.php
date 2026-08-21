@@ -9,7 +9,7 @@ use App\Exceptions\VpnScriptGenerationException;
 use App\Models\Nas;
 use App\Models\VpnAccount;
 use App\Models\VpnServer;
-use App\Support\CidrRange;
+use App\Models\VpnWireguardNasBlock;
 use Illuminate\Support\Facades\File;
 
 /**
@@ -152,44 +152,35 @@ class VpnScriptService
             // not been confirmed to tolerate.
             trim(File::get($serverPublicKeyFile)),
             $account->wireguardPrivateKey,
-            $this->reverseRouteTargets($freeradiusIp, $account->nas),
+            // v0.8.1 — a single reserved /27 (INFRA_TUNNEL_BLOCK_CIDR),
+            // always included regardless of what this specific NAS
+            // actually uses (FreeRADIUS/GenieACS/LibreNMS/future modules
+            // all share one fixed block now — see MikrotikScriptGenerator
+            // ::wireGuardScript()'s own docblock). The old per-NAS
+            // conditional inclusion of GenieACS NBI/CWMP based on
+            // tr069_management_subnet is GONE — "which service is allowed
+            // to reach which NAS" is now an application-level concern
+            // (e.g. tr069_management_subnet still gates whether GenieACS
+            // itself ever tries a Connection Request), not a VPN-layer
+            // one.
+            config('services.vpn.infra_block_cidr'),
+            $freeradiusIp,
             $this->onlineNodePorts(VpnProtocol::WireGuard),
+            // v0.8.1 — this NAS's OWN dedicated gateway (VpnWireguardNasBlock),
+            // replacing the single address shared by every NAS
+            // (CidrRange::gatewayAddress($account->vpnServer->subnet_cidr)
+            // — that call always returned 172.23.195.1 regardless of
+            // which NAS was asking). provision() guarantees a block exists
+            // for any account that reaches this point (wireGuardScriptOrThrow()
+            // only proceeds when $justProvisioned is true, i.e. provision()
+            // just ran), so this is never null in practice — still gated
+            // on tr069_management_subnet, same reasoning as before (only
+            // needed when this NAS actually uses MASQUERADE-based reverse
+            // routing).
             $account->nas->tr069_management_subnet !== null
-                ? CidrRange::gatewayAddress($account->vpnServer->subnet_cidr)
+                ? VpnWireguardNasBlock::where('nas_id', $account->nas_id)->value('gateway_ip')
                 : null,
         );
-    }
-
-    /**
-     * FreeRADIUS is always reachable through the tunnel; GenieACS NBI/CWMP
-     * (v0.7.3) are added only for a NAS that actually has CPE behind it
-     * worth issuing a Connection Request to (`tr069_management_subnet` set)
-     * — most NAS don't, and there's no reverse route to add for a service
-     * with no configured internal IP either (nbi_internal_ip/
-     * cwmp_internal_ip stay null until GENIEACS_NBI_INTERNAL_IP/
-     * GENIEACS_CWMP_INTERNAL_IP are set — see config/services.php).
-     *
-     * @return array<string, string> label => IP, fed straight into
-     *                               MikrotikScriptGenerator::wireGuardScript()'s $reverseRouteTargets.
-     */
-    private function reverseRouteTargets(string $freeradiusIp, Nas $nas): array
-    {
-        $targets = ['freeradius' => $freeradiusIp];
-
-        if ($nas->tr069_management_subnet === null) {
-            return $targets;
-        }
-
-        foreach ([
-            'genieacs-nbi' => config('services.genieacs.nbi_internal_ip'),
-            'genieacs-cwmp' => config('services.genieacs.cwmp_internal_ip'),
-        ] as $label => $ip) {
-            if ($ip !== null) {
-                $targets[$label] = $ip;
-            }
-        }
-
-        return $targets;
     }
 
     /**

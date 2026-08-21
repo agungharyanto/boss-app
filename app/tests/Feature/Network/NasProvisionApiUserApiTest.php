@@ -37,6 +37,11 @@ class NasProvisionApiUserApiTest extends TestCase
             {
                 return true;
             }
+            public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int
+            {
+                return null;
+            }
+
             public function provisionApiUser(Nas $nas, string $connectAsUsername, string $connectAsPassword, string $newApiUsername, string $newApiPassword): array
             {
                 return ['success' => $this->success, 'message' => $this->success ? null : 'bad admin credential'];

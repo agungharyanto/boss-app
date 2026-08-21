@@ -1,0 +1,48 @@
+! BOSS App — v0.8.1 OSPF sidecar config, NODE role (3 WireGuard VPN nodes
+! only: wireguard/wireguard-node2/wireguard-node3).
+!
+! This node redistributes STATIC routes (never `connected`) into OSPF —
+! see docker/frr/handshake-watcher.sh for what actually creates/removes
+! those static routes (conditional on a genuinely live WireGuard tunnel,
+! covering every prefix in a peer's own AllowedIPs — the /30 router
+! address AND any TR-069/OLT management subnets behind it, not just the
+! router address alone). A `redistribute connected` variant was tried and
+! abandoned for the subnet-prefix case — see handshake-watcher.sh's own
+! header comment for the full "kernel route vs connected route vs static
+! route, and why only removing the old bash-level `ip route replace` in
+! docker/wireguard/entrypoint.sh actually fixed it" investigation.
+!
+! __HELLO__ / __DEAD__ / __AUTH_KEY__ / __ROUTER_ID__ are substituted by
+! entrypoint.sh at container start (per-deployment values, not baked into
+! the image).
+hostname frr-node
+log stdout
+!
+router ospf
+ ospf router-id __ROUTER_ID__
+ redistribute static route-map OSPF-WG-ONLY
+!
+! Tag-based (not prefix-list) — a NAS's TR-069/OLT management subnet can
+! be any private range an ISP happens to use (10.1.0.0/20,
+! 10.168.100.0/24 for test-x86-bajastu specifically, but not a fixed
+! boundary for every future NAS), so filtering by fixed numeric range
+! would silently exclude a future NAS's differently-ranged subnet.
+! Tagging ties the permission to "was this route actually created by
+! handshake-watcher.sh" (which tags every route it installs with
+! `tag 100`), staying correct regardless of what ranges any given NAS's
+! AllowedIPs happens to contain.
+route-map OSPF-WG-ONLY permit 10
+ match tag 100
+!
+interface eth0
+ ip ospf hello-interval __HELLO__
+ ip ospf dead-interval __DEAD__
+ ip ospf authentication message-digest
+ ip ospf message-digest-key 1 md5 __AUTH_KEY__
+ ip ospf network broadcast
+!
+router ospf
+ network 172.28.0.0/24 area 0.0.0.0
+!
+line vty
+!

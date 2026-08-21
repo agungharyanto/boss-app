@@ -86,7 +86,39 @@ return [
         // deliberately readable by boss-app too — same posture already
         // accepted for OpenVPN's server.key inside the shared pki dir).
         'wg_peers_dir' => env('VPN_WG_PEERS_DIR', '/vpn-wg-data/peers'),
+        // v0.8.1 — sibling directory to wg_peers_dir, same shared
+        // vpn_wg_data volume. VpnProvisioningService writes one fragment
+        // per NAS here (the NAS's own /30 gateway address); docker/
+        // wireguard/entrypoint.sh's reconcile loop applies each one to
+        // wg0 on all 3 nodes — see VpnWireguardNasBlock's own docblock.
+        'wg_addresses_dir' => env('VPN_WG_ADDRESSES_DIR', '/vpn-wg-data/addresses'),
         'l2tp_secrets_dir' => env('VPN_L2TP_SECRETS_DIR', '/vpn-l2tp-data'),
+
+        // v0.8.1 fragment+reconcile (replaces the OSPF experiment — see
+        // CLAUDE.md's "OSPF Dynamic Routing" section for why, and
+        // "Fragment+Reconcile Routing" for this mechanism's own design).
+        // Sibling directory to wg_peers_dir/wg_addresses_dir, same shared
+        // vpn_wg_data volume — App\Console\Commands\VpnSyncRouteFragments
+        // writes one file per active WireGuard NAS here
+        // (routes/nas-{id}.conf, "<subnet> via <node_ip>" per line); each
+        // of the 5 consumer containers' own reconcile loop reads every
+        // file here and `ip route replace`s each line, same polling-loop
+        // idiom already used for peers/addresses.
+        'routes_dir' => env('VPN_ROUTES_DIR', '/vpn-wg-data/routes'),
+
+        // Port -> internal boss-network IP for the 3 WireGuard pool nodes,
+        // keyed by the SAME listen port RouterOS reports as a NAS's own
+        // `current-endpoint-port` (also vpn_servers.port DB-side — this is
+        // a plain env-driven map rather than a DB join purely because
+        // VpnSyncRouteFragments needs it independent of any one
+        // VpnServer row's current pool-ownership state). Used to turn
+        // "this NAS is currently on port 51821" into "route via
+        // 172.28.0.4" — see RouterOsGateway::currentWireguardEndpointPort().
+        'wireguard_node_ips' => [
+            51820 => env('WIREGUARD_NODE1_INTERNAL_IP'),
+            51821 => env('WIREGUARD_NODE2_INTERNAL_IP'),
+            51822 => env('WIREGUARD_NODE3_INTERNAL_IP'),
+        ],
 
         // v0.6.3 Script Generator (VpnScriptService) — values embedded into
         // generated Mikrotik scripts. public_ip/freeradius_internal_ip are
@@ -99,6 +131,22 @@ return [
         'openvpn_port' => (int) env('VPN_OPENVPN_PORT', 1194),
         'wireguard_port' => (int) env('WG_LISTEN_PORT', 51820),
         'l2tp_ipsec_psk' => env('L2TP_IPSEC_PSK'),
+
+        // v0.8.1 — the reserved /27 (INFRA_TUNNEL_BLOCK_CIDR) fed into
+        // MikrotikScriptGenerator::wireGuardScript()'s allowed-address +
+        // single infra-block route, replacing the old one-/32-per-service
+        // model. See VpnScriptService::wireGuardScriptOrThrow() and
+        // CLAUDE.md's "Infra Tunnel IP Block" section.
+        'infra_block_cidr' => env('INFRA_TUNNEL_BLOCK_CIDR'),
+
+        // v0.8.1 — read by VpnProvisioningService to widen a WireGuard
+        // account's own AllowedIPs (server-side cryptokey-routing filter,
+        // NOT the same thing as docker/wireguard/entrypoint.sh's `ip
+        // route`/iptables additions — both are independently required).
+        // Same single-global-subnet limitation as everywhere else
+        // OLT_MANAGEMENT_SUBNET is read (docker/wireguard/entrypoint.sh,
+        // docker/librenms/route-init.sh).
+        'olt_management_subnet' => env('OLT_MANAGEMENT_SUBNET'),
     ],
 
     // v0.6.5 dynamic virtual server + CoA — boss-app side of the
@@ -117,12 +165,15 @@ return [
     //
     // cwmp_internal_ip/nbi_internal_ip (v0.7.3) are the pinned boss-network
     // IPs from GENIEACS_CWMP_INTERNAL_IP/GENIEACS_NBI_INTERNAL_IP (see
-    // .env.example) — used by MikrotikScriptGenerator::wireGuardScript() to
-    // add the NAS-side reverse route + allowed-address entry each of them
-    // needs for GenieACS Connection Request to reach a CPE behind the NAS
-    // (same reasoning as freeradius_internal_ip above, one entry per
-    // service that needs to be reachable FROM the router through the
-    // tunnel, not just FreeRADIUS).
+    // .env.example) — both addresses now live inside the shared
+    // INFRA_TUNNEL_BLOCK_CIDR (services.vpn.infra_block_cidr) instead of
+    // getting their own individual allowed-address/route entries (v0.8.1,
+    // see MikrotikScriptGenerator::wireGuardScript()'s docblock). These two
+    // config keys are no longer read by VpnScriptService as of that change
+    // — kept here only because docker-compose.yml's ipv4_address and
+    // docker/wireguard/entrypoint.sh's TR069_MANAGEMENT_SUBNET firewall
+    // exception still need the underlying env vars directly (shell, not
+    // Laravel config).
     'genieacs' => [
         'nbi_url' => env('GENIEACS_NBI_URL', 'http://genieacs-nbi:7557'),
         'cwmp_internal_ip' => env('GENIEACS_CWMP_INTERNAL_IP'),

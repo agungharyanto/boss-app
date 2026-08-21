@@ -61,4 +61,20 @@ interface RouterOsGateway
         string $newApiUsername,
         string $newApiPassword,
     ): array;
+
+    /**
+     * v0.8.1 fragment+reconcile (App\Console\Commands\VpnSyncRouteFragments)
+     * — asks $nas's own router which WireGuard listen port its tunnel is
+     * CURRENTLY connected to (`current-endpoint-port` on the matching
+     * `/interface/wireguard/peers` entry, found by its own
+     * "... NAS {$account->username}" comment — see
+     * MikrotikScriptGenerator::wireGuardScript()). This is the ONLY
+     * reliable way to know which of the 3 pool nodes a NAS's auto-switch-
+     * capable tunnel currently lives on — that decision happens entirely
+     * client-side on the router (v0.6.4 auto-switch script), invisible to
+     * boss-app any other way. Returns null if the NAS has no matching
+     * WireGuard peer, or the query fails for any reason (caller treats
+     * null the same as "can't currently be determined" — never guesses).
+     */
+    public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int;
 }

@@ -8,6 +8,7 @@ use App\Console\Commands\SendWhatsappSuspendedReminders;
 use App\Console\Commands\SyncCpeConnectedHosts;
 use App\Console\Commands\SyncCpeDeviceStatus;
 use App\Console\Commands\VpnCheckNodeHealth;
+use App\Console\Commands\VpnSyncRouteFragments;
 use App\Console\Commands\WhatsappCheckSessionHealth;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -33,6 +34,12 @@ Schedule::command(WhatsappCheckSessionHealth::class)->hourly();
 // matches boss-scheduler's own 60s polling granularity (no point checking
 // more often than the loop that actually runs schedule:run).
 Schedule::command(VpnCheckNodeHealth::class)->everyMinute();
+
+// v0.8.1 fragment+reconcile (replaces the OSPF experiment, see CLAUDE.md) —
+// same everyMinute() cadence as VpnCheckNodeHealth above, a different
+// question (which node a NAS's tunnel is CURRENTLY on, not whether a node
+// container is alive at all).
+Schedule::command(VpnSyncRouteFragments::class)->everyMinute();
 
 // v0.7.1 GenieACS Core — reconciles CpeDevice rows bound before their first
 // real TR-069 Inform (see CpeBindingService::reconcilePending()'s own

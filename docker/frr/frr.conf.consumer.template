@@ -1,0 +1,29 @@
+! BOSS App — v0.8.1 OSPF sidecar config, CONSUMER role (freeradius,
+! genieacs-cwmp, genieacs-nbi, librenms, librenms-dispatcher).
+!
+! Deliberately NO `redistribute` statement of any kind — a consumer forms
+! full OSPF adjacency (Hello/DBD/LSA) and LEARNS routes from the 3 node
+! routers, but never announces anything of its own back into the domain.
+! This is NOT FRR's `passive-interface` (that means "don't even form
+! adjacency, just stub-announce the connected subnet" — the opposite of
+! what we want: we need real adjacency to actually receive LSAs).
+!
+! __HELLO__ / __DEAD__ / __AUTH_KEY__ / __ROUTER_ID__ are substituted by
+! entrypoint.sh at container start (per-deployment values, not baked into
+! the image).
+hostname frr-consumer
+log stdout
+!
+router ospf
+ ospf router-id __ROUTER_ID__
+ network 172.28.0.0/24 area 0.0.0.0
+!
+interface eth0
+ ip ospf hello-interval __HELLO__
+ ip ospf dead-interval __DEAD__
+ ip ospf authentication message-digest
+ ip ospf message-digest-key 1 md5 __AUTH_KEY__
+ ip ospf network broadcast
+!
+line vty
+!

@@ -12,9 +12,12 @@ use App\Models\VpnAccount;
  * per protocol). Every script is idempotent (removes any pre-existing
  * VPN client interface of ANY of the 4 PPP-based types — not just the one
  * being generated — before adding fresh ones, so switching protocols on
- * the same NAS never leaves an orphaned interface behind) and routes ONLY
- * FreeRADIUS traffic through the tunnel — never a default route — so a
- * NAS's normal production traffic is untouched (v0.6.3 locked decision).
+ * the same NAS never leaves an orphaned interface behind) and never routes
+ * a default route through the tunnel, so a NAS's normal production traffic
+ * is untouched (v0.6.3 locked decision). OpenVPN/L2TP route only
+ * FreeRADIUS specifically; WireGuard (v0.8.1) routes the whole reserved
+ * infra tunnel block (see wireGuardScript()'s own docblock) — still never
+ * anything beyond that fixed, deliberately-scoped set of destinations.
  *
  * Not verified against a real Mikrotik device (none available in this
  * environment) — same caveat as the v0.4.0 WhatsApp QR-delivery-vs-actual-
@@ -163,14 +166,13 @@ class MikrotikScriptGenerator
      * subnet IS the NAS's own local LAN, so RouterOS's connected route to
      * it always wins over a static route through the tunnel — the route
      * was accepted but never actually used. What GenieACS Connection
-     * Request genuinely needs instead is a per-service reverse route, same
-     * shape as the FreeRADIUS one above: each internal service that
-     * *initiates* a connection toward a CPE behind this NAS (GenieACS
-     * NBI/CWMP) gets its own `/32` route so the CPE's reply can find its
-     * way back through the tunnel instead of out the NAS's normal WAN
-     * route. $reverseRouteTargets carries these as label => IP (FreeRADIUS
-     * is always included by the caller; VpnScriptService adds GenieACS
-     * NBI/CWMP only when this NAS has `tr069_management_subnet` set).
+     * Request genuinely needs instead is a reverse route so a CPE's reply
+     * can find its way back through the tunnel instead of out the NAS's
+     * normal WAN route — v0.7.3-v0.8.0 did this per-service (one `/32`
+     * each for FreeRADIUS/GenieACS NBI/CWMP); v0.8.1 replaced that with a
+     * single route for the whole reserved infra block instead (see this
+     * method's own newer docblock below for why — $reverseRouteTargets no
+     * longer exists as a parameter).
      *
      * **A second, separate gap in the same v0.7.3 cut, found by inspecting
      * the live wireguard-node3 container's own iptables/interface state
@@ -214,17 +216,71 @@ class MikrotikScriptGenerator
      * ConnectionRequestURL from GenieACS itself before treating a timeout
      * against a remembered IP as evidence of anything.
      *
-     * **`/ip address add` here has ALWAYS used a single CIDR `/32` value,
-     * never a separate `network=` parameter** — checked via `git log -p`
-     * back to this method's introduction (v0.6.3) to be sure before
-     * assuming otherwise. A real `test-x86-bajastu` config found showing
-     * Address/Network as two split fields (`172.23.195.2` /
+     * **`/ip address add` here used a single CIDR `/32` value from
+     * v0.6.3 through v0.8.0, never a separate `network=` parameter** —
+     * checked via `git log -p` back to this method's introduction to be
+     * sure before assuming otherwise. A real `test-x86-bajastu` config
+     * found showing Address/Network as two split fields (`172.23.195.2` /
      * `172.23.195.1`) did not come from this generator — it was applied
-     * outside BOSS App (manually). `/32` is also the deliberately correct
-     * choice, not just what happens to be generated: a wider mask (e.g.
-     * `/30`) would make RouterOS auto-add a connected route for the whole
-     * subnet, which would defeat the explicit per-service reverse-route
-     * isolation this method exists to enforce.
+     * outside BOSS App (manually). `/32` was also the deliberately
+     * correct choice at the time, not just what happened to be generated:
+     * a wider mask would have made RouterOS auto-add a connected route
+     * for the WHOLE shared `/24` (every NAS's gateway lived in the same
+     * subnet back then), defeating the explicit per-service reverse-route
+     * isolation this method exists to enforce. **v0.8.1 changed this to
+     * `/30`** — see the `/ip address add` line's own comment further down
+     * for why that reasoning no longer applies once each NAS has its own
+     * dedicated /30 (VpnWireguardNasBlock) instead of sharing one /24.
+     *
+     * v0.8.1 — $infraBlockCidr replaces the old $reverseRouteTargets array
+     * (one /32 per service, hand-added to the router for every new
+     * module). It's now a single reserved /27 (INFRA_TUNNEL_BLOCK_CIDR in
+     * .env, e.g. "172.28.0.224/27") covering every boss-network container
+     * that legitimately needs to reach through a NAS's tunnel
+     * (FreeRADIUS, GenieACS CWMP/NBI, LibreNMS, LibreNMS-dispatcher, and
+     * room for future modules) — a brand-new module just needs a free IP
+     * inside this block, the router config never needs touching again.
+     * DELIBERATE widening of the v0.6.2 hub-and-spoke "/32 only" posture,
+     * confirmed explicitly with Agung, not scope drift — see CLAUDE.md's
+     * "Infra Tunnel IP Block" section for the full reasoning.
+     *
+     * $freeradiusInternalIp is still taken separately (not derived from
+     * the block) — it's only used for autoSwitchBlock()'s own health-check
+     * ping, unrelated to allowed-address/routing.
+     *
+     * Idempotent regen (found necessary from a real manual mix-up: Agung
+     * hand-edited allowed-address in Winbox once, and the old /32 entries
+     * were never cleaned up because nothing ever re-ran the generated
+     * script's own remove step) — the single infra-block route is
+     * preceded by a WILDCARD removal (`comment~"boss-vpn-.*-route"`, not
+     * an exact match on one comment) specifically so re-pasting this
+     * script also sweeps away the 3 old per-service routes
+     * (boss-vpn-freeradius-route/-genieacs-nbi-route/-genieacs-cwmp-route)
+     * from any NAS still on the pre-v0.8.1 scheme, in the same run that
+     * adds the new block route — no separate manual Winbox cleanup step
+     * needed for the migration.
+     *
+     * **A second, real orphan-entry bug found applying the FIRST /27-block
+     * script to test-x86-bajastu**: `/ip address remove [find
+     * interface="{$ifaceName}"]` used to run AFTER {$cleanup} (above) had
+     * already destroyed and recreated the wireguard interface — the OLD
+     * address entry's interface binding is by internal object id, not the
+     * display name string, so once that specific interface object is gone
+     * the entry shows as attached to interface "unknown" and a
+     * by-interface find silently matches nothing, leaving an orphaned
+     * duplicate in `/ip address print` on every single regen (confirmed
+     * from a real Winbox screenshot: an orphaned "BOSS App - WAN VPN
+     * address NAS nas-1" entry with interface "unknown"). Same root cause
+     * class as the route staleness above, same fix: `/ip address remove
+     * [find comment~"BOSS App - WAN VPN address"]` — the comment survives
+     * regardless of what happened to the interface object underneath it.
+     * Audited every other `[find ...]` removal in this class for the same
+     * "reference to something removed earlier in the same script" pattern
+     * (interfaceCleanupBlock(), routingIsolationBlock(), autoSwitchBlock(),
+     * openVpnScript()'s certificate/file cleanup, radiusScript()) — none
+     * of the others are interface-identity-dependent (they key off a
+     * static name or comment that isn't affected by removing/recreating a
+     * DIFFERENT object), so this was the only one with the bug.
      */
     public function wireGuardScript(
         VpnAccount $account,
@@ -232,13 +288,13 @@ class MikrotikScriptGenerator
         int $port,
         string $serverPublicKey,
         string $clientPrivateKey,
-        array $reverseRouteTargets,
+        string $infraBlockCidr,
+        string $freeradiusInternalIp,
         array $nodePorts = [],
-        ?string $vpnNodeTunnelIp = null,
+        ?string $nasGatewayIp = null,
     ): string {
         $ifaceName = 'boss-vpn-wireguard';
         $cleanup = $this->interfaceCleanupBlock();
-        $freeradiusInternalIp = $reverseRouteTargets['freeradius'];
         $autoSwitch = $this->autoSwitchBlock(
             schedulerName: 'boss-vpn-autoswitch-wireguard',
             freeradiusInternalIp: $freeradiusInternalIp,
@@ -250,24 +306,22 @@ class MikrotikScriptGenerator
             needsReEnable: false,
         );
 
-        $allowedAddress = collect($reverseRouteTargets)
-            ->map(fn (string $ip) => "{$ip}/32")
-            ->implode(',');
+        $allowedAddress = $infraBlockCidr;
 
-        if ($vpnNodeTunnelIp !== null) {
-            $allowedAddress .= ",{$vpnNodeTunnelIp}/32";
+        // v0.8.1 — $nasGatewayIp replaces $vpnNodeTunnelIp: no longer the
+        // single address shared by every NAS (172.23.195.1), now this
+        // NAS's OWN dedicated /30 gateway (VpnWireguardNasBlock). Still
+        // gated the same way as before (only added when this NAS actually
+        // needs MASQUERADE-based reverse routing for TR069/OLT traffic —
+        // see VpnScriptService::wireGuardScriptOrThrow()) — the PURPOSE
+        // hasn't changed (accepting packets MASQUERADEd onto the node's
+        // own tunnel identity before crossing), only WHICH address serves
+        // that role per NAS.
+        if ($nasGatewayIp !== null) {
+            $allowedAddress .= ",{$nasGatewayIp}/32";
         }
 
-        $reverseRouteBlock = collect($reverseRouteTargets)
-            ->map(function (string $ip, string $label) use ($ifaceName) {
-                $comment = $this->reverseRouteComment($label);
-
-                return <<<BLOCK
-                /ip route remove [find comment="{$comment}"]
-                /ip route add dst-address={$ip}/32 gateway={$ifaceName} comment="{$comment}"
-                BLOCK;
-            })
-            ->implode("\n");
+        $infraBlockRouteComment = $this->infraBlockRouteComment();
 
         return <<<SCRIPT
         # BOSS App — WireGuard client script untuk NAS "{$account->username}"
@@ -288,16 +342,47 @@ class MikrotikScriptGenerator
             allowed-address={$allowedAddress} persistent-keepalive=25s \\
             comment="BOSS App - WireGuard peer NAS {$account->username}"
 
-        /ip address remove [find interface="{$ifaceName}"]
-        /ip address add address={$account->internal_ip}/32 interface={$ifaceName} \\
+        # comment-based find, NOT [find interface="{$ifaceName}"] — the
+        # interface this address was attached to was already destroyed and
+        # recreated by the cleanup block above (different internal object,
+        # same display name), so the OLD address entry's interface binding
+        # is now "unknown" and a by-interface find silently matches
+        # nothing, leaving an orphaned duplicate every single regen. Same
+        # class of staleness bug as the old per-service /ip route entries,
+        # same fix (comment survives regardless of what happened to the
+        # interface).
+        #
+        # v0.8.1 — /30, NOT /32 anymore. This is a DELIBERATE REVERSAL of
+        # the v0.7.3 decision ("a wider mask would make RouterOS auto-add
+        # a connected route for the whole subnet, defeating the reverse-
+        # route isolation") — do NOT "fix" this back to /32 without first
+        # reading CLAUDE.md's "WireGuard /30 Per-NAS Tunnel Blocks"
+        # section. The difference: v0.7.3's subnet was WG_SUBNET_CIDR, a
+        # /24 SHARED by every NAS (a connected route for the whole /24
+        # would have been genuinely wrong/wide). Here the /30 belongs to
+        # THIS ONE NAS alone (VpnWireguardNasBlock) — a connected route
+        # for a /30 only ever covers 2 usable hosts (this NAS's own
+        # gateway + its own router address), so it's exactly as narrow as
+        # the old /32 was, just now backed by a REAL connected route
+        # instead of relying purely on WireGuard's own AllowedIPs-driven
+        # implicit routing for the reverse direction (suspected — not yet
+        # conclusively proven — contributor to traffic arriving at the
+        # router but not being forwarded onward, per real rx-counter
+        # evidence gathered investigating this).
+        /ip address remove [find comment~"BOSS App - WAN VPN address"]
+        /ip address add address={$account->internal_ip}/30 interface={$ifaceName} \\
             comment="BOSS App - WAN VPN address NAS {$account->username}"
 
         # allowed-address di atas HANYA filter kripto/interface — TIDAK
         # otomatis mengisi routing table (dibuktikan lewat tes ping asli:
         # handshake berhasil tapi paket ICMP tidak pernah sampai tanpa baris
-        # di bawah ini). Route eksplisit per-service wajib supaya traffic
-        # balasan dari tiap service benar-benar lewat tunnel ini.
-        {$reverseRouteBlock}
+        # di bawah ini). Satu route untuk seluruh blok infra wajib supaya
+        # traffic balasan dari servis mana pun di dalam blok itu benar-benar
+        # lewat tunnel ini. Wildcard remove dulu (bukan exact-match) supaya
+        # sisa route model lama (per-servis /32, sebelum v0.8.1) ikut
+        # tersapu otomatis di sini juga, tanpa langkah manual terpisah.
+        /ip route remove [find comment~"boss-vpn-.*-route"]
+        /ip route add dst-address={$infraBlockCidr} gateway={$ifaceName} comment="{$infraBlockRouteComment}"
         :log info "BOSS App: WireGuard client {$ifaceName} selesai dikonfigurasi"
 
         {$autoSwitch}
@@ -576,17 +661,19 @@ class MikrotikScriptGenerator
     }
 
     /**
-     * v0.7.3 — one comment per reverse-route service (see wireGuardScript()'s
-     * $reverseRouteTargets), so each is independently addable/removable via
-     * `find comment=...` without disturbing the others. 'freeradius'
-     * produces the same literal string as IROUTE_ROUTE_COMMENT/routeComment()
-     * above on purpose — a NAS provisioned before this generalization
-     * already has an `/ip route` with that exact comment, and re-running
-     * the script must replace it in place, not leave an orphaned duplicate.
+     * v0.8.1 — replaces the old per-service reverseRouteComment('label')
+     * (one comment per /32, v0.7.3-v0.8.0) now that wireGuardScript()
+     * generates exactly ONE route for the whole infra block. The old
+     * per-service comments ('boss-vpn-freeradius-route', etc.) are still
+     * what the wildcard `comment~"boss-vpn-.*-route"` removal in
+     * wireGuardScript() sweeps up during migration — this new comment is
+     * deliberately named differently ('-infra-block-' not tied to any one
+     * service) so it's obviously a different, newer kind of route to
+     * anyone reading Winbox's route list.
      */
-    private function reverseRouteComment(string $label): string
+    private function infraBlockRouteComment(): string
     {
-        return "boss-vpn-{$label}-route";
+        return 'boss-vpn-infra-block-route';
     }
 
     private function ruleComment(): string

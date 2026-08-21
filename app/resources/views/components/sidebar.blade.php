@@ -63,23 +63,41 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*'),
+            // v0.8.1 — nested one level deeper than a plain link: an item
+            // with a 'children' key renders as its own expand/collapse
+            // sub-group (own localStorage key, same pattern as the
+            // top-level clusters below) instead of a bare <a>. NAS/
+            // Perangkat CPE both keep their own real index page as the
+            // parent row's link — only the chevron toggles the sub-item,
+            // navigation still works independently of expand state.
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\Nas::class)
-                    ? ['route' => 'web.nas.index', 'label' => __('NAS')]
+                    ? [
+                        'id' => 'nas',
+                        'route' => 'web.nas.index',
+                        'label' => __('NAS'),
+                        'children' => [
+                            ['route' => 'web.vpn-script-generator.index', 'label' => __('Script Generator')],
+                        ],
+                    ]
                     : null,
-                auth()->user()->can('viewAny', \App\Models\Nas::class)
-                    ? ['route' => 'web.vpn-script-generator.index', 'label' => __('Script Generator')]
+                auth()->user()->can('viewAny', \App\Models\OltDevice::class)
+                    ? ['route' => 'web.olt-devices.index', 'label' => __('OLT')]
                     : null,
                 auth()->user()->can('viewAny', \App\Models\CpeDevice::class)
-                    ? ['route' => 'web.cpe-devices.index', 'label' => __('Perangkat CPE')]
-                    : null,
-                // Admin-only (cpe_devices.view directly, not the reseller
-                // carve-out CpeDevicePolicy::viewAny() also allows) —
-                // exposes legacy-import/matching internals not meant for
-                // reseller users.
-                auth()->user()->can('cpe_devices.view')
-                    ? ['route' => 'web.cpe-devices.status-check', 'label' => __('Cek Status Device')]
+                    ? [
+                        'id' => 'cpe-devices',
+                        'route' => 'web.cpe-devices.index',
+                        'label' => __('Perangkat CPE'),
+                        // Admin-only (cpe_devices.view directly, not the
+                        // reseller carve-out CpeDevicePolicy::viewAny()
+                        // also allows) — exposes legacy-import/matching
+                        // internals not meant for reseller users.
+                        'children' => auth()->user()->can('cpe_devices.view')
+                            ? [['route' => 'web.cpe-devices.status-check', 'label' => __('Cek Status Device')]]
+                            : [],
+                    ]
                     : null,
             ]),
         ],
@@ -128,12 +146,49 @@
                     class="mt-1 ml-3 space-y-1"
                 >
                     @foreach ($cluster['links'] as $link)
-                        <a
-                            href="{{ route($link['route']) }}"
-                            class="block px-3 py-1.5 text-sm rounded-md {{ request()->routeIs($link['route']) ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100' }}"
-                        >
-                            {{ $link['label'] }}
-                        </a>
+                        @if (! empty($link['children']))
+                            {{-- v0.8.1 — nested sub-group: the parent row is
+                                 still a real link to its own index page, the
+                                 chevron independently toggles the children
+                                 list below it (own localStorage key so the
+                                 expand state persists like top-level
+                                 clusters do). --}}
+                            <div x-data="{ subOpen: localStorage.getItem('sidebar-subgroup-{{ $link['id'] }}') !== 'false' }">
+                                <div class="flex items-center rounded-md {{ request()->routeIs($link['route']) ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100' }}">
+                                    <a href="{{ route($link['route']) }}" class="flex-1 px-3 py-1.5 text-sm">
+                                        {{ $link['label'] }}
+                                    </a>
+                                    <button
+                                        type="button"
+                                        x-on:click="subOpen = !subOpen; localStorage.setItem('sidebar-subgroup-{{ $link['id'] }}', subOpen)"
+                                        x-bind:aria-expanded="subOpen.toString()"
+                                        aria-controls="sidebar-subgroup-{{ $link['id'] }}"
+                                        class="px-2 py-1.5 focus:outline-none"
+                                    >
+                                        <svg x-bind:class="subOpen ? 'rotate-90' : ''" class="w-3.5 h-3.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                                        </svg>
+                                    </button>
+                                </div>
+                                <div id="sidebar-subgroup-{{ $link['id'] }}" x-show="subOpen" x-transition class="ml-4 mt-1 space-y-1">
+                                    @foreach ($link['children'] as $child)
+                                        <a
+                                            href="{{ route($child['route']) }}"
+                                            class="block px-3 py-1.5 text-sm rounded-md {{ request()->routeIs($child['route']) ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100' }}"
+                                        >
+                                            {{ $child['label'] }}
+                                        </a>
+                                    @endforeach
+                                </div>
+                            </div>
+                        @else
+                            <a
+                                href="{{ route($link['route']) }}"
+                                class="block px-3 py-1.5 text-sm rounded-md {{ request()->routeIs($link['route']) ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100' }}"
+                            >
+                                {{ $link['label'] }}
+                            </a>
+                        @endif
                     @endforeach
                 </div>
             </div>

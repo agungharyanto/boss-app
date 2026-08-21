@@ -12,6 +12,7 @@ use App\Models\Nas;
 use App\Models\VpnAccount;
 use App\Models\VpnIpPool;
 use App\Models\VpnServer;
+use App\Models\VpnWireguardNasBlock;
 use Illuminate\Contracts\Process\ProcessResult;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -81,6 +82,32 @@ class VpnProvisioningService
             // can't each have an independent IP pool without breaking
             // OpenVPN's node1-only ccd or WireGuard's shared peers dir.
             $poolOwner = VpnServer::poolOwnerFor($protocol);
+
+            // v0.8.1 — WireGuard gets a dedicated, STICKY /30 block per NAS
+            // (VpnWireguardNasBlock) instead of consuming a single /32 row
+            // from the shared vpn_ip_pool — replaces the old single shared
+            // tunnel gateway (172.23.195.1 for every NAS) with a real
+            // per-NAS point-to-point pair. OpenVPN/L2TP are UNCHANGED,
+            // still the plain vpn_ip_pool flow below — this redesign is
+            // WireGuard-specific (see CLAUDE.md's "WireGuard /30 Per-NAS
+            // Tunnel Blocks" section for the full reasoning).
+            if ($protocol === VpnProtocol::WireGuard) {
+                $block = VpnWireguardNasBlock::allocateFor($nas, $poolOwner);
+
+                $account = VpnAccount::create([
+                    'nas_id' => $nas->id,
+                    'vpn_server_id' => $server->id,
+                    'protocol' => $protocol,
+                    'username' => $username,
+                    'internal_ip' => $block->router_ip,
+                    'status' => VpnAccountStatus::Active,
+                    'issued_at' => now(),
+                ]);
+
+                $server->increment('current_clients');
+
+                return $account;
+            }
 
             $poolEntry = VpnIpPool::query()
                 ->where('vpn_server_id', $poolOwner->id)
@@ -315,9 +342,51 @@ class VpnProvisioningService
             $allowedIps .= ', '.$account->nas->tr069_management_subnet;
         }
 
+        // v0.8.1 — same widening for LibreNMS OLT SNMP polling. Real bug
+        // found and fixed the same day this was added: docker/wireguard/
+        // entrypoint.sh's OLT block added an explicit `ip route` +
+        // iptables rules, but NEVER touched AllowedIPs itself — and
+        // AllowedIPs is WireGuard's OWN cryptokey-routing filter, checked
+        // BEFORE the kernel even attempts to send (confirmed for real: a
+        // direct `ping -I wg0` to an OLT's IP failed outright with "sendto:
+        // Required key not available", never even reaching iptables/the
+        // explicit route, while the exact same test against the
+        // TR069-widened subnet at least transmitted). No `nas.
+        // olt_management_subnet` column exists (same single-global-subnet
+        // limitation as OLT_MANAGEMENT_SUBNET/OLT_MANAGEMENT_GATEWAY
+        // everywhere else this env var is read — docker/wireguard/
+        // entrypoint.sh, docker/librenms/route-init.sh — so this
+        // deliberately widens EVERY WireGuard NAS's AllowedIPs the same
+        // way, not just the one NAS that currently has OLTs behind it).
+        $oltManagementSubnet = config('services.vpn.olt_management_subnet');
+
+        if (! empty($oltManagementSubnet)) {
+            $allowedIps .= ', '.$oltManagementSubnet;
+        }
+
         File::put(
             rtrim($peersDir, '/')."/{$account->username}.conf",
             '[Peer]'.PHP_EOL."PublicKey = {$publicKey}".PHP_EOL."AllowedIPs = {$allowedIps}".PHP_EOL
+        );
+
+        // v0.8.1 — this NAS's own /30 gateway address, written as its own
+        // fragment (same "one file per NAS, reconciled by every wireguard
+        // node's own loop" pattern as the peer fragment above) so all 3
+        // nodes present the SAME gateway identity for THIS NAS regardless
+        // of which one the router's auto-switch is currently dialing —
+        // see VpnWireguardNasBlock's own docblock and docker/wireguard/
+        // entrypoint.sh's reconcile loop for the other half of this.
+        $block = VpnWireguardNasBlock::where('nas_id', $account->nas_id)->firstOrFail();
+
+        $addressesDir = config('services.vpn.wg_addresses_dir');
+
+        if (! File::isDirectory($addressesDir)) {
+            File::makeDirectory($addressesDir, 0777, true);
+        }
+
+        File::put(
+            rtrim($addressesDir, '/')."/{$account->username}.conf",
+            "{$block->gateway_ip}/30".PHP_EOL
         );
 
         $account->update(['public_key' => $publicKey]);
@@ -337,6 +406,15 @@ class VpnProvisioningService
      * container's reconcile loop next runs (up to its poll interval, ~10s)
      * — unlike OpenVPN's CRL (checked live per connection attempt), this is
      * a real, documented latency window, not instant revocation.
+     *
+     * v0.8.1 — deliberately does NOT touch this NAS's address fragment
+     * ($wg_addresses_dir/{$account->username}.conf) or its
+     * VpnWireguardNasBlock row. The gateway address is sticky/permanent
+     * per NAS (see VpnWireguardNasBlock's own docblock) — a revoke is
+     * almost always followed shortly by a fresh provision for the SAME
+     * NAS (as this whole sprint's own history shows), and leaving the
+     * address configured on all 3 nodes avoids pointless interface churn.
+     * Only the PEER (the actual handshake capability) is revoked here.
      */
     private function revokeWireGuard(VpnAccount $account): void
     {

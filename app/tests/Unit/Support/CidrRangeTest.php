@@ -51,4 +51,61 @@ class CidrRangeTest extends TestCase
 
         CidrRange::gatewayAddress('not-a-cidr');
     }
+
+    /**
+     * v0.8.1 — one dedicated /30 per NAS, replacing the single shared
+     * gateway gatewayAddress() above returns. Block #0's gateway/router
+     * pair must land exactly on the values Agung specified when this was
+     * designed: 172.23.195.0/30 → .1 (gateway) / .2 (router).
+     */
+    public function test_wireguard_nas_block_zero_is_the_first_slash_30_of_the_subnet(): void
+    {
+        $block = CidrRange::wireguardNasBlock('172.23.195.0/24', 0);
+
+        $this->assertSame(['gateway' => '172.23.195.1', 'router' => '172.23.195.2'], $block);
+    }
+
+    public function test_wireguard_nas_block_one_is_the_next_slash_30(): void
+    {
+        $block = CidrRange::wireguardNasBlock('172.23.195.0/24', 1);
+
+        $this->assertSame(['gateway' => '172.23.195.5', 'router' => '172.23.195.6'], $block);
+    }
+
+    public function test_wireguard_nas_block_sequence_never_overlaps_across_many_indices(): void
+    {
+        $seen = [];
+
+        foreach (range(0, 20) as $index) {
+            $block = CidrRange::wireguardNasBlock('172.23.195.0/24', $index);
+
+            foreach ([$block['gateway'], $block['router']] as $ip) {
+                $this->assertArrayNotHasKey($ip, $seen, "IP {$ip} reused by block #{$index}, already claimed by an earlier block.");
+                $seen[$ip] = $index;
+            }
+        }
+    }
+
+    public function test_wireguard_nas_block_exhaustion_throws(): void
+    {
+        // 172.23.195.0/24 has 64 possible /30 blocks (0-63) — index 64
+        // would spill past the subnet's own broadcast address.
+        $this->expectException(InvalidArgumentException::class);
+
+        CidrRange::wireguardNasBlock('172.23.195.0/24', 64);
+    }
+
+    public function test_wireguard_nas_block_invalid_cidr_throws(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        CidrRange::wireguardNasBlock('not-a-cidr', 0);
+    }
+
+    public function test_wireguard_nas_block_negative_index_throws(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        CidrRange::wireguardNasBlock('172.23.195.0/24', -1);
+    }
 }

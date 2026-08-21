@@ -3277,6 +3277,135 @@ discipline as everywhere else in this file**:
    never come up before because `boss-app` had never actually been
    recreated mid-session until this v0.8.1 work.
 
+## Dashboard Monitoring (v0.8.2)
+
+**Hybrid architecture: REST API for snapshot metrics, `rrdtool xport --json` reading LibreNMS's own RRD
+files directly for time-series history — not a platform swap, not a LibreNMS upgrade.** Initial research
+wrongly concluded CPU%/Memory% had no API path at all and traffic history had no JSON path at all. Both
+turned out to be real gaps only for the SECOND one; the first was two real bugs in how the API was being
+called, found only once systematically re-tested against the actual installed LibreNMS 26.8.1 (version
+confirmed via `GET /api/v0/system`, not assumed):
+
+1. **`{hostname}/health/{type}/{sensor_id?}` (`list_available_health_graphs` in LibreNMS's own
+   `api_functions.inc.php`) takes SINGULAR type values** (`processor`, `mempool`, `storage`) — plural
+   (`processors`/`mempools`, what general LibreNMS familiarity suggested) silently 500s, because there is
+   no dedicated route for those at all in this version; the request instead gets absorbed by this same
+   catch-all route with an unrecognized `$type`, which then chokes reading `GraphParameters.php`. Global
+   `/resources/processors`/`/resources/mempools` genuinely don't exist (404) — that part of the original
+   finding was correct, just not the whole story.
+2. **Calling `{hostname}/health/{type}` WITHOUT a `sensor_id` only returns `{sensor_id, desc}` metadata
+   pairs, never the actual reading.** The real value (`processor_usage`, `mempool_perc`, ...) only comes
+   back from `{hostname}/health/{type}/{sensor_id}` — confirmed the underlying `processors`/`mempools`
+   MariaDB tables (read directly, once, for this diagnosis only — never from application code, see below)
+   already held real non-zero data the whole time; this was purely an API-usage gap, never a data-
+   collection gap.
+
+`App\Services\Network\LibreNmsService::getCpuUsage()`/`getMemoryUsage()` iterate every sensor of that
+class for a device (a device can have several — the ZTE C300 OLT has 7 separate processor sensors, one
+per line card) via one list call + N per-sensor calls. Confirmed acceptable in practice: 48 serial calls
+(the router's own per-core sensor count) took ~1.9s end-to-end from inside the LibreNMS host itself —
+tolerable given every method is cached (see below), not worth the complexity of `Http::pool()` for this
+sprint.
+
+**Traffic time-series genuinely has no JSON path in this LibreNMS version — confirmed via full
+`routes/api.php` read, not just the one route tried.** `{hostname}/ports/{ifname}/{type}` (the only
+traffic-graph route) renders an SVG/PNG/base64 image only (`api_get_graph()`'s own source), and no
+export/raw/data-JSON route exists anywhere in the 180-route file. `LibreNmsService::getTrafficHistory()`
+instead shells out to `rrdtool xport --json` (Process facade) directly against the RRD file LibreNMS's own
+poller already writes — confirmed empirically that `hostname` from `GET /devices/{id}` is exactly the RRD
+directory name (`/librenms-data/rrd/{hostname}/`) and `port_id` from `GET /devices/{id}/ports` is exactly
+the file name (`port-id{port_id}.rrd`), no separate mapping table needed. `rrdtool`'s own real
+"file not found" error (a clean non-zero exit + stderr message, confirmed by testing directly) is relied
+on instead of a pre-emptive `is_file()` check — simpler, matches real tool behavior, and avoids an
+untestable filesystem branch (Process::fake() bypasses real execution entirely in tests either way).
+
+**Why direct RRD file reads were judged acceptable, not a BOSS-009 violation**: BOSS-009 is specifically
+about *database* isolation (no cross-database SQL joins between `boss_db`/`radius_db`/`genieacs_db`/
+`librenms_db`) — reading a file over a shared Docker volume is the SAME pattern already established and
+accepted repeatedly in this codebase (`vpn_pki`, `vpn_wg_data`, `freeradius_nas_config` — see the v0.6.2
+through v0.8.1 sections above), just a new service. The one real trade-off, recorded here rather than
+silently accepted: RRD filename conventions (`processor-hr-{id}.rrd`, `port-id{n}.rrd`, per-hostname
+directories) are LibreNMS's own internal poller implementation detail, not a published contract — stable
+for years in practice, but not guaranteed across a future LibreNMS upgrade the way the REST API is.
+
+**Infra changes (both explicitly approved before implementing)**: `docker/php/Dockerfile` gained
+`rrdtool` (its own layer, after the slow `ext-sockets` compile — same cache-locality discipline as every
+prior `apk add` addition in this file); `docker-compose.yml`'s `boss-app` service gained
+`librenms_data:/librenms-data:ro` (read-only — boss-app never writes LibreNMS's own poller data).
+Recreating `boss-app` for this required restarting `boss-nginx` too, per the stale-FastCGI-upstream-IP
+rule already documented at the end of the "Fragment+Reconcile Routing (v0.8.1)" section above — done as a
+precaution, confirmed still necessary.
+
+**`GET /devices` (and `GET /devices/{id}`) return the device's plaintext SNMP community/auth credentials
+in every response** — confirmed for real (`community: "tokia121314"` came back on a plain devices list
+call). `LibreNmsService::listDevices()` narrows the response to a safe explicit field subset
+(`device_id`/`hostname`/`sys_name`/`status`/`uptime`) before ever caching or returning it — the raw
+LibreNMS payload must never reach a cache entry, a view, or a log line. `resolveHostname()` (used
+internally for RRD path resolution) similarly only ever extracts `hostname`, nothing else, from the same
+raw response.
+
+**Caching**: every `LibreNmsService` method is wrapped in `Cache::remember()`
+(`config('services.librenms.cache_ttl')`, default 45s) — a widget appearing more than once per page (or,
+later, also on the Dashboard) doesn't multiply real LibreNMS hits. The global `/resources/sensors` call
+(used for temperature) is cached ONCE and filtered in-memory per device, not re-fetched per device — a
+full 4-device table renders it exactly once. A failed call is never cached (`Cache::remember()` only
+stores a value if its closure returns normally), so a transient LibreNMS outage self-heals on the very
+next call rather than showing "unavailable" for a full TTL window.
+
+**Three-state error handling, not two**: `LibreNmsDataUnavailableException` (a real LibreNMS/rrdtool
+failure) is deliberately distinct from an empty array (a device that genuinely has no sensor of a given
+class — real, confirmed cases in this fleet: the HSGQ-E04ID OLT has zero CPU or temperature sensors at
+all, the router itself has no temperature sensor). `App\Livewire\Network\DeviceMonitoringList` renders
+these as different states per table cell (`'ok'`/`'no_sensor'`/`'unavailable'`) — one device's LibreNMS
+call failing never blanks the whole table, and one metric failing for a device never hides that device's
+other metrics. A `listDevices()` failure is the one page-level exception (there's no per-row table to
+degrade if the row list itself never loads) — `pageUnavailable` renders a single banner instead.
+
+**Reusable by construction, not by aspiration** — `DeviceMonitoringList`/`DeviceTrafficGraph` are ordinary
+Livewire components taking `mount()` parameters (`onlyDeviceId`, `deviceId`/`ifName`/`rangeSeconds`), the
+exact shape `App\Livewire\Dashboard`'s existing widget system already expects (`@livewire($widget->
+component(), [], $widget->value)`, driven by the `App\Enums\DashboardWidget` registry + `WidgetSelector` —
+discovered mid-implementation, not built this sprint). This means dropping either component onto the main
+Dashboard later needs a new `DashboardWidget` case + Blade wiring, not a redesign of either component —
+**deliberately not done this sprint**, per explicit scope. The two components talk to each other via
+Livewire's own browser-event bus (`DeviceMonitoringList` dispatches `device-selected`, `DeviceTrafficGraph`
+listens via `#[On('device-selected')]`) — the same idiom `App\Livewire\Dashboard` already uses for
+`widgets-updated`, not a new pattern.
+
+**Chart.js is new to this codebase** (`resources/js/app.js`, `window.trafficChart` Alpine factory,
+`chart.js` added to `package.json` — first non-Tailwind/Alpine frontend dependency, checked first that no
+other charting library already existed anywhere in the codebase before adding it). The chart's canvas
+lives inside a `wire:ignore` wrapper — same "a third-party JS library owns this subtree, never let Livewire
+morph it" reasoning already documented for `OltDeviceIndex`'s DataTables table (v0.8.1) — updates arrive
+via a dispatched `traffic-series-updated` browser event carrying fresh series data, not a Livewire
+re-render, so the `wire:ignore`'d subtree is never stale. Traffic is stored/transmitted as bytes/second
+(matching what `INOCTETS`/`OUTOCTETS` DERIVE datasources natively give) and converted to bits/second only
+at chart-render time in JS, matching the networking-convention units LibreNMS's own graphs use.
+
+**Permission**: `monitoring.view` (view-only — `LibreNmsService` only ever reads), platform-level like
+`cpe_parameter_maps.*` (LibreNMS monitors the ISP's own infra, not per-tenant/reseller data — `/monitoring`
+deliberately sits outside the `reseller.context` route group). Unlike `cpe_parameter_maps.*`
+(super_admin-only), `noc` also gets it — monitoring the ISP's own infra is that role's whole purpose. No
+Eloquent model backs this page, so authorization is a plain `$this->authorize('monitoring.view')` /
+`auth()->user()->can('monitoring.view')` permission-string check (Spatie's own `Gate::before` hook resolves
+this directly) rather than a Policy class — same simpler pattern already used by
+`CpeDeviceStatusCheck::mount()`.
+
+**Test coverage**: `LibreNmsServiceTest` uses `Http::fake()`/`Process::fake()` exclusively (never the real
+LibreNMS API/rrdtool binary) — fixtures mirror the exact real response shapes confirmed during this
+sprint's research phase, including both gotchas above. `DeviceMonitoringListLivewireTest`/
+`DeviceTrafficGraphLivewireTest` bind an anonymous `LibreNmsService` subclass (via `$this->app->instance()`)
+rather than `Http::fake()`, since these tests exercise Livewire component logic (state derivation, event
+dispatch), not the service's own HTTP-calling behavior — already covered by `LibreNmsServiceTest`.
+
+**Found, NOT fixed — out of scope, flagged for awareness**: `storage/logs/laravel.log` had grown to ~12GB
+during this investigation, discovered only because a plain `tail`/`grep` against it timed out. The
+repeating error filling it (`App\Console\Commands\WhatsappQueueNames`, `Call to a member function getKey()
+on string`, firing roughly every 5 minutes via `boss-whatsapp-worker`'s own polling entrypoint) is a
+pre-existing v0.4.0-era bug, unrelated to this sprint's `/monitoring` route (confirmed — a fresh
+unauthenticated hit to `/monitoring` produced zero new log entries). Neither the log growth nor the
+underlying command bug were touched — real, but genuinely out of scope for this sprint; needs its own pass.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

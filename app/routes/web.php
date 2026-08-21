@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\Internal\CpeDeviceActionController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDatatableController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDetailController;
+use App\Http\Controllers\Api\Internal\OltDeviceDatatableController;
 use App\Http\Controllers\VpnScriptDownloadController;
 use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
@@ -16,6 +17,7 @@ use App\Livewire\Network\CpeDeviceIndex;
 use App\Livewire\Network\CpeDeviceStatusCheck;
 use App\Livewire\Network\CpeParameterMapIndex;
 use App\Livewire\Network\NasIndex;
+use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\VpnScriptGenerator;
 use App\Livewire\Resellers\PackagePricingIndex;
 use App\Livewire\Resellers\ResellerIndex;
@@ -73,6 +75,8 @@ Route::middleware('auth')->name('web.')->group(function () {
         Route::get('/whatsapp-gateway', WhatsappGatewayIndex::class)->name('whatsapp-gateway.index');
         Route::get('/nas', NasIndex::class)->name('nas.index');
         Route::get('/vpn-script-generator', VpnScriptGenerator::class)->name('vpn-script-generator.index');
+        Route::get('/olt-devices', OltDeviceIndex::class)->name('olt-devices.index');
+        Route::get('api/internal/olt-devices/datatable', OltDeviceDatatableController::class)->name('olt-devices.internal.datatable');
         Route::get('/cpe-devices', CpeDeviceIndex::class)->name('cpe-devices.index');
         Route::get('/cpe-devices/status-check', CpeDeviceStatusCheck::class)->name('cpe-devices.status-check');
 

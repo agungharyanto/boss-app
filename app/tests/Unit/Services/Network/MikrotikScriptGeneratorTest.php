@@ -145,7 +145,7 @@ class MikrotikScriptGeneratorTest extends TestCase
 
         $scripts = [
             $this->generator->openVpnScript($account, '7', '45.123.142.242', 1194, '172.28.0.10', 'ca-url', 'cert-url', 'key-url', 'https'),
-            $this->generator->wireGuardScript($wgAccount, '45.123.142.242', 51820, 'pub', 'priv', ['freeradius' => '172.28.0.10']),
+            $this->generator->wireGuardScript($wgAccount, '45.123.142.242', 51820, 'pub', 'priv', '172.28.0.224/27', '172.28.0.225'),
             $this->generator->l2tpScript($l2tpAccount, '7', '45.123.142.242', '172.28.0.10', 'psk'),
         ];
 
@@ -158,7 +158,7 @@ class MikrotikScriptGeneratorTest extends TestCase
         }
     }
 
-    public function test_wireguard_script_embeds_both_keys_inline_and_scopes_allowed_address_to_freeradius_only(): void
+    public function test_wireguard_script_embeds_both_keys_inline_and_scopes_allowed_address_to_the_infra_block(): void
     {
         $account = $this->vpnAccount([
             'username' => 'nas-42',
@@ -167,28 +167,32 @@ class MikrotikScriptGeneratorTest extends TestCase
         ]);
 
         $script = $this->generator->wireGuardScript(
-            $account, '45.123.142.242', 51820, 'SERVERPUB==', 'CLIENTPRIV==', ['freeradius' => '172.28.0.10'],
+            $account, '45.123.142.242', 51820, 'SERVERPUB==', 'CLIENTPRIV==', '172.28.0.224/27', '172.28.0.225',
         );
 
         $this->assertStringContainsString('private-key="CLIENTPRIV=="', $script);
         $this->assertStringContainsString('public-key="SERVERPUB=="', $script);
-        $this->assertStringContainsString('allowed-address=172.28.0.10/32', $script);
-        $this->assertStringContainsString('address=172.23.195.10/32', $script);
+        $this->assertStringContainsString('allowed-address=172.28.0.224/27', $script);
+        // v0.8.1 — /30, not /32: this NAS's own dedicated block, see the
+        // generator's own comment on this line for why.
+        $this->assertStringContainsString('address=172.23.195.10/30', $script);
         // No full-tunnel 0.0.0.0/0 allowed-address anywhere.
         $this->assertStringNotContainsString('0.0.0.0/0', $script);
-        $this->assertStringContainsString('/ip route add dst-address=172.28.0.10/32 gateway=boss-vpn-wireguard comment="boss-vpn-freeradius-route"', $script);
+        $this->assertStringContainsString('/ip route add dst-address=172.28.0.224/27 gateway=boss-vpn-wireguard comment="boss-vpn-infra-block-route"', $script);
     }
 
     /**
-     * v0.7.3 amendment: the original single whole-subnet route
-     * (`boss-vpn-tr069-route`) was found dead on a real router — a NAS's
-     * tr069_management_subnet IS its own local LAN, so RouterOS's connected
-     * route to it always wins over anything pointed at the tunnel. Fixed by
-     * routing back to each SERVICE that actually initiates traffic toward a
-     * CPE behind the NAS (GenieACS NBI/CWMP), same per-/32 treatment
-     * FreeRADIUS already got — never a whole-subnet route again.
+     * v0.8.1: replaces the old one-/32-per-service reverse route model
+     * (v0.7.3-v0.8.0) with a single route for the whole reserved infra
+     * block (INFRA_TUNNEL_BLOCK_CIDR) — a brand-new module (e.g. LibreNMS)
+     * just needs a free IP inside this block, no new route/allowed-address
+     * entry, no router re-touch. The idempotent wildcard removal
+     * (`comment~"boss-vpn-.*-route"`) is what actually cleans up the 3 old
+     * per-service routes on a NAS migrating from the pre-v0.8.1 scheme —
+     * asserted here too, since a regen that ADDS the new route but leaves
+     * the old ones behind would defeat the whole point of this change.
      */
-    public function test_wireguard_script_adds_a_reverse_route_and_allowed_address_entry_per_service(): void
+    public function test_wireguard_script_adds_a_single_idempotent_route_for_the_whole_infra_block(): void
     {
         $account = $this->vpnAccount([
             'username' => 'nas-1',
@@ -197,15 +201,23 @@ class MikrotikScriptGeneratorTest extends TestCase
         ]);
 
         $script = $this->generator->wireGuardScript(
-            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==',
-            ['freeradius' => '172.28.0.10', 'genieacs-nbi' => '172.28.0.31', 'genieacs-cwmp' => '172.28.0.30'],
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==', '172.28.0.224/27', '172.28.0.225',
         );
 
-        $this->assertStringContainsString('allowed-address=172.28.0.10/32,172.28.0.31/32,172.28.0.30/32', $script);
-        $this->assertStringContainsString('/ip route add dst-address=172.28.0.10/32 gateway=boss-vpn-wireguard comment="boss-vpn-freeradius-route"', $script);
-        $this->assertStringContainsString('/ip route add dst-address=172.28.0.31/32 gateway=boss-vpn-wireguard comment="boss-vpn-genieacs-nbi-route"', $script);
-        $this->assertStringContainsString('/ip route add dst-address=172.28.0.30/32 gateway=boss-vpn-wireguard comment="boss-vpn-genieacs-cwmp-route"', $script);
-        // The dead whole-subnet route/comment must never appear again.
+        $this->assertStringContainsString('allowed-address=172.28.0.224/27', $script);
+        $this->assertStringContainsString('/ip route remove [find comment~"boss-vpn-.*-route"]', $script);
+        $this->assertStringContainsString('/ip route add dst-address=172.28.0.224/27 gateway=boss-vpn-wireguard comment="boss-vpn-infra-block-route"', $script);
+        // The wildcard remove must come BEFORE the add, not after —
+        // otherwise a fresh add gets immediately wiped by its own cleanup.
+        $removePos = strpos($script, '/ip route remove [find comment~"boss-vpn-.*-route"]');
+        $addPos = strpos($script, '/ip route add dst-address=172.28.0.224/27');
+        $this->assertLessThan($addPos, $removePos);
+        // No individual per-service /32 route ever appears anymore.
+        $this->assertStringNotContainsString('boss-vpn-freeradius-route"', $script);
+        $this->assertStringNotContainsString('boss-vpn-genieacs-nbi-route', $script);
+        $this->assertStringNotContainsString('boss-vpn-genieacs-cwmp-route', $script);
+        // The dead whole-subnet route/comment from an even earlier
+        // (v0.7.3) false lead must never appear again either.
         $this->assertStringNotContainsString('boss-vpn-tr069-route', $script);
         $this->assertStringNotContainsString('10.1.0.0/20', $script);
     }
@@ -238,12 +250,11 @@ class MikrotikScriptGeneratorTest extends TestCase
         ]);
 
         $script = $this->generator->wireGuardScript(
-            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==',
-            ['freeradius' => '172.28.0.10', 'genieacs-nbi' => '172.28.0.31'],
-            vpnNodeTunnelIp: '172.23.195.1',
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==', '172.28.0.224/27', '172.28.0.225',
+            nasGatewayIp: '172.23.195.1',
         );
 
-        $this->assertStringContainsString('allowed-address=172.28.0.10/32,172.28.0.31/32,172.23.195.1/32', $script);
+        $this->assertStringContainsString('allowed-address=172.28.0.224/27,172.23.195.1/32', $script);
         // No /ip route needed for this one — the router only needs to
         // ACCEPT packets sourced from it, never SEND anything to it.
         // (Confirmed for real, not just reasoned about — see docblock.)
@@ -259,11 +270,10 @@ class MikrotikScriptGeneratorTest extends TestCase
         ]);
 
         $script = $this->generator->wireGuardScript(
-            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==',
-            ['freeradius' => '172.28.0.10'],
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==', '172.28.0.224/27', '172.28.0.225',
         );
 
-        $this->assertStringContainsString('allowed-address=172.28.0.10/32 ', $script);
+        $this->assertStringContainsString('allowed-address=172.28.0.224/27 ', $script);
     }
 
     public function test_openvpn_script_has_no_autoswitch_block_when_only_one_node_online(): void
@@ -325,8 +335,7 @@ class MikrotikScriptGeneratorTest extends TestCase
         $account = $this->vpnAccount(['username' => 'nas-42', 'protocol' => VpnProtocol::WireGuard, 'internal_ip' => '172.23.195.10']);
 
         $script = $this->generator->wireGuardScript(
-            $account, '45.123.142.242', 51820, 'SERVERPUB==', 'CLIENTPRIV==',
-            ['freeradius' => '172.28.0.10'],
+            $account, '45.123.142.242', 51820, 'SERVERPUB==', 'CLIENTPRIV==', '172.28.0.224/27', '172.28.0.225',
             [51820, 51821, 51822],
         );
 
@@ -381,11 +390,15 @@ class MikrotikScriptGeneratorTest extends TestCase
      * `/ip address` split into two separate Address+Network fields
      * (172.23.195.2 / 172.23.195.1) instead of a single CIDR value.
      * Confirmed via `git log -p` that this generator has NEVER emitted a
-     * `network=` parameter — this test locks that in going forward, and
-     * also locks in the CIDR mask staying `/32` specifically (not widened
-     * to e.g. `/30`, which would make RouterOS auto-add a connected route
-     * for the whole subnet and defeat the reverse-route isolation this
-     * script exists to enforce).
+     * `network=` parameter — this test locks that in going forward.
+     *
+     * v0.8.1 — the CIDR mask itself changed from a locked `/32` to `/30`
+     * (a DELIBERATE reversal, not a regression of the "never network="
+     * property this test still checks) — see MikrotikScriptGenerator's
+     * own comment on this exact line for why the original v0.7.3 "a wider
+     * mask would defeat the reverse-route isolation" reasoning no longer
+     * applies now that each NAS gets its own dedicated /30
+     * (VpnWireguardNasBlock) instead of sharing one /24.
      */
     public function test_wireguard_script_ip_address_line_is_single_cidr_value_never_a_separate_network_param(): void
     {
@@ -396,12 +409,85 @@ class MikrotikScriptGeneratorTest extends TestCase
         ]);
 
         $script = $this->generator->wireGuardScript(
-            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==',
-            ['freeradius' => '172.28.0.10'],
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==', '172.28.0.224/27', '172.28.0.225',
         );
 
-        $this->assertStringContainsString('/ip address add address=172.23.195.2/32 interface=boss-vpn-wireguard', $script);
+        $this->assertStringContainsString('/ip address add address=172.23.195.2/30 interface=boss-vpn-wireguard', $script);
         $this->assertStringNotContainsString('network=', $script);
+    }
+
+    /**
+     * Real bug found applying the first /27-block script to
+     * test-x86-bajastu: `/ip address remove [find interface=...]` used to
+     * run AFTER the wireguard interface had already been destroyed and
+     * recreated (by the cleanup block earlier in the same script) — the
+     * OLD address entry's interface binding is by internal object id, not
+     * the display name string, so once that specific object is gone the
+     * entry shows as attached to interface "unknown" and a by-interface
+     * find silently matches nothing, leaving an orphaned duplicate in
+     * `/ip address print` on every single regen (confirmed via a real
+     * Winbox screenshot). Fixed with a comment-based find, same class of
+     * fix as the /ip route staleness fixed earlier this same sprint.
+     */
+    public function test_wireguard_script_removes_old_ip_address_by_comment_not_stale_interface_reference(): void
+    {
+        $account = $this->vpnAccount([
+            'username' => 'nas-1',
+            'protocol' => VpnProtocol::WireGuard,
+            'internal_ip' => '172.23.195.2',
+        ]);
+
+        $script = $this->generator->wireGuardScript(
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==', '172.28.0.224/27', '172.28.0.225',
+        );
+
+        $this->assertStringContainsString('/ip address remove [find comment~"BOSS App - WAN VPN address"]', $script);
+        // The old, staleness-prone by-interface find must never appear.
+        $this->assertStringNotContainsString('/ip address remove [find interface=', $script);
+
+        // The remove must come BEFORE the add — otherwise a fresh add gets
+        // immediately wiped by its own cleanup, same ordering check
+        // already applied to the /ip route fix.
+        $removePos = strpos($script, '/ip address remove [find comment~"BOSS App - WAN VPN address"]');
+        $addPos = strpos($script, '/ip address add address=172.23.195.2/30');
+        $this->assertNotFalse($removePos);
+        $this->assertNotFalse($addPos);
+        $this->assertLessThan($addPos, $removePos);
+    }
+
+    /**
+     * Simulates what actually happened on the real router: regenerate the
+     * SAME NAS's script multiple times in a row (e.g. across several
+     * "Cabut & Generate Ulang" cycles, each with a genuinely different
+     * account/keypair — WireGuard's private key is never reused). Every
+     * single generation must emit the SAME comment-based removal command,
+     * proving a later regen would successfully find and remove an orphan
+     * left by ANY earlier regen, not just the immediately preceding one —
+     * the comment text itself never changes across regens (it's a fixed
+     * literal, not derived from anything regen-specific), which is exactly
+     * what makes it reliable regardless of how many times this has run.
+     */
+    public function test_wireguard_script_ip_address_removal_comment_stays_identical_across_repeated_regenerations(): void
+    {
+        $comments = [];
+
+        foreach (['nas-1-key-a', 'nas-1-key-b', 'nas-1-key-c'] as $i => $username) {
+            $account = $this->vpnAccount([
+                'username' => 'nas-1',
+                'protocol' => VpnProtocol::WireGuard,
+                'internal_ip' => '172.23.195.2',
+            ]);
+
+            $script = $this->generator->wireGuardScript(
+                $account, '45.123.142.242', 51822, "SERVERPUB{$i}==", "CLIENTPRIV{$username}==", '172.28.0.224/27', '172.28.0.225',
+            );
+
+            preg_match('/\/ip address remove \[find comment~"[^"]*"\]/', $script, $matches);
+            $this->assertNotEmpty($matches, "Regen #{$i} must contain the comment-based removal line.");
+            $comments[] = $matches[0];
+        }
+
+        $this->assertCount(1, array_unique($comments), 'The removal command must be identical across every regeneration.');
     }
 
     /**
@@ -423,8 +509,7 @@ class MikrotikScriptGeneratorTest extends TestCase
             'ca-url', 'cert-url', 'key-url', 'https', [1194, 1195],
         );
         $wgScript = $this->generator->wireGuardScript(
-            $wgAccount, '45.123.142.242', 51820, 'pub', 'priv',
-            ['freeradius' => '172.28.0.10'], [51820, 51821],
+            $wgAccount, '45.123.142.242', 51820, 'pub', 'priv', '172.28.0.224/27', '172.28.0.225', [51820, 51821],
         );
         $l2tpScript = $this->generator->l2tpScript($l2tpAccount, '7', '45.123.142.242', '172.28.0.10', 'psk');
         $radiusScript = $this->generator->radiusScript($nas, '172.28.0.10');
@@ -437,7 +522,7 @@ class MikrotikScriptGeneratorTest extends TestCase
         $this->assertStringContainsString('comment="BOSS App - WireGuard interface NAS nas-42"', $wgScript);
         $this->assertStringContainsString('comment="BOSS App - WireGuard peer NAS nas-42"', $wgScript);
         $this->assertStringContainsString('comment="BOSS App - WAN VPN address NAS nas-42"', $wgScript);
-        $this->assertStringContainsString('comment="boss-vpn-freeradius-route"', $wgScript);
+        $this->assertStringContainsString('comment="boss-vpn-infra-block-route"', $wgScript);
         $this->assertStringContainsString('comment="BOSS App - auto-switch logic boss-vpn-wireguard"', $wgScript);
         $this->assertStringContainsString('comment="BOSS App - auto-switch scheduler boss-vpn-wireguard"', $wgScript);
 
@@ -445,5 +530,128 @@ class MikrotikScriptGeneratorTest extends TestCase
         $this->assertStringContainsString('comment="boss-vpn-freeradius-route"', $l2tpScript);
 
         $this->assertStringContainsString('comment="boss-radius"', $radiusScript);
+    }
+
+    /**
+     * Real P0 bug: a comment added for the /ip address orphan-entry fix
+     * (see the test above) wrote `{$cleanup}` INSIDE a `#`-prefixed prose
+     * sentence, intending it as plain text — but a heredoc interpolates
+     * every `{$variable}`, including inside what LOOKS like a comment line
+     * to a human reader. Since $cleanup holds the entire multi-line
+     * interfaceCleanupBlock() script (several un-prefixed `/interface ...
+     * remove` commands), this silently duplicated that whole block into
+     * the middle of the comment — RouterOS's `/import` choked on the
+     * resulting malformed line ("interrupted / expected end of command"),
+     * reproduced for real trying to apply this to test-x86-bajastu twice.
+     * assertStringContainsString()-style tests alone did NOT catch this
+     * (the expected substrings were all still present — just ALSO
+     * duplicated) — this test instead validates the script holistically:
+     * every non-continuation line must start with `#`, `:`, or `/`, and no
+     * known singular command may appear more than once.
+     */
+    private function assertScriptHasNoStrayOrDuplicatedLines(string $script): void
+    {
+        $lines = explode("\n", $script);
+        $previousContinues = false;
+
+        foreach ($lines as $i => $line) {
+            $trimmed = trim($line);
+
+            if ($trimmed === '') {
+                $previousContinues = false;
+
+                continue;
+            }
+
+            if (! $previousContinues) {
+                $this->assertMatchesRegularExpression(
+                    '/^[#:\/]/',
+                    $trimmed,
+                    'Line '.($i + 1).' is neither a comment/command nor a line continuation — '
+                    .'looks like corrupted/injected content: "'.$trimmed.'"'
+                );
+            }
+
+            $previousContinues = str_ends_with(rtrim($line), '\\');
+        }
+
+        // "At most once", not "exactly once" — radiusScript() legitimately
+        // contains NONE of these (it's not a VPN client script at all, just
+        // a /radius add), so 0 occurrences there is correct, not a bug.
+        // The actual regression this guards against is 2+.
+        foreach ([
+            '/interface ovpn-client remove [find name="boss-vpn-openvpn"]',
+            '/interface sstp-client remove [find name="boss-vpn-sstp"]',
+            '/interface l2tp-client remove [find name="boss-vpn-l2tp"]',
+            '/interface pptp-client remove [find name="boss-vpn-pptp"]',
+            '/interface wireguard peers remove [find interface="boss-vpn-wireguard"]',
+            '/interface wireguard remove [find name="boss-vpn-wireguard"]',
+        ] as $singularLine) {
+            $this->assertLessThanOrEqual(
+                1,
+                substr_count($script, $singularLine),
+                "Cleanup line must appear at most once, found duplicated: \"{$singularLine}\""
+            );
+        }
+    }
+
+    public function test_wireguard_script_has_no_stray_or_duplicated_lines(): void
+    {
+        $account = $this->vpnAccount([
+            'username' => 'nas-1',
+            'protocol' => VpnProtocol::WireGuard,
+            'internal_ip' => '172.23.195.2',
+        ]);
+
+        $script = $this->generator->wireGuardScript(
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==', '172.28.0.224/27', '172.28.0.225',
+            nasGatewayIp: '172.23.195.1',
+        );
+
+        $this->assertScriptHasNoStrayOrDuplicatedLines($script);
+    }
+
+    /**
+     * Reproduces what actually happened on the real router: several
+     * regenerations in a row (different account/keypair each time, exactly
+     * how "Cabut & Generate Ulang" behaves) must EACH independently produce
+     * a clean, non-corrupted script — not just the first one.
+     */
+    public function test_repeated_wireguard_regeneration_never_produces_a_corrupted_script(): void
+    {
+        foreach (range(1, 4) as $i) {
+            $account = $this->vpnAccount([
+                'username' => 'nas-1',
+                'protocol' => VpnProtocol::WireGuard,
+                'internal_ip' => '172.23.195.2',
+            ]);
+
+            $script = $this->generator->wireGuardScript(
+                $account, '45.123.142.242', 51820 + $i, "SERVERPUB{$i}==", "CLIENTPRIV{$i}==", '172.28.0.224/27', '172.28.0.225',
+                nasGatewayIp: '172.23.195.1',
+            );
+
+            $this->assertScriptHasNoStrayOrDuplicatedLines($script);
+        }
+    }
+
+    public function test_openvpn_l2tp_and_radius_scripts_have_no_stray_or_duplicated_lines(): void
+    {
+        $ovpnAccount = $this->vpnAccount(['username' => 'nas-42', 'protocol' => VpnProtocol::OpenVpn]);
+        $l2tpAccount = $this->vpnAccount(['username' => 'nas-42', 'protocol' => VpnProtocol::L2tpIpsec, 'password' => 'pw']);
+        $nas = $this->nas(['name' => 'NAS Gambir', 'radius_secret' => 'secret', 'auth_port' => 20000, 'acct_port' => 20001]);
+
+        $this->assertScriptHasNoStrayOrDuplicatedLines(
+            $this->generator->openVpnScript(
+                $ovpnAccount, '7', '45.123.142.242', 1194, '172.28.0.10',
+                'ca-url', 'cert-url', 'key-url', 'https', [1194, 1195],
+            )
+        );
+        $this->assertScriptHasNoStrayOrDuplicatedLines(
+            $this->generator->l2tpScript($l2tpAccount, '7', '45.123.142.242', '172.28.0.10', 'psk')
+        );
+        $this->assertScriptHasNoStrayOrDuplicatedLines(
+            $this->generator->radiusScript($nas, '172.28.0.10')
+        );
     }
 }

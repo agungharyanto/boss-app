@@ -41,6 +41,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedNetworkPermissions();
         $this->seedGenieAcsPermissions();
         $this->seedCpeParameterMapPermissions();
+        $this->seedOltDevicePermissions();
     }
 
     /**
@@ -253,6 +254,26 @@ class RolesAndPermissionsSeeder extends Seeder
         $permissions = [
             'nas.view',
             'nas.manage',
+        ];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+    }
+
+    /**
+     * v0.8.1 OLT Credential Registry — same shape as seedNetworkPermissions
+     * (nas) above: admin-wide via these two permissions, or a reseller's
+     * own OLTs via any active reseller_users membership (see
+     * OltDevicePolicy), no separate permission needed for that carve-out.
+     */
+    private function seedOltDevicePermissions(): void
+    {
+        $permissions = [
+            'olt_devices.view',
+            'olt_devices.manage',
         ];
 
         foreach ($permissions as $permission) {

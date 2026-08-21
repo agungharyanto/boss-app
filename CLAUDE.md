@@ -1531,10 +1531,10 @@ not solved by more time on this same approach**:
 
 ## GenieACS Connection Request Routing (v0.7.3) — implementation done, end-to-end verification PENDING
 
-**Amendment (v0.7.7) — VERIFIED, this section's "PENDING" title is now
-stale**: the retest this section calls for below was finally run for real.
-Short version — it works; see "GenieACS Testing Refinements & Status Sync
-Redesign (v0.7.7)" near the end of this file for the full
+**Amendment (v0.7.7, merged/tagged) — VERIFIED, this section's "PENDING"
+title is now stale**: the retest this section calls for below was finally
+run for real. Short version — it works; see "GenieACS Testing Refinements &
+Status Sync Redesign (v0.7.7)" near the end of this file for the full
 account, including a real false lead this same investigation produced and
 had to walk back (don't re-add a route to a WireGuard node's tunnel
 gateway IP without new evidence — see that section). The two specific
@@ -1863,6 +1863,1419 @@ is new scope for a later sprint, not assumed here", still true). There's
 also no "look up WorkOrder by device serial number" endpoint —
 `index()` only filters by `status`. Both are real gaps to close as part of
 `v0.12.0`, not something to design/build yet.
+
+## Network Navigation Restructure & OLT Credential Registry (v0.8.1)
+
+**Built as a same-branch addendum to the still-open `v0.8.1-librenms-install`
+sprint** — the LibreNMS install/device-onboarding work itself (own MariaDB,
+own token auth, 4 real devices) is further along in that same branch but not
+yet documented here, pending the multi-hour resource-usage monitoring gate
+its own DoD requires; a full `## LibreNMS ...` CLAUDE.md section lands once
+that report is written, not before. This section covers only the addendum:
+sidebar nav restructure + a new OLT credential registry, both merged into
+the same unmerged/untagged branch, not split out.
+
+**Sidebar nav restructure**: `resources/views/components/sidebar.blade.php`'s
+`network` cluster gained an optional `children` key per top-level link — a
+link with `children` renders as a chevron-toggle group (`x-data="{ subOpen:
+... }"`, open/closed state persisted per-group in `localStorage` under
+`sidebar-subgroup-{id}`) instead of a plain `<a>`; a link with no `children`
+key still renders the old way, so this is additive, not a rewrite of every
+nav item. Applied to: **NAS** (child: Script Generator), **OLT** (new
+sibling top-level item, deliberately NOT nested under NAS — OLT hardware is
+independent of any one NAS, an OLT registry entry merely references a NAS
+as its access path), **Perangkat CPE** (child: Cek Status Device, listed
+first in the group).
+
+**New OLT Credential Registry** (`olt_manufacturers` → `olt_models` →
+`olt_devices`, page `/olt-devices`, component `App\Livewire\Network\
+OltDeviceIndex`): manufacturer/model master data (a model carries
+`supported_pon_type` — `Gpon`/`Epon`/`GponEpon`, `App\Enums\OltPonType`) is
+addable inline via quick-add modals on the same page, no separate CRUD
+screens. `olt_devices` is tenant+reseller scoped (`BelongsToTenant`,
+`BelongsToResellerScope` — same nullable-`reseller_id` "direct row" pattern
+already used by `whatsapp_sessions`/`customers.reseller_id`/`nas`), and
+requires both a `nas_id` FK and an `olt_model_id` FK, both
+`restrictOnDelete()` (an OLT registry row is meaningless without an access
+path or a model). `OltDevicePolicy` mirrors `NasPolicy` exactly:
+`olt_devices.view`/`.manage` (super_admin, seeded in
+`RolesAndPermissionsSeeder::seedOltDevicePermissions()`) for full access, or
+an active `reseller_users` membership for a reseller's own OLTs.
+
+**Credential encryption reuses `Nas`'s existing pattern exactly — no new
+encryption mechanism was written for this module, per explicit instruction**.
+`access_protocol` (`App\Enums\OltAccessProtocol`: `Telnet`/`Ssh` only —
+**not** `Snmp`, see next paragraph) gates which of two CLI-admin credential
+groups apply (telnet or ssh username+port+password); every secret-bearing
+column (`telnet_password`, `ssh_password`, `snmp_ro_community`,
+`snmp_rw_community`) is a plain `text` column with Eloquent's `'encrypted'`
+cast, and all four are listed in `OltDevice::$hidden` so they never
+serialize even for an authorized admin. `OltDeviceDatatableController`
+additionally whitelists its JSON output columns explicitly
+(`->only([...])`) — a second, independent layer against ever leaking a
+credential through the list view, the same belt-and-suspenders posture as
+`NasResource`'s `has_api_password`/`has_radius_secret`-boolean-only shape.
+
+**SNMP is deliberately NOT one of the `access_protocol` choices (addendum
+#2, same v0.8.1 branch) — a real UX bug from the first cut of this form is
+why.** SNMP fields used to live inside the same per-protocol conditional
+block as Telnet/SSH, mutually exclusive with them — so switching Access
+Protocol from Telnet to SNMP (or vice versa) silently wiped whatever had
+just been typed into the other block, because both shared the same "only
+render the block matching the current selection" Blade logic. Root
+modeling mistake: SNMP is a monitoring protocol independent of how an
+admin logs into the OLT's CLI, not a third alternative to Telnet/SSH.
+Fixed by giving SNMP its own always-on, unconditional form section
+(`App\Livewire\Network\OltDeviceIndex`'s SNMP fields are no longer inside
+any `if ($accessProtocol === ...)` branch, in the Blade view or in
+`save()`'s validation/data-assignment), positioned above the Access
+Protocol section — `snmp_version`/`snmp_port`/`snmp_ro_community` are
+required on every OLT regardless of which CLI protocol it uses;
+`snmp_rw_community` stays optional. `snmp_ro_community`'s "required" rule
+only actually applies on **create** (`$this->editingOltDeviceId === null`)
+— on edit it follows the same blank-means-unchanged masked-secret
+convention as `telnet_password`/`ssh_password`, so re-saving an existing
+OLT never forces re-typing a community string that's already stored.
+
+**`create()` auto-generates both SNMP community strings the moment the
+form opens** (`Str::password(16)`, Laravel's own secure-random-password
+helper — no hand-rolled generator), pre-filling `snmpRoCommunity`/
+`snmpRwCommunity` so they're never blank by default, matching the
+SmartOLT-style reference UI Agung pointed to. Both stay fully editable — a
+technician who already configured a specific community string manually on
+the physical OLT can type over the generated one — and each has its own
+"Regenerate" button (`regenerateSnmpRoCommunity()`/
+`regenerateSnmpRwCommunity()`) to redraw a fresh random value on demand.
+The community input fields render as plain `type="text"`, not
+`type="password"` — unlike telnet/ssh passwords (which the admin already
+knows and is typing in from memory), a generated community string is
+useless if the technician can't read/copy it to go configure the same
+value manually on the OLT itself (see the scope note below — this form
+only **stores** the value, it never pushes it to the device). **No
+existing `olt_devices` rows needed migrating when this changed** — checked
+directly (`OltDevice::where('access_protocol', 'snmp')->count()`) before
+making the change; the table was still empty, still awaiting Agung's real
+credential entry.
+
+**Explicitly out of scope, unchanged from the original addendum's
+framing**: this module never pushes the SNMP community (or anything else)
+to the OLT over Telnet/SSH — a technician must already have configured (or
+will separately configure) the matching community string directly on the
+device's own management interface. This form's only job is to record what
+LibreNMS should poll with; automatic config-push is future OMCI-adjacent
+scope, not attempted here.
+
+**Test Connection pings the OLT's IP FROM the selected NAS, never directly
+from boss-app** — `OltDeviceService::testConnection()` calls the exact same
+`RouterOsGateway::pingHost()` interface `NasService::testConnection()`
+already uses; no new router-connection code was written for this module.
+Reasoning is identical to the `CpeDeviceStatusSyncService` redesign in the
+v0.7.7 section above: under BOSS App's multi-tenant SaaS model, boss-app
+itself has no network path to an ISP's internal OLT management LAN — only
+that ISP's own NAS, reachable over the already-provisioned VPN tunnel, does.
+`OltDeviceService::isPrivateIp()`
+(`filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE)`) rejects
+any public IP at save time — an OLT's management IP is by definition on a
+private ISP-internal LAN, never directly internet-routable, so a public IP
+here is always a data-entry mistake, not a hypothetical worth tolerating.
+**No SSH/Telnet login-level test this sprint, ping-only** — Test Connection
+proves L3 reachability from the NAS to the OLT, nothing about whether the
+entered credentials actually authenticate; deliberately out of scope per
+the sprint brief, noted here so it isn't mistaken for a stronger guarantee.
+
+**Save is hard-blocked until Test Connection has passed for the exact
+current `(nas_id, ip_address)` pair** — `OltDeviceIndex` tracks
+`testPassedForKey = "{$nasId}|{$ipAddress}"`, set only by a successful
+`testConnection()` call; the `updated(string $property)` lifecycle hook
+invalidates it the instant either field changes afterward (re-typing the
+IP, or switching the NAS dropdown), so a passed test can never be silently
+carried over to a different pair by editing one field after the other.
+Editing an existing row re-derives this gate from the persisted
+`last_connection_test_result`/`last_connection_test_message` **only when
+the persisted result is a success** — a persisted `failed` (or no test ever
+recorded) leaves the gate closed and requires a fresh Test Connection
+rather than half-trusting stale failure data. **Real bug caught by this
+exact edge case while testing**: an early version of `edit()` set
+`testPassedForKey` unconditionally for any row being edited, which crashed
+`save()` (null array-offset access on `testConnectionResult`) the moment a
+row with no in-memory test result was saved without re-testing — fixed by
+only trusting a genuinely-persisted `success`, covered by
+`OltDeviceIndexLivewireTest::
+test_changing_ip_after_a_passed_test_invalidates_it_and_re_blocks_save` and
+its sibling cases.
+
+**3 real OLTs (ZTE C300, HSGQ-G02ID/GPON, HSGQ-E04ID/EPON) are entered by
+Agung directly through this new UI, not seeded or guessed** — same
+"don't guess real credentials" posture as every other real-hardware secret
+in this codebase (Xendit keys, the WhatsApp HMAC secret, NAS/VPN PSKs). All
+3 are now entered and Test-Connection-verified (ZTE C300 as
+`c300.kaliwungu.bajastu.id`, HSGQ-E04ID as `HSGQ-E04ID-CILED`, HSGQ-G02ID
+as `HSGQ-G02ID-BUMIREJA` — all via NAS `test-x86-bajastu`). **Attempting to
+actually onboard them into LibreNMS surfaced a real, unrelated network
+routing gap — see "LibreNMS OLT Onboarding — blocked on network routing,
+not SNMP" below — this is NOT a Test Connection bug and NOT specific to
+any one OLT/vendor.**
+
+**Addendum #3 (same branch, 3 more real bugs found by Agung testing the
+form in the browser) — a real Livewire+DataTables DOM-morph conflict, a
+missing delete path for master data, and a plaintext-password toggle.**
+
+1. **The OLT list silently stayed empty after every successful save, with
+   zero console errors** — confirmed for real with a headless Playwright
+   run against this dev server (login → edit an OLT → save → inspect the
+   live `#olt-devices-table` DOM without any manual page reload): the
+   `<tbody>` reverted to the pristine, empty, server-rendered Blade markup
+   every time. Root cause: `OltDeviceIndex`'s create/edit form and its
+   DataTables-driven list live in the SAME Livewire component, so every
+   `save()`/`delete()` (which touches many public properties, not just the
+   ones that changed) triggers a full Livewire DOM morph over the WHOLE
+   component tree — including the `<table>` DataTables had already
+   transformed client-side (wrapped in its own `.dataTables_wrapper`,
+   populated with AJAX-fetched rows). Livewire's morph doesn't know
+   DataTables did that; it reconciles the live DOM back toward the
+   server's freshly-rendered HTML, which is always the pristine empty
+   `<table><tbody></tbody></table>` from the Blade source — wiping
+   DataTables' rows/wrapper regardless of whether `table.ajax.reload()`
+   also fires via the existing `olt-device-saved` dispatch/`x-on:...window`
+   listener (see the "New OLT Credential Registry" paragraph above — that
+   plumbing was already correct, it just wasn't enough on its own). Fixed
+   with `wire:ignore` on the list's outer `<div>` (Livewire's own
+   documented answer for "a third-party JS library owns this subtree,
+   never morph it") — confirmed fixed with the same Playwright script
+   re-run after the fix: the renamed value appeared in the live table with
+   no manual reload. This is a real, general gotcha for this codebase: **any
+   future page combining a reactive Livewire form with a DataTables list in
+   the SAME component needs `wire:ignore` on the DataTables container from
+   the start** — `CpeDeviceIndex` (the only other DataTables+Livewire page)
+   never hit this because it has no state-changing form/save() at all, not
+   because it solved the problem.
+2. **Manufacturer/Model master data had no delete path** — the existing
+   "+" quick-add modals were extended into "manage" modals (same modal,
+   now also lists existing rows with a `wire:confirm`-gated "Hapus" link,
+   the exact same `text-red-600 hover:underline` + `wire:confirm="..."`
+   pattern already used by `customer-show.blade.php`'s contact delete —
+   reused, not reinvented). Referential integrity: `deleteModel()` checks
+   `OltDevice::withoutGlobalScopes()->where('olt_model_id', $id)->count()`
+   deliberately WITHOUT tenant/reseller scoping — `olt_models`/
+   `olt_manufacturers` are platform-level master data (same posture as
+   `payment_gateway_channels`), so "is this still in use" must mean across
+   every tenant, never just what the acting admin's own session can see.
+   `deleteManufacturer()` takes a deliberately simpler/stricter rule
+   instead of relying on `olt_models`' DB-level `cascadeOnDelete()` (see
+   that migration) chained through `olt_devices`' `restrictOnDelete()`: a
+   manufacturer can only be deleted while it has ZERO models under it,
+   full stop — no silent cascade-delete of models the user never explicitly
+   asked to remove, matching the sprint's own "create+delete only, no more
+   complex master-data CRUD" scope limit. Deleting a manufacturer/model
+   that's currently selected in the open form clears that selection rather
+   than leaving it pointing at a now-nonexistent id.
+3. **`telnet_password`/`ssh_password` had no show/hide toggle** (unlike the
+   SNMP community fields, which are plain `type="text"` by design — see
+   above). Checked first for an existing toggle component to reuse (login
+   form, other credential forms) — none exists anywhere in this app, so a
+   small inline Alpine `x-data="{ showPw: false }"` + `:type="showPw ?
+   'text' : 'password'"` toggle was added directly on both fields (a
+   "Lihat"/"Sembunyikan" button, same `border-gray-300 hover:bg-gray-50`
+   styling as the SNMP "Regenerate" buttons) rather than building a new
+   reusable component for what is, so far, exactly two fields.
+
+## LibreNMS OLT Onboarding — RESOLVED (v0.8.1)
+
+**Status: DONE — all 3 OLTs onboarded, real polling data confirmed
+(uptime, real GPON port names, `last_polled` advancing).** Getting here
+took THREE separate, independently-real root causes stacked on top of
+each other, found and fixed in this order — a genuine lesson in not
+declaring victory after fixing just the first plausible-looking cause:
+
+1. **Network routing** (fragment+reconcile / the OSPF experiment before
+   it) — `librenms`/`librenms-dispatcher` had zero path to `10.168.100.
+   0/24` at all. Fixed by the fragment+reconcile mechanism (see that
+   section above) — proven correct via `ip route` content on the
+   containers.
+2. **Router FORWARD-chain firewall** — even with routing fixed, ICMP/TCP
+   replies never made it back. A live, deliberately time-boxed test with
+   Agung disabling the entire FORWARD filter chain proved this
+   conclusively: ping to all 3 OLTs and a GenieACS Connection Request
+   both succeeded for the FIRST TIME in this entire investigation the
+   moment the firewall was off, then reverted immediately after
+   confirming (never left disabled — a genuine root-cause proof, not a
+   workaround). Strong suspect going in: FORWARD rule `drop connection-
+   state=invalid` (8.7M+ hits, actively firing) — the router's own
+   connection tracker apparently failing to correlate reply traffic back
+   to its originating request for this specific path. **The actual
+   permanent fix for this rule is NOT done yet** — Agung re-enabled the
+   full firewall as-is after the diagnostic window; a real fix (an
+   explicit accept for this traffic ahead of rule #8, or a connection-
+   tracking-level correction) is still open, tracked separately from the
+   SNMP-specific finding below.
+3. **SNMP credentials — the actual final blocker, unrelated to either of
+   the above.** Even with routing AND firewall no longer in question,
+   `snmpget`/`snmpwalk` against all 3 OLTs kept failing. Root cause: the
+   `olt_devices` registry (v0.8.1 addendum, "Network Navigation
+   Restructure & OLT Credential Registry" section above) held
+   **auto-generated random SNMP communities that were never actually
+   applied to the real hardware** — these 3 OLTs had been configured with
+   real, human-chosen community strings (`tokia121314`, confirmed
+   identical across all three, port 161 — not the `2161` the registry
+   had stored) LONG before this registry/form existed. Confirmed by
+   Agung reading the two HSGQ units' own web UI directly; the ZTE C300's
+   value was hypothesized (same ISP convention, same community, default
+   port) and confirmed correct empirically — `snmpget`/`snmpwalk`
+   succeeded immediately against all 3 once `olt_devices.snmp_ro_
+   community`/`snmp_port` were corrected to match, returning genuine
+   device data (`sysDescr`, real uptime, `sysName`, GPON port names).
+
+**UX gap this surfaced, worth fixing but not yet actioned (observation
+only, per explicit instruction not to change the form this round)**:
+`OltDeviceIndex::create()` auto-generates `snmpRoCommunity`/
+`snmpRwCommunity` via `Str::password(16)` the MOMENT the form opens (see
+that section's own docblock above) — a genuinely good default for a
+brand-new OLT whose community BOSS App gets to define first. But for an
+OLT that's been running for months/years with an admin-chosen community
+already configured on the physical device (exactly this case, 3-for-3
+real OLTs), the auto-generated value fills the field **before** the admin
+has a chance to type the real one in — nothing in the form visually
+distinguishes "this is a fresh random suggestion, please confirm or
+replace it" from "this is what I want" the way the password fields'
+masked-blank-means-unchanged convention does on edit. All 3 real OLTs in
+this registry were saved with the auto-generated value silently accepted
+as-is, undetected until SNMP simply never worked. A future improvement
+(not built here) might: default to blank instead of auto-generating on
+create, or add explicit copy near the field clarifying it's a
+suggestion, not a requirement.
+
+---
+
+**Original diagnosis record below (network-routing phase only) — left
+intact as-is, superseded by the fuller 3-layer account above.**
+
+**Status: NOT done, real infrastructure gap found, NOT worked around
+without asking first.** The router (`test-x86-bajastu`, `ro-x86-
+kaliwungu.bajastu.id`) was onboarded into LibreNMS earlier this sprint and
+is genuinely polling real data (uptime, interfaces — confirmed via the
+LibreNMS API's own `devices` response, `last_polled`/`uptime` fields
+populated and advancing). Attempting the same for the 3 OLTs in the new
+Credential Registry failed for all 3 — not because of anything wrong with
+the registry or their credentials, but because **the `librenms` container
+has zero network path to the OLTs' management subnet (`10.168.100.0/24`)
+at all**, confirmed layer by layer, the same way the v0.7.3 GenieACS
+Connection Request gap was originally diagnosed:
+
+1. `docker compose exec librenms ip route` — only a route to
+   `172.28.0.0/24` (boss-network) + a default gateway. Nothing toward
+   `10.168.100.0/24`.
+2. Direct proof: `snmpget -v2c -c <real-ro-community> 10.168.100.34:2161
+   sysDescr.0` from inside the `librenms` container timed out — "No
+   Response". Not a community/version/port mistake — the packet has
+   nowhere to go.
+3. `POST /api/v0/devices` against the real LibreNMS API (no `force_add`,
+   so LibreNMS's own server-side reachability check ran for real) was
+   asked to add the ZTE C300 with its real stored SNMP credentials and
+   cleanly refused: `{"status":"error","message":"Could not ping
+   10.168.100.34 (10.168.100.34)"}` — LibreNMS itself agrees, no device
+   row was created (deliberately NOT retried with `force_add: true`,
+   which would have created a permanently-unreachable "added" row —
+   exactly the misleading state this investigation was trying to avoid).
+4. Traced one hop further: `docker compose exec wireguard-node3 ip route`
+   (the actual VPN tunnel node this NAS's active `vpn_accounts` row is
+   currently on, per `VpnServer::poolOwnerFor()`-style lookup — protocol
+   `wireguard`, `vpn_server_id=7`, `vpn-node-3`) shows a route to
+   `10.1.0.0/20` (the TR-069/CPE subnet, provisioned for GenieACS in
+   v0.7.3) but **no route to `10.168.100.0/24` at all** — this subnet was
+   simply never provisioned for anyone, at the very first hop, let alone
+   for LibreNMS specifically.
+
+**Why `OltDeviceIndex`'s own Test Connection showing "Berhasil" for all 3
+OLTs does NOT contradict this** — that check runs the ping FROM the NAS
+itself (`RouterOsGateway::pingHost()`, a RouterOS API call the router
+executes against its own attached LAN), never from boss-app's or
+LibreNMS's own network position. The router can reach its own local
+10.168.100.0/24 management VLAN trivially; that says nothing about
+whether `librenms` (a container on `boss-network`, several hops and one
+WireGuard tunnel away) can.
+
+**Amendment — the router-side "sudah di-apply" claim didn't hold up under
+verification, and the fix design changed as a result.** Before touching any
+container config, the actual live router state was read directly via
+RouterOS API (`/interface/wireguard/peers/print`, `/ip/route/print`) —
+`allowed-address` and the reverse-route table were byte-for-byte identical
+to the pre-existing v0.7.3 state (4 `/32`s, nothing OLT/LibreNMS-related).
+The claimed manual Winbox edit had not actually landed. This, combined with
+Agung independently flagging that a prior manual widening attempt left
+stale entries behind (no exact-match idempotent cleanup for a model that
+was about to change shape anyway), led to a locked architecture decision
+(confirmed explicitly, not a unilateral choice): **replace the whole
+one-`/32`-per-service model with a single reserved `/27` block**, migrating
+FreeRADIUS/GenieACS-CWMP/GenieACS-NBI onto it at the same time as LibreNMS
+— see "Infra Tunnel IP Block (v0.8.1)" below for the full design and
+current implementation status.
+
+**Status as of that redesign — Tahap 1-4 done and tested, Tahap 5 (the
+actual router script) blocked on a real production-safety question, not
+yet generated:**
+- Tahap 1 (IP block choice) and Tahap 2 (docker-compose.yml/.env pinning)
+  are done — see "Infra Tunnel IP Block" below for the address map.
+- Tahap 3 (`MikrotikScriptGenerator::wireGuardScript()`/`VpnScriptService`
+  rewritten for the block model, fully idempotent regen) is done, tested
+  (full suite green), Pint-clean.
+- Tahap 4 (`docker/wireguard/entrypoint.sh` + a new
+  `docker/librenms/route-init.sh` for the OLT subnet route/firewall) is
+  done, incremental — the existing `TR069_MANAGEMENT_SUBNET`/GenieACS
+  block was verified untouched.
+- Tahap 5 (generate the actual script for Agung to apply) surfaced a real
+  blocker before any script could be produced: `test-x86-bajastu` already
+  has an ACTIVE WireGuard `vpn_accounts` row for this NAS, and
+  `VpnScriptService::generateVpnScript()` can only emit a fresh script for
+  a `justProvisioned` account — WireGuard's private key is never persisted
+  (see the v0.6.3 section above), so there is no way to re-emit a script
+  for the CURRENTLY LIVE keypair. The only path to a new script is "Cabut &
+  Generate Ulang" (revoke + reprovision), which necessarily drops and
+  re-establishes this NAS's live tunnel — not a side-effect-free regen.
+  **Not executed without explicit confirmation** — this is a materially
+  bigger production action than "print a new script" and needed to be
+  surfaced before proceeding, not discovered mid-cutover.
+- A SECOND pre-existing drift was found while preparing `OLT_MANAGEMENT_GATEWAY`
+  (needed regardless of the block redesign, for `docker/librenms/
+  route-init.sh` and `docker/genieacs/entrypoint.sh`'s already-existing
+  `TR069_MANAGEMENT_GATEWAY` mechanism): `.env`'s `TR069_MANAGEMENT_GATEWAY`
+  is currently `172.28.0.11` (node1), set 2026-08-19 after an observed
+  auto-switch — but a fresh live check (RouterOS API,
+  `/interface/wireguard/peers/print`) done while writing this shows the
+  router's REAL current peer at `endpoint-port=51822` (`vpn-node-3`,
+  `172.28.0.5`), 27s-old handshake — i.e. it has since switched back to
+  node3 and `TR069_MANAGEMENT_GATEWAY` was never updated to match. This
+  means the GenieACS Connection Request path may ALREADY be broken right
+  now, independent of any v0.8.1 work — flagged, not silently fixed (fixing
+  it means recreating `genieacs-cwmp`/`genieacs-nbi`, explicitly off-limits
+  without asking first this sprint). `OLT_MANAGEMENT_GATEWAY` was set from
+  the fresh, correct value (`172.28.0.5`), not copied from the stale
+  `TR069_MANAGEMENT_GATEWAY`.
+
+All 3 OLTs stay registered in `olt_devices` (BOSS App's own credential
+registry — correct, unaffected by any of this) but **not yet added to
+LibreNMS at all** — zero misleading "added but unreachable" rows exist.
+
+**Resource usage — still the 1-device baseline, not yet a real 4-device
+comparison**: since no OLT was ever actually added to LibreNMS, `docker
+stats` for `librenms`/`librenms-dispatcher`/`librenms-db`/`librenms-redis`
+still reflects the router-only baseline: **~291MiB combined RAM**
+(librenms 99.9MiB + dispatcher 69.2MiB + db 118.3MiB + redis 3.5MiB),
+consistent with the earlier ~288MB single-device figure — i.e. no
+meaningful drift, as expected, since nothing new is actually polling.
+`librenms_data` volume 522.9MB, `librenms_db_data` 238.2MB. **The
+4-device resource comparison this sprint's DoD wants is deferred until the
+routing gap above is resolved and the 3 OLTs are actually polling** — this
+number should NOT be read as "LibreNMS handles 4 devices for ~291MB", it's
+still genuinely 1 device.
+
+## Infra Tunnel IP Block (v0.8.1)
+
+**Replaces the v0.6.2-v0.8.0 "one `/32` per service, hand-added to the
+router" model with a single reserved `/27` block.** Through v0.7.7, every
+service allowed to reach through a NAS's WireGuard tunnel (FreeRADIUS,
+GenieACS CWMP/NBI) got its own individual `/32` in the router's
+`allowed-address` — this worked but meant the router had to be manually
+re-touched for every new module. LibreNMS's OLT onboarding was the change
+that surfaced this as a real problem (a 5th manual router edit, on top of
+3 that already existed) — see "LibreNMS OLT Onboarding" above for the full
+diagnosis trail.
+
+**DELIBERATE, CONSCIOUS security trade-off — confirmed explicitly with
+Agung, not scope drift.** The v0.6.2 hub-and-spoke design intentionally
+locked `allowed-address` to specific `/32`s ("FreeRADIUS selalu diakses di
+SATU IP internal tetap dari sisi Mikrotik" — a locked architecture decision
+at the time). This widens that to block-level (any of the 32 addresses in
+the reserved range is now a trusted tunnel source) in exchange for a
+genuinely modular product — an ISP can buy just GenieACS, or just
+LibreNMS, without a router re-touch per combination, matching how this
+product is meant to be sold.
+
+**Block chosen: `172.28.0.224/27` (`.224`-`.255`)** — NOT the mathematically
+"free" option of reusing `172.28.0.0/27` (which would have covered the 5
+old/current addresses without any migration), deliberately rejected: that
+range is already occupied by 23 unrelated non-tunnel containers
+(boss-postgresql, mongo, boss-app, boss-worker, the VPN node containers
+themselves, etc.) — widening `allowed-address` to include it would have
+trusted all of them as tunnel sources, a real security regression far
+beyond the agreed trade-off. `172.28.0.224/27` was empty (confirmed via
+`docker network inspect` before picking it) and happens to end at `.255`,
+the `/24`'s own broadcast address — doubly protected against ever being
+assigned to a container (both by convention and by Docker itself refusing
+it). `.224` (block base) is likewise left unused by convention.
+
+| IP | Service | Env var |
+|---|---|---|
+| `172.28.0.224` | *(reserved — block base)* | — |
+| `172.28.0.225` | FreeRADIUS | `FREERADIUS_INTERNAL_IP` (was `.10`) |
+| `172.28.0.226` | GenieACS CWMP | `GENIEACS_CWMP_INTERNAL_IP` (was `.30`) |
+| `172.28.0.227` | GenieACS NBI | `GENIEACS_NBI_INTERNAL_IP` (was `.31`) |
+| `172.28.0.228` | LibreNMS (web/API) | `LIBRENMS_INTERNAL_IP` (new) |
+| `172.28.0.229` | LibreNMS Dispatcher (the actual SNMP poller) | `LIBRENMS_DISPATCHER_INTERNAL_IP` (new) |
+| `172.28.0.230`-`.254` | *(reserved, 25 free slots for future modules)* | — |
+| `172.28.0.255` | *(reserved — `/24` broadcast, Docker-enforced)* | — |
+
+`INFRA_TUNNEL_BLOCK_CIDR=172.28.0.224/27` is the new single source of
+truth (`config('services.vpn.infra_block_cidr')`) — a brand-new module
+just needs a free IP inside this block; the router's `allowed-address`
+never needs touching again for it.
+
+**`MikrotikScriptGenerator::wireGuardScript()` rewritten (v0.8.1)** — takes
+`string $infraBlockCidr` instead of the old `array $reverseRouteTargets`.
+`allowed-address` is now `{$infraBlockCidr}[,{$vpnNodeTunnelIp}/32]` (the
+VPN node's own tunnel-gateway `/32`, used for the v0.7.3 MASQUERADE
+mechanism, stays a separate parameter — it's a `172.23.x.x` tunnel address,
+not a `boss-network` one, so it can't be folded into the block). The
+per-service reverse-route loop collapsed into exactly ONE route
+(`dst-address={block} gateway=boss-vpn-wireguard comment="boss-vpn-infra-block-route"`).
+**Idempotent regen**: preceded by
+`/ip route remove [find comment~"boss-vpn-.*-route"]` — a WILDCARD match
+(not the old per-comment exact match), specifically so re-pasting the
+script also sweeps up the 3 old per-service routes
+(`boss-vpn-freeradius-route`/`-genieacs-nbi-route`/`-genieacs-cwmp-route`)
+from a NAS still on the pre-v0.8.1 scheme, in the same run that adds the
+new block route — no separate manual Winbox cleanup needed. **Behavioral
+simplification that comes with this**: the old per-NAS conditional
+inclusion of GenieACS NBI/CWMP (only added if `nas.tr069_management_subnet`
+was set) is GONE — the block itself is now unconditional for every
+WireGuard NAS; "which service is allowed to reach which NAS" moved fully
+to the application layer (e.g. `tr069_management_subnet` still gates
+whether GenieACS itself ever attempts a Connection Request), not the
+VPN-layer allowlist.
+
+**Gotcha found applying the FIRST real /27-block script to
+test-x86-bajastu: `/ip address` had the exact same staleness bug the route
+fix above already solved, just not yet applied to it** —
+`/ip address remove [find interface="boss-vpn-wireguard"]` used to run
+AFTER the interface-cleanup block earlier in the same script had already
+destroyed and recreated the wireguard interface. RouterOS binds an
+`/ip address` entry's `interface` property to the interface's internal
+object id, not its display-name string — once that specific object is
+deleted, the address entry shows as attached to interface `"unknown"`,
+and a by-interface `find` silently matches nothing against it. Net effect,
+confirmed from a real Winbox screenshot: an orphaned duplicate
+"BOSS App - WAN VPN address NAS nas-1" entry, interface `unknown`, left
+behind on every single regen. **General rule this establishes for this
+whole class of generated script**: any `remove [find ...]` that targets an
+object by referencing ANOTHER object this same script also removes/
+recreates (interface name, in this case) is unreliable the moment that
+other object gets recreated — comment-based `find` is the robust pattern,
+since the comment string is a property of the object being removed itself,
+not a reference to something else that might have changed underneath it.
+Fixed the same way as the route: `/ip address remove [find comment~"BOSS
+App - WAN VPN address"]`. Every other `[find ...]` removal in this
+generator (`interfaceCleanupBlock()`'s 4 PPP-interface + wireguard removes,
+`routingIsolationBlock()`'s mangle/route/table/rule removes,
+`autoSwitchBlock()`'s script/scheduler removes, `openVpnScript()`'s
+certificate/file cleanup, `radiusScript()`'s `/radius` remove) was audited
+for the same pattern — none of the others reference an object this script
+also recreates, so none had this bug.
+
+**P0 found immediately after applying that same fix: the fix itself broke
+the generated script** — the `.rsc` Agung downloaded and tried to `/import`
+twice failed with "interrupted / expected end of command", and the file's
+own content (confirmed from what he sent back) showed the interface
+cleanup block duplicated, with un-`#`-prefixed prose sitting between the
+two copies. Root cause: the comment explaining the fix above wrote
+`` {$cleanup} `` **inside a `#`-prefixed prose sentence** ("...recreated by
+{$cleanup} above...") intending it as plain English text — but this is
+still inside the SAME PHP heredoc as the rest of the script, and a heredoc
+interpolates every `{$variable}` exactly like a double-quoted string,
+comment or not. `$cleanup` holds the ENTIRE multi-line
+`interfaceCleanupBlock()` output (6 real, un-prefixed RouterOS commands) —
+interpolating it mid-sentence spliced that whole block into the comment,
+and the tail of the original sentence ("above (different internal object,
+same...") ended up appended onto the LAST injected command's line,
+producing exactly the malformed line RouterOS choked on. **Verified this
+was the sole cause, not the download endpoint**: `VpnScriptDownloadController`/
+`ScriptDownloadTokenService` were checked first and confirmed to be a pure
+pass-through (`Cache::pull()` returns byte-for-byte what `store()` was
+given, no concatenation anywhere) — reproducing the SAME generator call
+directly (bypassing HTTP entirely) showed the identical corruption, proving
+it originated in `MikrotikScriptGenerator::wireGuardScript()` itself.
+Fixed by rewording the comment to avoid referencing `$cleanup` (or any
+other variable holding multi-line script content) inside prose — audited
+every other `{$variable}` interpolated inside a `#`-comment line across the
+whole class and confirmed all the others (`$account->username`,
+`$routerOsVersion`, `$nas->name`, `$nas->auth_port`/`acct_port`,
+`$minPort`/`$maxPort`) are plain scalars, safe to interpolate anywhere.
+**General rule for this whole class of generated script**: never
+interpolate a variable that holds multi-line generated script content
+(`$cleanup`, `$autoSwitch`, `$routing`, or anything else built from a
+private helper returning a script fragment) inside a `#`-comment sentence
+— only ever place it on its own line as an intentional full-block
+insertion. `MikrotikScriptGeneratorTest`/`VpnScriptDownloadTest` both gained
+a holistic validator (every non-continuation line must start with `#`/`:`/
+`/`, no known cleanup line may appear more than once) run against all 4
+script types AND across several simulated regenerations in a row, plus one
+test going through the real HTTP download endpoint end-to-end — this class
+of bug produced output where every individual `assertStringContainsString()`
+still passed (the expected text was present, just ALSO duplicated), so a
+holistic check was necessary to actually catch it, not just spot-checks.
+**Confirmed no production impact**: read the router's live RADIUS monitor
+directly (`/radius/monitor` for the `boss-radius` entry, `address=
+172.28.0.10`) — `requests=0` across the board, meaning all 442 real active
+PPPoE sessions on `test-x86-bajastu` are still authenticating through the
+NAS's other (legacy "added by mixradius") RADIUS entry, not through BOSS
+App's tunnel at all — so the broken WireGuard tunnel from the failed
+imports never affected a real customer.
+incrementally, `TR069_MANAGEMENT_SUBNET`/GenieACS untouched.** New,
+independent optional pair `OLT_MANAGEMENT_SUBNET`/`OLT_MANAGEMENT_GATEWAY`
+(same "one subnet only, static/manual" limitation as
+`TR069_MANAGEMENT_SUBNET`/`TR069_MANAGEMENT_GATEWAY` — a SEPARATE pair, not
+a reuse, since a NAS can have both a TR-069 subnet AND a different OLT
+subnet at once, as `test-x86-bajastu` does). When set: `ip route replace
+$OLT_MANAGEMENT_SUBNET dev wg0` + a FORWARD ACCEPT scoped to
+`-s $INFRA_TUNNEL_BLOCK_CIDR -d $OLT_MANAGEMENT_SUBNET` (source is the
+WHOLE block, not 2 individual `/32`s the way the GenieACS exception is —
+the actual point of this redesign: a future block member doesn't need its
+own entrypoint.sh edit either) + a matching MASQUERADE rule (same
+mechanism as the TR069 one, rewriting the real source to this node's own
+wg0 gateway before crossing the tunnel). **Known limitation inherited from
+the same MASQUERADE mechanism**: the rewritten source is only accepted by
+the router when `$vpnNodeTunnelIp` is in `allowed-address`, which currently
+only happens when `nas.tr069_management_subnet` is set — a future NAS with
+an OLT subnet and NO TR-069 subnet would need a real
+`nas.olt_management_subnet` column to fix properly (not built this sprint,
+out of scope for an incremental container-side change).
+
+**`docker/librenms/route-init.sh` — new, for an official image with no
+custom Dockerfile of BOSS App's own.** `librenms`/`librenms-dispatcher` use
+`librenms/librenms:latest` directly (no `build:` in `docker-compose.yml`),
+unlike `genieacs-cwmp`/`genieacs-nbi` (which already have their own
+`docker/genieacs/entrypoint.sh` doing the exact same
+`TR069_MANAGEMENT_GATEWAY` route trick). This new script is bind-mounted
+in and set as `entrypoint: ["/route-init.sh"]` on both services — it adds
+`ip route replace $OLT_MANAGEMENT_SUBNET via $OLT_MANAGEMENT_GATEWAY` (when
+both are set) then `exec /init`, wrapping rather than replacing the
+official image's own init. Both containers need it: `librenms-dispatcher`
+for ongoing polling, `librenms` itself because `POST /api/v0/devices`'
+add-time reachability check runs synchronously in that container, not
+delegated to the dispatcher (confirmed for real — see "LibreNMS OLT
+Onboarding" above).
+
+**Cutover execution (Langkah 3-4), 3 more real bugs found and fixed doing
+this for real, none of them in the code reviewed/tested up to that
+point:**
+
+1. **`wireguard` (node1) was never actually pinned, despite this file's
+   own prior comment insisting it was.** Recreating `freeradius` alone
+   wasn't enough — `wireguard`/`wireguard-node2`/`wireguard-node3`'s OWN
+   iptables FORWARD/MASQUERADE rules are baked in at THEIR OWN entrypoint
+   run, keyed off `FREERADIUS_INTERNAL_IP` at THAT container's boot time —
+   so all 3 needed recreating too for the new `.225` to actually work.
+   Recreating `wireguard` (node1) for this then immediately exposed a
+   second, independent, longstanding bug: node1 had **no `ipv4_address`
+   pinned at all** — `container_name: wireguard` only fixes the
+   container's name, not its network IP — so it silently grabbed
+   `172.28.0.4` (node2's own address) on recreate, breaking node2's own
+   recreate right after ("Address already in use"). Fixed by adding
+   `WIREGUARD_NODE1_INTERNAL_IP=172.28.0.11` + pinning it in
+   `docker-compose.yml`, same pattern node2/node3 already had since
+   v0.7.3. **A second, separate lesson from this same step**:
+   `docker/wireguard/entrypoint.sh` is `COPY`'d into the image at
+   **build** time (unlike `docker/librenms/route-init.sh`, which is
+   bind-mounted) — a plain `docker compose up -d` recreate silently keeps
+   running the OLD entrypoint.sh from before any of this sprint's code
+   existed. `--build` is required for wireguard/node2/node3 specifically
+   whenever `docker/wireguard/entrypoint.sh` itself changes, not just a
+   recreate.
+
+2. **`AllowedIPs` (the WireGuard peer fragment written by
+   `VpnProvisioningService::provision()`) never got the OLT subnet added —
+   only the router-side `/ip route`/iptables did.** AllowedIPs is
+   WireGuard's OWN cryptokey-routing filter, checked by the KERNEL before
+   a packet is even handed to iptables — a route/firewall rule alone is
+   necessary but not sufficient. Confirmed for real: `ping -I wg0
+   10.168.100.34` from `wireguard-node3` failed outright with `sendto:
+   Required key not available` (a kernel-level WireGuard error, not a
+   timeout) until this was fixed. Fixed by widening
+   `VpnProvisioningService`'s `$allowedIps` construction with a new
+   `services.vpn.olt_management_subnet` config key (from
+   `OLT_MANAGEMENT_SUBNET`), same unconditional-per-account pattern as the
+   existing `tr069_management_subnet` widening (no `nas.
+   olt_management_subnet` column exists, so — same accepted
+   single-global-subnet limitation as `OLT_MANAGEMENT_SUBNET`/
+   `OLT_MANAGEMENT_GATEWAY` everywhere else). Required one more
+   revoke-and-regenerate cycle for `test-x86-bajastu` specifically to
+   apply (the already-active account's peer fragment predated the fix) —
+   in hindsight this specific fix could have been applied by directly
+   editing the existing peer fragment file in place (no new keypair/router
+   script needed, since the fix is pure server-side AllowedIPs content) —
+   noted here so a similar future fix doesn't default to a full
+   revoke-regenerate when a direct fragment edit would be far less
+   disruptive.
+
+3. **Real production drift caught and corrected, not silently
+   "fixed"**: `TR069_MANAGEMENT_GATEWAY` had been stale (pointing to node1
+   from an observed 2026-08-19 auto-switch) while the router's WireGuard
+   tunnel had since genuinely settled back onto a DIFFERENT node — the
+   auto-switch scheduler was ACTIVELY cycling through all 3 nodes every
+   ~90s throughout the early part of this cutover specifically BECAUSE its
+   own health-check ping target (`FREERADIUS_INTERNAL_IP`) was
+   unreachable until wireguard-node1/2/3 were rebuilt (see bug #1 above)
+   — confirmed by watching the live endpoint-port bounce
+   51822→51820→51821→51822 across repeated checks, then verifying it held
+   steady across 3 separate checks afterward. `TR069_MANAGEMENT_GATEWAY`/
+   `OLT_MANAGEMENT_GATEWAY` were both corrected to match the node it
+   genuinely settled on (confirmed via 3 stable reads, not a single
+   snapshot) before `genieacs-cwmp`/`genieacs-nbi`/`librenms`/
+   `librenms-dispatcher` were recreated against it.
+
+**Open item, NOT resolved as of this writing — a real router-side
+forwarding gap distinct from anything above, found during Langkah 4
+verification.** After all 3 fixes above, FreeRADIUS reachability through
+the tunnel is fully proven end-to-end (a real RADIUS Access-Accept via
+`172.28.0.225`, from a router-initiated `/ping`). But server-INITIATED
+traffic toward the router's own LAN (both the OLT SNMP path AND a GenieACS
+Connection Request retest to several real, currently-fresh CPE) transmits
+successfully — confirmed via the router's own PER-PEER `rx` byte counter
+increasing by the exact expected amount for a 5-packet ping burst — but
+gets **zero reply**, for every destination tried (OLT IPs and multiple
+different CPE IPs, several device models). The router's own direct
+`/ping` to the SAME destinations from its own CLI succeeds instantly
+(0% loss), ruling out the CPE/OLT devices themselves being down.
+`/tool sniffer`-based capture and `/ip firewall connection print`
+consistently show NOTHING for this traffic despite the peer-level `rx`
+counter proving arrival — inconclusive with the read-only tooling
+available this session (no terminal/SSH access to the router, no tcpdump
+inside `wireguard-node3` to independently confirm departure timing).
+`/ip firewall filter` was checked in full (82 rules) — nothing explicitly
+scoped to the WireGuard interface or the tunnel's address ranges. This
+affects the SAME mechanism (MASQUERADE-to-`172.23.195.1`, present and
+unchanged in shape from what v0.7.7 already verified working) for BOTH
+the pre-existing TR-069 path and the new OLT path identically, so it does
+not look like a defect introduced by the addresses this sprint changed —
+but root cause has not been pinned down further. LibreNMS OLT onboarding
+therefore remains blocked on this, separate from (and downstream of) all
+3 fixes above, which are independently confirmed correct.
+
+## WireGuard /30 Per-NAS Tunnel Blocks (v0.8.1)
+
+**Replaces the single shared tunnel gateway (`172.23.195.1`, one address
+for every WireGuard NAS) with a dedicated `/30` block per NAS.** Diagnosed
+by Agung (networking) while the "traffic arrives at the router but isn't
+forwarded onward" gap above was still unresolved: the shared-gateway `/32`
+scheme means the router only ever learns about the tunnel through
+WireGuard's own `AllowedIPs`-driven implicit routing, never a real
+connected route the way a normal point-to-point link would have. This is
+a plausible contributing factor to that gap — **not yet conclusively
+proven to fix it**, verification is Langkah 3/4 of this same work, still
+pending as of this section being written.
+
+**Scope: WireGuard only.** OpenVPN (`ifconfig-push`/ccd, already
+genuinely per-client point-to-point) and L2TP/IPsec (PPP's own dynamic
+negotiation) are untouched — both still use the original flat
+`vpn_ip_pool` mechanism exactly as before. Each protocol already has its
+own `subnet_cidr` (`172.23.194.0/24` OpenVPN, `172.23.195.0/24` WireGuard,
+`172.23.196.0/24` L2TP, plus OpenVPN's node2/node3 sibling subnets) so
+there was never any cross-protocol collision risk to begin with.
+
+**Allocation formula**: block #n = `172.23.195.0 + (n × 4)` →
+gateway = `base + 1`, router = `base + 2` (network/broadcast, `base + 0`/
+`base + 3`, deliberately unused — the same "some addresses wasted for a
+real point-to-point topology" trade-off any `/30` link has). Block #0 —
+`172.23.195.0/30` (gateway `.1`, router `.2`) — happens to reproduce
+`test-x86-bajastu`'s existing addresses exactly, since it's the first (and
+so far only) NAS to ever hold a WireGuard block. `App\Support\CidrRange::
+wireguardNasBlock()` is the pure-arithmetic implementation (same "no DB
+dependency" posture as `usableHostAddresses()`/`gatewayAddress()` already
+in that class).
+
+**Allocation is STICKY, not a release-and-reuse pool like `vpn_ip_pool`**
+— a NAS keeps the SAME block forever, across every revoke/reprovision
+cycle of its WireGuard account (this system revokes/reprovisions the same
+NAS's account routinely — a FCFS-pool-of-blocks model would make the
+router-side block assignment churn unpredictably every regen, exactly the
+kind of instability this redesign exists to remove). New table
+`vpn_wireguard_nas_blocks` (`nas_id` unique — one row per NAS, forever;
+`(vpn_server_id, block_index)` unique). `App\Models\VpnWireguardNasBlock::
+allocateFor()` — lookup-or-create: an existing assignment is always
+reused; a genuinely new NAS gets `MAX(block_index)+1`, computed under a
+lock on the POOL OWNER's own `vpn_servers` row (not on the aggregate
+query itself — see the deployment-bug note below), an adaptation of the
+`lockForUpdate()` pattern already trusted for `vpn_ip_pool`/`OdpPort`
+(`WorkOrderService`), not a new locking style. Order is **FCFS by
+whichever NAS asks first** (chronological, matching how
+`vpn_ip_pool`'s own row-id FCFS already worked), explicitly NOT `nas.id`
+order — confirmed with a test provisioning 3 NAS out of `id` order and
+checking the block indices land in REQUEST order, not `id` order.
+`VpnProvisioningService::provision()` branches on `protocol ===
+VpnProtocol::WireGuard` right where `internal_ip` gets sourced — WireGuard
+takes `$block->router_ip` instead of touching `vpn_ip_pool` at all;
+`revoke()`/`rollbackFailedProvisioning()` needed NO code changes (their
+`vpn_ip_pool`-release queries simply match zero rows for a WireGuard
+account now, a harmless no-op) — deliberately does NOT touch the block row
+either, consistent with "sticky forever."
+
+**`/ip address` mask changed from `/32` to `/30` — a DELIBERATE REVERSAL
+of the v0.7.3 decision, not a regression.** v0.7.3 locked `/32` specifically
+because the shared subnet (`WG_SUBNET_CIDR`, one `/24` for every NAS) meant
+a wider mask would have made RouterOS auto-add a connected route for the
+WHOLE shared range — defeating the explicit reverse-route isolation this
+whole class of script exists to enforce. That reasoning stops applying the
+moment each NAS gets its OWN dedicated `/30` — a connected route for a
+`/30` only ever covers the 2 addresses that `/30` legitimately has (this
+NAS's own gateway + its own router address), exactly as narrow as the old
+`/32` was, just backed by a real connected route now instead of relying
+purely on `AllowedIPs`. **Do not "fix" this back to `/32` without reading
+this section first** — `MikrotikScriptGenerator`'s own comment on this
+exact line repeats this same warning for anyone reading the code directly
+without CLAUDE.md open.
+
+**Replication to all 3 WireGuard nodes reuses the EXISTING reconcile-loop
+pattern (peers), not a new mechanism.** Through v0.8.0, gateway replication
+was "free" — `WG_SUBNET_NETWORK_ADDR` (always `172.23.195.1`) came from the
+SAME root `.env` via `env_file:`, so all 3 nodes' `entrypoint.sh` ran the
+identical static `ip address add` at boot. With one gateway per NAS, this
+can no longer be a single static value — `VpnProvisioningService::
+issueWireGuardCredentials()` now ALSO writes a per-NAS address fragment
+(`$WG_DIR/addresses/nas-{id}.conf`, containing just `{gateway}/30`) to the
+same shared `vpn_wg_data` volume already used for peer fragments;
+`docker/wireguard/entrypoint.sh`'s existing ~10s reconcile loop (previously
+only `wg syncconf` for peers) now ALSO applies every known fragment to wg0
+— idempotently, since (unlike `wg syncconf`) a plain `ip address add`
+errors on a duplicate: each fragment's exact "IP/mask" token is checked
+against `ip -4 address show dev wg0` first via `grep -qw`, skipped if
+already present. **Verified in complete isolation, not just read** — a
+throwaway `alpine:3.20` container with a dummy interface confirmed 3
+cycles behave exactly as designed: first cycle applies 2 fresh addresses,
+second cycle (same fragments) applies nothing, third cycle (a NEW fragment
+added mid-flight, simulating a brand-new NAS being provisioned while nodes
+are already running) applies only the new one — no restart needed, matching
+the "no manual per-node step" requirement. The static `ip address add
+"${WG_SUBNET_NETWORK_ADDR}/24"` line at container boot is GONE — wg0 starts
+with no address at all on a fresh container start, until the reconcile
+loop's first cycle (~10s) applies whatever NAS blocks already exist.
+`WG_SUBNET_NETWORK_ADDR` itself is left in `.env`/`.env.example`, just no
+longer read — removing it outright risked looking like a real config
+regression to anyone diffing against an older deployment.
+
+**MASQUERADE ambiguity — a real gap found auditing this redesign, fixed
+for the ONE currently-supported NAS, explicitly NOT generalized.** The 3
+existing `MASQUERADE` rules (FreeRADIUS/TR069/OLT reverse routing) never
+specified `--to-source` — safe through v0.8.0 because wg0 only ever had
+ONE address, so "whatever the outgoing interface's address is" was
+unambiguous. The moment wg0 can carry several NAS gateways at once, plain
+`-j MASQUERADE` becomes genuinely ambiguous about which one to rewrite to.
+Fixed with a new optional `WG_NAS_GATEWAY_IP` env var (same "one NAS only,
+static/manual, documented limitation" posture as `TR069_MANAGEMENT_GATEWAY`/
+`OLT_MANAGEMENT_GATEWAY`) — when set, all 3 `MASQUERADE` rules gain
+`--to-source "$WG_NAS_GATEWAY_IP"`; when unset, they silently fall back to
+the old ambiguous default (a transitional safety net for a deployment that
+hasn't set the new var yet, not a real fix for the general case). **A
+genuinely multi-NAS-aware version — matching each packet's destination
+subnet to the CORRECT NAS's own gateway automatically, not one pinned
+global value — is NOT built here.** Tracked as a real, explicit gap (same
+class as `TR069_MANAGEMENT_SUBNET`/`OLT_MANAGEMENT_SUBNET`'s existing
+"one subnet system-wide" limitation), not silently hardcoded without a
+trace — both the `.env.example` comment and the entrypoint.sh comment on
+this exact array spell out what a real fix would need.
+
+**Deployment status (Langkah 3, this same v0.8.1 branch): containers
+redeployed, `test-x86-bajastu`'s account moved to block #0, backend fully
+verified — the actual router-side script has deliberately NOT been applied
+yet.** Two real bugs surfaced only once this hit the real containers/real
+Postgres, neither caught by the pre-deployment test suite (601/601 green
+at the time, SQLite doesn't share either restriction below):
+
+1. **`-j MASQUERADE --to-source ...` is invalid iptables syntax** —
+   `--to-source` is an SNAT-target-only option; combining it with the
+   `MASQUERADE` target crash-looped both `wireguard` and `wireguard-node2`
+   immediately after `docker compose up -d --build`
+   (`iptables v1.8.10 (nf_tables): unknown option "--to-source"`, fatal
+   under `set -euo pipefail`). Fixed by switching the TARGET itself
+   (`-j MASQUERADE` vs `-j SNAT --to-source "$WG_NAS_GATEWAY_IP"`) rather
+   than appending an option to the wrong target — verified first in an
+   isolated throwaway `alpine:3.20` container before redeploying to the
+   already-crash-looping real containers, which then recovered cleanly.
+2. **`SELECT MAX(block_index) ... FOR UPDATE` is rejected outright by
+   PostgreSQL** (`SQLSTATE[0A000]: Feature not supported: 7 ERROR: FOR
+   UPDATE is not allowed with aggregate functions`) — there's no single row
+   to lock when the result is an aggregate, and SQLite (the test driver)
+   simply doesn't enforce this restriction, so all 601 tests passed against
+   the now-broken version. This caused a real, if brief, incident:
+   `test-x86-bajastu`'s old WireGuard account had already been revoked (as
+   a separate call, not in the same transaction as the failed provision)
+   before the provision call threw, leaving the NAS with zero active
+   WireGuard account for a short window. Fixed in
+   `VpnWireguardNasBlock::allocateFor()` by locking the POOL OWNER's own
+   `vpn_servers` row instead of the aggregate query — that row always
+   exists, so it works as a mutex regardless of how many (if any) block
+   rows currently exist under it; the `MAX()` query itself then runs
+   unlocked but safely serialized by the parent lock, portable to both
+   drivers. Account restored immediately after the fix (new id, same block
+   #0 / `172.23.195.1`-`.2` addresses, since it's still the same NAS).
+
+**Verified post-fix, for real**: all 3 wireguard node containers show
+`172.23.195.1/30` on `wg0` (reconciled correctly from the single address
+fragment via the existing ~10s loop), and the restored account's peer
+entry (`AllowedIPs = 172.23.195.2/32, 10.1.0.0/20, 10.168.100.0/24`) is
+present on all 3 nodes too — full regression suite re-run clean (601/601)
+after the fix. **What is NOT yet done**: the new keypair has zero
+handshake on any node (expected — the router hasn't been given the new
+script yet). Per Agung's explicit instruction, the actual script
+generation/application for this step is being done by Agung himself
+through the real `/nas` → NAS → Script Generator UI (both the WireGuard
+and RADIUS tabs) — deliberately NOT generated by Claude Code via API/CLI
+for this step, so the real user-facing path (including the earlier `.rsc`
+corruption fix) gets validated through actual UI use, not just another
+round of automated testing. Backend readiness for that was confirmed via
+`Livewire::test(VpnScriptGenerator::class)` mounting cleanly and accepting
+NAS #1 on both tabs with zero errors — without invoking either tab's
+actual generate action, so the first real generation is still Agung's.
+
+**P0 found the moment Agung actually clicked "Cabut" in the browser — the
+SAME bug class as the OpenVPN PKI (`nas-11`, v0.6.3) and
+`freeradius_nas_config` (v0.6.5) incidents, not a new one.** Real 500,
+confirmed from `storage/logs/laravel.log`:
+`file_put_contents(/vpn-wg-data/addresses/nas-1.conf): Failed to open
+stream: Permission denied`, thrown from
+`VpnProvisioningService::issueWireGuardCredentials()`
+(`app/Services/Network/VpnProvisioningService.php:387`), called via
+`VpnScriptGenerator::revokeAndRegenerate()`. Root cause, confirmed by
+inspecting the file directly, not guessed: `nas-1.conf` in
+`/vpn-wg-data/addresses/` was `root:root 0644` — written by this session's
+own `docker compose exec` (no `--user` flag → uid 0 by default) tinker
+call earlier in this same Langkah 3, restoring the NAS's account after the
+`FOR UPDATE`+`MAX()` incident above. That write happened AFTER the
+container's one-time boot-time `chmod -R 0777 "$PEERS_DIR" "$ADDRESSES_DIR"`
+had already run, so the file never got the permissive mode — a real
+`www-data` web request (Agung's own browser session) can then never
+overwrite it again. **Not a new class of bug — this codebase has hit
+"a root-run manual/testing session leaves a root-owned file behind that
+later blocks a real www-data request" twice before**; the fix is the same
+established pattern both times: re-apply the permissive chmod on every
+reconcile-loop cycle (~10s), not just at container boot, so a stray
+root-owned fragment self-heals quickly instead of wedging the next real
+save permanently. Added to `docker/wireguard/entrypoint.sh`'s existing
+reconcile loop (`chmod -R 0777 "$PEERS_DIR" "$ADDRESSES_DIR"` at the top of
+the `while true` loop, right where the freeradius supervisor loop already
+does the equivalent `chgrp`/`chmod` every cycle for `freeradius_nas_config`).
+Immediate unblock (no container rebuild needed) was also applied directly
+— `chmod -R 0777` on the two live volumes — so Agung's very next attempt
+in the browser isn't blocked while the container-image fix is still
+pending its own rebuild+rolling-recreate.
+
+**Honest note on test coverage for this specific bug**: a
+`Livewire::test(VpnScriptGenerator::class)->call('revokeAndRegenerate')`
+test **already existed** before this incident
+(`test_revoke_and_regenerate_replaces_the_old_wireguard_account_and_produces_a_fresh_script`
+in `VpnScriptGeneratorLivewireTest.php`) and calls the real action, not
+just mount — so the gap was never "no test calls Cabut for real." The gap
+is structural: PHPUnit runs the whole request in ONE OS process/UID, so
+there is no cross-UID permission conflict for it to ever reproduce — the
+exact same reason the OpenVPN PKI and `freeradius_nas_config` incidents
+were never caught by their own test suites either, only by real deployment
+use. No new PHPUnit test was added for this reason; the regression
+protection is the entrypoint.sh periodic-chmod fix itself, verified the
+same way the prior two incidents were — through real container behavior,
+not a unit test.
+
+**Migration for the currently-live NAS (`test-x86-bajastu`) — Langkah 3,
+DONE.** (Superseding the "deliberately NOT done" note this paragraph used
+to carry — the migration described above has since actually happened, see
+the "P0" and IP-migration entries below for what was found doing it.)
+Agung applied the new `/30` script via the real `/nas` → Script Generator
+UI himself (not generated by Claude Code, per the explicit instruction for
+this step); the account was revoked/reprovisioned, and the router now
+shows `172.23.195.2/30` with a live handshake, confirmed via RouterOS API.
+
+**Real 500 found and fixed the moment Agung actually clicked "Cabut" in
+the browser — see the "P0" entry above this one for the full stack
+trace/root cause/fix** (stray root-owned address fragment file, same bug
+class as the OpenVPN PKI/`freeradius_nas_config` incidents).
+
+**IP migration to the reserved `/27` block (`.225`-`.229`) for
+FreeRADIUS/GenieACS-CWMP/GenieACS-NBI/LibreNMS/LibreNMS-dispatcher — also
+already done, confirmed by direct `docker inspect` + real ping, not
+assumed.** All 5 containers already carry their correct target IPs and are
+reachable both from `boss-app` and directly from the host (0% packet
+loss); only `.224` (the deliberately unused reserved block-base address)
+fails to ping, which is expected, not a bug.
+
+**Real bug found doing the post-migration layered verification (FreeRADIUS
+reachability via the tunnel, from the router's own side) — a genuine,
+if currently-dormant, gap, NOT the same class as anything above.** A real
+RouterOS `/ping` from `test-x86-bajastu` to FreeRADIUS's new IP
+(`172.28.0.225`) times out 100% of the time, even though: `boss-app` can
+ping `.225` fine, `wireguard-node3` (the node this NAS's tunnel is
+CURRENTLY handshaked on) can ping `.225` fine directly, and the router's
+own WireGuard peer/route/allowed-address state is all correct
+(`172.28.0.224/27,172.23.195.1/32` in `allowed-address`, an active route
+to the block, a live handshake with real rx/tx counters). Root cause,
+confirmed by reading `freeradius` container's own routing table directly:
+`docker/freeradius/entrypoint.sh`'s `refresh_coa_routes()` (added in
+v0.6.5 for CoA/Disconnect) resolves the WireGuard tunnel subnet's next-hop
+by the container NAME `wireguard` — i.e. **always node1**
+(`172.28.0.11`), never whichever node is actually the CURRENT live one.
+This NAS's session has auto-switched to node3
+(`172.28.0.5`/`wireguard-node3`) — so any reply FreeRADIUS sends back
+toward the tunnel (an ICMP echo-reply, or — just as much — a real RADIUS
+Access-Accept) gets routed to node1, which has no live peer/handshake for
+this NAS, and is silently lost. **The v0.6.5 CoA docblock already flags
+this exact "failed-over to a sibling node" scenario as a known gap** — but
+frames it narrowly as a CoA/Disconnect limitation ("CoaService therefore
+only reliably reaches a NAS that hasn't (recently) auto-switched"); this
+investigation found its real blast radius is broader — it's FreeRADIUS's
+**only** route back into the WireGuard tunnel subnet at all, so it governs
+every reply through that tunnel, not just CoA-initiated ones. **Unlike**
+`TR069_MANAGEMENT_GATEWAY`/`OLT_MANAGEMENT_GATEWAY` (which went stale
+because a correct-at-the-time env var value was never updated after a
+later auto-switch), this route isn't driven by any env var at all — it's
+structurally hardcoded to node1 by design, so there's no "just update the
+value" fix available; a real fix needs either a mechanism to keep this
+route pointed at whichever node is CURRENTLY live (mirroring how
+`VpnCheckNodeHealth`/the auto-switch scheduler already tracks this), or
+accepting the same limitation CoA already has, just documented more
+broadly. **No live production impact confirmed** — `/radius/monitor` for
+`boss-radius` (the NAS's `172.28.0.225` entry) shows `requests: 0` (all
+441 currently-active real PPPoE sessions are authenticating via the
+router's other, `mixradius`-added entry, which is unaffected by any of
+this) — this is a real, confirmed infrastructure gap, not a customer-
+facing outage, as of this writing. **Layered verification (GenieACS
+Connection Request retest, OLT `snmpget`, LibreNMS onboarding) was
+deliberately NOT attempted after this was found** — the instruction for
+this task was to stop the chain on the first failure, and this is that
+first failure.
+
+## OSPF Dynamic Routing (v0.8.1) — DISABLED, kept as reference/future upgrade path
+
+**STATUS: built, verified working end-to-end for real, then deliberately
+rolled back and disabled — not because it didn't work, but because it
+was more operational complexity than this deployment's current scale
+(1 real NAS, 3 nodes, 1 physical Docker host) justifies.** Replaced by
+the much simpler **fragment+reconcile** mechanism (see its own section
+below) — BOSS App itself, which already knows which node owns which
+NAS from its own DB, writes small per-NAS route files directly; consumer
+containers just read-and-apply on a polling loop, the same idiom already
+used elsewhere in this codebase (WireGuard peer/address fragments,
+`freeradius_nas_config`) — no routing protocol, no extra daemon, no new
+failure surface.
+
+**Why this was a genuine, working implementation, not an abandoned
+half-measure** — worth recording precisely so a future decision to
+revisit this isn't second-guessing a broken prototype: full-mesh OSPF
+adjacency (MD5-authenticated) was confirmed FULL across all 3 WireGuard
+nodes; `handshake-watcher.sh`'s hybrid liveness check (handshake age OR
+byte-delta) was verified correct both against the real live tunnel and
+via a deterministic test harness; and — most importantly — a REAL
+auto-switch event happened live during testing (the NAS's tunnel moved
+from node3 → node1 → node2 across the session) and sibling nodes
+correctly re-learned the new routes via OSPF within seconds each time,
+with zero manual intervention. The mechanism did exactly what it was
+built to do.
+
+**Why disabled anyway — the actual trade-off, not a technical failure**:
+- **Operational complexity for the current scale.** 8 sidecar containers
+  (one per target), 2 config-file formats per daemon, a hand-rolled
+  supervision model (no `frrinit.sh`/`watchfrr`), and real FRR-specific
+  footguns discovered along the way (`mgmtd`/`staticd` silently required
+  for live `vtysh` static-route changes but not for config-file-loaded
+  OSPF settings; `ip prefix-list` non-idempotent while `ip route` is;
+  kernel (`K`) vs connected (`C`) vs static (`S`) route-type distinctions
+  mattering for `redistribute` eligibility in ways that aren't obvious
+  without hitting them) — real, learnable, but genuine ongoing
+  maintenance burden for a team running a single-host deployment.
+- **A structural gotcha with the sidecar pattern itself**: a
+  `network_mode: "service:X"` sidecar does NOT automatically reattach
+  when `X` itself is recreated — it becomes silently orphaned, pointing
+  at a netns that no longer exists. Confirmed for real during Tahap B
+  (recreating `librenms-dispatcher` orphaned `frr-librenms-dispatcher`
+  without any error, silently losing its learned routes) — every future
+  container touch would need BOTH the target and its sidecar recreated
+  together, forever, or this bites again. A permanent, easy-to-forget
+  operational tax.
+- **`.env`-driven config-hash recreates kept cascading further than
+  intended**, repeatedly, throughout both Tahap A and Tahap B — adding
+  `OSPF_*` keys to the shared `.env` meant `docker compose up -d
+  <one-sidecar>` routinely recreated far more of the dependency chain
+  than requested (including, twice, the WireGuard node genuinely holding
+  the live NAS tunnel at that moment) — self-healed both times (~14s,
+  ~30s) with no lasting harm, but a real, repeated risk surface that
+  fragment+reconcile doesn't share (it never touches container identity/
+  networking, only writes files an already-running polling loop reads).
+- **The one thing OSPF actually buys — automatic adjacency/topology
+  discovery across a growing number of routers — isn't needed yet.**
+  This deployment is 1 physical Docker host; "topology" is simply
+  "boss-network" needing to be told, containers may as well use a
+  substantially simpler distribution mechanism (the fragment+reconcile
+  loop) since discovery isn't the actual problem being solved.
+
+**When to reconsider this** (per Agung's own framing, recorded so a
+future sprint doesn't need to re-derive it from scratch): if/when these
+node containers ever actually move to separate PHYSICAL servers (not
+just separate containers on one host) — at that point, real routing
+protocol convergence (sub-second failover across genuinely different
+network segments, not just container recreates on one bridge) becomes a
+real requirement fragment+reconcile's simple polling loop can't cleanly
+solve, and this OSPF implementation — Dockerfile, config templates,
+`handshake-watcher.sh`, and this whole section's hard-won debugging
+history — is sitting here ready to be re-enabled rather than rebuilt
+from zero.
+
+**What's still in the repo, deliberately not deleted**: `docker/frr/`
+(Dockerfile, entrypoint.sh, `frr.conf.node.template`/`frr.conf.
+consumer.template`, `handshake-watcher.sh`, both test scripts) — all
+unchanged, all still buildable, just not referenced by any active
+`docker-compose.yml` service. The 8 sidecar service definitions in
+`docker-compose.yml` are commented out in place (not deleted) with a
+`[v0.8.1 OSPF DISABLED — see CLAUDE.md]` marker on each block, so
+re-enabling is "uncomment + rebuild", not "rewrite". `OSPF_ROUTING_
+ENABLED`/`OSPF_AUTH_KEY`/`OSPF_HELLO_INTERVAL`/`OSPF_DEAD_INTERVAL`
+remain in `.env`/`.env.example` (flag defaults `false`, harmless to
+leave set).
+
+---
+
+**The rest of this section (below) is the original design/build record
+from when OSPF was the active mechanism — left intact as-is for anyone
+re-enabling it later, not updated to reflect the rollback.**
+
+**Replaces the static, manually-updated route mechanisms** (`docker/
+freeradius/entrypoint.sh`'s `refresh_coa_routes()` WireGuard half,
+`docker/genieacs/entrypoint.sh`'s `TR069_MANAGEMENT_GATEWAY` route,
+`docker/librenms/route-init.sh`'s `OLT_MANAGEMENT_GATEWAY` route — all
+hardcoded or manually-updated to "whichever node currently holds a NAS's
+account", confirmed to actually go stale/wrong in production, see the
+"LibreNMS OLT Onboarding"/"Infra Tunnel IP Block" sections above) with
+real dynamic routing — **FRRouting (FRR) OSPFv2**, one shared sidecar
+image deployed 8 times via `network_mode: "service:<target>"` (3
+WireGuard nodes + freeradius + genieacs-cwmp + genieacs-nbi + librenms +
+librenms-dispatcher). A sidecar has NO network of its own — it fully
+shares its target's netns, so zebra's kernel route installs apply
+directly to whatever process actually routes packets for that container,
+no cross-container route-copying mechanism needed.
+
+**Confirmed via direct `apk search`/`apk add` before choosing this**:
+every one of the 8 target containers' base images (`freeradius/
+freeradius-server:3.2.10-alpine`, `node:22-alpine`, `alpine:3.20`, and —
+checked directly, not assumed — even the official `librenms/librenms:
+latest` with no Dockerfile of our own) is Alpine, and `frr` (10.0-r2)
+installs cleanly via `apk` on all of them. One shared image
+(`docker/frr/Dockerfile`) rather than baking FRR into 3 different
+Dockerfiles plus a runtime-install hack for the one official image.
+
+**Resource footprint, measured for real before committing to all 8** (13
+minutes, 13 samples, one sidecar in isolation): **8.4 MiB RAM flat, 0.32-
+0.40% CPU** with Hello genuinely active every 1s. Extrapolated to 8:
+~67MB RAM (linear — LSDB for an 8-router topology is trivially small),
+<1% CPU per container even full-mesh. ~30% of the existing LibreNMS
+stack's own ~225MB footprint, but spread as lightweight sidecars on
+already-running containers, not a new heavy process.
+
+**Route redistribution — asymmetric by design, not symmetric OSPF**:
+- **3 WireGuard nodes** (`FRR_ROLE=node`): `redistribute static
+  route-map OSPF-WG-ONLY` (prefix-list scoped to `172.23.0.0/16`,
+  defense-in-depth against ever leaking an unrelated future static
+  route). Deliberately NOT `redistribute connected` — the existing
+  reconcile loop in `docker/wireguard/entrypoint.sh` keeps applying
+  every known NAS's `/30` address to ALL 3 nodes unconditionally
+  (unchanged, still the sticky/permanent design from the WireGuard /30
+  section above) — a plain `redistribute connected` would announce all 3
+  nodes as valid paths to the same NAS simultaneously, real handshake or
+  not. `docker/frr/handshake-watcher.sh` is the actual gate: it adds/
+  removes a `/32` static route for each NAS's *router* address (derived
+  by pure arithmetic from the gateway address VpnProvisioningService
+  already writes — `router = gateway + 1`, no DB access needed) based on
+  a **hybrid liveness check** (see below), and only THAT static route
+  gets redistributed.
+- **5 consumers** (`FRR_ROLE=consumer`): form full OSPF adjacency
+  (Hello/DBD/LSA) and learn routes normally, but carry **no
+  `redistribute` statement of any kind** — never announce anything back.
+  This is deliberately NOT FRR's `passive-interface` (that means "don't
+  even form adjacency, just stub-announce the connected subnet" — the
+  opposite of what's needed here).
+
+**Hybrid liveness check for handshake-watcher.sh — replaced a
+handshake-age-only design after it was found to flap on a genuinely
+healthy tunnel, confirmed empirically, not theoretically.** The original
+design used `wg show wg0 latest-handshakes` age alone against a 30s
+threshold — real testing (Tahap A) showed a live, actively-passing-
+traffic tunnel sitting at 51s-115s+ handshake age the whole time, proven
+by watching the SAME handshake timestamp stay frozen across 4 checks
+spanning 45 seconds while `rx`/`tx` kept climbing in that same window.
+Root cause: `persistent-keepalive` (25s) only refreshes the NAT mapping —
+it does **not** trigger a WireGuard Noise-protocol rekey, which only
+happens ~120s by default (`REKEY_AFTER_TIME`) or on its own traffic-
+triggered schedule. A flat 30s threshold against this signal would make
+the redistributed route flap in and out for the majority of every ~120s
+cycle, even for a perfectly healthy tunnel. Fixed (Agung's explicit
+decision) with a **hybrid**: a route stays installed if EITHER (1)
+handshake age < **150s** (bumped from 30s — just above the natural
+rekey interval + margin), OR (2) the peer's `rx` byte counter grew since
+the watcher's last cycle (5s ago) — this second condition is what
+actually saves a healthy-but-handshake-stale tunnel almost immediately,
+since `persistent-keepalive` alone bumps `rx` every ~25s regardless of
+rekey timing. The route is only withdrawn when **both** fail — first
+watcher cycle for a peer (no prior `rx` sample yet) defaults to
+"present" rather than risk a spurious withdrawal before two samples
+exist. **Verified deterministically** via
+`docker/frr/test-handshake-watcher-hybrid.sh` (fakes `wg`/`vtysh`, no
+dependency on live WireGuard rekey timing, which turned out to be too
+unpredictable to reliably exercise "handshake stale but traffic active"
+against the real tunnel on demand) — both scenarios pass: stale-handshake-
+but-growing-rx keeps the route, stale-handshake-and-flat-rx withdraws it
+and keeps it withdrawn across repeated cycles, not just a one-off blip.
+Also confirmed against the real live NAS tunnel: the route was genuinely
+installed (`S>* 172.23.195.2/32 ... directly connected, wg0`) and
+genuinely redistributed into OSPF and learned by a sibling node
+(`O>* 172.23.195.2/32 [110/20] via 172.28.0.5, eth0`).
+
+**Real bug found deploying to the live tunnel node for the first time:
+FRR 10.x needs `mgmtd` + `staticd` running for live `vtysh` static-route
+commands, not just `zebra` + `ospfd`.** `handshake-watcher.sh`'s `ip
+route .../32 wg0` calls were silently failing every single cycle —
+config-FILE loading (`ospfd -f ospfd.conf`, what sets up `router ospf`/
+`network`/authentication) worked fine without these two daemons, so
+adjacency formed and looked entirely healthy, masking the failure
+completely; the real error (`mgmtd is not running`) only surfaces when
+running `vtysh` interactively — the watcher's own `>/dev/null 2>&1`
+swallowed it silently on every cycle. Root cause: FRR's newer central
+config-transaction daemon (`mgmtd`) brokers live `vtysh` static-route
+changes to `staticd` (which owns static routes in modern FRR, not zebra
+directly) — this has nothing to do with OSPF-specific config, which
+still loads the old way via a daemon's own `-f` config file. Fixed by
+starting `mgmtd`+`staticd` (node role only — consumers never issue a
+live `ip route` command, so they don't need either). **Capability list
+also had to grow past the original design**: `zebra` itself refused to
+start at all (`privs_init: initial cap_set_proc failed`) until
+`SYS_ADMIN` was added alongside `NET_ADMIN`/`NET_BROADCAST`/`NET_RAW` —
+found during the resource-test phase, before any of the 8 were deployed
+for real.
+
+**Entrypoint deliberately does NOT go through `frrinit.sh`/`watchfrr`**
+(FRR's own distro-init-style launcher, tried first) — its `daemon_start`/
+`daemon_prep` machinery assumes a real init system (PID-file
+conventions, `install(1)`-based directory bootstrap tuned for openrc/
+systemd) that adds real complexity/failure modes in a bare container with
+no clear win. `docker/frr/entrypoint.sh` instead launches each needed
+daemon directly (zebra background → mgmtd+staticd background, node role
+only → handshake-watcher background, node role only → ospfd foreground as
+PID1), with crash recovery delegated to Docker's own `restart: unless-
+stopped` on the sidecar container itself rather than watchfrr's finer-
+grained per-daemon restart logic (all the daemons in one sidecar need to
+restart together anyway — ospfd's zapi connection to zebra doesn't
+survive zebra dying alone).
+
+**Two separate config files per daemon, not one shared "integrated"
+file** — a real, if harmless, bug found on first deploy: pointing BOTH
+`zebra -f` and `ospfd -f` at the SAME file made zebra log a "No such
+command" warning for every single OSPF-specific line (`router ospf`,
+`network ... area`, `ip ospf hello-interval`, etc. — all ospfd-only
+commands zebra doesn't understand). Not fatal (zebra just skips unknown
+lines and starts fine regardless) but architecturally wrong and noisy.
+Fixed: zebra gets its own minimal generated file (just `hostname`/`log
+stdout`), the full templated config (`frr.conf.node.template`/
+`frr.conf.consumer.template`, `__HELLO__`/`__DEAD__`/`__AUTH_KEY__`/
+`__ROUTER_ID__` substituted by entrypoint.sh at container start — router-
+id derived from the sidecar's own shared-netns eth0 IP, deterministic
+since every target already has a pinned static IP) goes to ospfd alone.
+True FRR "integrated" single-file config would need `vtysh`'s own
+boot-time distribution mechanism, not two daemons independently pointed
+at the same raw file.
+
+**Security**: OSPF MD5 authentication (`ip ospf authentication
+message-digest` + `ip ospf message-digest-key 1 md5 ${OSPF_AUTH_KEY}`)
+on every one of the 8 sidecars' `eth0` — one shared key across the whole
+domain (`OSPF_AUTH_KEY` in `.env`, infra-level secret like
+`WHATSAPP_GATEWAY_HMAC_SECRET`/`L2TP_IPSEC_PSK`, generated with `openssl
+rand -hex 8` — FRR's MD5 key field is capped at 16 characters, a 32-char
+key was tried first and silently accepted by this FRR version but not
+relied upon since the RFC 2328 limit is 16). Confirmed working, not just
+configured: adjacency between node1/node2 would never have formed FULL
+at all if the key didn't match on both sides — a real, working proof
+point, not just a config-parses-cleanly check.
+
+**Migration discipline — no static+OSPF parallel-run period, unlike the
+original design doc's plan.** Agung's explicit revision: the moment a
+given container's FRR sidecar has verified adjacency + correct learned
+routes, `OSPF_ROUTING_ENABLED=true` is set and the old static route
+mechanism is cut over for THAT container immediately — no 24-48h
+observation window with both running side by side (the original design
+doc's plan). Each of the 3 modified entrypoint scripts
+(`freeradius`/`genieacs`/`librenms route-init`) checks this ONE shared
+flag; `OSPF_ROUTING_ENABLED` is global in `.env`, not per-container, but
+only actually takes effect on a container once THAT container is
+recreated, so the cutover is still genuinely one-at-a-time in practice.
+`freeradius`'s WireGuard-subnet route is gated by this flag; its OpenVPN-
+subnet route in the SAME function is deliberately left unconditional —
+OSPF is WireGuard-only scope this sprint, gating the OpenVPN route too
+would silently break CoA for any OpenVPN NAS the moment the flag flips.
+Verified with a standalone deterministic shell harness (`docker/frr/
+test-ospf-routing-enabled-conditional.sh`, fakes `ip`/`getent`, no real
+container needed) rather than a PHPUnit test — these are plain POSIX
+shell entrypoint.sh files with zero PHP involved, so there's nothing for
+`php artisan test` to exercise; the shell harness proves whether the real
+route-modifying commands (`ip route replace ...`) are invoked under
+`OSPF_ROUTING_ENABLED=true` vs `false`/unset, for all 3 modified scripts.
+
+**Real infrastructure side effect found deploying Tahap A (3 WireGuard
+nodes), not caused by anything wrong in the FRR work itself**: adding new
+`OSPF_*` keys to `.env` changed the effective config hash of every OTHER
+service that reads it via `env_file: - .env` — `docker compose up -d
+frr-wireguard-node2` (etc.) walked the full `depends_on` chain and
+recreated `wireguard`, `wireguard-node2`, `wireguard-node3`, and
+`freeradius` too, not just the requested sidecar, none of which were
+intentionally targeted for recreation at that step. Real consequence:
+`wireguard-node3` — the node `test-x86-bajastu`'s live tunnel was
+actually on — got recreated as a side effect, dropping the tunnel
+momentarily; it **self-healed within ~14 seconds** (fresh handshake,
+`endpoint-port` stayed 51822/node3, no auto-switch triggered, rx/tx
+resumed climbing normally) — confirmed via direct RouterOS API read
+immediately after, not assumed safe. No lasting harm, but a real,
+documented gotcha: **once `.env` gets a genuinely new key added,
+`docker compose up -d <anything>` can silently recreate far more than
+the one service named on the command line**, if enough of the dependency
+chain shares that same `env_file`. Tahap B's containers don't need any
+further `.env` additions, so this specific trigger shouldn't recur for
+the rest of this rollout — flagged here so a future sprint touching
+`.env` again knows to expect it.
+
+## Fragment+Reconcile Routing (v0.8.1) — replaces OSPF, currently ACTIVE
+
+**Status: implemented, deployed to all 5 consumer containers, verified
+working for real** (adjacency/routing correctness proven via `ip route`
+content on every container plus real packet-transit evidence — see
+below). Pivoted to from the OSPF experiment (see that section above for
+why OSPF was rolled back) — same underlying problem (5 consumer
+containers need to reach a WireGuard NAS's tunnel subnet + TR-069/OLT
+management subnets, dynamically following whichever pool node currently
+holds that NAS's live account), radically simpler mechanism.
+
+**Design**: BOSS App itself is the source of truth — it already has (or
+can ask for) everything needed: which NAS accounts are active
+(`vpn_accounts`), which subnets matter for a given NAS
+(`VpnWireguardNasBlock.router_ip`, `nas.tr069_management_subnet`,
+`config('services.vpn.olt_management_subnet')` gated on whether the NAS
+actually has an `OltDevice` registered), and — the one piece that isn't
+in any DB column — which pool node a NAS's WireGuard tunnel is
+*currently* connected to, asked directly via `RouterOsGateway::
+currentWireguardEndpointPort()` (a new interface method,
+`/interface/wireguard/peers/print`'s `current-endpoint-port`, matched by
+the peer's own `"... NAS {$account->username}"` comment — the same
+comment `MikrotikScriptGenerator::wireGuardScript()` already writes).
+That's the ONLY reliable source for "current node" — auto-switch (v0.6.4)
+happens entirely client-side on the router, invisible to boss-app any
+other way.
+
+**`App\Console\Commands\VpnSyncRouteFragments`** (scheduled
+`->everyMinute()`, same cadence as `VpnCheckNodeHealth` — a different
+question: that one tracks whether a node CONTAINER is alive, this one
+tracks which node a NAS's tunnel is CURRENTLY on) writes one file per
+active WireGuard NAS to the shared `vpn_wg_data` volume
+(`services.vpn.routes_dir`, default `/vpn-wg-data/routes/nas-{id}.conf`),
+one `<subnet> via <node_ip>` line per relevant subnet. A NAS whose
+current node can't be determined (router unreachable, no matching peer)
+gets its fragment DELETED rather than left stale — a wrong/old route is
+worse than no route (a consumer would silently keep trying a dead node).
+A revoked account's fragment is cleaned up the same way. `services.vpn.
+wireguard_node_ips` (new config key, `51820/1/2 => WIREGUARD_NODE1/2/3_
+INTERNAL_IP`) is the port→boss-network-IP lookup table, keyed by the same
+listen ports `vpn_servers.port` already stores DB-side.
+
+**The 5 consumer containers** (`freeradius`, `genieacs-cwmp`,
+`genieacs-nbi`, `librenms`, `librenms-dispatcher`) each mount
+`vpn_wg_data:ro` and run an identical small reconcile loop (backgrounded
+in their own `entrypoint.sh`/`route-init.sh`, same polling idiom already
+used for peer/address fragments in `docker/wireguard/entrypoint.sh`,
+never invented fresh): every 5s, read every `routes/*.conf` file, `ip
+route replace <subnet> via <gateway>` per line. No routing protocol, no
+extra daemon, no sidecar — genuinely just files + a loop. This REPLACED,
+not layered onto, the old per-container mechanisms: `docker/freeradius/
+entrypoint.sh`'s `refresh_coa_routes()` (renamed
+`refresh_openvpn_coa_route()` — its WireGuard half is gone, OpenVPN half
+untouched, out of scope), and `TR069_MANAGEMENT_GATEWAY`/
+`OLT_MANAGEMENT_GATEWAY` env-var-driven static routes in `docker/
+genieacs/entrypoint.sh`/`docker/librenms/route-init.sh` (both env vars
+removed from these 4 containers' own `environment:` blocks entirely —
+they're still read by `docker/wireguard/entrypoint.sh` for a completely
+different, still-current purpose: the WG NODE's own AllowedIPs widening/
+firewall exceptions, untouched by this change).
+
+**Verified for real, container by container, not just "the code looks
+right"**:
+- `librenms-dispatcher`/`librenms`: fragment written correctly, route
+  applied (`10.1.0.0/20`/`10.168.100.0/24`/NAS `/32` all present, correct
+  node). SNMP to the 3 OLTs still times out at this point in the work —
+  the SAME pre-existing, already-documented "arrives, no reply" gap (see
+  "LibreNMS OLT Onboarding" above), explicitly Bagian 3 scope, not a
+  regression from this change. (Later resolved as TWO stacked causes,
+  firewall then SNMP credentials — see that section's own final account,
+  written after this one.)
+- `genieacs-nbi`/`genieacs-cwmp`: route applied correctly. Connection
+  Request's own immediate response (`connection_request_ok: false`) was
+  NOT trusted as proof either way (known async-signal limitation, see
+  v0.7.7 section) — instead verified via real packet-transit evidence:
+  the NAS's peer `rx` counter on the live node measurably increased
+  right after triggering a CR. **Separate, pre-existing anomaly found
+  and explicitly NOT chased down (out of scope)**: all 20 sampled CPE
+  devices stopped sending periodic Informs at nearly the identical
+  timestamp roughly a day before this work — real, but CPEs reach
+  `genieacs-cwmp` via `boss-nginx`'s public port 7547, entirely outside
+  the WireGuard tunnel this change touches, so it can't be this
+  mechanism's doing; flagged for separate investigation, not treated as
+  a Bagian 2 failure.
+- `freeradius`: route applied correctly. The pre-existing `pingHost()`
+  (router-INITIATED ping toward FreeRADIUS) test still fails — expected,
+  that direction was never in this fix's scope (it depends on each node's
+  OWN reverse-path FORWARD/NAT setup, not on FreeRADIUS's own routing
+  table). What this fix actually targets — FreeRADIUS-INITIATED traffic
+  toward a NAS (the real CoA/Disconnect direction) — was verified
+  directly instead: `docker exec freeradius ping 172.23.195.2` (the live
+  NAS's own router address) got a genuine 0%-loss, ~6ms round trip
+  through the correct, currently-live node. A real CoA disconnect against
+  the live production NAS was deliberately NOT triggered to verify this
+  further (same standing caution as the v0.6.5 CoA section above — don't
+  risk a real customer session just to observe the effect).
+
+**Real bugs found deploying this, same "found by actually running it"
+discipline as everywhere else in this file**:
+1. **A stray function-rename left one call site behind**, crash-looping
+   `freeradius` on first deploy (`refresh_coa_routes: not found`, exit
+   127) — `refresh_coa_routes()` was renamed to `refresh_openvpn_coa_
+   route()` at its definition and its boot-time call, but a SECOND call
+   site inside the container's own periodic (~3s) self-healing loop
+   (chmod/chgrp refresh) still referenced the old name. Fixed by updating
+   that second call site too — a reminder that `grep`-ing for every call
+   site, not just the definition, matters when renaming a shell function.
+2. **Long-running containers silently missing `.env` keys added mid-
+   session** — the exact same bug class documented multiple times
+   already in this file (APP_ENV, WHATSAPP_GATEWAY_HMAC_SECRET,
+   TR069_MANAGEMENT_GATEWAY), hit again here: `boss-app`/`boss-worker`/
+   `boss-whatsapp-worker`/`boss-scheduler` had never been recreated since
+   `WIREGUARD_NODE1/2/3_INTERNAL_IP` were added to `.env` earlier in this
+   same v0.8.1 work — `services.vpn.wireguard_node_ips` silently resolved
+   to all-`null`, which meant `VpnSyncRouteFragments` (running for real
+   every minute via `boss-scheduler`) treated the live NAS as
+   "undetectable" and DELETED its own fragment on every single tick —
+   diagnosed by directly comparing `printenv | grep WIREGUARD_NODE` output
+   between `boss-app` (missing just `NODE1`, added slightly later in the
+   session) and `boss-scheduler` (missing all three, started earliest).
+   Fixed by recreating all 4 PHP containers; confirmed stable across ~15
+   real scheduler ticks (~2 minutes) afterward, not just asserted fixed.
+3. **Recreating `boss-app` caused a real, if brief, P0: `boss-nginx`
+   502'd on every request.** `boss-nginx`'s own `app.conf` uses a static
+   `fastcgi_pass boss-app:9000` — plain nginx (not nginx-plus) resolves a
+   hostname used this way ONCE, at worker startup, and does NOT
+   automatically pick up a new IP when the container behind that Docker
+   DNS name changes — `boss-app`'s recreate (fixing gap #2 above) gave it
+   a new internal IP (`172.28.0.10`, was `172.28.0.17`), but `boss-nginx`
+   (untouched, `Up 10 days`, no reason to suspect it independently) kept
+   sending FastCGI requests to the OLD, now-dead IP
+   (`connect() failed (111: Connection refused) ... upstream: "fastcgi://
+   172.28.0.17:9000"`). `boss-app`'s own php-fpm was confirmed healthy
+   the whole time (listening on :9000, `php artisan test` running fine
+   inside it) — this was purely nginx's stale upstream resolution, not an
+   application-level failure. Fixed with `docker compose restart
+   boss-nginx` (forces fresh DNS resolution on worker restart) —
+   confirmed via a real `curl` returning 200 immediately after, and no
+   new stale-IP errors in the access/error logs afterward. **General
+   rule for this whole codebase, not just this incident**: recreating
+   `boss-app` (or any container another container's nginx/proxy config
+   references by static hostname:port) should be followed by restarting
+   the proxying container too, not assumed safe on its own — this had
+   never come up before because `boss-app` had never actually been
+   recreated mid-session until this v0.8.1 work.
 
 ## Architecture
 

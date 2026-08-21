@@ -177,4 +177,33 @@ class RouterOsApiGateway implements RouterOsGateway
         $set->equal('.id', $existing[0]['.id'])->equal('group', self::API_USER_GROUP)->equal('password', $password);
         $client->query($set)->read();
     }
+
+    public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 8,
+            ]);
+
+            $peers = $client->query(new Query('/interface/wireguard/peers/print'))->read();
+
+            foreach ($peers as $peer) {
+                if (str_contains($peer['comment'] ?? '', $peerCommentNeedle)) {
+                    $port = (int) ($peer['current-endpoint-port'] ?? 0);
+
+                    return $port > 0 ? $port : null;
+                }
+            }
+
+            return null;
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal ambil current-endpoint-port untuk NAS #{$nas->id} ({$nas->mikrotik_ip}): {$e->getMessage()}");
+
+            return null;
+        }
+    }
 }

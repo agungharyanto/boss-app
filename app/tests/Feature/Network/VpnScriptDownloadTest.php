@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Network;
 
+use App\Models\VpnAccount;
+use App\Services\Network\MikrotikScriptGenerator;
 use App\Services\Network\ScriptDownloadTokenService;
 use Tests\TestCase;
 
@@ -45,5 +47,63 @@ class VpnScriptDownloadTest extends TestCase
         $this->assertStringContainsString('mode=http ', $command);
         $this->assertStringNotContainsString('mode=https', $command);
         $this->assertStringContainsString('http://45.123.142.242/vpn-script-generator/download/abc123.rsc', $command);
+    }
+
+    /**
+     * P0 regression, end-to-end through the REAL HTTP download endpoint —
+     * not just the generator directly (MikrotikScriptGeneratorTest already
+     * covers that in isolation). Confirms the whole chain (generate →
+     * store → HTTP download) delivers exactly what was generated, with no
+     * corruption introduced anywhere along the way — this is what a real
+     * RouterOS `/tool fetch` would actually receive.
+     */
+    public function test_downloaded_wireguard_script_has_no_stray_or_duplicated_lines(): void
+    {
+        $account = new VpnAccount;
+        $account->username = 'nas-1';
+        $account->internal_ip = '172.23.195.2';
+        $account->wireguardPrivateKey = 'CLIENTPRIV==';
+
+        $script = app(MikrotikScriptGenerator::class)->wireGuardScript(
+            $account, '45.123.142.242', 51822, 'SERVERPUB==', 'CLIENTPRIV==', '172.28.0.224/27', '172.28.0.225',
+            nasGatewayIp: '172.23.195.1',
+        );
+
+        $token = app(ScriptDownloadTokenService::class)->store($script);
+
+        $response = $this->get("/vpn-script-generator/download/{$token}.rsc");
+        $response->assertOk();
+
+        $downloaded = $response->getContent();
+        $this->assertSame($script, $downloaded, 'The download endpoint must return the generated script byte-for-byte.');
+
+        $lines = explode("\n", $downloaded);
+        $previousContinues = false;
+
+        foreach ($lines as $i => $line) {
+            $trimmed = trim($line);
+
+            if ($trimmed === '') {
+                $previousContinues = false;
+
+                continue;
+            }
+
+            if (! $previousContinues) {
+                $this->assertMatchesRegularExpression(
+                    '/^[#:\/]/',
+                    $trimmed,
+                    'Line '.($i + 1).' of the DOWNLOADED script is neither a comment/command nor a '
+                    .'continuation — looks like corrupted/injected content: "'.$trimmed.'"'
+                );
+            }
+
+            $previousContinues = str_ends_with(rtrim($line), '\\');
+        }
+
+        $this->assertSame(
+            1,
+            substr_count($downloaded, '/interface wireguard remove [find name="boss-vpn-wireguard"]'),
+        );
     }
 }

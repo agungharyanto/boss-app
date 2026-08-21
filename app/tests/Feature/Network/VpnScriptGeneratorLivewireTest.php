@@ -38,6 +38,10 @@ class VpnScriptGeneratorLivewireTest extends TestCase
             'services.vpn.ccd_dir' => sys_get_temp_dir().'/vpn-script-ccd-test-'.uniqid(),
             'services.vpn.public_ip' => '45.123.142.242',
             'services.vpn.freeradius_internal_ip' => '172.28.0.10',
+            // v0.8.1 — the reserved infra tunnel block (INFRA_TUNNEL_BLOCK_CIDR),
+            // always fed into wireGuardScript() now regardless of what a
+            // given NAS actually uses (see VpnScriptService's own docblock).
+            'services.vpn.infra_block_cidr' => '172.28.0.224/27',
         ]);
     }
 
@@ -158,7 +162,17 @@ class VpnScriptGeneratorLivewireTest extends TestCase
             '*wg*pubkey*' => Process::result(output: "pub\n"),
         ]);
         File::put($this->pkiDir.'/server_public.key', 'SERVER-PUB-KEY');
-        config(['services.vpn.wg_peers_dir' => $this->pkiDir.'/peers']);
+        config([
+            'services.vpn.wg_peers_dir' => $this->pkiDir.'/peers',
+            // v0.8.1 — REQUIRED isolation, not optional tidiness: without
+            // this, VpnProvisioningService::issueWireGuardCredentials()'s
+            // address-fragment write falls back to its real default and
+            // lands in the actual production /vpn-wg-data/addresses
+            // volume — confirmed for real (a stray "nas-1.conf" with this
+            // exact test's synthetic 172.23.200.0/29 data was found there
+            // and cleaned up while building this fix).
+            'services.vpn.wg_addresses_dir' => $this->pkiDir.'/addresses',
+        ]);
     }
 
     public function test_regenerating_wireguard_for_an_already_provisioned_nas_offers_revoke_and_regenerate(): void
@@ -226,22 +240,20 @@ class VpnScriptGeneratorLivewireTest extends TestCase
     }
 
     /**
-     * v0.7.3 end-to-end regression: a NAS with tr069_management_subnet set
-     * must get a per-/32 reverse route + allowed-address entry for BOTH
-     * GenieACS NBI and CWMP (not the whole-subnet route this originally
-     * shipped with — found dead on a real router, see
-     * MikrotikScriptGenerator::wireGuardScript()'s own docblock), plus the
-     * VPN node's own tunnel gateway address so traffic MASQUERADEd onto it
-     * by docker/wireguard/entrypoint.sh isn't dropped by WireGuard's own
-     * cryptokey routing before it ever reaches RouterOS.
+     * v0.8.1 end-to-end regression: a NAS with tr069_management_subnet set
+     * must get the VPN node's own tunnel gateway address appended to
+     * allowed-address (so traffic MASQUERADEd onto it by
+     * docker/wireguard/entrypoint.sh isn't dropped by WireGuard's own
+     * cryptokey routing before it ever reaches RouterOS) — the reserved
+     * infra tunnel block itself (and its single route) is now unconditional
+     * for every NAS regardless of tr069_management_subnet, replacing the
+     * old per-service GenieACS NBI/CWMP routes this test used to assert
+     * (see MikrotikScriptGenerator::wireGuardScript()'s own docblock for
+     * the full v0.8.1 reasoning).
      */
-    public function test_wireguard_script_for_a_nas_with_tr069_subnet_includes_genieacs_reverse_routes(): void
+    public function test_wireguard_script_for_a_nas_with_tr069_subnet_includes_the_vpn_nodes_tunnel_gateway(): void
     {
         $this->fakeWireGuard();
-        config([
-            'services.genieacs.nbi_internal_ip' => '172.28.0.31',
-            'services.genieacs.cwmp_internal_ip' => '172.28.0.30',
-        ]);
         $tenant = Tenant::factory()->create();
         $nas = Nas::factory()->create([
             'tenant_id' => $tenant->id,
@@ -260,15 +272,42 @@ class VpnScriptGeneratorLivewireTest extends TestCase
 
         $script = $component->get('generatedScript');
         $this->assertNotNull($script);
-        $this->assertStringContainsString('/ip route add dst-address=172.28.0.10/32 gateway=boss-vpn-wireguard comment="boss-vpn-freeradius-route"', $script);
-        $this->assertStringContainsString('/ip route add dst-address=172.28.0.31/32 gateway=boss-vpn-wireguard comment="boss-vpn-genieacs-nbi-route"', $script);
-        $this->assertStringContainsString('/ip route add dst-address=172.28.0.30/32 gateway=boss-vpn-wireguard comment="boss-vpn-genieacs-cwmp-route"', $script);
+        $this->assertStringContainsString('/ip route add dst-address=172.28.0.224/27 gateway=boss-vpn-wireguard comment="boss-vpn-infra-block-route"', $script);
         // 172.23.200.1 — the reserved .1 of this VpnServer's own
         // subnet_cidr (172.23.200.0/29), i.e. its wg0 tunnel gateway.
-        $this->assertStringContainsString('allowed-address=172.28.0.10/32,172.28.0.31/32,172.28.0.30/32,172.23.200.1/32', $script);
+        $this->assertStringContainsString('allowed-address=172.28.0.224/27,172.23.200.1/32', $script);
         // The dead whole-subnet route must never appear.
         $this->assertStringNotContainsString('boss-vpn-tr069-route', $script);
         $this->assertStringNotContainsString('dst-address=10.1.0.0/20', $script);
+    }
+
+    /**
+     * v0.8.1 — the flip side of the test above: a NAS with NO
+     * tr069_management_subnet still gets the infra block itself (it's
+     * unconditional now), just without the extra VPN-node-tunnel-gateway
+     * /32 appended.
+     */
+    public function test_wireguard_script_for_a_nas_without_tr069_subnet_still_gets_the_infra_block(): void
+    {
+        $this->fakeWireGuard();
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id, 'tr069_management_subnet' => null]);
+        $server = VpnServer::factory()->create(['protocol' => 'wireguard', 'subnet_cidr' => '172.23.200.0/29']);
+        $server->provisionIpPool();
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(VpnScriptGenerator::class)
+            ->set('selectedNasId', $nas->id)
+            ->set('routerOsVersion', '7')
+            ->set('vpnProtocol', 'wireguard')
+            ->call('generateVpn')
+            ->assertHasNoErrors();
+
+        $script = $component->get('generatedScript');
+        $this->assertNotNull($script);
+        $this->assertStringContainsString('/ip route add dst-address=172.28.0.224/27 gateway=boss-vpn-wireguard comment="boss-vpn-infra-block-route"', $script);
+        $this->assertStringContainsString('allowed-address=172.28.0.224/27 ', $script);
+        $this->assertStringNotContainsString('172.23.200.1/32', $script);
     }
 
     public function test_generating_radius_script_never_touches_nas_api_credentials(): void

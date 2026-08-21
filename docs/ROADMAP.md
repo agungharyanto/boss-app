@@ -19,11 +19,13 @@
 | v0.6.5  | Network         | Dynamic Virtual Server & CoA  | Virtual server FreeRADIUS dinamis per-NAS + port allocator (diverifikasi race-safe nyata) + CoA/Disconnect + fix `require_message_authenticator` per-NAS (akar masalah sesungguhnya) — sesi PPPoE nyata pertama berhasil end-to-end lewat FreeRADIUS produksi, config router sepenuhnya hasil generate resmi BOSS App | Selesai |
 | v0.7.1  | Network         | GenieACS Core                 | Deploy GenieACS+MongoDB, auto-binding device dari Installation (work_order_devices), CpeDevice model + API + UI list read-only | Selesai |
 | v0.7.2  | Network         | GenieACS Vendor Mapping       | Mapping parameter per-vendor (`cpe_parameter_maps`), resolve RX/TX power via `refreshObject` — refresh on-demand lewat Connection Request/tunnel VPN masih diblokir, lihat catatan v0.7.3 | Selesai |
-| v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Connection Request terverifikasi nyata (5/5 ZTE + 8/8 Huawei, `informEvent` bertanda "6 CONNECTION REQUEST" di log genieacs-cwmp) — di branch `v0.7.x-testing-refinements`, belum di-merge/tag |
-| v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Ganti WiFi terverifikasi ke device pelanggan asli (Natofik, `ZICG298E1389`) — di branch `v0.7.x-testing-refinements`, belum di-merge/tag |
-| v0.7.5  | Network         | GenieACS Auto-Provisioning (SSID/Password) | Reuse `CpeActionService` (v0.7.4) — SSID/password hasil input teknisi (`work_order_devices.ssid`/`wifi_password`, direkam CS lewat bridge endpoint sementara) otomatis didorong ke device begitu dikenal GenieACS, lewat hook di `CpeBindingService` (binding ATAU reconciliation). PPPoE di luar scope ini, item roadmap terpisah (diberi nomor `v0.12.0` — lihat amendment di atas). Slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions | Auto-provisioning terverifikasi end-to-end nyata ke device pelanggan asli — di branch `v0.7.x-testing-refinements`, belum di-merge/tag |
+| v0.7.3  | Network         | GenieACS Connection Request Routing | Routing Connection Request GenieACS lewat tunnel VPN ke subnet manajemen TR-069 NAS (prasyarat jaringan, bukan fitur remote action itu sendiri) — reboot/push SSID instan tetap backlog terpisah | Selesai — Connection Request terverifikasi nyata (5/5 ZTE + 8/8 Huawei, `informEvent` bertanda "6 CONNECTION REQUEST" di log genieacs-cwmp) |
+| v0.7.4  | Network         | GenieACS Remote Actions       | Reboot + ganti SSID/password WiFi lewat task queue GenieACS + audit log (`cpe_action_logs`) — sengaja "tidak instan" (Connection Request dicoba tapi tidak diandalkan, lihat catatan v0.7.3), instant-push otomatis aktif tanpa perubahan kode begitu v0.7.3 terverifikasi | Selesai — Ganti WiFi terverifikasi ke device pelanggan asli (Natofik, `ZICG298E1389`) |
+| v0.7.5  | Network         | GenieACS Auto-Provisioning (SSID/Password) | Reuse `CpeActionService` (v0.7.4) — SSID/password hasil input teknisi (`work_order_devices.ssid`/`wifi_password`, direkam CS lewat bridge endpoint sementara) otomatis didorong ke device begitu dikenal GenieACS, lewat hook di `CpeBindingService` (binding ATAU reconciliation). PPPoE di luar scope ini, item roadmap terpisah (diberi nomor `v0.12.0` — lihat amendment di atas). Slot ini sebelumnya bernomor v0.7.4, digeser karena v0.7.4 akhirnya dipakai buat Remote Actions | Selesai — Auto-provisioning terverifikasi end-to-end nyata ke device pelanggan asli |
 | v0.7.6  | Network         | GenieACS Connected Clients (dengan histori) | Baca TR-069 `Hosts.Host` (client WiFi/LAN terhubung) — histori per `(device, MAC)` di `cpe_connected_hosts`, bukan snapshot per poll, sync command terjadwal 5 menit dari data yang sudah tersimpan GenieACS (tidak memicu refresh sendiri) | Implementasi selesai — verifikasi UI browser masih belum dicoba Agung langsung |
-| v0.8.0  | Network         | LibreNMS & Graph              | Device monitoring, graph jaringan, graph pemakaian per-pelanggan, alert                       | Backlog |
+| v0.7.7  | Network         | GenieACS Testing Refinements  | Verifikasi nyata v0.7.3-v0.7.5 ke device pelanggan asli, status Online/Offline dirombak jadi hybrid GenieACS (bukan router-ping), DataTables UI + halaman Detail, Remove/Ganti Modem, Cek Status Device, auto-matching legacy berkelanjutan, import 561 customer MixRadius, NIK encryption + CID — lihat bagian "Branch v0.7.x-testing-refinements" di bawah untuk detail lengkap | Selesai |
+| v0.8.0  | Network         | LibreNMS Install              | Install LibreNMS + MariaDB terpisah, onboarding router `test-x86-bajastu` dengan polling data nyata | Selesai |
+| v0.8.1  | Network         | OLT Onboarding & Dynamic Routing | OLT Credential Registry (manufacturer/model/device, SNMP/telnet/ssh), redesign addressing WireGuard ke `/30` per-NAS, OSPF dicoba lalu dinonaktifkan (referensi), fragment+reconcile dynamic routing, fix akar masalah SNMP OLT (kredensial) — 3 OLT real ter-onboard dengan bukti polling nyata | Selesai |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
 | v0.11.0 | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
@@ -515,14 +517,13 @@ Implementasi + 404 test regresi hijau, tapi UI (tombol "Client", modal
 tabel host) belum pernah dicoba langsung di browser — masuk sesi
 verifikasi yang sama dengan v0.7.3-v0.7.5 sebelum mulai v0.8.
 
-## Branch `v0.7.x-testing-refinements` — sesi verifikasi + refinement pasca v0.7.6 (BELUM di-merge/tag)
+## v0.7.7 — GenieACS Testing Refinements (branch `v0.7.x-testing-refinements`, merged + tagged 2026-08-20)
 
 Sesi verifikasi komprehensif yang dijanjikan di catatan v0.7.3-v0.7.6 di atas
 akhirnya dijalankan, sekaligus membuka beberapa refinement/fitur baru yang
-ditemukan perlu selama proses itu. **Status per commit ini masih 1 commit
-"wip" (`fa6b0ca`) + sejumlah besar perubahan belum di-commit di working
-tree** — belum di-merge ke `develop`/`main`, belum di-tag. Jangan anggap
-selesai/final sampai commit+merge+tag benar-benar terjadi (BOSS-002).
+ditemukan perlu selama proses itu. Commit `a90c3b4` (di atas commit "wip"
+`fa6b0ca`), di-merge ke `develop` (`a3bd380`) lalu `main` (`b603053`),
+di-tag `v0.7.7`. BOSS-002 terpenuhi — commit, merge, tag semua berhasil.
 
 **Verifikasi nyata yang akhirnya terjadi**:
 - **v0.7.3 Connection Request TERBUKTI jalan** — 5/5 device ZTE F663NV3a
@@ -797,3 +798,93 @@ Gateway v0.4.0 yang sudah ada), UI scan kamera html5-qrcode (endpoint API
 kamera browser menyusul).
 
 Detail lengkap ada di CLAUDE.md bagian "Installation / Work Order (v0.5.0)".
+
+## v0.8.0-v0.8.1 — LibreNMS Install & OLT Onboarding (branch `v0.8.1-librenms-install`, merged + tagged `v0.8.1` 2026-08-21)
+
+v0.8.0 (install LibreNMS + onboarding router) sudah selesai dan committed
+sebelumnya di branch ini. v0.8.1 memperluas scope-nya jauh lebih dalam dari
+rencana awal (LibreNMS & Graph di tabel utama) — bukan cuma menambahkan
+OLT Credential Registry, tapi membuka investigasi routing dinamis yang
+berujung dua kali ganti pendekatan (OSPF dicoba lalu dinonaktifkan,
+fragment+reconcile jadi solusi akhir) sebelum akhirnya OLT-OLT-nya benar-
+benar bisa dipoll. Merge ke `develop` (`e47a43f`) lalu `main`
+(`c321cfa`), tag `v0.8.1`. BOSS-002 terpenuhi.
+
+**OLT Credential Registry** (modul baru): `olt_manufacturers` →
+`olt_models` → `olt_devices`, tenant+reseller-scoped sama seperti `nas`,
+kredensial (telnet/ssh/SNMP RO+RW community) di-enkripsi Eloquent cast
+sama seperti pola `Nas` yang sudah ada — tidak ada mekanisme enkripsi baru
+dibuat. 3 addendum bug fix di sesi yang sama: konflik DataTables+Livewire
+DOM-morph (`wire:ignore`), delete master data manufacturer/model dengan
+referential integrity, toggle show/hide password.
+
+**Redesign addressing WireGuard ke `/30` per-NAS** (dari satu gateway
+`/32` yang dibagi semua NAS): setiap NAS sekarang dapat blok `/30` sendiri
+secara sticky (`VpnWireguardNasBlock`, dialokasikan sekali dan permanen
+lintas revoke/reprovision). Alasan: gateway bersama membuat router cuma
+belajar tunnel lewat `AllowedIPs` WireGuard, tidak pernah lewat connected
+route asli — dicurigai (walau tidak terbukti tuntas) sebagai kontributor
+gap "paket sampai tapi tidak ada balasan" yang jadi tema besar investigasi
+sesi ini.
+
+**Routing dinamis — dua pendekatan dicoba, satu dipakai**:
+- **OSPF (FRRouting)** dibangun penuh dan **terbukti bekerja nyata**
+  (adjacency full-mesh 3 node WireGuard, bertahan lewat auto-switch NAS
+  sungguhan) — lalu **dinonaktifkan secara sengaja**, bukan karena gagal:
+  kompleksitas operasional (8 sidecar container, beberapa footgun FRR
+  nyata, gotcha `network_mode: service:X` yang bikin sidecar orphan kalau
+  targetnya di-recreate) dinilai tidak sepadan untuk skala satu host
+  Docker saat ini. Kode disimpan (`docker/frr/`), tidak dihapus — layak
+  dipertimbangkan lagi kalau node-node VPN pindah ke server fisik terpisah
+  sungguhan.
+- **Fragment+reconcile** (dipakai): BOSS App sendiri jadi sumber
+  kebenaran — tanya router lewat API mana node yang sedang dipegang tiap
+  NAS, tulis file kecil per-NAS ke volume bersama, 5 container consumer
+  baca+`ip route replace` lewat loop polling sederhana. Tidak ada
+  routing protocol, tidak ada daemon tambahan.
+
+**Root cause ganda untuk "SNMP OLT tidak pernah jalan"** — investigasi
+panjang menemukan DUA penyebab independen, bertumpuk:
+1. **Firewall FORWARD chain router** — rule `drop connection-state=invalid`
+   (jutaan hit aktif) diduga kuat memblokir balasan. Dibuktikan lewat tes
+   darurat terkontrol (Agung mematikan sementara seluruh rule FORWARD,
+   ping ke 3 OLT dan GenieACS Connection Request langsung berhasil —
+   pertama kali dalam seluruh investigasi) lalu firewall dikembalikan
+   segera. **Belum ada fix permanen** — lihat backlog di bawah.
+2. **Kredensial SNMP salah** — `olt_devices` menyimpan community
+   auto-generated random dari form registry, sementara ketiga OLT real
+   sudah lama dikonfigurasi manual dengan community asli (`tokia121314`,
+   port 161, bukan `2161` yang tersimpan). Setelah dikoreksi, SNMP
+   langsung berhasil ke ketiganya (`snmpwalk` mengembalikan data asli:
+   sysDescr, uptime, port GPON). Ketiga OLT berhasil di-onboard ke
+   LibreNMS dengan bukti polling nyata (uptime maju, `last_polled` aktif).
+
+**Backlog eksplisit dari sesi ini** (jangan dilupakan, belum dikerjakan):
+- **Fix permanen firewall rule `drop connection-state=invalid`** — paling
+  prioritas dari daftar ini. Firewall router saat ini kembali ke kondisi
+  semula (rule aktif apa adanya, tanpa exception untuk traffic BOSS App)
+  setelah window diagnostik. Perlu keputusan desain: accept eksplisit
+  untuk traffic dari `172.28.0.224/27` (infra tunnel block) sebelum rule
+  ini, atau perbaikan di level connection-tracking. Belum ada solusi teknis
+  dicoba, cuma root cause yang sudah terbukti.
+- **UX form OLT Credential Registry — auto-generate community SNMP**:
+  `OltDeviceIndex::create()` mengisi field community dengan nilai random
+  SEBELUM admin sempat mengetik nilai asli, tanpa indikasi visual "ini
+  saran, bukan keharusan" (beda dengan field password yang pakai konvensi
+  masked-blank-means-unchanged). Terbukti nyata bikin 3 OLT real tersimpan
+  salah tanpa disadari. Perbaikan disarankan (default kosong saat create,
+  atau keterangan eksplisit di dekat field) belum dikerjakan.
+- **Auto-switch flapping saat firewall dimatikan sementara** — ditemukan
+  tak sengaja saat tes darurat, router sempat berpindah node berkali-kali
+  dalam waktu singkat. Belum diinvestigasi kenapa (dugaan: health-check
+  auto-switch terpengaruh perubahan firewall) — dicatat untuk observasi
+  lanjutan, tidak menghalangi kesimpulan root cause di atas.
+- **OSPF sebagai referensi masa depan** — lihat paragraf di atas, hanya
+  layak dipertimbangkan lagi kalau node VPN pindah ke server fisik
+  terpisah, bukan sekadar container terpisah di satu host.
+
+Detail teknis lengkap (termasuk seluruh jejak debugging: FRR footgun,
+gotcha `network_mode`, bug env var container lama, cache DNS nginx, dsb)
+ada di `CLAUDE.md` bagian "WireGuard /30 Per-NAS Tunnel Blocks", "OSPF
+Dynamic Routing", "Fragment+Reconcile Routing", dan "LibreNMS OLT
+Onboarding".

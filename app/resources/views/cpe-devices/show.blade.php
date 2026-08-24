@@ -174,6 +174,20 @@
         </div>
     </div>
 
+    {{-- v0.8.3 — full-width RX Power graph section, moved out of the
+         "Status Jaringan" panel (which now only holds instant-reading
+         fields) so the graph gets the full content width instead of being
+         squeezed into one column. Title/"Riwayat" link live INSIDE
+         CpeSignalHistoryGraph's own view (same "component owns its own
+         header" convention DeviceTrafficGraph already uses), not
+         duplicated here — see CLAUDE.md's "RX Power History (v0.8.3)" and
+         the component's own docblock. This component authorizes itself
+         independently (defense in depth), not relying solely on this
+         controller's own earlier $this->authorize('view', $cpeDevice). --}}
+    <div class="bg-white border border-gray-200 rounded-md p-5 mt-6">
+        @livewire('network.cpe-signal-history-graph', ['cpeDeviceId' => $device->id], key('cpe-signal-history-graph-'.$device->id))
+    </div>
+
     {{-- WiFi/SSID — semua SSID yang ditemukan discovery, bukan cuma SSID1.
          "Ganti WiFi" (2026-08-17) is now per-row here instead of one
          standalone form below — a single flat form could only ever target

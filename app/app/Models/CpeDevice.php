@@ -77,4 +77,13 @@ class CpeDevice extends Model
     {
         return $this->hasMany(CpeConnectedHost::class);
     }
+
+    /**
+     * RX Power poll history (v0.8.3) — see App\Models\CpeSignalHistory /
+     * App\Console\Commands\SyncCpeSignalHistory.
+     */
+    public function signalHistory(): HasMany
+    {
+        return $this->hasMany(CpeSignalHistory::class);
+    }
 }

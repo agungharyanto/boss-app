@@ -202,4 +202,12 @@ return [
         'cache_ttl' => (int) env('LIBRENMS_CACHE_TTL', 45),
     ],
 
+    // v0.8.4 Bagian C — App\Services\Infra\ContainerStatsService's only
+    // dependency. Points at docker-stats-proxy (docker-compose.yml), never
+    // a direct docker.sock mount on this container — see CLAUDE.md
+    // "Container Stats via docker-socket-proxy (v0.8.4 Bagian C)".
+    'docker_stats' => [
+        'proxy_url' => env('DOCKER_STATS_PROXY_URL', 'http://docker-stats-proxy:2375'),
+    ],
+
 ];

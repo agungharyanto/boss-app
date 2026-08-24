@@ -3,6 +3,48 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.8.3 — Dashboard Monitoring (v0.8.2) + RX Power History, Custom Range & API (v0.8.3) (2026-08-24)
+
+**Catatan penting**: tag ini mencakup DUA versi roadmap sekaligus, v0.8.2
+DAN v0.8.3 — deviasi eksplisit dari BOSS-002, sama pola dengan v0.8.0-v0.8.1
+sebelumnya. Keduanya dikerjakan berurutan dalam satu branch/sesi panjang
+(`v0.8.2-monitoring-fixes`) alih-alih dua branch terpisah; splitting tag
+setelah fakta tidak akan mencerminkan bagaimana kerjanya sesungguhnya
+berjalan. Merge branch `v0.8.2-monitoring-fixes` ke `develop` lalu `main`,
+tag `v0.8.3` dibuat di `main`. Regresi 776/776 hijau di branch, `develop`,
+dan `main`. Detail teknis lengkap ada di `docs/ROADMAP.md` bagian
+"v0.8.2-v0.8.3 — Dashboard Monitoring, RX Power History, Custom Range &
+API" dan banyak bagian `CLAUDE.md` (lihat daftar di ROADMAP.md).
+
+Ringkasan singkat (lihat ROADMAP.md/CLAUDE.md untuk detail teknis penuh):
+- **v0.8.2 Dashboard Monitoring**: `LibreNmsService` (hybrid REST API +
+  `rrdtool xport`, LibreNMS versi ini tidak punya endpoint JSON untuk
+  traffic history), device list + traffic graph di `/monitoring`,
+  Add/Edit/Remove device manual (mutating call pertama ke LibreNMS di
+  codebase ini), self-monitoring host (SNMP) dan container
+  (`docker-socket-proxy`, read-only) dikelompokkan visual VPN/LibreNMS/
+  BOSS App Core/Lainnya.
+- **v0.8.3 RX Power History, Custom Range, API**: riwayat RX Power
+  terjadwal di Detail CPE dengan tab Custom Range (dipakai ulang di 3
+  modal riwayat lewat satu trait + satu partial bersama), REST API baru
+  `/api/v1/monitoring/*` + `/api/v1/cpe-devices/{id}/signal-history`
+  sebagai fondasi integrasi bot WhatsApp masa depan.
+- **Dua bug infrastruktur nyata ditemukan & diperbaiki**: (1) crash
+  `WhatsappQueueNames` di setiap eksekusi — kemungkinan besar menghentikan
+  total pengiriman WhatsApp selama bug ini ada, plus `~12GB` log yang tidak
+  pernah dirotasi (`LOG_STACK` sekarang `daily`); (2) 500 nyata di Custom
+  Range Device/Traffic History — dua bug bertumpuk (`diffInSeconds()`
+  negatif membalik jendela `rrdtool`, plus file log root-owned
+  mengeskalasi kegagalan-anggun jadi 500 mentah) — diperbaiki keduanya,
+  plus loop self-healing permission `/tmp`+`storage/logs` di semua
+  container PHP.
+- **Backlog terbuka (belum dikerjakan)**: root cause pasti drift
+  permission `/tmp` masih pertanyaan terbuka (self-healing sudah bekerja,
+  tapi mekanisme drift-nya sendiri belum sepenuhnya dipastikan); riset
+  syslog sudah selesai tapi belum diimplementasikan (butuh keputusan
+  sensitif-produksi terpisah); audit "API wajib di semua fitur" (BOSS-006)
+  masih menunggu keputusan terpisah.
+
 ## v0.8.1 — LibreNMS Monitoring, OLT Credential Registry & Dynamic Routing (2026-08-21)
 
 Merge branch `v0.8.1-librenms-install` ke `develop` (`e47a43f`) lalu

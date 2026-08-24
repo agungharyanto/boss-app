@@ -5048,6 +5048,237 @@ custom range — where before the fix, the identical request 500'd (log
 root-owned) or gracefully failed with zero real data (log writable, Bug #1
 still present). Full regression suite green at 776/776, Pint clean.
 
+## Riwayat Dialup PPPoE & Syslog — Investigation Phase (v0.8.4, branch `v0.8.4-dialup-syslog`)
+
+**Two new features approved, both tested against a NEW NAS
+(`ro-hotspot.bajastu.id`, NAS #3, VLAN 110/"PPPoE Remote"), never
+`test-x86-bajastu` (441+ real production PPPoE sessions) — a
+deliberately different risk posture from the earlier deferred plan.**
+This section covers the investigation/prep work done before any actual
+feature code — PPPoE session history UI and per-device syslog are both
+still unbuilt as of this writing.
+
+**NAS #3 status, found via investigation (Bagian A)**: already
+registered in `nas` (id=3, ports 20070/20071 pre-allocated) with a LIVE,
+handshaking WireGuard tunnel — but two real gaps blocked accounting from
+ever working: (1) its RADIUS entry's `address=` was stale
+(`172.28.0.10`, the pre-v0.8.1 FreeRADIUS IP, never `172.28.0.225`), and
+(2) it had never been migrated to the v0.8.1 sticky `/30` block scheme —
+zero row in `vpn_wireguard_nas_blocks`, zero route fragment, confirmed
+directly (`freeradius`'s own route to the NAS's tunnel address fell
+through to the default gateway, not any WireGuard node). Both are
+exactly the same "packet arrives, no reply" class of gap already solved
+for `test-x86-bajastu` in v0.8.1 — this NAS just never got the same
+treatment.
+
+**Fixed via the EXISTING Script Generator flow, not new code** — Agung
+regenerated both scripts himself through `/nas` → Script Generator
+("Cabut & Generate Ulang" for WireGuard, plain generate for RADIUS) and
+applied them via Winbox. **Verified for real, all three claims**:
+- `ip addr show wg0` on all 3 WireGuard node containers shows the new
+  block's gateway address (`172.23.195.5/30`) — fragment+reconcile
+  correctly replicated to every node for this NAS, same as it already
+  does for NAS #1.
+- `wg show wg0` on `vpn-node-2` (the node currently holding this NAS's
+  account) shows a genuine live handshake with the NEW public key
+  (`vpn_accounts` id #23 in the DB, matching — not a stale/leftover
+  keypair).
+- `/radius/print` on the router now shows `address=172.28.0.225`
+  (correct) — the stale-address gap is closed.
+- End-to-end connectivity proven with a REAL ping: `freeradius` →
+  `172.23.195.6` (the NAS's own `router_ip`, NOT `172.23.195.5` which is
+  the WireGuard node's own gateway-side address and was never expected
+  to answer a ping) succeeded with a genuine ~7ms RTT, via a route
+  fragment (`172.23.195.6/32 via 172.28.0.4`) that fragment+reconcile
+  wrote automatically — proof the routing actually works, not just that
+  addresses are configured.
+
+**Accounting SQL writes (`docker/freeradius/entrypoint.sh`'s commented-out
+`detail`/`-sql` in the shared `accounting {}` block) are architecturally
+GLOBAL to FreeRADIUS** — there is only ONE shared `accounting {}`
+processing section in `sites-enabled/default`, referenced by every NAS's
+own per-NAS virtual server, so this can't be toggled per-NAS at that
+level. The actual production risk is gated by whether a given NAS's
+`/radius` entry is enabled and reachable, not by this flag — confirmed
+live (read-only) that `test-x86-bajastu`'s own `boss-radius` entry stays
+`disabled=true`, so enabling SQL writes globally has zero effect on real
+production traffic, which continues flowing entirely through the
+separate "added by mixradius" entry. **Not yet actually enabled** —
+still pending Agung's go-ahead for the checkpoint (a real PPPoE test
+session via NAS #3).
+
+### PPP local-secret → RADIUS migration (v0.12.0-adjacent, investigation only)
+
+**A parallel, related need surfaced while investigating**: on
+`test-x86-bajastu` (production), a subset of real customers authenticate
+via LOCAL `/ppp secret` entries on the router itself, entirely bypassing
+RADIUS (both mixradius and boss-radius). Agung wants this subset moved
+to BOSS App's own `radcheck`. **Pure read-only investigation performed,
+zero writes to the production router** — findings:
+
+- **331 total `/ppp secret` entries**, of which 2 are NOT customers:
+  `agung-tokia` (service=pptp, comment "VPN" — Agung's own admin
+  credential) and `anten-palestina` (service=sstp, disabled, see its own
+  investigation below). **329 genuine PPPoE customer entries**: 297
+  still enabled, 32 already disabled at the local-secret level.
+- **Overlap between local secrets and mixradius, proven empirically, not
+  assumed**: of the 32 disabled local secrets, **27 are CURRENTLY ONLINE
+  right now via mixradius** (`radius=true` in `/ppp/active/print`,
+  uptime ranging ~1.5h to ~1d20h) — direct proof mixradius already has
+  its own copies of at least these 27 usernames and successfully
+  authenticates them once the local secret stops answering.
+- **Critical finding for migration strategy — mixradius answers with an
+  explicit REJECT for the vast majority of its traffic, not a timeout**:
+  `/radius/monitor` for the mixradius entry (lifetime counters):
+  `requests=447059, accepts=436528, rejects=10347, timeouts=184` — a
+  reject:timeout ratio of ~56:1. Since RouterOS only fails over to the
+  NEXT `/radius` entry on TIMEOUT, never on an explicit reject (already
+  established in the v0.6.5 investigation elsewhere in this file), this
+  means **simply enabling `boss-radius` after mixradius in the `/radius`
+  list order cannot be relied on to migrate anyone** — for any username
+  mixradius already "knows" (accept or reject), `boss-radius` would never
+  get a chance regardless of local-secret state. A per-user, verified
+  approach (insert `radcheck` row → disable local secret → reconnect →
+  watch `boss-radius`'s own `/radius/monitor` counters climb → instant
+  rollback via re-enabling the local secret if it fails) is the
+  recommended strategy over a "just flip the switch" batch approach,
+  precisely because of this finding.
+- **`anten-palestina` investigated in full, NOT concluded either way per
+  explicit instruction** — same comment text as a real customer
+  (`081210434558`/"sartini | Odp watiem"), but every other field differs:
+  service `sstp` (not `pppoe`), static tunnel IPs
+  (`local-address=144.79.52.6`/`remote-address=144.79.52.7` — typical of
+  a site-to-site link, not a residential dial-in), `last-caller-id` is an
+  IP not a MAC, hasn't logged in since 2026-05-31 (~3 months stale), and
+  **does not exist anywhere in BOSS App's own `customers` table** (no
+  `legacy_username` match, no name/address match) — unlike `081210434558`
+  itself, which maps cleanly to customer #228 ("sartini", real MixRadius
+  import). Left entirely untouched pending Agung's own determination.
+- **2 candidate customers proposed for the first real migration test**
+  (not executed): `081229565701` ("Taryo | ODP Nasirun") and
+  `082315432580` ("Pras Fidiyanto") — both residential (plain personal
+  name in comment, standard phone-number username), both currently
+  online via local secret with short uptime (~1h, ~47min — easy to ask
+  to reconnect without disrupting a long-stable session), and neither
+  proven "known" to mixradius yet (unlike the 27 above), so a successful
+  migration test for either would be genuinely informative.
+
+**Real cleanup performed**: a leftover test artifact was found in
+`radcheck`/`radreply` — a real customer (`082314874960`, "Warsigit",
+whose own local secret is disabled and who is currently online via
+mixradius, i.e. one of the 27 above) had been manually inserted at some
+point during earlier ad-hoc testing, including an odd
+`Framed-IP-Address := 0.0.0.0` reply attribute. Confirmed zero live
+effect (boss-radius stays disabled, `/radius/monitor` showed `requests:
+0` for it) before removal. Deleted per Agung's explicit confirmation;
+`radcheck` now holds only the permanent QA fixture `085166445368`.
+
+## WireGuard Per-NAS SNAT — global gateway bug fixed, real production incident (v0.8.4)
+
+**P0 found and root-caused via direct evidence during NAS #3 setup, not
+guessed**: `ro-hotspot.bajastu.id` (NAS #3)'s `boss-vpn-autoswitch-
+wireguard-script` was changing `endpoint-port` every exactly 30 seconds,
+continuously, for 11+ minutes with no settling — the auto-switch health
+check (`:ping 172.28.0.225 interface=boss-vpn-wireguard count=3`,
+switches node on 3/3 failure) never once succeeded.
+
+**Root cause, proven via packet capture, not inferred**: `tcpdump` on
+`freeradius`'s own `eth0` during a manual reproduction of the exact same
+ping showed the request arriving with source IP `172.23.195.1` —
+NAS #1 (`test-x86-bajastu`)'s own gateway address, not NAS #3's real
+`172.23.195.6`. `docker/wireguard/entrypoint.sh`'s POSTROUTING SNAT rule
+(`-s $WG_SUBNET_CIDR -d $FREERADIUS_INTERNAL_IP -j SNAT --to-source
+$WG_NAS_GATEWAY_IP`) matched the WHOLE `172.23.195.0/24` (every NAS's
+block) but rewrote EVERY NAS's source to the SAME single global
+`WG_NAS_GATEWAY_IP` (`.env`, pinned to NAS #1) — a "generalization gap"
+already flagged in the code's own comments since the v0.8.1 redesign,
+now actually triggered for real the moment a second NAS (#3) started
+using this same path. FreeRADIUS correctly replied to `172.23.195.1`
+(NAS #1's address), which of course never reached NAS #3. Confirmed
+identical on all 3 nodes (same rule, same `WG_NAS_GATEWAY_IP` value, same
+counters actively incrementing on all 3).
+
+**Addendum investigated in parallel, found to be a red herring**: Agung
+separately reported "host unreachable" pinging the router's own tunnel
+IP (`172.23.195.6`) from itself — checked directly (`/interface/
+wireguard/print`, `/ip/address/print`): interface `running=true`,
+address genuinely present and correctly attached, and a live retest got
+0% loss. No config was ever missing or corrupted; this was very likely a
+transient condition (possibly caught mid-handshake-renegotiation),
+unrelated to the SNAT bug — no action was needed or taken for this
+specific symptom.
+
+**Fix — generalized the SNAT rule to be per-NAS, reusing the EXISTING
+fragment+reconcile mechanism, not a new one**:
+- The one static rule (run once at container start) was removed. Instead,
+  `docker/wireguard/entrypoint.sh`'s existing ~10s reconcile loop — the
+  SAME loop that already applies each NAS's `$ADDRESSES_DIR/nas-{id}.conf`
+  fragment as a real `ip address` — now ALSO reconciles one SNAT rule per
+  NAS from that exact same fragment: each fragment already IS
+  `gateway_ip/30`, which doubles as both the correct `-s` match (iptables
+  network-aligns a host+mask automatically — `172.23.195.5/30` as a MATCH
+  criterion already means "this NAS's own /30 block", no separate CIDR
+  arithmetic needed) and, stripped of its `/30` suffix, the correct
+  `--to-source` target.
+- Idempotent via `iptables -C` (check-before-add, same idiom already
+  established for `ip address add`'s own `grep -qw` check). Stale rules
+  (NAS revoked, fragment gone) are swept every cycle via rule-NUMBER
+  deletion, re-queried fresh before each single delete since removing a
+  rule shifts every later line number — a partial `-D <criteria>` spec
+  doesn't work here since iptables only matches a full original rule
+  specification, not a comment alone.
+- **Second, non-obvious piece the fix also needed, found only by testing
+  end-to-end, not by code review alone**: even with the per-NAS SNAT rule
+  correct, both NAS #1 and NAS #3's pings STILL failed 100% — because
+  `App\Console\Commands\VpnSyncRouteFragments` only ever wrote a route to
+  a NAS's `router_ip`, never to its `gateway_ip` — and `gateway_ip` is
+  exactly the address the new SNAT rule rewrites traffic to, so
+  FreeRADIUS had no route back to it at all. Confirmed by manually adding
+  `ip route add {gateway_ip}/32 via {node_ip}` and watching the previously
+  100%-failing ping immediately succeed. Fixed by extending
+  `VpnSyncRouteFragments` to write a second `/32 via` line per NAS
+  alongside the existing `router_ip` one — same command, same schedule
+  (`->everyMinute()`), same fragment file, no new mechanism.
+- **TR069_MANAGEMENT_SUBNET/OLT_MANAGEMENT_SUBNET's own MASQUERADE rules
+  were audited and left UNCHANGED, deliberately** — they share the same
+  `REVERSE_NAT_TARGET`/`WG_NAS_GATEWAY_IP` variable and are structurally
+  exposed to the identical class of bug, but there is no per-NAS fragment
+  source for these two subnets to loop over (they're single global env
+  vars by design — "one subnet system-wide" was already a documented,
+  accepted limitation before this incident, not something to silently
+  fix as a side effect here). They stay correct today only because the
+  one NAS they're configured for happens to be the same NAS
+  `WG_NAS_GATEWAY_IP` already points at — flagged, not silently patched.
+
+**Deployment risk handled deliberately, not accidentally avoided**: NAS
+#1's own live tunnel was mid-test-migration (Taryo/Pras) when this fix
+needed deploying. `docker/wireguard/entrypoint.sh` is `COPY`'d into the
+image at build time, so `--build` + recreate was unavoidable for all 3
+nodes. **Confirmed the exact same `.env`-change-cascades-further-than-
+requested gotcha already documented elsewhere in this file recurred
+here too**: `docker compose up -d --build wireguard-node2` (deliberately
+NOT the node NAS #1 was live on) also recreated `wireguard` (node1,
+which WAS live) and `freeradius`, unprompted. NAS #1's own auto-switch
+self-healed within ~10-20 seconds each time (failed over to whichever
+sibling node was still up) — verified via `wg show` showing a fresh
+handshake on the new node immediately after, not assumed safe.
+
+**Verified for real, end-to-end, repeatedly — not a single lucky ping**:
+after both fixes (per-NAS SNAT + gateway_ip route) were live and
+`vpn:sync-route-fragments` had run for real: NAS #3 → FreeRADIUS ping
+5/5 success (0% loss, ~6.5ms), re-confirmed 4x back-to-back; NAS #1 →
+FreeRADIUS ping 5/5 success (regression check, no change in behavior);
+auto-switch flapping genuinely stopped — last port-switch log entry was
+several minutes before the check, with the script confirmed to have run
+again since (via its own `last-started` timestamp) without triggering
+another switch. Full regression suite green at 776/776.
+
+**Taryo/Pras (the unrelated PPP local-secret migration test on NAS #1)
+still had not reconnected as of this fix landing** — force-disconnected
+~20+ minutes prior, genuinely unrelated mechanism (PPP local-secret vs
+RADIUS auth, no WireGuard/SNAT involvement), reported as-is, not
+investigated further as part of this incident.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

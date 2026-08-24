@@ -91,7 +91,7 @@ class VpnSyncRouteFragmentsTest extends TestCase
         ]);
         VpnWireguardNasBlock::factory()->create([
             'nas_id' => $nas->id, 'vpn_server_id' => $account->vpn_server_id,
-            'router_ip' => '172.23.195.2',
+            'gateway_ip' => '172.23.195.1', 'router_ip' => '172.23.195.2',
         ]);
         $this->bindGateway([$nas->id => 51821]);
 
@@ -99,6 +99,11 @@ class VpnSyncRouteFragmentsTest extends TestCase
 
         $content = File::get($this->fragmentPath($nas));
         $this->assertStringContainsString('172.23.195.2/32 via 172.28.0.4', $content);
+        // v0.8.4 — gateway_ip also needs a route now, not just router_ip
+        // (see this command's own docblock: the per-NAS FreeRADIUS SNAT
+        // rule in docker/wireguard/entrypoint.sh rewrites the NAS's real
+        // source to gateway_ip, so a consumer needs a route back to it).
+        $this->assertStringContainsString('172.23.195.1/32 via 172.28.0.4', $content);
         $this->assertStringContainsString('10.1.0.0/20 via 172.28.0.4', $content);
         // No OLT registered for this NAS — must NOT appear.
         $this->assertStringNotContainsString('10.168.100.0/24', $content);
@@ -113,7 +118,7 @@ class VpnSyncRouteFragmentsTest extends TestCase
         ]);
         VpnWireguardNasBlock::factory()->create([
             'nas_id' => $nas->id, 'vpn_server_id' => $account->vpn_server_id,
-            'router_ip' => '172.23.195.6',
+            'gateway_ip' => '172.23.195.5', 'router_ip' => '172.23.195.6',
         ]);
         OltDevice::factory()->create(['nas_id' => $nas->id]);
         $this->bindGateway([$nas->id => 51822]);
@@ -172,7 +177,8 @@ class VpnSyncRouteFragmentsTest extends TestCase
             'username' => "nas-{$nasA->id}",
         ]);
         VpnWireguardNasBlock::factory()->create([
-            'nas_id' => $nasA->id, 'vpn_server_id' => $accountA->vpn_server_id, 'router_ip' => '172.23.195.2',
+            'nas_id' => $nasA->id, 'vpn_server_id' => $accountA->vpn_server_id,
+            'gateway_ip' => '172.23.195.1', 'router_ip' => '172.23.195.2',
         ]);
 
         $nasB = Nas::factory()->provisioned()->create();
@@ -181,14 +187,19 @@ class VpnSyncRouteFragmentsTest extends TestCase
             'username' => "nas-{$nasB->id}",
         ]);
         VpnWireguardNasBlock::factory()->create([
-            'nas_id' => $nasB->id, 'vpn_server_id' => $accountB->vpn_server_id, 'router_ip' => '172.23.195.6',
+            'nas_id' => $nasB->id, 'vpn_server_id' => $accountB->vpn_server_id,
+            'gateway_ip' => '172.23.195.5', 'router_ip' => '172.23.195.6',
         ]);
 
         $this->bindGateway([$nasA->id => 51820, $nasB->id => 51822]);
 
         $this->artisan('vpn:sync-route-fragments')->assertSuccessful();
 
-        $this->assertStringContainsString('172.23.195.2/32 via 172.28.0.11', File::get($this->fragmentPath($nasA)));
-        $this->assertStringContainsString('172.23.195.6/32 via 172.28.0.5', File::get($this->fragmentPath($nasB)));
+        $contentA = File::get($this->fragmentPath($nasA));
+        $contentB = File::get($this->fragmentPath($nasB));
+        $this->assertStringContainsString('172.23.195.2/32 via 172.28.0.11', $contentA);
+        $this->assertStringContainsString('172.23.195.1/32 via 172.28.0.11', $contentA);
+        $this->assertStringContainsString('172.23.195.6/32 via 172.28.0.5', $contentB);
+        $this->assertStringContainsString('172.23.195.5/32 via 172.28.0.5', $contentB);
     }
 }

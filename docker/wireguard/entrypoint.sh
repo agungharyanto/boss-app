@@ -241,26 +241,31 @@ iptables -t nat -F POSTROUTING
 # "add an argument to MASQUERADE", it's switching the TARGET itself to
 # SNAT when a specific source is known.
 #
-# Pinned to WG_NAS_GATEWAY_IP — the ONE NAS this reverse-masquerade path
-# is currently configured for (same "one NAS only" limitation
-# TR069_MANAGEMENT_SUBNET/OLT_MANAGEMENT_SUBNET already have). Falls back
-# to plain MASQUERADE (old behavior) when WG_NAS_GATEWAY_IP is unset, so a
-# deployment that hasn't set the new var yet doesn't break — but that
-# fallback is exactly as ambiguous as described above the moment more
-# than one NAS block exists on this node, so it's a transitional safety
-# net, not a real fix for the general case.
-#
-# GENERALIZATION GAP, not silently hardcoded without a trace: a real
-# multi-NAS-aware version needs to match each packet's DESTINATION subnet
-# to the correct NAS's own gateway (not one global pinned value) — not
-# built here, same class of "single NAS only, documented, not yet
-# generalized" limitation as everywhere else in this file.
+# v0.8.4 — STILL pinned to the single global WG_NAS_GATEWAY_IP, used
+# below ONLY for the TR069/OLT management-subnet rules now (the
+# FreeRADIUS rule this variable used to also drive is generated
+# per-NAS inside the reconcile loop instead — see that loop's own
+# comment for the real production bug this fixes). TR069_MANAGEMENT_
+# SUBNET/OLT_MANAGEMENT_SUBNET are themselves single global env vars,
+# not per-NAS fragments the way addresses/peers/routes are — there is
+# only ever ONE NAS's management subnet configured system-wide at a
+# time by design (see those vars' own "one subnet only, static/manual"
+# docblocks above), so a single pinned gateway is CORRECT as long as it
+# points at the SAME NAS those subnet vars describe (true today: both
+# are configured for test-x86-bajastu). This remains a real, documented
+# generalization gap for the day a SECOND NAS gets its own TR069/OLT
+# management subnet configured — fixing that properly needs actual
+# per-NAS `nas.tr069_management_subnet`/`nas.olt_management_subnet`
+# fragments (a genuinely new mechanism, not something to retrofit as a
+# side effect of the FreeRADIUS fix) — not built here, same class of
+# "single NAS only, documented, not yet generalized" limitation as
+# everywhere else in this file. Falls back to plain MASQUERADE when
+# WG_NAS_GATEWAY_IP is unset, same transitional-safety-net reasoning as
+# before.
 REVERSE_NAT_TARGET=(-j MASQUERADE)
 if [ -n "$WG_NAS_GATEWAY_IP" ]; then
     REVERSE_NAT_TARGET=(-j SNAT --to-source "$WG_NAS_GATEWAY_IP")
 fi
-
-iptables -t nat -A POSTROUTING -s "$WG_SUBNET_CIDR" -d "$FREERADIUS_INTERNAL_IP" "${REVERSE_NAT_TARGET[@]}"
 
 if [ -n "$TR069_MANAGEMENT_SUBNET" ]; then
     # Masquerade genieacs's real boss-network IP into this node's own
@@ -331,13 +336,71 @@ while true; do
     # interface's current addresses first, one exact "IP/mask" token
     # match via `grep -qw`, so a value already applied in an earlier cycle
     # is skipped rather than re-added every ~10s.
+    #
+    # v0.8.4 — SAME loop also reconciles one per-NAS SNAT rule for traffic
+    # destined to FreeRADIUS, fixing a real production bug: the old
+    # single static rule (`-s $WG_SUBNET_CIDR -j SNAT --to-source
+    # $WG_NAS_GATEWAY_IP`, applied ONCE at container start, removed above)
+    # matched the WHOLE /24 — every NAS's block, not just the one
+    # WG_NAS_GATEWAY_IP was actually pinned for — so a SECOND NAS's own
+    # traffic toward FreeRADIUS got its source rewritten to the FIRST
+    # NAS's gateway address instead of its own, and FreeRADIUS's reply
+    # then went to the wrong address and was silently lost. Confirmed for
+    # real via packet capture on a live NAS (see CLAUDE.md's own account
+    # of this incident) before writing this fix — the request genuinely
+    # arrived at FreeRADIUS with the WRONG source IP, not "arrived nowhere".
+    #
+    # Each $ADDRESSES_DIR/*.conf fragment already IS "gateway_ip/30" —
+    # exactly the two pieces of data this rule needs, no separate CIDR
+    # arithmetic required: used AS-IS for `-s` (iptables network-aligns a
+    # host+mask automatically, so "172.23.195.5/30" as a MATCH criterion
+    # is identical to "172.23.195.4/30" — it already means "this NAS's
+    # own /30 block, not the whole /24"), and stripped of its `/30` suffix
+    # for `--to-source` (the exact address this cycle's `ip address add`
+    # above just applied to wg0 — this node genuinely owns that address,
+    # so SNAT-ing to it is always valid).
+    #
+    # Idempotency via `iptables -C` (the standard idiomatic check-before-
+    # add for iptables, mirroring the ip-address grep check above, which
+    # can't be reused as-is since NAT rules aren't listed by `ip addr`).
+    # A `-m comment` tag (unique per NAS id, parsed straight from the
+    # fragment's own filename) is what makes a rule identifiable enough
+    # to check/delete later — plain `-s`/`-d`/`-j` alone would already be
+    # unique per NAS in practice (no two NAS share a /30), but the
+    # comment makes the intent self-documenting to anyone reading
+    # `iptables -t nat -L POSTROUTING -n -v` directly on a live node.
+    declare -A active_snat_nas=()
     for addr_file in "$ADDRESSES_DIR"/*.conf; do
         [ -e "$addr_file" ] || continue
 
+        nas_id=$(basename "$addr_file" .conf)
         addr=$(tr -d '[:space:]' < "$addr_file")
 
         if [ -n "$addr" ] && ! ip -4 address show dev wg0 | grep -qw "$addr"; then
             ip address add "$addr" dev wg0 2>&1 || echo ">> [reconcile] failed to add address $addr from $addr_file, will retry next cycle"
+        fi
+
+        if [ -n "$addr" ]; then
+            gw_ip="${addr%/*}"
+            active_snat_nas["$nas_id"]=1
+
+            if ! iptables -t nat -C POSTROUTING -s "$addr" -d "$FREERADIUS_INTERNAL_IP" -j SNAT --to-source "$gw_ip" -m comment --comment "boss-vpn-snat-freeradius-${nas_id}" 2>/dev/null; then
+                iptables -t nat -A POSTROUTING -s "$addr" -d "$FREERADIUS_INTERNAL_IP" -j SNAT --to-source "$gw_ip" -m comment --comment "boss-vpn-snat-freeradius-${nas_id}" \
+                    2>&1 || echo ">> [reconcile] failed to add SNAT rule for ${nas_id}, will retry next cycle"
+            fi
+        fi
+    done
+
+    # Sweep per-NAS SNAT rules whose address fragment no longer exists
+    # (NAS revoked) — deleted by rule NUMBER (re-queried fresh before
+    # each single delete, since removing a rule shifts every later line
+    # number), not by a partial `-D <criteria>` spec, which iptables
+    # only matches against a rule's FULL original specification, not a
+    # comment alone.
+    for stale_nas in $(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep -oE 'boss-vpn-snat-freeradius-nas-[0-9]+' | sed 's/boss-vpn-snat-freeradius-//' | sort -u); do
+        if [ -z "${active_snat_nas[$stale_nas]:-}" ]; then
+            line_no=$(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep "boss-vpn-snat-freeradius-${stale_nas}\b" | head -1 | awk '{print $1}')
+            [ -n "$line_no" ] && { iptables -t nat -D POSTROUTING "$line_no" 2>/dev/null || true; }
         fi
     done
 

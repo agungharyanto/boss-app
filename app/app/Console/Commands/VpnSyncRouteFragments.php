@@ -87,6 +87,23 @@ class VpnSyncRouteFragments extends Command
             $block = VpnWireguardNasBlock::where('nas_id', $nas->id)->first();
             if ($block !== null) {
                 $lines[] = "{$block->router_ip}/32 via {$nodeIp}";
+
+                // v0.8.4 — also route to this NAS's own gateway_ip, not
+                // just its router_ip. Needed since docker/wireguard/
+                // entrypoint.sh's per-NAS FreeRADIUS SNAT rule rewrites
+                // the NAS's real source to gateway_ip before the packet
+                // reaches FreeRADIUS (fixing a real bug where a single
+                // global SNAT target collapsed every NAS's traffic onto
+                // ONE NAS's gateway — see that script's own docblock) —
+                // without a route back to gateway_ip specifically,
+                // FreeRADIUS has no path for its reply and the request
+                // still silently times out even with the per-NAS SNAT
+                // rule correctly in place. Confirmed for real: a manual
+                // `ip route add {gateway_ip}/32 via {nodeIp}` was what
+                // actually made the previously-100%-failing ping succeed
+                // during this incident's live diagnosis, on top of (not
+                // instead of) the per-NAS SNAT rule itself.
+                $lines[] = "{$block->gateway_ip}/32 via {$nodeIp}";
             }
 
             if (! empty($nas->tr069_management_subnet)) {

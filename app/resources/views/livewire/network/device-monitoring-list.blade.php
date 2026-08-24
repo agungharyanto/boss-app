@@ -17,6 +17,10 @@
         </button>
     </div>
 
+    @if ($removeErrorMessage)
+        <p class="px-4 py-2 text-xs text-red-600 bg-red-50 border-b border-gray-100">{{ $removeErrorMessage }}</p>
+    @endif
+
     @if ($pageUnavailable)
         <div class="p-6 text-center text-sm text-amber-700 bg-amber-50">
             {{ __('Data monitoring tidak tersedia — LibreNMS tidak bisa dihubungi. Coba muat ulang beberapa saat lagi.') }}
@@ -37,6 +41,7 @@
                         <th class="px-4 py-2 text-left">{{ __('Memory%') }}</th>
                         <th class="px-4 py-2 text-left">{{ __('Temperature') }}</th>
                         <th class="px-4 py-2 text-left">{{ __('Availability% (1 hari)') }}</th>
+                        <th class="px-4 py-2 text-left"></th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
@@ -71,6 +76,32 @@
                             <td class="px-4 py-2 {{ $memory['class'] }}">{{ $memory['text'] }}</td>
                             <td class="px-4 py-2 {{ $temperature['class'] }}">{{ $temperature['text'] }}</td>
                             <td class="px-4 py-2 {{ $availability['class'] }}">{{ $availability['text'] }}</td>
+                            <td class="px-4 py-2 whitespace-nowrap">
+                                <button
+                                    type="button"
+                                    wire:click.stop="openHistory({{ $row['device_id'] }}, '{{ addslashes($row['name']) }}')"
+                                    class="text-xs text-primary hover:underline"
+                                >
+                                    {{ __('Riwayat') }}
+                                </button>
+                                @can('monitoring.manage')
+                                    <button
+                                        type="button"
+                                        wire:click.stop="openEdit({{ $row['device_id'] }})"
+                                        class="text-xs text-primary hover:underline ml-2"
+                                    >
+                                        {{ __('Edit') }}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        wire:click.stop="removeDevice({{ $row['device_id'] }})"
+                                        wire:confirm="{{ __('Hapus device \":name\" dari LibreNMS? Riwayat CPU/Memory/Traffic-nya ikut terhapus dan TIDAK bisa dikembalikan.', ['name' => $row['name']]) }}"
+                                        class="text-xs text-red-600 hover:underline ml-2"
+                                    >
+                                        {{ __('Hapus') }}
+                                    </button>
+                                @endcan
+                            </td>
                         </tr>
                     @endforeach
                 </tbody>

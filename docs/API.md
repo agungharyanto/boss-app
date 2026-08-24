@@ -889,3 +889,209 @@ diurutkan `last_seen_at` terbaru dulu. Query param `?active_only=true`
 membatasi ke yang `is_active` saja. Response `CpeConnectedHostResource`:
 `mac_address`, `hostname` (nullable), `ip_address` (nullable),
 `is_active`, `first_seen_at`, `last_seen_at`.
+
+## Dashboard Monitoring API (v0.8.4)
+
+**Cikal bakal integrasi bot WhatsApp** (belum dibangun sendiri di sprint
+ini) — read-only, membungkus data yang sama persis dengan yang sudah
+ditampilkan di halaman `/monitoring`
+(`App\Livewire\Network\DeviceMonitoringList`/`DeviceTrafficGraph`) dan
+modal "Riwayat" RX Power CPE
+(`App\Livewire\Network\CpeSignalHistoryGraph`) — tidak ada logic query
+baru, murni endpoint baru di atas service yang sudah ada. Semua 3
+endpoint butuh permission `monitoring.view` (kecuali signal history CPE,
+lihat di bawah) dan dibatasi `throttle:60,1`, sama seperti rate limit yang
+sudah dipakai di 2 webhook publik.
+
+**Vocabulary `?range=`** dipakai bersama oleh 2 dari 3 endpoint ini (lihat
+`App\Enums\CpeSignalHistoryRange::fromApiParam()`): `hourly`, `daily`
+(default), `weekly`, `monthly`, `yearly`. Nilai di luar 5 kata ini
+menghasilkan `422` dengan `errors.range`.
+
+### `GET /cpe-devices/{cpe_device}/signal-history`
+
+Riwayat RX Power (dBm) satu perangkat CPE — query yang sama persis dengan
+yang dipakai modal "Riwayat" (`App\Services\Network\
+CpeSignalHistoryQueryService::seriesFor()`), termasuk agregasi SQL-level
+untuk range Week/Month/Year (lihat bagian "GenieACS Connected Clients"
+dan CLAUDE.md "RX Power History (v0.8.3)" untuk detail agregasinya).
+Otorisasi mengikuti `CpeDevicePolicy::view()` yang sudah ada — bukan
+`monitoring.view` — device milik reseller sendiri tetap bisa diakses staff
+reseller itu, sama seperti endpoint CPE lain.
+
+Query param: `?range=` (opsional, default `daily`).
+
+Response `data` — array flat, satu elemen per titik:
+
+```json
+{
+  "success": true,
+  "message": "Riwayat RX Power perangkat CPE",
+  "data": [
+    { "timestamp": 1755590400, "rx_power_dbm": -22.5 },
+    { "timestamp": 1755591000, "rx_power_dbm": null }
+  ],
+  "meta": []
+}
+```
+
+`rx_power_dbm: null` adalah gap nyata (bukan error) — sama seperti yang
+sudah didokumentasikan untuk grafik Livewire-nya.
+
+### `GET /monitoring/devices`
+
+Daftar semua device LibreNMS beserta ringkasan status/CPU/Memory/
+Temperature/Availability — delegasi penuh ke
+`App\Services\Network\DeviceMonitoringSummaryService::buildRow()` (dipakai
+juga oleh `DeviceMonitoringList` Livewire, diekstrak sprint ini supaya API
+dan UI Livewire berbagi logic yang sama persis, bukan duplikat). Butuh
+permission `monitoring.view`.
+
+Setiap metric (`cpu`/`memory`/`temperature`/`availability`) punya 3
+kemungkinan state, dihitung independen per metric per device — satu
+device/metric gagal tidak pernah menyembunyikan device/metric lain:
+- `"ok"` — nilai riil (rata-rata kalau device punya beberapa sensor kelas
+  yang sama, mis. OLT ZTE C300 punya 7 sensor processor).
+- `"no_sensor"` — device memang tidak punya sensor kelas ini sama sekali
+  (bukan error, contoh nyata: OLT HSGQ-E04ID tidak punya OID CPU/suhu).
+- `"unavailable"` — pemanggilan API LibreNMS-nya sendiri gagal (network,
+  5xx, timeout) — dependency genuinely degraded.
+
+`availability.value` khusus menampilkan durasi 1 hari (LibreNMS selalu
+mengembalikan 4 durasi tetap; 1 hari dianggap paling relevan untuk "apakah
+ini online sekarang").
+
+```json
+{
+  "success": true,
+  "message": "Daftar device monitoring",
+  "data": [
+    {
+      "device_id": 2,
+      "hostname": "c300.kaliwungu.bajastu.id",
+      "name": "c300.kaliwungu.bajastu.id",
+      "status": true,
+      "uptime": 100000,
+      "cpu": { "state": "ok", "value": 3.0 },
+      "memory": { "state": "ok", "value": 41.2 },
+      "temperature": { "state": "no_sensor", "value": null },
+      "availability": { "state": "ok", "value": 99.98 }
+    }
+  ],
+  "meta": []
+}
+```
+
+### `GET /monitoring/devices/{device}/traffic`
+
+Riwayat traffic (bukan gambar grafik, time-series mentah) satu interface
+device — delegasi langsung ke
+`App\Services\Network\LibreNmsService::getTrafficHistory()` (`rrdtool
+xport`, sudah melakukan konsolidasi/downsampling sendiri lewat RRA RRDtool
+untuk range yang lebih lebar — tidak ada agregasi tambahan di sisi PHP).
+Butuh permission `monitoring.view`.
+
+Query param: `interface` (**wajib**, nama interface persis seperti di
+LibreNMS, mis. `ether1`), `?range=` (opsional, default `daily`).
+
+```json
+{
+  "success": true,
+  "message": "Riwayat traffic device monitoring",
+  "data": [
+    { "timestamp": 1755590400, "in_bytes_per_second": 125000.5, "out_bytes_per_second": 84000.2 }
+  ],
+  "meta": []
+}
+```
+
+Nilai `null` pada `in_bytes_per_second`/`out_bytes_per_second` berarti
+tidak ada sample RRD pada titik waktu itu — bukan nol.
+
+### `GET /monitoring/containers`
+
+Snapshot CPU%/Memory/Network/Disk **terakhir** (bukan live) untuk setiap
+container Docker — dibaca dari `container_stats_history`, diisi setiap 5
+menit oleh `App\Console\Commands\SyncContainerStats` lewat
+`docker-stats-proxy` (baca-saja secara struktural, lihat CLAUDE.md
+"Container Stats via docker-socket-proxy (v0.8.4 Bagian C)"). Butuh
+permission `monitoring.view`. Tidak ada query param — selalu snapshot poll
+paling baru.
+
+```json
+{
+  "success": true,
+  "message": "Snapshot stats container terakhir",
+  "data": [
+    {
+      "container_name": "genieacs-cwmp",
+      "cpu_percent": 6.15,
+      "memory_usage_mb": 9.91,
+      "memory_limit_mb": 19762.49,
+      "network_rx_bytes": 7684,
+      "network_tx_bytes": 309168,
+      "disk_usage_mb": 0.03,
+      "recorded_at": "2026-08-22T09:05:00.000000Z"
+    }
+  ],
+  "meta": []
+}
+```
+
+`disk_usage_mb` adalah `SizeRw` (writable layer milik container itu
+sendiri), bukan `SizeRootFs` (yang sebagian besar mencerminkan image layer
+bersama, bukan pertumbuhan sesungguhnya container tersebut). Kalau belum
+ada satu pun siklus sinkronisasi yang selesai, `data` adalah array kosong.
+
+### `GET /monitoring/devices/{device}/history`
+
+Riwayat CPU/Memory/Suhu **per sensor** (device dengan beberapa sensor —
+mis. OLT ZTE C300 punya 7 sensor processor — tidak dirata-rata, satu
+elemen array per sensor). Delegasi ke
+`App\Services\Network\LibreNmsService::getMetricHistory()`, mekanisme yang
+sama dengan endpoint traffic (`rrdtool xport`, tidak ada agregasi PHP
+tambahan). Butuh permission `monitoring.view`.
+
+Query param: `metric` (**wajib**, salah satu dari `cpu`/`memory`/
+`temperature`), `?range=` (opsional, default `daily`).
+
+```json
+{
+  "success": true,
+  "message": "Riwayat metrik device monitoring",
+  "data": [
+    {
+      "sensor_id": 49,
+      "label": "PRWH Processor",
+      "points": [
+        { "timestamp": 1755590400, "value": 6.15 },
+        { "timestamp": 1755590700, "value": 5.8 }
+      ]
+    }
+  ],
+  "meta": []
+}
+```
+
+### `PATCH /monitoring/devices/{device}`
+
+Edit device — whitelist field yang sama dengan form Edit di UI:
+`display_name` (opsional, nama tampilan), `community` (SNMP read-only
+community), `port`, `snmp_version` (`v1`/`v2c` saja). Butuh permission
+`monitoring.manage`. `hostname`/`ip` sengaja tidak bisa diubah lewat
+endpoint ini (mengubah identitas jaringan device adalah operasi jauh
+lebih berisiko dan tidak diminta di sprint ini).
+
+```json
+{ "success": true, "message": "Device berhasil diperbarui", "data": null, "meta": [] }
+```
+
+### `DELETE /monitoring/devices/{device}`
+
+Hapus device dari LibreNMS — **destruktif**, riwayat RRD dan data
+port/sensor device tersebut ikut terhapus, tidak bisa dikembalikan. Butuh
+permission `monitoring.manage`.
+
+```json
+{ "success": true, "message": "Device berhasil dihapus dari LibreNMS", "data": null, "meta": [] }
+```

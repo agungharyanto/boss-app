@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\V1\DashboardWidgetSettingController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\LocaleSettingController;
+use App\Http\Controllers\Api\V1\MonitoringController;
 use App\Http\Controllers\Api\V1\NasController;
 use App\Http\Controllers\Api\V1\OdpController;
 use App\Http\Controllers\Api\V1\PaymentController;
@@ -163,6 +164,11 @@ Route::prefix('v1')->group(function () {
             // v0.7.6 — read-only, populated by the scheduled
             // cpe:sync-connected-hosts command (never triggered per-request).
             Route::get('cpe-devices/{cpe_device}/connected-hosts', [CpeDeviceController::class, 'connectedHosts']);
+
+            // v0.8.4 — read-only, WhatsApp-bot integration foothold, see
+            // CpeDeviceController::signalHistory()'s own docblock.
+            Route::get('cpe-devices/{cpe_device}/signal-history', [CpeDeviceController::class, 'signalHistory'])
+                ->middleware('throttle:60,1');
         });
 
         // Admin-only tax engine catalog/reporting — no reseller.context needed.
@@ -212,5 +218,25 @@ Route::prefix('v1')->group(function () {
         Route::get('resellers/{reseller}/users', [ResellerUserController::class, 'index']);
         Route::post('resellers/{reseller}/users', [ResellerUserController::class, 'store']);
         Route::delete('resellers/{reseller}/users/{user}', [ResellerUserController::class, 'destroy']);
+
+        // v0.8.4 — read-only Dashboard Monitoring API, WhatsApp-bot
+        // integration foothold (see App\Http\Controllers\Api\V1\
+        // MonitoringController's own docblock). Platform-level, no
+        // reseller.context needed — same posture as tax-components/
+        // cpe-parameter-maps above.
+        Route::get('monitoring/devices', [MonitoringController::class, 'devices'])
+            ->middleware('throttle:60,1');
+        Route::get('monitoring/devices/{device}/traffic', [MonitoringController::class, 'deviceTraffic'])
+            ->middleware('throttle:60,1');
+        // v0.8.4 Bagian D
+        Route::get('monitoring/devices/{device}/history', [MonitoringController::class, 'deviceHistory'])
+            ->middleware('throttle:60,1');
+        Route::patch('monitoring/devices/{device}', [MonitoringController::class, 'updateDevice'])
+            ->middleware('throttle:60,1');
+        Route::delete('monitoring/devices/{device}', [MonitoringController::class, 'destroyDevice'])
+            ->middleware('throttle:60,1');
+        // v0.8.4 Bagian C
+        Route::get('monitoring/containers', [MonitoringController::class, 'containers'])
+            ->middleware('throttle:60,1');
     });
 });

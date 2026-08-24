@@ -327,12 +327,21 @@ class RolesAndPermissionsSeeder extends Seeder
      * reads, never mutates LibreNMS's own state), platform-level like
      * cpe_parameter_maps above. Unlike that one, `noc` also gets it —
      * monitoring the ISP's own infra is that role's whole purpose.
+     *
+     * `monitoring.manage` added (v0.8.2-monitoring-fixes) once
+     * LibreNmsService gained its first genuinely mutating call
+     * (addDevice() — onboarding a generic SNMP device). Given to the same
+     * two roles as `.view`, not restricted further — onboarding a device
+     * to be monitored is squarely within NOC's own operational duties,
+     * same posture as `.view` already established for this role.
      */
     private function seedMonitoringPermissions(): void
     {
         Permission::firstOrCreate(['name' => 'monitoring.view', 'guard_name' => 'web']);
+        Permission::firstOrCreate(['name' => 'monitoring.manage', 'guard_name' => 'web']);
 
-        Role::findByName('super_admin', 'web')->givePermissionTo('monitoring.view');
-        Role::findByName('noc', 'web')->givePermissionTo('monitoring.view');
+        foreach (['super_admin', 'noc'] as $role) {
+            Role::findByName($role, 'web')->givePermissionTo(['monitoring.view', 'monitoring.manage']);
+        }
     }
 }

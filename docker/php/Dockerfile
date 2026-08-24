@@ -74,8 +74,16 @@ RUN apk add --no-cache rrdtool
 # Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
+# v0.8.x — self-heals /tmp's permission (1777) at container start AND
+# periodically for the container's whole lifetime, not just once at
+# boot — see entrypoint.sh's own docblock for the real "419 on Riwayat"
+# investigation this fixes and why a one-time chmod wasn't enough.
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 WORKDIR /var/www/html
 
 EXPOSE 9000
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["php-fpm"]

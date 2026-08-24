@@ -2,9 +2,11 @@
 
 namespace App\Livewire\Network;
 
+use App\Services\Network\DeviceMonitoringSummaryService;
 use App\Services\Network\LibreNmsService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Facades\Log;
+use Livewire\Attributes\On;
 use Livewire\Component;
 use Throwable;
 
@@ -51,6 +53,8 @@ class DeviceMonitoringList extends Component
 
     public ?int $selectedDeviceId = null;
 
+    public ?string $removeErrorMessage = null;
+
     public function mount(?int $onlyDeviceId = null): void
     {
         $this->authorize('monitoring.view');
@@ -59,6 +63,19 @@ class DeviceMonitoringList extends Component
         $this->loadDevices();
     }
 
+    /**
+     * v0.8.2-monitoring-fixes — AddMonitoringDeviceForm dispatches
+     * monitoring-device-added after successfully onboarding a generic SNMP
+     * device, so the new device shows up here without a manual page
+     * reload. v0.8.4 Bagian D — DeviceEditForm/DeviceMonitoringList's own
+     * removeDevice() dispatch monitoring-device-updated for the same
+     * reason after an edit/remove. Both rely on LibreNmsService's own
+     * Cache::forget('librenms:devices') on success — without that, this
+     * reload would just re-serve the same stale cached list for up to
+     * cache_ttl seconds.
+     */
+    #[On('monitoring-device-added')]
+    #[On('monitoring-device-updated')]
     public function loadDevices(?LibreNmsService $service = null): void
     {
         $service ??= app(LibreNmsService::class);
@@ -79,73 +96,8 @@ class DeviceMonitoringList extends Component
             $devices = array_values(array_filter($devices, fn (array $d) => $d['device_id'] === $this->onlyDeviceId));
         }
 
-        $this->rows = array_map(fn (array $device) => $this->buildRow($device, $service), $devices);
-    }
-
-    /**
-     * @param  array{device_id: int, hostname: string, sys_name: ?string, status: bool, uptime: ?int}  $device
-     * @return array<string, mixed>
-     */
-    private function buildRow(array $device, LibreNmsService $service): array
-    {
-        return [
-            'device_id' => $device['device_id'],
-            'name' => $device['sys_name'] ?: $device['hostname'],
-            'status' => $device['status'],
-            'uptime' => $device['uptime'],
-            'cpu' => $this->averagedMetricCell(fn () => $service->getCpuUsage($device['device_id']), 'usage_percent'),
-            'memory' => $this->averagedMetricCell(fn () => $service->getMemoryUsage($device['device_id']), 'usage_percent'),
-            'temperature' => $this->averagedMetricCell(fn () => $service->getTemperature($device['device_id']), 'value_celsius'),
-            'availability' => $this->availabilityCell(fn () => $service->getAvailability($device['device_id'])),
-        ];
-    }
-
-    /**
-     * @return array{state: string, value: ?float}
-     */
-    private function averagedMetricCell(callable $fetch, string $valueKey): array
-    {
-        try {
-            $readings = $fetch();
-        } catch (Throwable $e) {
-            Log::warning('LibreNMS metric unavailable', ['exception' => $e->getMessage()]);
-
-            return ['state' => 'unavailable', 'value' => null];
-        }
-
-        if ($readings === []) {
-            return ['state' => 'no_sensor', 'value' => null];
-        }
-
-        $values = array_filter(array_column($readings, $valueKey), fn ($v) => $v !== null);
-
-        if ($values === []) {
-            return ['state' => 'no_sensor', 'value' => null];
-        }
-
-        return ['state' => 'ok', 'value' => array_sum($values) / count($values)];
-    }
-
-    /**
-     * @return array{state: string, value: ?float}
-     */
-    private function availabilityCell(callable $fetch): array
-    {
-        try {
-            $durations = $fetch();
-        } catch (Throwable $e) {
-            Log::warning('LibreNMS availability unavailable', ['exception' => $e->getMessage()]);
-
-            return ['state' => 'unavailable', 'value' => null];
-        }
-
-        $oneDay = collect($durations)->firstWhere('duration_seconds', 86400);
-
-        if ($oneDay === null) {
-            return ['state' => 'no_sensor', 'value' => null];
-        }
-
-        return ['state' => 'ok', 'value' => $oneDay['availability_percent']];
+        $summaryService = app(DeviceMonitoringSummaryService::class);
+        $this->rows = array_map(fn (array $device) => $summaryService->buildRow($device, $service), $devices);
     }
 
     public function selectDevice(int $deviceId): void
@@ -153,6 +105,53 @@ class DeviceMonitoringList extends Component
         $this->selectedDeviceId = $this->selectedDeviceId === $deviceId ? null : $deviceId;
 
         $this->dispatch('device-selected', deviceId: $this->selectedDeviceId);
+    }
+
+    /**
+     * v0.8.4 Bagian D — "Riwayat" per row. Deliberately a dispatched event
+     * to a SEPARATE sibling component (App\Livewire\Network\
+     * DeviceHistoryModal), same "table component dispatches, a sibling
+     * listens" architecture already established for device-selected →
+     * DeviceTrafficGraph — keeps this table's own state surface unchanged
+     * rather than bolting modal/metric/range state onto it.
+     */
+    public function openHistory(int $deviceId, string $name): void
+    {
+        $this->dispatch('device-history-requested', deviceId: $deviceId, deviceName: $name);
+    }
+
+    /**
+     * v0.8.4 Bagian D — same dispatched-event pattern as openHistory()
+     * above, to App\Livewire\Network\DeviceEditForm.
+     */
+    public function openEdit(int $deviceId): void
+    {
+        $this->dispatch('device-edit-requested', deviceId: $deviceId);
+    }
+
+    /**
+     * v0.8.4 Bagian D — gated by `wire:confirm` in the Blade view
+     * (destructive: LibreNMS's own delete_device() drops that device's RRD
+     * history and port/sensor rows too, not just the device row). Requires
+     * `monitoring.manage`, not `.view` — same posture as
+     * AddMonitoringDeviceForm/DeviceEditForm.
+     */
+    public function removeDevice(int $deviceId, LibreNmsService $service): void
+    {
+        $this->authorize('monitoring.manage');
+
+        $this->removeErrorMessage = null;
+
+        try {
+            $service->deleteDevice($deviceId);
+        } catch (Throwable $e) {
+            Log::warning("DeviceMonitoringList: gagal menghapus device #{$deviceId} — {$e->getMessage()}");
+            $this->removeErrorMessage = $e->getMessage();
+
+            return;
+        }
+
+        $this->loadDevices();
     }
 
     public function render()

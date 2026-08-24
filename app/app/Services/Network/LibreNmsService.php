@@ -4,8 +4,10 @@ namespace App\Services\Network;
 
 use App\Exceptions\LibreNmsDataUnavailableException;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
 /**
@@ -97,6 +99,202 @@ class LibreNmsService
                 ->values()
                 ->all();
         });
+    }
+
+    /**
+     * Onboards a generic SNMP device (v0.8.2 monitoring-fixes) — the same
+     * `POST /devices` call already used to manually onboard the 3 real
+     * OLTs during v0.8.1 (see CLAUDE.md's "LibreNMS OLT Onboarding"), now
+     * codified here rather than left as an ad-hoc curl/UI action.
+     * Deliberately never sends `force_add` — LibreNMS's own real
+     * reachability/SNMP check decides pass or fail, same posture already
+     * locked in for those 3 OLTs (never create a misleadingly "added" row
+     * for a device that was never actually confirmed reachable).
+     *
+     * Confirmed by reading `add_device()`'s own source
+     * (`includes/html/api_functions.inc.php`): a failure (unreachable,
+     * SNMP timeout, host already exists, unsupported SNMP version) comes
+     * back as a real HTTP 500 with LibreNMS's own human-readable message
+     * in the JSON body — that message is passed through verbatim in the
+     * thrown exception rather than paraphrased, so the UI can show
+     * Agung exactly what LibreNMS itself says went wrong.
+     *
+     * `$displayName` is a genuine two-request flow, not one call — `POST
+     * /devices`'s own field whitelist (confirmed by reading the same
+     * source) has no `display` field at all, only `display_template` (a
+     * templating feature, not a plain name). A custom display name needs a
+     * SEPARATE `PATCH /devices/{id}` (`update_device()`), sent only when a
+     * non-empty name was actually given and differs from the hostname.
+     *
+     * That PATCH deliberately targets the `display_template` field, NOT
+     * `display` directly — a real bug found by testing this for real
+     * (patching `display` returned a genuine HTTP 200 "has been updated"
+     * response, but the value silently never changed, confirmed by reading
+     * `devices.display` straight from librenms_db). Root cause: LibreNMS's
+     * own `Device::$fillable` (app/Models/Device.php) does NOT include
+     * `display` at all — only `display_template` — so `update_device()`'s
+     * generic `$device->fill([$field => $data])->save()` silently drops
+     * the assignment entirely for `display` (Eloquent mass-assignment
+     * protection, no exception raised) while still reporting success,
+     * since the resulting no-op `save()` still returns true.
+     * `display_template` IS fillable, and `DeviceObserver::updating()`
+     * regenerates `display` from it whenever `display_template` is dirty
+     * (`SimpleTemplate::parse($this->display_template ?: ..., [...])` —
+     * with no `{{ }}` placeholders in the string we send, this parses to
+     * the literal string verbatim) — confirmed working end-to-end for
+     * real against device #1 (patched to a test value, verified changed
+     * in `librenms_db` directly, then reverted back to the original
+     * `display_template = NULL` / `display = "144.79.52.0"`).
+     *
+     * Forgets the cached device list on success so `listDevices()` (and
+     * therefore DeviceMonitoringList) reflects the new device on its very
+     * next render, instead of waiting out the cache TTL.
+     *
+     * @return array{device_id: int, hostname: string}
+     *
+     * @throws LibreNmsDataUnavailableException on any add failure — the
+     *                                          message is LibreNMS's own, not this class's.
+     */
+    public function addDevice(
+        string $hostname,
+        string $snmpVersion,
+        ?string $community,
+        int $port,
+        ?string $displayName = null,
+    ): array {
+        $payload = array_filter([
+            'hostname' => $hostname,
+            'version' => $snmpVersion,
+            'community' => $community,
+            'port' => $port,
+        ], fn ($value) => $value !== null && $value !== '');
+
+        $response = $this->http()->post('/devices', $payload);
+
+        if ($response->failed()) {
+            throw new LibreNmsDataUnavailableException(
+                $response->json('message') ?? "Gagal menambahkan device {$hostname} ke LibreNMS."
+            );
+        }
+
+        $device = $response->json('devices.0') ?? [];
+        $deviceId = (int) ($device['device_id'] ?? 0);
+
+        if ($displayName !== null && $displayName !== '' && $displayName !== $hostname && $deviceId > 0) {
+            $this->http()->patch("/devices/{$deviceId}", ['field' => 'display_template', 'data' => $displayName]);
+        }
+
+        Cache::forget('librenms:devices');
+
+        return [
+            'device_id' => $deviceId,
+            'hostname' => $device['hostname'] ?? $hostname,
+        ];
+    }
+
+    /**
+     * v0.8.4 Bagian D — feeds DeviceEditForm's pre-filled fields. A
+     * DELIBERATELY narrower subset than the raw `/devices/{id}` response
+     * (which also includes SNMPv3 auth/crypto fields this UI never
+     * exposes, per the same v1/v2c-only scope as AddMonitoringDeviceForm)
+     * — but, unlike listDevices()'s own sanitization, DOES include the
+     * real `community` value: an edit form legitimately needs the current
+     * value to show/let an admin modify it, the same way LibreNMS's own
+     * web UI does — this is not a "shown once, never again" secret the
+     * way a Xendit key is, it's re-fetchable from LibreNMS itself by
+     * anyone holding `monitoring.manage` regardless of what this form
+     * shows.
+     *
+     * @return ?array{device_id: int, hostname: string, display_template: ?string, community: ?string, port: int, snmpver: string}
+     */
+    public function getEditableDevice(int $deviceId): ?array
+    {
+        $device = $this->http()->get("/devices/{$deviceId}")->throw()->json('devices.0');
+
+        if ($device === null) {
+            return null;
+        }
+
+        return [
+            'device_id' => (int) $device['device_id'],
+            'hostname' => $device['hostname'],
+            'display_template' => $device['display_template'] ?? null,
+            'community' => $device['community'] ?? null,
+            'port' => (int) ($device['port'] ?? 161),
+            'snmpver' => $device['snmpver'] ?? 'v2c',
+        ];
+    }
+
+    /**
+     * v0.8.4 Bagian D — Edit form on DeviceMonitoringList. Deliberately a
+     * SMALL, explicit whitelist (`display_template`/`community`/`port`/
+     * `snmpver`), not "whatever PATCH /devices/{id} accepts" — confirmed by
+     * reading LibreNMS's own `App\Models\Device::$fillable`
+     * (`app/Models/Device.php`) directly, which also allows `hostname`/
+     * `ip`/SNMPv3 fields/etc., none of which this form exposes:
+     * `hostname`/`ip` are deliberately excluded (changing a device's own
+     * network identity is a materially bigger, riskier operation than
+     * fixing a typo'd display name or rotating a community string — not
+     * requested, not built), and SNMPv3 fields are excluded for the same
+     * "only v1/v2c is a selectable option" reason `AddMonitoringDeviceForm`
+     * already established. Confirmed live, safely, against the real router
+     * (device #1) BEFORE trusting this: a same-value no-op PATCH of
+     * `port`/`snmpver` returned a genuine `200 "Device fields have been
+     * updated"` with zero effect on live polling.
+     *
+     * `field`/`data` are PARALLEL ARRAYS (LibreNMS's own multi-field PATCH
+     * contract, confirmed live) — every key in $fields becomes one array
+     * position in each. Forgets the cached device list on success, same
+     * reasoning as addDevice().
+     *
+     * @param  array<string, string|int>  $fields  subset of display_template/community/port/snmpver
+     *
+     * @throws LibreNmsDataUnavailableException on any update failure
+     */
+    public function updateDevice(int $deviceId, array $fields): void
+    {
+        $allowed = ['display_template', 'community', 'port', 'snmpver'];
+        $fields = array_intersect_key($fields, array_flip($allowed));
+
+        if ($fields === []) {
+            return;
+        }
+
+        $response = $this->http()->patch("/devices/{$deviceId}", [
+            'field' => array_keys($fields),
+            'data' => array_values($fields),
+        ]);
+
+        if ($response->failed()) {
+            throw new LibreNmsDataUnavailableException(
+                $response->json('message') ?? "Gagal mengubah device #{$deviceId} di LibreNMS."
+            );
+        }
+
+        Cache::forget('librenms:devices');
+        Cache::forget("librenms:device:{$deviceId}:hostname");
+    }
+
+    /**
+     * v0.8.4 Bagian D — Remove button on DeviceMonitoringList, gated behind
+     * `wire:confirm` in the Blade view (destructive — LibreNMS's own
+     * `delete_device()` also drops that device's RRD history and port/
+     * sensor rows, not just the device row itself).
+     *
+     * @throws LibreNmsDataUnavailableException on any delete failure
+     */
+    public function deleteDevice(int $deviceId): void
+    {
+        $response = $this->http()->delete("/devices/{$deviceId}");
+
+        if ($response->failed()) {
+            throw new LibreNmsDataUnavailableException(
+                $response->json('message') ?? "Gagal menghapus device #{$deviceId} dari LibreNMS."
+            );
+        }
+
+        Cache::forget('librenms:devices');
+        Cache::forget("librenms:device:{$deviceId}:hostname");
     }
 
     /**
@@ -287,11 +485,11 @@ class LibreNmsService
      *
      * @throws LibreNmsDataUnavailableException
      */
-    public function getTrafficHistory(int $deviceId, string $ifName, int $rangeSeconds = 1800): array
+    public function getTrafficHistory(int $deviceId, string $ifName, int $rangeSeconds = 1800, ?Carbon $endAt = null): array
     {
-        $cacheKey = 'librenms:device:'.$deviceId.':traffic:'.md5($ifName).':'.$rangeSeconds;
+        $cacheKey = 'librenms:device:'.$deviceId.':traffic:'.md5($ifName).':'.$rangeSeconds.':'.($endAt?->getTimestamp() ?? 'now');
 
-        return Cache::remember($cacheKey, $this->cacheTtl, function () use ($deviceId, $ifName, $rangeSeconds) {
+        return Cache::remember($cacheKey, $this->cacheTtl, function () use ($deviceId, $ifName, $rangeSeconds, $endAt) {
             $hostname = $this->resolveHostname($deviceId);
 
             if ($hostname === null) {
@@ -306,15 +504,16 @@ class LibreNmsService
 
             $rrdPath = rtrim($this->rrdDataDir, '/')."/{$hostname}/port-id{$portId}.rrd";
 
-            $result = Process::timeout(10)->run([
-                'rrdtool', 'xport', '--json',
-                '-s', '-'.$rangeSeconds,
-                '-e', 'now',
-                "DEF:in={$rrdPath}:INOCTETS:AVERAGE",
-                "DEF:out={$rrdPath}:OUTOCTETS:AVERAGE",
-                'XPORT:in:In',
-                'XPORT:out:Out',
-            ]);
+            $result = Process::timeout(10)->run(array_merge(
+                ['rrdtool', 'xport', '--json'],
+                $this->xportTimeWindowArgs($rangeSeconds, $endAt),
+                [
+                    "DEF:in={$rrdPath}:INOCTETS:AVERAGE",
+                    "DEF:out={$rrdPath}:OUTOCTETS:AVERAGE",
+                    'XPORT:in:In',
+                    'XPORT:out:Out',
+                ],
+            ));
 
             if ($result->failed()) {
                 throw new LibreNmsDataUnavailableException(
@@ -367,5 +566,283 @@ class LibreNmsService
         $port = collect($this->listPorts($deviceId))->firstWhere('if_name', $ifName);
 
         return $port['port_id'] ?? null;
+    }
+
+    /**
+     * v0.8.4 Bagian D — "Riwayat" modal for a device's CPU sensor, same
+     * `rrdtool xport --json` mechanism as getTrafficHistory() above, not a
+     * new one. The RRD filename is NOT a fixed `processor-hr-{id}.rrd`
+     * pattern (that was an initial assumption disproven by directly
+     * inspecting real files on this server) — it's
+     * `processor-{processor_type}-{processor_index}.rrd`, vendor-driver-
+     * specific (e.g. `processor-zxa10-1.1.3.rrd` for a ZTE OLT,
+     * `processor-vrp-16842753.rrd` for Huawei VRP) — `processor_type`/
+     * `processor_index` come from the SAME per-sensor detail call
+     * collectHealthSensorReadings() already makes
+     * (`/devices/{id}/health/processor/{sensor_id}`), confirmed
+     * byte-for-byte against real files for all 7 sensors on a real ZTE
+     * C300 OLT before trusting this pattern.
+     *
+     * @return array<int, array{timestamp: int, value: ?float}>
+     *
+     * @throws LibreNmsDataUnavailableException
+     */
+    public function getCpuHistory(int $deviceId, int $sensorId, int $rangeSeconds = 1800, ?Carbon $endAt = null): array
+    {
+        $cacheKey = "librenms:device:{$deviceId}:cpu-history:{$sensorId}:{$rangeSeconds}:".($endAt?->getTimestamp() ?? 'now');
+
+        return Cache::remember($cacheKey, $this->cacheTtl, function () use ($deviceId, $sensorId, $rangeSeconds, $endAt) {
+            $hostname = $this->resolveHostname($deviceId);
+
+            if ($hostname === null) {
+                throw new LibreNmsDataUnavailableException("Device LibreNMS #{$deviceId} tidak ditemukan.");
+            }
+
+            $detail = $this->http()->get("/devices/{$deviceId}/health/processor/{$sensorId}")->throw()->json('graphs.0');
+
+            if ($detail === null) {
+                throw new LibreNmsDataUnavailableException("Sensor processor #{$sensorId} tidak ditemukan pada device #{$deviceId}.");
+            }
+
+            $rrdPath = rtrim($this->rrdDataDir, '/')."/{$hostname}/processor-{$detail['processor_type']}-{$detail['processor_index']}.rrd";
+
+            return $this->xportSingleSeries(
+                $rrdPath,
+                ["DEF:usage={$rrdPath}:usage:AVERAGE"],
+                'usage',
+                $rangeSeconds,
+                "device #{$deviceId} processor sensor #{$sensorId}",
+                $endAt,
+            );
+        });
+    }
+
+    /**
+     * Same mechanism as getCpuHistory() above, but the mempool RRD file
+     * only stores raw `used`/`free` datasources (confirmed via `rrdtool
+     * info` against a real file — NOT a `perc` datasource, unlike what the
+     * live API's own `mempool_perc` field might suggest) — the percentage
+     * shown here is computed at export time via an rrdtool CDEF
+     * (`used / (used+free) * 100`), matching what `getMemoryUsage()`'s
+     * live value already represents. Filename pattern:
+     * `mempool-{mempool_type}-{mempool_class}-{mempool_index}.rrd`
+     * (e.g. `mempool-zxa10-system-1.1.3.rrd`), confirmed the same way as
+     * the processor pattern above.
+     *
+     * @return array<int, array{timestamp: int, value: ?float}>
+     *
+     * @throws LibreNmsDataUnavailableException
+     */
+    public function getMemoryHistory(int $deviceId, int $sensorId, int $rangeSeconds = 1800, ?Carbon $endAt = null): array
+    {
+        $cacheKey = "librenms:device:{$deviceId}:memory-history:{$sensorId}:{$rangeSeconds}:".($endAt?->getTimestamp() ?? 'now');
+
+        return Cache::remember($cacheKey, $this->cacheTtl, function () use ($deviceId, $sensorId, $rangeSeconds, $endAt) {
+            $hostname = $this->resolveHostname($deviceId);
+
+            if ($hostname === null) {
+                throw new LibreNmsDataUnavailableException("Device LibreNMS #{$deviceId} tidak ditemukan.");
+            }
+
+            $detail = $this->http()->get("/devices/{$deviceId}/health/mempool/{$sensorId}")->throw()->json('graphs.0');
+
+            if ($detail === null) {
+                throw new LibreNmsDataUnavailableException("Sensor mempool #{$sensorId} tidak ditemukan pada device #{$deviceId}.");
+            }
+
+            $rrdPath = rtrim($this->rrdDataDir, '/')."/{$hostname}/mempool-{$detail['mempool_type']}-{$detail['mempool_class']}-{$detail['mempool_index']}.rrd";
+
+            return $this->xportSingleSeries(
+                $rrdPath,
+                [
+                    "DEF:used={$rrdPath}:used:AVERAGE",
+                    "DEF:free={$rrdPath}:free:AVERAGE",
+                    'CDEF:percent=used,used,free,+,/,100,*',
+                ],
+                'percent',
+                $rangeSeconds,
+                "device #{$deviceId} mempool sensor #{$sensorId}",
+                $endAt,
+            );
+        });
+    }
+
+    /**
+     * Same mechanism as getCpuHistory()/getMemoryHistory() above. Filename
+     * pattern: `sensor-temperature-{sensor_type}-{sensor_index}.rrd`
+     * (e.g. `sensor-temperature-zxa10-1.1.0.rrd`), single `sensor`
+     * datasource — confirmed the same way as the other two patterns.
+     *
+     * @return array<int, array{timestamp: int, value: ?float}>
+     *
+     * @throws LibreNmsDataUnavailableException
+     */
+    public function getTemperatureHistory(int $deviceId, int $sensorId, int $rangeSeconds = 1800, ?Carbon $endAt = null): array
+    {
+        $cacheKey = "librenms:device:{$deviceId}:temperature-history:{$sensorId}:{$rangeSeconds}:".($endAt?->getTimestamp() ?? 'now');
+
+        return Cache::remember($cacheKey, $this->cacheTtl, function () use ($deviceId, $sensorId, $rangeSeconds, $endAt) {
+            $hostname = $this->resolveHostname($deviceId);
+
+            if ($hostname === null) {
+                throw new LibreNmsDataUnavailableException("Device LibreNMS #{$deviceId} tidak ditemukan.");
+            }
+
+            $detail = $this->http()->get("/devices/{$deviceId}/health/temperature/{$sensorId}")->throw()->json('graphs.0');
+
+            if ($detail === null) {
+                throw new LibreNmsDataUnavailableException("Sensor temperature #{$sensorId} tidak ditemukan pada device #{$deviceId}.");
+            }
+
+            $rrdPath = rtrim($this->rrdDataDir, '/')."/{$hostname}/sensor-temperature-{$detail['sensor_type']}-{$detail['sensor_index']}.rrd";
+
+            return $this->xportSingleSeries(
+                $rrdPath,
+                ["DEF:sensor={$rrdPath}:sensor:AVERAGE"],
+                'sensor',
+                $rangeSeconds,
+                "device #{$deviceId} temperature sensor #{$sensorId}",
+                $endAt,
+            );
+        });
+    }
+
+    /**
+     * v0.8.4 Bagian D — shared multi-sensor history fetch, extracted so
+     * BOTH App\Livewire\Network\DeviceHistoryModal AND
+     * MonitoringController::deviceHistory() (the REST API twin) call the
+     * exact same logic rather than duplicating it (BOSS-006). Every sensor
+     * of the given class gets its OWN series — never averaged away, see
+     * DeviceHistoryModal's own docblock for why (a real device in this
+     * fleet has up to 7 processor sensors, one per line card).
+     *
+     * A device with genuinely zero sensors of this class returns an EMPTY
+     * array (real, not an error — same "no_sensor" distinction already
+     * established for getCpuUsage()/getMemoryUsage()/getTemperature()).
+     * One sensor's own history call failing is logged and dropped from the
+     * result, NOT fatal to the others; only when EVERY sensor's history
+     * call fails (despite the device having sensors) does this throw —
+     * a genuine degraded-dependency state, not "no sensor".
+     *
+     * @return array<int, array{sensor_id: int, label: string, points: array<int, array{timestamp: int, value: ?float}>}>
+     *
+     * @throws LibreNmsDataUnavailableException if the sensor list call itself fails, or every sensor's history call fails
+     * @throws \InvalidArgumentException if $metric isn't cpu/memory/temperature
+     */
+    public function getMetricHistory(int $deviceId, string $metric, int $rangeSeconds, ?Carbon $endAt = null): array
+    {
+        $sensors = match ($metric) {
+            'cpu' => $this->getCpuUsage($deviceId),
+            'memory' => $this->getMemoryUsage($deviceId),
+            'temperature' => $this->getTemperature($deviceId),
+            default => throw new \InvalidArgumentException("Metric tidak dikenal: \"{$metric}\". Gunakan cpu, memory, atau temperature."),
+        };
+
+        if ($sensors === []) {
+            return [];
+        }
+
+        $series = [];
+
+        foreach ($sensors as $sensor) {
+            try {
+                $points = match ($metric) {
+                    'cpu' => $this->getCpuHistory($deviceId, $sensor['sensor_id'], $rangeSeconds, $endAt),
+                    'memory' => $this->getMemoryHistory($deviceId, $sensor['sensor_id'], $rangeSeconds, $endAt),
+                    'temperature' => $this->getTemperatureHistory($deviceId, $sensor['sensor_id'], $rangeSeconds, $endAt),
+                };
+            } catch (LibreNmsDataUnavailableException $e) {
+                Log::warning("LibreNmsService::getMetricHistory: gagal ambil riwayat {$metric} sensor #{$sensor['sensor_id']} device #{$deviceId} — {$e->getMessage()}");
+
+                continue;
+            }
+
+            $series[] = [
+                'sensor_id' => $sensor['sensor_id'],
+                'label' => $sensor['label'] ?? "Sensor #{$sensor['sensor_id']}",
+                'points' => $points,
+            ];
+        }
+
+        if ($series === []) {
+            throw new LibreNmsDataUnavailableException("Riwayat {$metric} tidak tersedia untuk device #{$deviceId}.");
+        }
+
+        return $series;
+    }
+
+    /**
+     * v0.8.3 (CLAUDE.md "Custom Date Range" section) — shared `-s`/`-e`
+     * argument builder for every rrdtool xport call in this class,
+     * including getTrafficHistory()'s own inline call. `$endAt === null`
+     * (every pre-existing named-range caller) keeps the original relative
+     * `-s -{rangeSeconds} -e now` shape byte-for-byte; the Custom Range
+     * tab is the only caller that ever passes a real `$endAt`, in which
+     * case both `-s`/`-e` become absolute Unix timestamps
+     * (`$endAt - $rangeSeconds` / `$endAt`) — rrdtool accepts raw epoch
+     * seconds for both flags natively, no AT-style string needed, and
+     * still picks its own best-matching RRA/consolidation level for
+     * whatever absolute window this resolves to, same as it already does
+     * for the relative case.
+     *
+     * @return array<int, string>
+     */
+    private function xportTimeWindowArgs(int $rangeSeconds, ?Carbon $endAt): array
+    {
+        if ($endAt === null) {
+            return ['-s', '-'.$rangeSeconds, '-e', 'now'];
+        }
+
+        $end = $endAt->getTimestamp();
+
+        return ['-s', (string) ($end - $rangeSeconds), '-e', (string) $end];
+    }
+
+    /**
+     * Shared `rrdtool xport --json` runner for a SINGLE-value series (CPU/
+     * Memory/Temperature history) — getTrafficHistory() above has its own
+     * inline two-column (in/out) version rather than sharing this, since
+     * unifying a 1-column and 2-column parser wasn't worth the extra
+     * indirection for just one caller. Both share xportTimeWindowArgs()
+     * above for the actual `-s`/`-e` flags.
+     *
+     * @param  array<int, string>  $defAndCdefLines
+     * @return array<int, array{timestamp: int, value: ?float}>
+     *
+     * @throws LibreNmsDataUnavailableException
+     */
+    private function xportSingleSeries(string $rrdPath, array $defAndCdefLines, string $xportVar, int $rangeSeconds, string $errorContext, ?Carbon $endAt = null): array
+    {
+        $result = Process::timeout(10)->run(array_merge(
+            ['rrdtool', 'xport', '--json'],
+            $this->xportTimeWindowArgs($rangeSeconds, $endAt),
+            $defAndCdefLines,
+            ["XPORT:{$xportVar}:{$xportVar}"],
+        ));
+
+        if ($result->failed()) {
+            throw new LibreNmsDataUnavailableException(
+                "rrdtool xport gagal untuk {$errorContext}: ".trim($result->errorOutput())
+            );
+        }
+
+        $decoded = json_decode($result->output(), true);
+
+        if (! is_array($decoded) || ! isset($decoded['meta']['start'], $decoded['meta']['step'], $decoded['data'])) {
+            throw new LibreNmsDataUnavailableException(
+                "Output rrdtool xport tidak sesuai format yang diharapkan untuk {$errorContext}."
+            );
+        }
+
+        $start = (int) $decoded['meta']['start'];
+        $step = (int) $decoded['meta']['step'];
+
+        return collect($decoded['data'])
+            ->values()
+            ->map(fn (array $row, int $index) => [
+                'timestamp' => $start + ($index * $step),
+                'value' => $row[0] !== null ? (float) $row[0] : null,
+            ])
+            ->all();
     }
 }

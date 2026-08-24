@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\CpeSignalHistoryRange;
 use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\RebootCpeDeviceRequest;
@@ -11,6 +12,7 @@ use App\Http\Resources\CpeConnectedHostResource;
 use App\Http\Resources\CpeDeviceResource;
 use App\Models\CpeDevice;
 use App\Services\Network\CpeActionService;
+use App\Services\Network\CpeSignalHistoryQueryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -141,5 +143,41 @@ class CpeDeviceController extends Controller
                 'last_page' => $hosts->lastPage(),
             ]]
         );
+    }
+
+    /**
+     * v0.8.4 — read-only REST wrapper over the exact same query the
+     * "Riwayat" modal already uses (App\Livewire\Network\
+     * CpeSignalHistoryGraph → CpeSignalHistoryQueryService), for the
+     * future WhatsApp-bot integration foothold — see MonitoringController's
+     * own docblock for the shared reasoning. `?range=` reuses
+     * CpeSignalHistoryRange::fromApiParam() (default Day when omitted),
+     * same hourly/daily/weekly/monthly/yearly vocabulary as
+     * `GET /monitoring/devices/{device}/traffic`. Response rows are
+     * remapped to the plain `{timestamp, rx_power_dbm}` shape (renaming
+     * the internal `recorded_at` key) — a stable, minimal external
+     * contract independent of this service's own internal field naming.
+     */
+    public function signalHistory(Request $request, CpeDevice $cpeDevice, CpeSignalHistoryQueryService $service): JsonResponse
+    {
+        $this->authorize('view', $cpeDevice);
+
+        $validated = $request->validate([
+            'range' => ['nullable', 'string', 'in:hourly,daily,weekly,monthly,yearly'],
+        ]);
+
+        $range = isset($validated['range'])
+            ? CpeSignalHistoryRange::fromApiParam($validated['range'])
+            : CpeSignalHistoryRange::default();
+
+        $series = array_map(
+            fn (array $point) => [
+                'timestamp' => $point['recorded_at'],
+                'rx_power_dbm' => $point['rx_power_dbm'],
+            ],
+            $service->seriesFor($cpeDevice->id, $range),
+        );
+
+        return $this->success($series, 'Riwayat RX Power perangkat CPE');
     }
 }

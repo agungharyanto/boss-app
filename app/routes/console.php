@@ -5,8 +5,10 @@ use App\Console\Commands\MarkOverdueInvoices;
 use App\Console\Commands\ReconcileCpeDevices;
 use App\Console\Commands\SendWhatsappDueReminders;
 use App\Console\Commands\SendWhatsappSuspendedReminders;
+use App\Console\Commands\SyncContainerStats;
 use App\Console\Commands\SyncCpeConnectedHosts;
 use App\Console\Commands\SyncCpeDeviceStatus;
+use App\Console\Commands\SyncCpeSignalHistory;
 use App\Console\Commands\VpnCheckNodeHealth;
 use App\Console\Commands\VpnSyncRouteFragments;
 use App\Console\Commands\WhatsappCheckSessionHealth;
@@ -87,3 +89,31 @@ Schedule::command(SyncCpeConnectedHosts::class)->everyFiveMinutes();
 // cadence as the legacy matcher above, for the same "not time-sensitive
 // enough to need the 5-minute jobs' tighter polling" reasoning.
 Schedule::command(SyncCpeDeviceStatus::class)->everyFifteenMinutes();
+
+// v0.8.3 — records RX Power history (App\Models\CpeSignalHistory) for the
+// CPE detail page's new history graph. 20 minutes is a locked decision
+// (15-30 min range agreed), not derived from any technical constraint here
+// — see App\Services\Network\CpeSignalHistoryService's own docblock for the
+// full reasoning (deliberately separate from SyncCpeDeviceStatus above,
+// different question/cadence/failure model). No named ->everyTwentyMinutes()
+// helper exists in Laravel's schedule API, hence the raw cron expression.
+// ->withoutOverlapping() is new to this file (no prior scheduled command
+// needed it) — this run's own staggered sends + single read-back wait
+// genuinely take several minutes end to end (~5.5 min worked example at
+// 400 devices, comfortably under 20 min), but a real GenieACS slowdown on
+// some future run could push it close to the next scheduled tick, and a
+// second run starting on top of an unfinished first is worse than one run
+// occasionally starting a few minutes late.
+Schedule::command(SyncCpeSignalHistory::class)->cron('*/20 * * * *')->withoutOverlapping();
+
+// v0.8.4 Bagian C — records container CPU/Memory/Network/Disk history
+// (App\Models\ContainerStatsHistory) for the Monitoring page's new
+// "Container BOSS App" section. 5 minutes is a measured decision, not a
+// guess — App\Services\Infra\ContainerStatsService's own docblock records
+// the real timing (~53s for 27 containers on this server, sequential
+// per-container /stats calls, each ~2s due to the Docker daemon's own
+// internal two-sample wait) that this interval was picked against, with
+// wide (5-6x) margin. ->withoutOverlapping() for the same reason as
+// SyncCpeSignalHistory above — a slow run overlapping the next tick is
+// worse than one run starting a few minutes late.
+Schedule::command(SyncContainerStats::class)->everyFiveMinutes()->withoutOverlapping();

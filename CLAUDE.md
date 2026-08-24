@@ -3406,6 +3406,1648 @@ pre-existing v0.4.0-era bug, unrelated to this sprint's `/monitoring` route (con
 unauthenticated hit to `/monitoring` produced zero new log entries). Neither the log growth nor the
 underlying command bug were touched — real, but genuinely out of scope for this sprint; needs its own pass.
 
+
+## RX Power History (v0.8.3)
+
+**Status**: fully built — migration/scheduler (verified against real
+GenieACS/CPE data at a checkpoint) and the Livewire graph + CPE detail page
+placement (built after that checkpoint was approved) are both done.
+`cpe_signal_history` table + `App\Models\CpeSignalHistory` +
+`App\Services\Network\CpeSignalHistoryService` + `App\Console\Commands\
+SyncCpeSignalHistory` (scheduled `->cron('*/20 * * * *')->withoutOverlapping()`,
+see routes/console.php) + `App\Livewire\Network\CpeSignalHistoryGraph`,
+placed on the CPE detail page's Status Jaringan panel right below the
+existing live RX Power field.
+
+**Why this exists**: investigating the CPE detail page's already-existing
+"live" RX Power display (`CpeParameterResolverService::
+resolveDeviceSummary()`, called fresh on every page load) found it is
+NEVER proactively refreshed — `docker/genieacs/presets/default.js` has
+zero `declare()` rules for the optical DDM object, so GenieACS's own
+periodic Inform processing never re-reads it on any schedule; the ONLY
+things that ever update it are the manual "Sync Sekarang" button
+(`CpeActionService::syncNow()`) or one-off investigation tasks. Nothing in
+`boss_db` stored a history of it anywhere. This sprint builds both pieces
+from zero.
+
+**Deliberately a separate service/command from `CpeDeviceStatusSyncService`
+(v0.7.7)**, not layered onto it — different question (signal trend vs.
+online/offline), different cadence (20 min vs 15 min), different failure
+model (a signal-history miss is a permanent graph gap, a status-sync miss
+is just a stale flag for one more cycle). See
+`CpeSignalHistoryService`'s own docblock for the full design reasoning.
+
+**Refresh is targeted, not the "Sync Sekarang" button's whole-`WANDevice`
+sweep** — the `refreshObject` `objectName` sent is derived directly from
+the matching `cpe_parameter_maps.parameter_path` row (its parent object,
+path minus the final `.RXPower` segment, e.g.
+`WANDevice.1.X_CT-COM_GponInterfaceConfig`), narrower and cheaper to repeat
+automatically for hundreds of devices every 20 minutes than a full-subtree
+refresh. A device whose model has no catalog row for `rx_power_dbm` at all
+is skipped entirely (no history row — nothing to refresh, nothing
+meaningful to record); a device that IS catalogued but whose refresh/read
+genuinely comes back empty gets a row with `rx_power_dbm = null` — a real
+gap the future graph should be able to show, not a silently missing point.
+
+**Sending is staggered in chunks** (5 devices, 3s between chunks) rather
+than fired at once, specifically to avoid spiking GenieACS's CWMP
+connection-request load across a fleet of 400+ CPE — followed by a single
+90s read-back wait (reusing the exact same real-measured-latency figure
+`CpeDeviceStatusSyncService`'s own docblock already established, 0.7-60s
+observed connection_request delay) rather than a per-chunk wait, so every
+device gets at least 90s between its own send and the read, earlier-sent
+devices get considerably more. The actual value read-back reuses
+`CpeParameterResolverService::resolveDeviceSummary()` verbatim — no new
+per-vendor parsing/formula logic was written for this sprint.
+
+**Two real bugs found running this for real against the live fleet (129
+online CPE, not a synthetic test), neither caught by writing/reading the
+code alone:**
+
+1. **Eloquent's default table-name pluralization guessed wrong.** The
+   migration creates `cpe_signal_history` (singular, matching the exact
+   name requested), but `App\Models\CpeSignalHistory` with no explicit
+   `$table` guesses `cpe_signal_histories` — the very first real INSERT
+   failed outright (`SQLSTATE[42P01]: Undefined table`). Not caught by any
+   automated test at the time because no test had yet exercised a real
+   INSERT against the real migrated schema — fixed with an explicit
+   `protected $table = 'cpe_signal_history'`.
+2. **A manual CLI-triggered run of a scheduled command is NOT protected by
+   that command's own `->withoutOverlapping()`.** Laravel's overlap guard
+   only applies to the scheduler's own dispatch path (`schedule:run`
+   evaluating its registered `Schedule::command()` entries) — it does
+   nothing to stop a directly-invoked `php artisan cpe:sync-signal-history`
+   from racing a scheduler-triggered invocation of the exact same command.
+   Confirmed for real: running the command by hand (it genuinely takes
+   ~9.5 minutes end to end against the real 129-device fleet — see the
+   runtime breakdown below) overlapped with `boss-scheduler`'s own
+   `*/20 * * * *` tick firing mid-run, producing two full independent
+   sweeps 34 seconds apart (`cpe_signal_history` briefly held 256 rows,
+   128 per run, before this was understood) — the exact same class of
+   "manual verification session collides with already-running automation"
+   incident this codebase has hit several times before (OpenVPN PKI
+   permissions, `freeradius_nas_config` permissions, both v0.8.1). Not a
+   bug in `CpeSignalHistoryService`/`withoutOverlapping()` itself — both
+   runs completed correctly and independently, and `withoutOverlapping()`
+   still does its real job of preventing two consecutive SCHEDULER-fired
+   ticks from overlapping if a future run ever legitimately runs long.
+   **Practical lesson for this codebase**: never manually run a `->cron()`-
+   scheduled command by hand while its own container's scheduler loop is
+   live, without first checking how close the next tick is (or briefly
+   disabling the schedule entry) — same discipline already applied
+   (inconsistently, in hindsight) to `docker compose exec` tinker sessions
+   elsewhere in this file.
+
+**Real measured runtime, 129 online devices (one full, clean, single run)**:
+~9.5 minutes end to end — longer than the ~5.5-minute worked-example
+estimate in `CpeSignalHistoryService`'s own docblock, because that estimate
+only accounted for the staggered-send phase + the one 90s wait, not the
+subsequent per-device read-back loop's own real HTTP latency (129
+sequential `resolveDeviceSummary()` calls, each a real GenieACS NBI round
+trip) — still comfortably under the 20-minute schedule interval with
+margin, but the docblock's own math should be read as a lower bound, not
+the full real number.
+
+**Verified correct against real data**: every one of several spot-checked
+devices' stored `cpe_signal_history.rx_power_dbm` matched a fresh live
+`resolveDeviceSummary()` call byte-for-byte (e.g. device #88:
+`-22.076083105017` both stored and live) — confirming the recorded history
+value is genuinely consistent with what the CPE detail page itself would
+show. The one real `null` row in this run (device #138,
+`A4F33B-M63X XPON`) was independently confirmed to be a legitimate gap, not
+a bug: `resolveForDevice()` for that device returns `"Path not present in
+this device's parameter tree — may need a refreshObject task first"` even
+after our targeted refresh + 90s wait — consistent with v0.7.2's own
+documented finding that a device's Gpon object sometimes needs more than
+one refreshObject cycle across multiple real Informs to actually populate
+(`too_many_commits` faults on a large tree), not something achievable
+within one 90s window every time.
+
+**Open item, explicitly deferred — no retention/pruning built this
+sprint**: at 20-minute intervals across 400+ CPE, `cpe_signal_history` will
+grow by roughly 400 x 3 x 24 ≈ 28,800 rows/day, ~875K rows/month, with no
+automatic pruning or downsampling. Needs a real retention policy (e.g. keep
+raw resolution for N days, aggregate/downsample older data, or a hard
+row-count cap) before this becomes a real storage/query-performance
+concern — tracked here and in `docs/ROADMAP.md`'s backlog, not solved now.
+
+**`App\Livewire\Network\CpeSignalHistoryGraph`** — reuses v0.8.2's
+`DeviceTrafficGraph` pattern verbatim even though that branch isn't merged
+yet (its component code was read directly off the `v0.8.2-monitoring-
+dashboard` branch via `git show` for reference, not copy-pasted from a
+merge): Chart.js inside a `wire:ignore` wrapper, updated via a dispatched
+`signal-history-series-updated` browser event rather than a Livewire
+re-render. `resources/js/app.js`/`package.json` independently gained their
+own `chart.js` dependency + a NEW `window.signalHistoryChart` factory
+(distinct from v0.8.2's `window.trafficChart` — different data shape, one
+value per point instead of an in/out pair) — the two branches will merge
+this file's Chart.js `import` line and each other's factory function
+without conflict once v0.8.2 actually merges, no coordination needed now.
+
+Reads `cpe_signal_history` directly (no service layer — a single indexed
+query isn't business logic worth its own abstraction; the real business
+logic, deciding what gets written, already lives in
+`CpeSignalHistoryService`). Three states, not two, mirroring the
+`no_sensor`/`unavailable` distinction v0.8.2 established for a different
+question: `no_history` (zero rows in the 24h range — plain message, no
+empty chart), `all_null` (rows exist but every reading in range is null —
+a distinct message, since the poll DID run, it just never got a number),
+`ok` (renders the chart; individual null points within an otherwise-real
+series are normal and expected, rendered as genuine breaks via Chart.js's
+`spanGaps: false`, declared explicitly even though it's already the
+library default — a null must never read as a misleading 0 or a
+line drawn straight across the gap).
+
+**Placement**: directly below the RX Power/TX Power/MAC/PPPoE `<dl>` in
+the CPE detail page's existing "Status Jaringan" panel (not a new
+section) — contextual to the live reading right above it, per the sprint
+brief. Self-authorizes independently (`CpeDevice::findOrFail()` — the
+default, tenant-scoped query, so a cross-tenant id 404s before
+`CpeDevicePolicy::view()` is even reached — then `$this->authorize('view',
+$device)`) rather than relying solely on `CpeDeviceDetailController`'s own
+earlier authorization check, same defense-in-depth posture as every other
+Livewire component in this codebase.
+
+**Verified for real, not just via the automated test suite**: the CPE
+detail page (`cpe-devices/show.blade.php`) is rendered through a nested
+`view(...)->render()` call into a string (see `cpe-devices/page.blade.php`'s
+own docblock for a real, previously-hit `@push`/`@stack`-flushing bug from
+this exact mechanism) — confirmed via a direct `php artisan tinker` call
+into the real controller method (not a synthetic unit test) that
+`@livewire('network.cpe-signal-history-graph', ...)` embedded inside it
+still hydrates correctly end to end (`wire:snapshot` present, the Alpine
+`x-data="signalHistoryChart(...)"` payload present and containing the
+exact real stored values). Also directly confirmed all three states
+render correctly against real devices from the checkpoint's own fleet
+data: device #88 (`ok`, real values), device #138 (`all_null`, its
+genuine confirmed gap), and a device with zero `cpe_signal_history` rows
+at all (`no_history`).
+
+**Gap found closing out this sprint, not part of the original checkpoint
+report**: the checkpoint's own DoD asked for automated scheduler tests
+("test batch/stagger logic, test skip CPE offline, test kegagalan satu
+CPE tidak menghentikan batch") but the checkpoint itself only delivered
+REAL manual verification, not automated regression coverage for
+`CpeSignalHistoryService` — a real gap in following through on that
+request, caught and closed in this same UI-phase commit rather than left
+outstanding. `CpeSignalHistoryServiceTest` (`Http::fake()`/`Sleep::fake()`
+only, never the real API) now covers: offline devices never touched,
+no-catalog-row devices skipped entirely (no send, no row), a matched
+device gets a row + a targeted (not whole-`WANDevice`) refresh, staggered
+sends produce exactly `ceil(N/5)` 3-second sleeps followed by exactly ONE
+90-second read-wait (not one wait per chunk), one device's send failure
+doesn't block the rest of the same batch, and a device whose tree still
+has no value after a successful refresh correctly records a null row
+(mirroring the real device #138 outcome).
+
+**Tooltip + 5-tab range selector (same v0.8.3 branch, after the graph
+itself first shipped)**: `App\Enums\CpeSignalHistoryRange` (Hour/Day/Week/
+Month/Year, `label()`/`windowHours()`/`aggregationGrain()`) is a locked
+window+aggregation pairing, not derived — Jam (3h, raw)/Hari (24h, raw,
+unchanged default)/Minggu (7d, hourly avg)/Bulan (30d, daily avg)/Tahun
+(365d, weekly avg). A brand-new `App\Services\Network\
+CpeSignalHistoryQueryService` does the actual reading — split out from
+the graph component (which previously just queried `CpeSignalHistory`
+directly, judged not worth a service at the time) specifically because
+Week/Month/Year need real SQL-level `AVG(...) GROUP BY <bucket>`
+aggregation, not "pull every raw row and average in PHP" — a 365-day view
+would otherwise mean ~26,000 raw rows per render for nothing, exactly the
+resource cost this whole feature's brief was written against.
+
+**`AVG(rx_power_dbm)` already does the right thing with NULLs for free** —
+standard SQL aggregates skip NULL inputs, so a bucket whose every row is a
+genuine gap (see device #138 above) correctly comes back NULL from the
+query itself, no extra PHP-side NULL-handling needed to keep it rendering
+as a break in the chart rather than a false 0 or a lied-about average.
+
+**Bucket boundaries are two independently-implemented per-driver branches,
+not one portable expression** — no single SQL fragment truncates to
+start-of-hour/day/week identically on both SQLite (phpunit.xml's test
+driver) and PostgreSQL (production). PostgreSQL uses its own native
+`date_trunc('hour'|'day'|'week', recorded_at)` (Monday-start by default
+for `'week'`). SQLite has no equivalent built-in, so hour/day use
+`strftime`/`date()` directly and week uses the standard
+`date(recorded_at, '-6 days', 'weekday 1')` idiom — deliberately NOT the
+naive single-modifier `date(recorded_at, 'weekday 1', '-7 days')` version,
+which gets the boundary wrong for a point recorded exactly ON a Monday
+(rolls it into the wrong week) — caught by writing a test for that exact
+edge case before trusting the expression, not found by accident.
+`recorded_at` has no explicit timezone component (see the original
+migration), so neither branch needs a timezone-conversion step — both
+truncate the same naive local timestamp PHP already writes.
+
+**Verified for real against production data, not just the SQLite test
+suite** — the PostgreSQL `date_trunc` branch is never exercised by
+`CpeSignalHistoryQueryServiceTest` (that file only proves the SQLite side,
+see its own docblock) or by any other automated test in this repo (no
+Postgres-backed test connection exists). Confirmed directly via `tinker`
+against the real dev database and device #88's real history rows: Jam/Hari
+both returned the 3 real raw points unchanged; Minggu correctly merged 2 of
+those 3 points landing in the same clock-hour into one averaged bucket;
+Bulan/Tahun each correctly collapsed to a single daily/weekly bucket. The
+full CPE detail page was also re-rendered for real (same `tinker`-through-
+the-real-controller method already used to verify the graph's first
+version) confirming all 5 tab labels and the `changeRange(...)` wire:click
+attribute are genuinely present in the real HTML output.
+
+**Tooltip** (`resources/js/app.js`'s `signalHistoryChart`, Chart.js
+`plugins.tooltip.callbacks`): title shows the exact hovered point's full
+local date+time in Indonesian formatting (`toLocaleString('id-ID', {day,
+month, year, hour, minute})`, e.g. "21 Agu 2026, 04.00"), body shows
+`RX Power: -26.19 dBm` (or a plain `-` for a null/gap point, never a
+misleading "0.00 dBm"). Colors (`titleColor`/`bodyColor`) are read from
+the app's own `--color-text` CSS custom property at chart-build time
+(`getComputedStyle(document.documentElement)`, resources/css/app.css,
+user-editable via Pengaturan Tema) rather than a hardcoded hex value, so
+the tooltip doesn't visually drift from whatever theme is currently
+active; the tooltip's own background/border stay a fixed white/
+`border-gray-200` to match this app's established card styling
+(`displayColors: false` — a single-dataset chart doesn't need the default
+color swatch).
+
+**Range tabs UI — SUPERSEDED, moved into a modal (same branch, real design
+feedback after the inline version above first shipped)**: the tab button
+group described in the paragraph above originally sat directly above the
+main page graph. Revised so the main graph goes back to exactly its
+original pre-tabs form — no selector visible at all, always the plain
+24h/Day view — and a small "⋮" (vertical-ellipsis) affordance in the
+panel's bottom-right corner (`title="Lihat riwayat lengkap"`, styled
+`text-gray-400 hover:text-primary` — plain text glyph, not an SVG icon;
+checked first for an existing icon-button component/set anywhere in this
+codebase, found none, so a one-off icon component wasn't worth inventing
+for a single use) opens a modal containing a larger chart AND the 5-tab
+range selector, reusing the exact same `showXModal` boolean +
+`fixed inset-0 bg-black/40 ... wire:click.self="close..."` pattern already
+established by `OltDeviceIndex`'s manufacturer/model quick-add modals
+(v0.8.1) rather than inventing a new modal mechanism.
+
+**Two fully independent chart states, not a shared one toggled by
+context** — `CpeSignalHistoryGraph` now carries `$state`/`$series` (main
+page graph, permanently pinned to `CpeSignalHistoryRange::Day`, loaded
+once in `mount()` and never re-queried again) alongside a separate
+`$modalState`/`$modalSeries`/`$modalRange` trio (lazy-loaded only when
+`openHistoryModal()` actually runs, switchable via `changeModalRange()`
+while the modal is open). Two distinct dispatched browser events
+(`signal-history-series-updated` vs `signal-history-modal-series-updated`)
+target two separate `wire:ignore` Alpine scopes — switching tabs inside
+the modal can never leak into and mutate the main page's own chart, and
+closing/reopening the modal always gets a genuinely fresh `<canvas>` (the
+`@if($showHistoryModal)` block is added/removed from the DOM by Livewire's
+morph each time, so Chart.js never has to reuse or manually tear down a
+stale canvas element itself). Both scopes are built from the exact same
+`window.signalHistoryChart` factory — one JS implementation, no
+main-vs-modal rendering drift.
+
+**Y-axis unit label**: `scales.y.title = {display: true, text: 'dBm'}` in
+that same shared factory — applies identically to the main graph and the
+modal graph for free, since both call the same `build()`.
+
+## Dashboard Monitoring Fixes (v0.8.2-monitoring-fixes)
+
+**Bug: the Monitoring page's Traffic panel showed nothing when an
+interface was selected — root cause was a stale COMPILED bundle, not a
+code bug.** `resources/js/app.js` (source, tracked by git) always had
+`window.trafficChart` correctly defined on every branch checked — but
+`public/build/assets/*.js` (the compiled artifact actually served to the
+browser) is gitignored and does NOT regenerate on its own when switching
+branches or merging `app.js` changes; `npm run build` (or
+`scripts/deploy.sh`, which runs it as part of a real deploy) must be run
+manually in this dev environment. Across several branch switches earlier
+in this sprint's own git-history work (merging v0.8.2 into `develop`, then
+syncing `v0.8.3-rx-power-history`), the bundle on disk went stale —
+confirmed directly: `grep -c "window.trafficChart" public/build/assets/
+app-*.js` returned **0** on the branch this fix was built on, even though
+the same grep against the SOURCE `app.js` returned 1. Alpine's
+`x-data="trafficChart(...)"` therefore called an undefined global
+function — no JS error a Blade/PHP-only debugging session would ever
+surface, and no PHP-level test could have caught it (`DeviceTrafficGraph`'s
+own Livewire logic was, and still is, entirely correct — confirmed via
+`Livewire::test()`, `getTrafficHistory()` called directly against real
+rrdtool data, and a full HTML render, all three showing correct data
+before this fix). Fixed by rebuilding (`npm run build`).
+
+**Real regression test added, proven to catch this exact class of bug**
+(not just asserted to work — deliberately broken the built bundle by hand
+mid-session, confirmed the new test failed, then restored the real bundle
+and confirmed it passed again): `tests/Feature/FrontendBuildTest.php`
+scans every `resources/views/**/*.blade.php` for `x-data="someFn("`
+references (a bare identifier immediately followed by `(`, deliberately
+not matching Alpine's own inline `x-data="{ ... }"` object-literal form)
+and asserts each such factory name is genuinely present (`window.
+<name>`) in the currently-built JS bundle. Auto-discovers future charts
+rather than relying on a manually-maintained list, which would itself be
+exactly the kind of thing that silently goes stale. **General lesson for
+this codebase, not just this incident**: after any branch switch/merge
+that touches `resources/js/app.js` (or any frontend source), rebuild
+before trusting what's rendered in a browser — the same "container/bundle
+wasn't rebuilt after code changed" gotcha class already documented many
+times elsewhere in this file, now confirmed to apply to the frontend build
+artifact specifically too.
+
+**New feature: "+ Tambah Device" — onboard a generic SNMP device (switch,
+server, anything with an SNMP agent) directly from the Monitoring page.**
+`LibreNmsService::addDevice()` — the SAME `POST /devices` call already
+used to manually onboard the 3 real OLTs in v0.8.1 (see "LibreNMS OLT
+Onboarding" above), now codified as a real method instead of an ad-hoc
+curl/UI action. Deliberately never sends `force_add`, same posture as
+those 3 OLTs — LibreNMS's own real reachability/SNMP check decides pass
+or fail. Confirmed for real, safely, against the live LibreNMS instance
+(not just `Http::fake()`): attempting to re-add the router's own IP
+(`144.79.52.0`, already onboarded) correctly returned LibreNMS's own real
+error, `"Device 144.79.52.0 already exists"`, passed through verbatim —
+proving the payload field names (`hostname`/`version`/`community`/`port`)
+are accepted by the real API (a field-name typo would have produced a
+different, earlier validation error instead of reaching the
+host-existence check). The genuine "successfully add a brand-new device"
+path itself was NOT re-verified against a new real target this sprint —
+there's no safe, freely-addable real SNMP endpoint in this environment,
+and this module has no delete capability (out of scope, see below) to
+clean up a real test addition afterward — that path is covered by
+`Http::fake()` tests only, consistent with how every other LibreNMS write
+in this codebase that can't be safely exercised for real is tested.
+
+**Real bug found and fixed onboarding the optional Display Name field —
+LibreNMS's own `PATCH /devices/{id}` silently no-ops for `field: "display"`
+specifically.** Found by direct real-world testing, not assumed: patching
+device #1's `display` field returned a genuine HTTP 200
+`"Device display field has been updated"` — but the value never actually
+changed, confirmed immediately after by reading `devices.display` straight
+out of `librenms_db` (bypassing any API/app-level cache entirely). Traced
+to the actual root cause via LibreNMS's own source
+(`app/Models/Device.php`): `Device::$fillable` does NOT include `display`
+at all (only `display_template`, a different field) — so
+`update_device()`'s generic `$device->fill([$field => $data])->save()`
+silently drops the assignment via Eloquent's own mass-assignment
+protection (no exception raised), and the resulting no-op `save()` still
+returns `true`, which is why the API response claims success. Fixed by
+targeting `display_template` instead (which IS fillable) — LibreNMS's own
+`DeviceObserver::updating()` regenerates the real `display` column from it
+via `SimpleTemplate::parse()` whenever `display_template` is dirty, and
+with no `{{ }}` placeholders in the string this app sends, that template
+parse is just the literal string verbatim. **Verified working end-to-end
+for real, safely, then fully reverted**: patched device #1's
+`display_template` to a test value, confirmed `display` genuinely changed
+in `librenms_db`, then patched `display_template` back to `NULL` and
+confirmed `display` returned to its original `"144.79.52.0"` — the real
+router's LibreNMS state is byte-for-byte unchanged from before this
+investigation.
+
+**`monitoring.manage` — new permission, `monitoring.view` alone was no
+longer sufficient.** v0.8.2's own original docblock for `monitoring.view`
+explicitly framed it as safe/view-only because `LibreNmsService` had no
+mutating method at all at the time; `addDevice()` breaks that premise, so
+a real `.manage` permission was added (same two roles as `.view`:
+super_admin + noc — onboarding a device to monitor is squarely NOC's own
+operational duty, not a stricter admin-only action). **Real deployment
+gotcha hit verifying this, same class already documented several times
+elsewhere in this file**: the new permission was seeded correctly into
+every automated test's own fresh SQLite database (each test calls
+`$this->seed(RolesAndPermissionsSeeder::class)` itself), but the real dev
+Postgres database's already-existing `super_admin`/`noc` roles did NOT
+have it until `php artisan db:seed --class=RolesAndPermissionsSeeder` was
+run again by hand against that real database — the "+ Tambah Device"
+button was genuinely, silently absent from a real browser/curl-rendered
+page until that was done, despite every automated test passing the whole
+time. `AddMonitoringDeviceForm` (button + modal, same
+`fixed inset-0 bg-black/40 ... wire:click.self="close..."` pattern as
+`OltDeviceIndex`'s manufacturer/model quick-add modals, v0.8.1) is gated
+both in the Blade embed (`@can('monitoring.manage')`, so a future
+`.view`-only user never even mounts a component that would 403 for them)
+and inside the component's own `mount()`/`openModal()`/`save()` (defense
+in depth, same posture as every other Livewire component in this
+codebase).
+
+**Confirmed, not assumed: `DeviceMonitoringList` needed zero code changes
+to show a newly-added generic device.** It already calls
+`LibreNmsService::listDevices()` unconditionally (no BOSS-App-side device
+allowlist/filter beyond the optional `onlyDeviceId` prop, which `/monitoring`
+never passes) — verified by reading its own `loadDevices()` source
+directly, not assumed from the architecture description. The only wiring
+needed was making the new device show up WITHOUT waiting out
+`listDevices()`'s own cache TTL: `addDevice()` calls `Cache::forget
+('librenms:devices')` on success, and `DeviceMonitoringList::loadDevices()`
+gained a `#[On('monitoring-device-added')]` attribute so
+`AddMonitoringDeviceForm`'s post-save dispatch triggers an immediate
+reload — same "dispatch an event, a sibling component reloads" pattern
+already established between `DeviceMonitoringList` and
+`DeviceTrafficGraph`'s own `device-selected` event.
+
+**Explicitly out of scope this sprint** (per the sprint brief): SNMP v3
+(only v1/v2c are selectable — the server-side `in:v1,v2c` validation rule
+is the real guard against a forged `wire:model` payload smuggling `v3`
+through, not just the dropdown's own options), and edit/delete for a
+device added this way (this form only ever creates).
+
+## Branch Consolidation, "Berat" Investigation, Traffic Graph Units (v0.8.2-monitoring-fixes)
+
+**Branch topology accident, not a code regression — RX Power History
+(v0.8.3) appeared to have "vanished" from the CPE detail page.** Root
+cause traced precisely: `v0.8.2-monitoring-fixes` was created from
+`develop` at a point that never included `v0.8.3-rx-power-history`'s own
+work — and more specifically, that v0.8.3 work had never actually been
+committed to ANY branch at all; every checkpoint in that sprint was
+deliberately left uncommitted pending Agung's own browser verification
+(per that sprint's own repeated instruction), so across two later branch
+switches it ended up sitting only in a `git stash` entry, never popped
+back. Recovered by popping that exact stash onto `v0.8.2-monitoring-fixes`
+— 2 real conflicts (`CLAUDE.md`, both branches independently appended a
+new section in the same spot; `app.js`, both independently added a new
+Chart.js factory function), both resolved by keeping both sides' content
+side by side (sequential sections, sibling functions) since neither was a
+genuine logical conflict, just two independent unrelated additions
+landing at the same file location. **New standing rule for the rest of
+this v0.8.x sprint cluster** (explicit instruction): no further new
+branches — all continued work stays on `v0.8.2-monitoring-fixes` until
+told to merge to `develop`, specifically to stop this class of drift from
+recurring a third time.
+
+**"App terasa berat" — three real, causally-linked findings, not one.**
+
+1. **`storage/logs/laravel.log` had grown to ~12.4GB** (confirmed via
+   `ls -la` — growing further from the ~12GB already flagged, unfixed, in
+   the v0.8.2 "Dashboard Monitoring" section above). Concrete, first-hand
+   evidence of real I/O cost from this exact file, not just theoretical:
+   several `tail`/`grep` commands against it during earlier sessions this
+   sprint had themselves timed out (120s+).
+2. **Real root cause of the growth, found and fixed**:
+   `App\Console\Commands\WhatsappQueueNames` (used by `boss-whatsapp-
+   worker`'s entrypoint loop to enumerate dynamic `whatsapp-*` queue
+   names, see the v0.4.0 WhatsApp Gateway section above) crashed on
+   **every single invocation**, unconditionally — reproduced directly
+   (`php artisan whatsapp:queue-names` → `Call to a member function
+   getKey() on string`). Root cause: `Illuminate\Database\Eloquent\
+   Collection::map()` stays an Eloquent Collection even once its items are
+   no longer `Model` instances (here, plain session-key strings) — late
+   static binding means `->unique()` on that still-Eloquent-typed
+   collection defaults to Model-keyed uniqueness
+   (`getDictionary()` calling `->getKey()` on each item), which crashes
+   outright on a string. Fixed with `->toBase()` (downgrades to a plain
+   `Support\Collection` before `->unique()`, so it correctly compares by
+   value instead) — confirmed the fix works, and separately confirmed
+   (by reverting it temporarily) that the new regression test
+   (`WhatsappQueueNamesTest`, 3 cases — no test existed for this command
+   at all before) genuinely catches the original crash.
+3. **Real, compounding production consequence discovered while fixing
+   this — not just a log-growth bug**: `boss-whatsapp-worker`'s own
+   entrypoint (`queue:work --queue=$(php artisan whatsapp:queue-names)
+   ...`) had been failing to start `queue:work` AT ALL, every single
+   5-minute cycle, for as long as this bug existed — the crashed
+   command's multi-line stack-trace output got word-split by the shell's
+   unquoted `$(...)` substitution into dozens of bogus positional
+   arguments (`"Too many arguments to queue:work command, expected
+   arguments connection"`, confirmed directly in the container's own
+   logs). This means **WhatsApp message sending had likely been
+   completely stalled** for as long as this bug existed — queued
+   `SendWhatsappMessageJob`s never processed. Self-healed the moment the
+   underlying command was fixed (no container restart needed — the
+   `while true` loop re-evaluates the command substitution fresh every
+   iteration, and the fix landed via the same bind-mounted `./app`
+   directory) — confirmed via `ps aux` inside the container showing a
+   genuinely running `queue:work --queue=whatsapp-direct` process with no
+   new error lines afterward.
+
+**Truncated the log file safely** (`> storage/logs/laravel.log`, safe for
+a file already open for append by other processes — freed ~11.7GB, host
+disk usage dropped from 21G to 9.3G used). **Also fixed the underlying
+class of problem, not just this one instance of it**: `LOG_STACK` was
+`single` (the Laravel default — one file, growing forever, never rotated)
+in both the real dev server's `app/.env` and `app/.env.example`; changed
+to `daily` (`config/logging.php`'s `daily` channel already existed,
+unused, with a sane `LOG_DAILY_DAYS=14` default) in both files — verified
+for real (`Log::warning(...)` in tinker produced a genuinely new
+`storage/logs/laravel-2026-08-21.log`, old `laravel.log` left alone at 0
+bytes). This means a FUTURE bug that logs repeatedly (the same class of
+mistake `WhatsappQueueNames` just made) can no longer silently balloon
+into an unbounded single file again — it'll rotate and self-prune after
+14 days instead.
+
+**`docker stats` across the full stack (~25 containers: boss/GenieACS/
+LibreNMS/FreeRADIUS/3x WireGuard nodes/etc.) showed nothing resource-
+abnormal** — combined RAM usage across every running container is roughly
+~2.2GB against a 19.3GB host limit, no container pegged at high CPU. The
+disabled-but-still-defined OSPF FRR sidecars (see CLAUDE.md's own "OSPF
+Dynamic Routing — DISABLED" section) are commented out in
+`docker-compose.yml` and were confirmed NOT actually running (`docker
+stats` lists no `frr-*` containers at all) — container count concern
+raised in the brief turned out not to be a real factor. **Conclusion**:
+the perceived "berat" is fully explained by findings 1-3 above (I/O cost
+of a 12GB+ constantly-growing log file, plus — likely more
+noticeable in practice — a completely stalled WhatsApp delivery pipeline
+silently retrying and failing every 5 minutes for an unknown duration),
+not by container resource exhaustion.
+
+**Traffic graph (Monitoring page) — dynamic bps/Kbps/Mbps/Gbps unit,
+reusing RX Power History's own tooltip-precision pattern.**
+`window.pickBpsUnit(maxBps)` (new, `resources/js/app.js`) picks ONE unit
+for the WHOLE graph — from the single largest value across BOTH In and
+Out series together, never a per-point or per-dataset unit (a graph
+mixing units within itself would be unreadable) — thresholds exactly as
+specified: `<1,000` bps, `<1,000,000` Kbps, `<1,000,000,000` Mbps,
+otherwise Gbps. `trafficChart`'s tooltip now reuses the exact callback
+shape already built for `signalHistoryChart`/`CpeSignalHistoryGraph`
+(full local date+time title, precise value + real unit in the body, e.g.
+"In: 2.58 Mbps" — a null point renders as `"In: -"`, never a misleading
+"0.00 Mbps") — not a new pattern invented for this chart. Y-axis also
+gained a `title` matching the chosen unit, same mechanism as RX Power
+History's own `dBm` axis label.
+
+**Verification approach, given this codebase has no JS test runner at
+all** (no Jest/Vitest/etc. — confirmed by reading `package.json`, only
+`chart.js` as a runtime dependency): `pickBpsUnit`'s actual threshold
+logic was verified for real via a one-time Node script, run directly
+against the real source file (`resources/js/app.js`, not a
+reimplementation that could drift from it) via the same throwaway
+`node:22-alpine` container already used for `npm run build` — 10
+scenarios (each unit's low/high boundary, plus 53 Mbps and 338.9 Mbps,
+the real magnitudes measured against device #1's real interfaces this
+sprint), all passing. Setting up a permanent JS test framework for one
+~10-line utility function was judged disproportionate. A PERMANENT
+PHPUnit-level guard was still added (`FrontendBuildTest`, extending the
+same "assert the built bundle actually contains what Blade/JS code
+expects" pattern already established for `trafficChart`/
+`signalHistoryChart`): confirms `window.pickBpsUnit` and its threshold
+constants/unit labels are genuinely present in the compiled bundle — a
+presence check, not a logic check, but it does catch the SAME class of
+staleness bug this whole file already exists to guard against.
+**Gotcha found writing that presence check**: Vite's minifier renders
+`1_000_000`/`1_000_000_000` as scientific notation (`1e6`/`1e9`) in the
+built output, not the literal digit string — the test's own threshold
+assertions check for `1e3`/`1e6`/`1e9` specifically, confirmed against
+the actual built bundle content, not assumed from the source form.
+
+## RX Power Graph Layout + Traffic Dot-Hover Fix (v0.8.2-monitoring-fixes)
+
+**RX Power graph moved out of the "Status Jaringan" two-column panel into
+its own full-width section**, positioned between that panel's grid and
+"WiFi / SSID" — was previously squeezed into one column alongside TX
+Power/MAC/PPPoE fields; now gets the full content width. Title ("RX
+Power") and the "Riwayat" trigger link both moved INSIDE
+`CpeSignalHistoryGraph`'s own Blade view (same "component owns its own
+header" convention `DeviceTrafficGraph` already used for its "Traffic"
+title) rather than the parent page duplicating a title — `cpe-devices/
+show.blade.php` now just wraps the component in a plain card div with no
+title of its own. The "Riwayat" text link replaces the earlier "⋮"
+vertical-ellipsis icon as the modal trigger — this was actually the
+ORIGINAL intended design from an earlier sprint instruction that got
+deferred (superseded by the icon in the interim), not a new design
+decision.
+
+**Verified via real HTML positional assertion, not just "the code should
+do this"** — a real gotcha found writing the regression test: a naive
+`strpos($html, '>RX Power<')` check matches the WRONG occurrence first
+(the pre-existing `<dt>RX Power</dt>` field label still inside "Status
+Jaringan", which also happens to literally contain that exact substring)
+— fixed by searching starting from the "Attached VLANs" position, which
+correctly lands on the new section's own `<h2>`. `CpeSignalHistoryGraphLivewireTest::
+test_graph_section_sits_between_the_status_grid_and_wifi_section` asserts
+`strpos('Attached VLANs') < strpos('<h2>RX Power</h2>') < strpos('WiFi /
+SSID')` against the real rendered page — genuine structural proof, not a
+presence-only check.
+
+**Honest limitation, stated plainly rather than glossed over**: this
+sprint's own instructions asked for actual browser screenshots as proof
+(explicitly to avoid a repeat of an earlier miscommunication in this same
+sprint cluster) — **no browser/screenshot tool is available in this
+environment** (confirmed by searching for one before starting; CLAUDE.md's
+own many "Verified via Playwright" records elsewhere in this file are from
+a different session/tooling setup, not available here). What WAS done
+instead, as the closest available substitute: the real HTTP-rendered page
+(via an actual authenticated `curl` session against the live `boss-nginx`,
+not just Livewire's synthetic test harness) was inspected directly for
+exact byte-position ordering (above) and for the literal `wire:click=
+"openHistoryModal"` attribute sitting immediately next to the "Riwayat"
+text, confirming the trigger is genuinely wired, not just present as
+inert text. This is real evidence, but it is NOT a visual screenshot —
+Agung's own manual browser check (already the standing final step before
+any commit in this whole sprint) is what actually confirms the visual
+result.
+
+**Traffic graph (Monitoring page) dot-hover fix** — `trafficChart`'s two
+datasets (`In`/`Out`) had `pointRadius: 0`, unlike `signalHistoryChart`'s
+`pointRadius: 2`. Root cause of "no dot on hover": Chart.js's default
+`pointHitRadius` (the hoverable/clickable area around a point, independent
+of the point's own visible radius) is only 1px — combined with a genuinely
+invisible `pointRadius: 0` point, there was effectively nowhere on the
+line a real mouse cursor could land within tolerance. Fixed by changing
+both datasets to `pointRadius: 2` — the exact same value already used by
+`signalHistoryChart`, reused verbatim rather than picked fresh, per the
+sprint's own explicit instruction. `pointHoverRadius`/`pointHitRadius`
+remain unset on both charts (matching `signalHistoryChart`'s own
+approach of relying on Chart.js's defaults for those two, never set
+explicitly there either) — true parity, not just "some point radius
+value together at last."
+
+## Dashboard Monitoring REST API (v0.8.4)
+
+**Built on `v0.8.2-monitoring-fixes`, per Agung's standing "JANGAN buat
+branch baru lagi" instruction for the rest of this v0.8.x work** — this is
+Bagian A of a 3-part request ("API Graph untuk Bot + Self-Monitoring
+Server & Container"); Bagian B (SNMP self-monitoring of the BOSS App host
+itself, onboarded through the already-built "Tambah Device" feature) and
+Bagian C (per-Docker-container stats, explicitly gated behind a
+STOP-and-report-a-technical-plan-first checkpoint since it implies giving
+`boss-app` some form of Docker socket access — a real security-surface
+change) are separate, later steps of the same request.
+
+**Purpose: a foothold for a future WhatsApp bot integration, not the bot
+itself** — Agung's own framing: "cikal bakal integrasi WhatsApp bot
+nanti... bukan dibangun sekarang, tapi datanya harus sudah bisa diakses
+via API." All 3 new endpoints are strictly read-only wrappers around data
+already shown on `/monitoring` and the CPE "Riwayat" modal — zero new
+query/aggregation logic, only a REST surface over what already existed.
+
+**`App\Services\Network\DeviceMonitoringSummaryService` — extracted from
+`DeviceMonitoringList` (v0.8.2) so the new `GET /monitoring/devices`
+endpoint doesn't duplicate the row-averaging/degradation logic.** This
+logic (the `'ok'`/`'no_sensor'`/`'unavailable'` per-metric states,
+originally written as 3 private methods directly on the Livewire
+component) turned out to be genuine reusable domain logic the moment a
+second real consumer (the API) needed the exact same shape — a real
+BOSS-006 "business logic belongs in Service classes, not
+Controllers/Components" case, not a refactor done for its own sake.
+`DeviceMonitoringList::loadDevices()` now just calls
+`app(DeviceMonitoringSummaryService::class)->buildRow($device, $service)`
+per device — behaviorally identical, confirmed by the pre-existing
+`DeviceMonitoringListLivewireTest` suite passing unchanged against the
+refactored code with zero test edits needed. The extracted service also
+adds one small additive field the Livewire UI never needed on its own:
+a bare `hostname` key alongside `name` (which falls back to `hostname`
+when LibreNMS has no `sysName`) — useful for an API consumer that wants
+the LibreNMS hostname specifically, not just the display name.
+
+**`CpeSignalHistoryRange::fromApiParam()` — a new mapping method, not a
+new enum.** The external API's own `?range=` vocabulary
+(`hourly`/`daily`/`weekly`/`monthly`/`yearly`) is spelled out in full
+rather than reusing the enum's short internal case values
+(`hour`/`day`/...) directly, deliberately decoupling the public API
+contract from this enum's internal naming. Reused as-is for BOTH
+`GET /cpe-devices/{id}/signal-history` and
+`GET /monitoring/devices/{id}/traffic` — the hourly/daily/weekly/monthly/
+yearly time-window concept isn't actually CPE-specific despite the enum's
+name (a historical accident of where it was first introduced, v0.8.3's RX
+Power history) — a deliberate cross-purpose reuse of a shared vocabulary
+rather than two endpoints each inventing their own range words. Throws
+`\InvalidArgumentException` on anything outside the 5 known words;
+callers convert this into a normal `ValidationException`/422, not a 500.
+
+**Three endpoints, two different authorization postures — deliberately,
+not an oversight**:
+- `GET /cpe-devices/{cpe_device}/signal-history` (added to the existing
+  `CpeDeviceController`, not a new controller — it's a CPE-device-scoped
+  endpoint, same home as `connectedHosts()`) sits INSIDE the
+  `reseller.context` route group and authorizes via the existing
+  `CpeDevicePolicy::view()` — a reseller's own staff can pull their own
+  device's RX Power history, same posture as every other `cpe-devices/*`
+  endpoint.
+- `GET /monitoring/devices` and `GET /monitoring/devices/{device}/traffic`
+  (new `App\Http\Controllers\Api\V1\MonitoringController`) sit OUTSIDE
+  `reseller.context`, platform-level, and authorize via the raw
+  `monitoring.view` permission string (`$this->authorize('monitoring.view')`
+  — precedented directly by `CustomerTimelineController`/
+  `RemittanceSummaryController`/`TaxLedgerController` already using this
+  exact raw-permission-string style) — monitoring the ISP's own
+  infrastructure devices has no reseller-ownership concept the way a
+  `Nas`/`OltDevice`/`CpeDevice` row does.
+
+**`getTrafficHistory()` needed zero new aggregation for the API's wider
+ranges** — unlike `cpe_signal_history` (a raw-row table genuinely needing
+SQL-level `AVG()...GROUP BY` bucketing for Week/Month/Year, see
+`CpeSignalHistoryQueryService`), `LibreNmsService::getTrafficHistory()`
+already goes through `rrdtool xport`, which performs its own
+consolidation/downsampling internally via RRDtool's RRA mechanism — the
+new `deviceTraffic()` controller method only converts
+`CpeSignalHistoryRange::windowHours() * 3600` into the existing
+`$rangeSeconds` parameter and passes it straight through.
+
+**Rate limiting**: all 3 new endpoints carry `throttle:60,1` — the only
+throttle precedent in this codebase before now was the two public
+webhook endpoints (Xendit, WhatsApp session-status); this is the first
+time it's applied to an authenticated route, per Agung's explicit "reuse
+throttle middleware yang sudah dipakai" instruction rather than inventing
+a new rate-limit scheme.
+
+**Full regression suite green at 689/689** (11 new tests across
+`tests/Feature/Api/MonitoringApiTest.php`/`CpeSignalHistoryApiTest.php`,
+up from the pre-existing 678) — includes the fake-`LibreNmsService`
+pattern already established by `DeviceMonitoringListLivewireTest`/
+`DeviceTrafficGraphLivewireTest`, reused verbatim for the new API tests
+rather than reinvented. `docs/API.md` gained a new
+"Dashboard Monitoring API (v0.8.4)" section with all 3 endpoints'
+response shapes.
+
+**Bagian B/C status as of this section being written**: Bagian A
+(this section) is complete and tested; Bagian B (SNMP self-monitoring
+of the BOSS App server itself, onboarded via the existing "Tambah
+Device" Livewire form) and Bagian C's technical-plan report (Docker
+container stats, STOP-before-execution per Agung's explicit instruction)
+are the next steps, not yet started as of this commit.
+
+## Host Self-Monitoring via SNMP (v0.8.4 Bagian B)
+
+**The BOSS App server itself (`45.123.142.242`) is a KVM VM, not
+bare-metal** — confirmed directly (`systemd-detect-virt` → `kvm`,
+`/sys/class/dmi/id/sys_vendor` → `QEMU`), not assumed. Onboarded into
+LibreNMS the same way any other device is — **zero new application code**,
+per Agung's explicit instruction — using the existing `LibreNmsService::
+addDevice()` (the same method `App\Livewire\Network\
+AddMonitoringDeviceForm::save()` already calls). This section is purely
+the operational/infra side: installing and hardening `snmpd` on the host,
+then a single onboarding call.
+
+**`snmpd` installed via `apt`, configured deliberately narrow** —
+`/etc/snmp/snmpd.conf` binds to exactly ONE address,
+`udp:172.28.0.1:161` (this host's own address on the `boss-network`
+Docker bridge — the same gateway IP every VPN/GenieACS/LibreNMS
+reverse-route mechanism elsewhere in this file already relies on being
+stable). Deliberately NOT bound to `ens18` (the public interface,
+`45.123.142.242`) or `0.0.0.0` — same BOSS-010 minimal-exposure posture
+as every other internal-only service in this stack (FreeRADIUS, GenieACS
+CWMP/NBI, etc.). A fresh, unique read-only community string was
+generated (`openssl rand -hex 12`) — deliberately **not** the same value
+as any OLT's `olt_devices.snmp_ro_community` (checked first: this host is
+infrastructure, not an ISP customer network device, a different category
+entirely) — and is stored ONLY in a root-only file on this server
+(`/root/.boss-app-host-snmp-community.txt`, `chmod 600`) plus the running
+`/etc/snmp/snmpd.conf` itself; **never** written to `boss_db`/
+`olt_devices` or to any file this repo tracks in git, per Agung's explicit
+instruction. `rocommunity <string> 172.28.0.0/24` is a second,
+independent access-control layer on top of the narrow bind — belt and
+suspenders, same posture as `NasResource`/`OltDeviceDatatableController`'s
+own double-layer credential protection elsewhere in this codebase.
+
+**Two real, genuinely surprising bugs found getting this to actually
+respond to a container — neither was a config mistake, both confirmed by
+direct packet-level investigation, not guessed:**
+
+1. **net-snmp 5.9.4 (this Ubuntu 24.04 build) silently swallows every
+   request — zero response, no error logged — the moment TWO
+   `agentAddress` entries share the same port** (the originally-planned
+   `udp:127.0.0.1:161,udp:172.28.0.1:161`). Confirmed via `tcpdump`+
+   `strace`: the request genuinely arrived and was parsed (community
+   matched, GetRequest decoded), but no `sendto()` ever followed. A
+   single-address bind (`udp:172.28.0.1:161` alone) does not have this
+   problem — this is why the final config binds to exactly one address
+   rather than the originally-planned two (127.0.0.1 *and* the bridge
+   IP). The host can still self-test using the same bridge address
+   (`172.28.0.1` is a real, host-owned local interface address, reachable
+   from the host itself exactly like any other local IP).
+2. **The actual root cause of every container-sourced request timing
+   out was UFW, not snmpd, not Docker's NAT/DOCKER-USER/FORWARD chains
+   (all individually checked and ruled out)** — this server's UFW has a
+   default-deny INPUT policy (`Default: deny (incoming)`) and, before
+   this fix, had zero rule permitting UDP/161 inbound from anywhere,
+   including `boss-network`. A request arriving via the boss-network
+   bridge is genuinely visible in `tcpdump -i br-...` (bridge-layer
+   capture happens before the host's own INPUT chain filtering) — which
+   is what made this look, for a long stretch of debugging, like
+   snmpd itself was silently dropping bridge-sourced requests
+   specifically, when in fact those requests never reached the
+   application layer at all: UFW's `ufw-before-input` chain
+   unconditionally `ACCEPT`s loopback (`-i lo`) — explaining why local
+   `snmpget 127.0.0.1` worked throughout the entire investigation — but
+   has no equivalent rule for the bridge interface, and `ufw-user-input`
+   only had rules for 22/80/443/49194 (SSH/HTTP/HTTPS/the real SSH port).
+   Fixed with one scoped rule:
+   `ufw allow from 172.28.0.0/24 to any port 161 proto udp` — deliberately
+   scoped to `boss-network` only, not "Anywhere" the way 80/443 are (this
+   is an internal monitoring service, never meant to be dialed from the
+   public internet). Verified afterward, all 4 cases: (a) a real
+   `snmpget` from both `librenms`/`librenms-dispatcher` containers
+   succeeds with real `sysDescr` output, (b) a wrong community string
+   still correctly times out (rocommunity's own ACL is unaffected by the
+   firewall change), (c) `snmpget` against the public IP
+   (`45.123.142.242:161`) still times out — the public interface was
+   never touched by this fix.
+
+**Onboarded via `LibreNmsService::addDevice(hostname: '172.28.0.1',
+snmpVersion: 'v2c', community: <the generated string>, port: 161,
+displayName: 'boss-app-server (host)')`** — the exact same call
+`AddMonitoringDeviceForm::save()` makes, run once as a real operational
+step (no browser-automation tool is available in this environment, same
+documented limitation as every other real-hardware verification in this
+file — see the v0.4.0 WhatsApp QR-scan gap for the precedent). LibreNMS's
+own real reachability check accepted it immediately (`device_id: 6`, same
+never-`force_add` posture already established for the 3 OLTs).
+
+**Verified with real, live data — not just "added successfully"**: after
+LibreNMS's poll cycle ran, `GET /api/v1/monitoring/devices` (the very
+endpoint built in Bagian A above) shows the host with
+`"hostname": "172.28.0.1"`, `"name": "vps"` (a real SNMP-reported
+`sysName`, not the bare hostname — proves SNMP data is genuinely flowing,
+not just an ICMP-reachability stub), `"status": true`,
+`"uptime": 952335` (a real, plausible uptime in seconds for this VM), and
+`memory.state: "ok"` with a real breakdown (physical/virtual/buffers/
+cached/shared/swap all present via `getMemoryUsage(6)`, values in the
+teens/forties percent range — genuine, not placeholder). `cpu.state` was
+still `"no_sensor"` at first verification — checked directly
+(`getCpuUsage(6)` returned an empty array) — as suspected, this was just
+LibreNMS's separate discovery pass not having completed yet: rechecked
+during Bagian C's work session (some time later) and `getCpuUsage(6)` now
+returns 6 real per-core sensors (`Intel Xeon E5-2695 v4 @ 2.10GHz`,
+usage in the 7-14% range — genuine, plausible values for this VM's vCPU
+allocation), closing this open item for real rather than leaving it
+assumed.
+
+## Container Stats via docker-socket-proxy (v0.8.4 Bagian C)
+
+**Technical plan reviewed and approved by Agung before any code was
+written** (per the sprint's own STOP-and-confirm checkpoint, since this
+touches a real security surface — a container gaining any form of Docker
+visibility). Chosen approach: **`tecnativa/docker-socket-proxy`** sidecar,
+not a direct `docker.sock` bind-mount on `boss-app`/`boss-scheduler`
+themselves.
+
+**Architecture**: a new `docker-stats-proxy` service (`docker-compose.yml`)
+is the ONLY container that mounts the real `/var/run/docker.sock` (`:ro`).
+Its env whitelist enables exactly `CONTAINERS=1` — every other endpoint
+family (`POST`/`EXEC`/`NETWORKS`/`VOLUMES`/`IMAGES`/`INFO`/`SWARM`/`SYSTEM`/
+`BUILD`/`COMMIT`/`CONFIGS`/`DISTRIBUTION`/`NODES`/`PLUGINS`/`SECRETS`/
+`SERVICES`/`SESSION`/`TASKS`) is explicitly set to `0`. `boss-app`/
+`boss-scheduler` never touch the socket at all — they talk to the proxy
+over plain HTTP on `boss-network` (`DOCKER_STATS_PROXY_URL`,
+`config('services.docker_stats.proxy_url')`), the same "communicate via a
+narrow intermediary, never widen this container's own capabilities"
+posture already established for `LibreNmsService`/`GenieAcsClientService`.
+No host port published (BOSS-010), same as every other internal-only
+service in this stack.
+
+**Verified for real that this is a STRUCTURAL guarantee, not just
+application-code discipline** — a live `curl` from inside `boss-app`
+against the running proxy: `GET /containers/json` → `200` (real container
+list), `POST /containers/create` → `403`, `GET /images/json` → `403`,
+`GET /info` → `403`. Even a hypothetical bug in `ContainerStatsService`
+that tried to call a mutating endpoint would be refused by the proxy
+itself before ever reaching the real Docker daemon.
+
+**`App\Services\Infra\ContainerStatsService::syncAll()`** — same
+append-only-history pattern as `CpeSignalHistoryService` (v0.8.3): one
+`GET /containers/json?size=true` (container list + `SizeRw`/`SizeRootFs`
+in a single call) then one `GET /containers/{id}/stats?stream=false` per
+container, one `ContainerStatsHistory` row written per container. One
+container's fetch failure is logged and skipped, never aborts the rest of
+the sweep — same resilience posture as every other batch-sync service in
+this codebase.
+
+**CPU%/memory formulas match `docker stats` exactly, confirmed against
+real response shapes, not assumed from Docker's docs**:
+- **CPU%** — `(cpu_delta / system_delta) * online_cpus * 100`. A SINGLE
+  `stream=false` call already returns a valid, non-zero delta — confirmed
+  directly (`precpu_stats.cpu_usage.total_usage` genuinely differs from
+  `cpu_stats.cpu_usage.total_usage` in a real response) — the Docker
+  daemon itself takes two internal samples ~1s apart before replying, no
+  second HTTP round trip needed here.
+- **Memory** — this host runs a **cgroup v2** kernel (confirmed:
+  `memory_stats.stats` has `inactive_file`, not the cgroup v1
+  `total_inactive_file` key), so `usage - stats.inactive_file` is used
+  (Docker CLI's own `calculateMemUsageUnixNoCache` logic), not raw
+  `usage` — otherwise reclaimable page cache would be double-counted as
+  real application memory pressure.
+- **Disk** — `SizeRw` (the container's own writable layer, from
+  `?size=true` on the SAME `/containers/json` call, no extra endpoint),
+  deliberately not `SizeRootFs` (mostly shared base-image layers, not a
+  meaningful "how much has THIS container grown" signal).
+
+**Real bug found and fixed by the test suite itself, before it ever hit
+production** — the first version of `calculateCpuPercent()` computed
+`$cpuDelta`/`$systemDelta` via subtraction FIRST, then checked
+`=== null` afterward. PHP's arithmetic operators silently coerce a missing
+(`null`) operand to `0` (`100 - null === 100`, not `null`) — so that null
+check could never actually fire; a response missing
+`precpu_stats.system_cpu_usage` would have silently produced a wildly
+wrong CPU% (up to 600%+ in the exact test case that caught this) instead
+of the intended graceful `null`. Fixed by checking presence of every
+required field BEFORE any arithmetic. Caught by
+`ContainerStatsServiceTest::test_missing_precpu_stats_yields_a_null_cpu_percent_instead_of_a_bogus_value`
+— written deliberately for this exact edge case, not found by reasoning
+about the code after the fact.
+
+**5-minute schedule interval is a measured decision, not a guess** — per
+the sprint's own explicit "ukur dulu sebelum putuskan interval" requirement.
+Real timing on this server (27 containers): `?size=true` container list is
+cheap (~0.24s), but the per-container `/stats?stream=false` loop took
+**~53 seconds total** (~2s per container — the Docker daemon's own
+internal two-sample wait dominates, not network latency to the proxy).
+`Http::pool()` for parallel per-container calls was considered and
+deliberately not used — same "not worth the complexity for this data
+volume" call already made for `LibreNmsService`'s own per-sensor loop.
+5 minutes gives 5-6x margin over the measured runtime; `->withoutOverlapping()`
+is a backstop, same reasoning as `SyncCpeSignalHistory`. **No retention/
+pruning policy exists yet** — same accepted, documented gap as
+`cpe_signal_history` (v0.8.3) and `container_stats_history` will grow
+similarly unbounded.
+
+**`App\Livewire\Network\ContainerStatsList`** — new "Container BOSS App"
+section on `/monitoring`, below the device table (`resources/views/
+livewire/network/monitoring-index.blade.php`). Reads the LATEST snapshot
+per container directly from `container_stats_history` (no service layer —
+a single indexed `WHERE recorded_at = <max>` query isn't business logic
+worth its own abstraction, same call already made for
+`CpeSignalHistoryGraph` reading `cpe_signal_history` directly). "Latest" =
+every row sharing the single most recent `recorded_at` — every container
+in one `SyncContainerStats` run shares the SAME `recorded_at`
+(`ContainerStatsService::syncAll()` computes it once per run), so this is
+a plain equality filter, never a per-container `MAX()` subquery.
+
+**`GET /api/v1/monitoring/containers`** — new `MonitoringController::
+containers()` method, same `monitoring.view` permission, same
+`throttle:60,1`, same envelope as the other 2 Bagian A endpoints. Reads
+the exact same "latest snapshot" query `ContainerStatsList` uses.
+
+**Verified for real, end-to-end, all layers**: `infra:sync-container-stats`
+run against the real `docker-stats-proxy` recorded all 27 real containers
+with 0 failures; stored values spot-checked as genuinely sane
+(`librenms-dispatcher` 4.75% CPU, `mongo` 464.5MB memory, `boss-scheduler`
+17.5GB cumulative RX — all plausible for this fleet's real workload); a
+real authenticated `curl` against `GET /api/v1/monitoring/containers`
+returned the same real data; a real authenticated browser-equivalent
+session (login + `GET /monitoring`) confirmed the "Container BOSS App"
+section and real container names (`boss-app`, `boss-scheduler`,
+`genieacs-cwmp`) genuinely present in the rendered HTML. Full regression
+suite green at 701/701 (12 new tests), Pint clean.
+
+## Riwayat/Edit/Remove for Monitoring Devices (v0.8.4 Bagian D)
+
+**RRD filename patterns for CPU/Memory/Temperature history are vendor-
+driver-specific, NOT a fixed `processor-hr-{id}.rrd` scheme** — that was
+the sprint brief's own initial assumption, disproven by directly
+inspecting real files on this server before writing any code (same
+"verify against real data before trusting a pattern" discipline as
+every other RRD-path decision in this file). Confirmed byte-for-byte
+against all 7 processor sensors + all 5 mempool sensors + 10 temperature
+sensors on a real ZTE C300 OLT:
+- CPU: `processor-{processor_type}-{processor_index}.rrd` (e.g.
+  `processor-zxa10-1.1.3.rrd`), single `usage` datasource.
+- Memory: `mempool-{mempool_type}-{mempool_class}-{mempool_index}.rrd`
+  (e.g. `mempool-zxa10-system-1.1.3.rrd`) — the RRD file only stores raw
+  `used`/`free` datasources (confirmed via `rrdtool info` against a real
+  file), **not** a `perc` datasource despite the live API's own
+  `mempool_perc` field — the percentage shown is computed at export time
+  via an rrdtool CDEF (`used / (used+free) * 100`), matching what
+  `getMemoryUsage()`'s live value already represents.
+- Temperature: `sensor-temperature-{sensor_type}-{sensor_index}.rrd`
+  (e.g. `sensor-temperature-zxa10-1.1.0.rrd`), single `sensor`
+  datasource.
+
+All three `{type}`/`{index}`/`{class}` values come from the SAME
+per-sensor detail call `LibreNmsService::collectHealthSensorReadings()`
+already makes (`/devices/{id}/health/{type}/{sensor_id}`) — no new API
+call needed to resolve the RRD path.
+
+**`LibreNmsService::getCpuHistory()`/`getMemoryHistory()`/
+`getTemperatureHistory()`** — same `rrdtool xport --json` mechanism as
+`getTrafficHistory()` (v0.8.2), one new method per metric, sharing a new
+private `xportSingleSeries()` helper (getTrafficHistory's own two-column
+in/out parser stayed separate — unifying a 1-column and 2-column parser
+wasn't worth the indirection for just one caller).
+
+**`LibreNmsService::getMetricHistory(deviceId, metric, rangeSeconds)`** —
+extracted so BOTH `App\Livewire\Network\DeviceHistoryModal` AND
+`MonitoringController::deviceHistory()` (the REST API twin) share one
+implementation (BOSS-006), rather than duplicating the "list sensors,
+fetch each sensor's history, tolerate individual failures" logic in two
+places. **Every sensor of a metric class gets its OWN series, never
+averaged away** — a real device in this fleet has up to 7 processor
+sensors (one per OLT line card); collapsing them into one averaged line
+would hide exactly the kind of "which line card is under load" signal an
+ops user needs. Three states: `no_sensor` (device genuinely has none,
+real not error), `unavailable` (the sensor list call failed, OR every
+individual sensor's history call failed), `ok` (at least one sensor
+loaded — a sensor whose own history call fails is dropped from the chart,
+not fatal to the others).
+
+**`window.deviceHistoryChart`** (`resources/js/app.js`) — a variable-
+length-dataset Chart.js factory (one line per sensor, cycling an 8-color
+palette), X-axis labels derived from the FIRST sensor's own timestamps
+(every sensor on the same device is polled on the same interval in
+practice — a reasonable, not perfect, alignment assumption, same
+simplification already accepted for the existing single/dual-series
+charts). Same `wire:ignore` + dispatched-browser-event mechanism as
+`trafficChart`/`signalHistoryChart`, reused verbatim.
+
+**Sibling-component-via-dispatched-event architecture, same pattern as
+`device-selected` → `DeviceTrafficGraph` (v0.8.2)**, applied twice more
+rather than bolting new state onto `DeviceMonitoringList` itself:
+- "Riwayat" link per row → `device-history-requested` event →
+  `App\Livewire\Network\DeviceHistoryModal` (metric tabs: CPU/Memory/
+  Suhu; range tabs: reuses `CpeSignalHistoryRange`'s 5-tab vocabulary,
+  a second unrelated cross-purpose reuse of that enum — see the v0.8.4
+  API section above for the first one).
+- "Edit" link per row (gated `@can('monitoring.manage')`) →
+  `device-edit-requested` event → `App\Livewire\Network\DeviceEditForm`.
+
+**Edit field whitelist confirmed by reading LibreNMS's own
+`App\Models\Device::$fillable` directly** (`app/Models/Device.php` inside
+the real `librenms` container) — `display_template`/`community`/`port`/
+`snmpver` are exposed; `hostname`/`ip` are deliberately excluded (changing
+a device's own network identity is a materially bigger, riskier operation
+than fixing a typo'd name or rotating a community string — not requested,
+not built), and SNMPv3 fields are excluded for the same "only v1/v2c is
+selectable" reason `AddMonitoringDeviceForm` already established.
+**`LibreNmsService::updateDevice()`'s multi-field PATCH contract
+(`field`/`data` as PARALLEL ARRAYS) confirmed live against the real
+router** (device #1) with a same-value no-op patch (`port`→161,
+`snmpver`→`v2c`) — genuine `200 "Device fields have been updated"`, zero
+effect on live polling — before trusting this shape in code.
+**`getEditableDevice()`'s community field is a deliberate exception to
+`listDevices()`'s own credential-sanitization posture** — an edit form
+legitimately needs the current value to show/let an admin modify it, the
+same way LibreNMS's own web UI does; it's re-fetchable from LibreNMS
+itself by anyone holding `monitoring.manage` regardless of what this form
+shows, unlike a genuinely "shown once" secret such as a Xendit key.
+
+**"Hapus" — `wire:confirm`-gated, `monitoring.manage`, calls
+`LibreNmsService::deleteDevice()`** (`DELETE /devices/{id}`) — destructive,
+LibreNMS's own `delete_device()` drops that device's RRD history and
+port/sensor rows too, not just the device row, called out explicitly in
+the confirm dialog text.
+
+**REST API twins, same envelope/permission posture as Bagian A**:
+`GET /api/v1/monitoring/devices/{device}/history?metric=&range=`
+(`monitoring.view`), `PATCH /api/v1/monitoring/devices/{device}`
+(`monitoring.manage`, same whitelist), `DELETE /api/v1/monitoring/devices/{device}`
+(`monitoring.manage`). All three carry `throttle:60,1`, matching Bagian A.
+
+**Verified for real, end-to-end, against the live server — including a
+real destructive round trip, not just a read-only spot-check**:
+- `GET .../devices/2/history?metric=cpu` and `?metric=memory` both
+  returned real, correctly-shaped multi-sensor series from the real ZTE
+  C300 OLT.
+- A real `PATCH` against the host's own self-monitoring device (#6, added
+  in Bagian B) changed `display_template` to a test value, confirmed via
+  `getEditableDevice()` reading the live LibreNMS state directly, then
+  reverted.
+- A real `DELETE` against that same device genuinely removed it from
+  `GET /monitoring/devices` — confirmed absent — then the exact same
+  `addDevice()` call from Bagian B was re-run to restore host
+  self-monitoring (new `device_id`, expected and harmless for this
+  non-customer-facing entry, same "revoke and reprovision" posture
+  already normal elsewhere in this codebase for VPN accounts/NAS API
+  users).
+- A real authenticated browser-equivalent session (login + `GET
+  /monitoring`) confirmed genuine `wire:click.stop="openHistory(...)"`
+  attributes with real device ids/names present in the rendered HTML for
+  all 5 real devices.
+
+No real production customer-facing device (OLT/router serving live
+traffic) was ever added or removed during this verification — only the
+BOSS App server's own self-monitoring entry, which is safe to cycle.
+
+Full regression suite green at 735/735 (34 new tests across
+`LibreNmsServiceTest`/`DeviceMonitoringListLivewireTest`/
+`DeviceHistoryModalLivewireTest`/`DeviceEditFormLivewireTest`/
+`MonitoringApiTest`), Pint clean, frontend bundle rebuilt and
+`FrontendBuildTest` green.
+
+## Intermittent 419 Page Expired — root cause was permissions, not disk (v0.8.4)
+
+**Reported symptom: `/monitoring` occasionally 419'd, with a raw PHP
+warning visible on the page — "Unable to create temporary file, Check
+permissions in temporary files directory".** That exact warning text
+strongly suggested filesystem-level trouble, not an application bug —
+investigated disk/inode capacity FIRST, before touching anything else,
+per the same "verify against real state before acting" discipline as
+every other infra investigation in this file.
+
+**Disk/inode capacity was a dead end — genuinely healthy everywhere**:
+host root/`` /var``/boot/home all 1-27% used, all inode counts 1-5% used;
+`boss-app` container's own view of every mount (overlay root, all shared
+volumes) matched. This ruled out the LibreNMS/`container_stats_history`/
+RRD-growth hypothesis the investigation brief itself raised as a leading
+suspect — none of it, because there was no capacity problem to attribute
+to anything.
+
+**Real root cause, confirmed by directly testing as `www-data` (the actual
+php-fpm user), not by reading permission bits and guessing**: TWO separate
+permission faults, both genuinely blocking writes:
+1. **`/tmp` inside `boss-app` was `755 root:root`** instead of the
+   universal Linux default `1777` — confirmed the base image itself
+   (`php:8.4-fpm-alpine`, pulled fresh and inspected directly) ships
+   `1777` correctly, so this was **runtime drift on this specific
+   long-lived container** (some past root-run operation reset it, most
+   likely one of the many root-by-default `docker compose exec boss-app
+   ...` sessions this codebase's own history is full of — not
+   conclusively traceable to one exact command, and not worth chasing
+   further since the fix is unconditional either way). Not a reproducible
+   setup bug — `/tmp` isn't part of any bind mount/volume, so a fresh
+   container recreate already gets a correct `1777` `/tmp` for free from
+   the base image; this was a one-time live fix (`chmod 1777 /tmp`),
+   applied to all 4 PHP containers (`boss-app`/`boss-worker`/
+   `boss-whatsapp-worker`/`boss-scheduler`, each has its own separate
+   `/tmp`, unlike the shared bind-mounted `app/` directory).
+2. **`storage/framework/{cache,sessions,testing}` were `755 root:root`**
+   — this one IS `App\models`. **This is the actual, direct cause of the
+   419s**: Laravel's file session driver (`SESSION_DRIVER=file`) could
+   never write a session file at all, so the CSRF token stored in a
+   request's session was never actually persisted — the next request
+   (form submit) validates against a session that was silently never
+   saved, indistinguishable from a genuinely expired one. **Root cause,
+   confirmed by tracing back to `scripts/02-init-laravel.sh`**: step 1
+   (`composer create-project laravel/laravel app`) runs inside a
+   throwaway `docker run` container, which defaults to root — Laravel's
+   own skeleton ships `storage/framework/{cache,sessions,testing}` as
+   pre-existing EMPTY directories (just a `.gitignore` placeholder each),
+   so they inherit root ownership straight from the scaffold step onto
+   the host-bind-mounted `app/` directory, and nothing downstream ever
+   corrected it. `storage/logs`/`bootstrap/cache` happened to escape this
+   specific bug only because php-fpm itself was the first process to ever
+   write into them at runtime (as `www-data`, succeeding since their
+   PARENT directories were already correctly owned) — not because
+   anything explicitly fixed them.
+3. **Fixed live** (`chown -R www-data:www-data storage bootstrap/cache`
+   on `boss-app` — the fix applies to all 4 PHP containers at once since
+   they share the same bind-mounted `app/` directory, unlike `/tmp`),
+   verified both by a direct `touch` test as `www-data` (succeeded, where
+   it failed before) and by 5 consecutive real login attempts all
+   returning a clean 302 (zero 419s, where this exact flow had been
+   reported failing intermittently).
+4. **Fixed at the root, not just patched live** — `scripts/02-init-laravel.sh`
+   gained a new `chown -R 82:82 app/storage app/bootstrap/cache` step
+   (82 = Alpine's `www-data` uid/gid, confirmed directly via `id www-data`
+   inside the image) right after the stub-copying step, so a genuinely
+   fresh server rebuild (BOSS-011: `git clone` → `02-init-laravel.sh` →
+   `docker compose up -d`) never reproduces this same 419 bug. Not
+   re-executed against a live re-scaffold to prove it (would mean wiping
+   and rebuilding this in-use Laravel install — unnecessary risk for a
+   fix whose actual operation was already directly verified live, just
+   not yet exercised through the script's own automation path).
+
+**LibreNMS isolation test — confirmed NOT a contributing factor**,
+performed as a second, independent check per the investigation brief
+(not skipped just because the permission root cause was already found —
+explicitly to rule out a second, overlapping cause). Baseline (LibreNMS
+running) vs. all 4 LibreNMS containers (`librenms`/`librenms-dispatcher`/
+`librenms-db`/`librenms-redis`) genuinely stopped:
+- Warm-cache `/monitoring` response time: ~90-110ms **either way** —
+  negligible difference.
+- The one genuinely slow figure observed (~2.9-3.4s) was a **cold-cache**
+  request (`LibreNmsService`'s 45s `Cache::remember()` TTL had just been
+  flushed) making real synchronous HTTP+`rrdtool` calls — happens once
+  per cache window regardless of whether this specific investigation was
+  running, not a sustained load.
+- `docker stats` snapshot across the full ~22-container stack: nothing
+  above ~7% CPU, combined RAM well under the 19.3GB host limit — no
+  resource-exhaustion signal anywhere.
+- LibreNMS was restarted immediately after the test (`docker compose
+  start librenms-db librenms-redis librenms librenms-dispatcher`),
+  confirmed healthy again (`/monitoring` re-rendered the full real device
+  list) — never left stopped.
+
+**Conclusion**: the reported "berat" feeling was very likely the SAME 419/
+session-write-failure bug manifesting as repeated failed page loads/
+re-logins, not an actual LibreNMS performance problem — consistent with
+how a broken session write looks identical to slowness from a user's
+perspective (the page appears to "not work," prompting a reload/retry
+loop) even though the underlying request itself was fast.
+
+## 419 on "Riwayat" — Amendment: `/tmp` Was the Real, RECURRING Cause, Not CSRF (v0.8.4)
+
+**The section above got the underlying facts right but the EMPHASIS
+backwards, and that mistake sent an entire follow-up investigation down
+the wrong path for several turns.** Item #1 above (`/tmp` at `755`
+instead of `1777`) was framed as a one-off runtime curiosity, "fixed,
+not a reproducible setup bug, not worth chasing further" — while item #2
+(`storage/framework/{cache,sessions,testing}` ownership) got the
+"actual, direct cause" label and the permanent `scripts/02-init-laravel.sh`
+fix. **Both permission fixes were real and worth keeping — but `/tmp`
+was the one that actually caused the reported 419s, and it was NOT a
+one-off: it drifted back to `755 root:root` a SECOND time**, on the
+exact same long-running `boss-app` container, sometime after the first
+manual `chmod 1777 /tmp` (2026-08-22) and before this second
+investigation (2026-08-23/24) — never fixed at a persistent level the
+first time around, exactly the mistake the original section's own
+wording ("not worth chasing further since the fix is unconditional
+either way") now reads as premature.
+
+**How this was actually confirmed, not guessed**: Agung reproduced the
+419 from his own browser and sent a screenshot of the real DevTools
+Network tab response body — which contained a literal, unmasked PHP
+runtime warning ahead of the 419 page's own HTML: `"Unable to create
+temporary file, Check permissions in temporary files directory"` and
+`"POST data can't be buffered; all data discarded"`. That second line is
+the actual mechanism: when PHP cannot create a temp file to buffer an
+incoming POST body (which is exactly what an unwritable `/tmp` causes),
+it doesn't fail cleanly — it silently DISCARDS THE ENTIRE REQUEST BODY,
+including the CSRF token AND the whole Livewire snapshot/payload, before
+Laravel's router or any middleware ever sees a single byte of it. Laravel
+then correctly (from its own narrow point of view) rejects the resulting
+tokenless request as CSRF-invalid.
+
+**This retroactively explains every anomaly from the CSRF-focused
+investigation that preceded this one, which is why that whole
+investigation looked plausible right up until the DevTools screenshot**:
+- `_token: null` and `components: []` in the CSRF debug logging (see the
+  now-removed `LogCsrfDebugSuccess`/`csrf-debug.log` investigation,
+  documented only in git history/prior conversation, not carried forward
+  here) — because the request body genuinely never arrived at Laravel at
+  all, not because a token was wrong or a session was lost.
+- Session ID staying perfectly stable across every failed attempt — the
+  session was never the problem; it was never even read for these
+  requests, since CSRF verification (which does depend on the session)
+  runs on a request whose BODY was already empty by the time it got
+  there.
+- The repeated "klik → 419 → klik lagi → 419 lagi" pattern — `/tmp`
+  being unwritable is a standing condition, not a one-off timing fluke,
+  so every subsequent POST with a body fails identically until the
+  underlying permission is fixed, matching this exactly.
+- The unresolved nginx-status-vs-Laravel-log discrepancy from the CSRF
+  investigation (nginx logging 200 for requests Laravel's own exception
+  handler treated as 419) was never conclusively resolved and remains an
+  open, unexplained detail of that investigation — not chased further
+  once the DevTools evidence made the CSRF framing itself moot.
+
+**Fixed properly this time — self-healing, not a manual `chmod` that can
+drift back again**: `docker/php/entrypoint.sh` (new file, shared by all 4
+containers built from `docker/php` — `boss-app`/`boss-worker`/
+`boss-whatsapp-worker`/`boss-scheduler`) runs `chmod 1777 /tmp` once at
+startup, then launches a backgrounded `while true; do chmod 1777 /tmp;
+sleep 30; done` loop for the container's entire lifetime — same
+"re-apply defensively every cycle, don't trust a one-time fix" posture
+already established elsewhere in this codebase for shared volumes that
+drifted for similarly unclear reasons (`freeradius_nas_config`'s
+periodic `chgrp`/`chmod`, `vpn_wg_data`'s periodic address-fragment
+chmod). **The exact mechanism that reset `/tmp` a second time was
+investigated but not conclusively identified** — no `/tmp` entry in
+`mount`/`/proc/mounts` (ruling out a tmpfs remount), no active `crond`
+process despite Alpine's cron infrastructure being present in the base
+image (`ps aux` showed only `php-fpm`, nothing else, so a periodic cron
+job resetting it was ruled out), and the container was never recreated
+between the two drifts (same `StartedAt` timestamp throughout). Rather
+than keep chasing an elusive one-time root cause, this is now enforced
+unconditionally and periodically, which closes the bug regardless of
+what specifically causes the drift.
+
+**Dockerfile now has a real `ENTRYPOINT`** (`ENTRYPOINT
+["/entrypoint.sh"]` + unchanged `CMD ["php-fpm"]`) — `boss-app`/
+`boss-worker` pick this up automatically since neither overrides
+`entrypoint:` in `docker-compose.yml`. `boss-whatsapp-worker`/
+`boss-scheduler` DO override `entrypoint:` directly in compose (their
+own polling-loop one-liners, see the WhatsApp Gateway/FreeRADIUS
+sections above) — for those two, `/entrypoint.sh` is prefixed as the
+FIRST element of their existing `entrypoint:` array rather than
+duplicating the chmod logic inline: `entrypoint: ["/entrypoint.sh",
+"sh", "-c", "<their existing one-liner, byte-for-byte unchanged>"]` —
+since the script's own last line is `exec "$@"`, this transparently
+`exec`s their original command afterward with zero behavior change to
+the polling logic itself. Confirmed for real after rebuilding and
+recreating all 4 containers: `ls -ld /tmp` shows `drwxrwxrwt` (1777) on
+all four, and `ps aux` inside each shows the backgrounded `sleep 30`
+loop genuinely running alongside each container's own real workload
+(php-fpm workers, `queue:work --queue=whatsapp-direct`, both scheduler
+loops) — nothing about the existing startup commands was altered.
+
+**Verified clean, end-to-end, repeated — not just permission bits**: 5
+consecutive real login → load `/monitoring` → simulate the "Riwayat"
+click via a genuine Livewire update request (same reproduction technique
+already established in this file's CSRF investigation, reused instead of
+rebuilt) all returned a clean `200` with **zero** occurrences of "Unable
+to create temporary file" in the response body — where before the fix,
+every such attempt in this same reproduction technique failed. Also
+confirmed via a `grep` across every log file for the warning text
+(`storage/logs/*.log`) — zero hits since the fix, where the DevTools
+screenshot proved it was happening in real, live use immediately before.
+
+**Temporary CSRF debug logging removed** (`App\Http\Middleware\
+LogCsrfDebugSuccess`, the `csrf-debug` log channel in `config/
+logging.php`, and the `TokenMismatchException`/`HttpException(419)`
+`render()` callback in `bootstrap/app.php`) — it did its job (captured
+the real request shape that led to the DevTools screenshot being the
+right next step) but was never the actual fix, and per the same
+temporary-instrumentation discipline already used once before in this
+codebase (the WireGuard hybrid-liveness test harness, the OSPF
+resource-measurement sidecar), it's removed once superseded rather than
+left accumulating in a production codebase indefinitely.
+
+**Lesson for this codebase's own investigation discipline, stated
+plainly**: a CSRF-shaped symptom (`_token`/session mismatch at the
+Laravel layer) can have a non-CSRF root cause entirely below the
+framework — server-side instrumentation at the Laravel/Livewire level
+answered "what did Laravel receive" correctly and consistently
+throughout, but could never have answered "why did the browser's real
+outgoing request end up looking like that" on its own. The DevTools
+screenshot — something only the person actually reproducing the bug
+could capture — is what actually closed this, not further server-side
+log analysis. Worth remembering the next time a symptom "looks like"
+one specific framework-level failure mode (CSRF, auth, validation) but
+resists every attempt at clean, faithful server-side reproduction: the
+faithful reproduction attempts themselves (all succeeding cleanly, see
+the section above) were correctly telling us the framework-level
+mechanism itself was fine — the signal was that reproducing "the same
+inputs" wasn't reproducing "the same bug," not that the bug wasn't real.
+
+## "Riwayat" on the Traffic Graph (v0.8.4)
+
+**Reuses `CpeSignalHistoryGraph`'s own INTERNAL-modal pattern, not
+`DeviceMonitoringList`'s per-row sibling-component pattern** — a
+deliberate distinction, not an inconsistency. `DeviceTrafficGraph` is
+architecturally like `CpeSignalHistoryGraph` (one self-contained graph
+already tracking its own single target — device+interface here, CPE
+device there), unlike `DeviceMonitoringList` (a table of many independent
+rows, each needing its own dispatched-event handoff to a shared sibling
+modal). `showHistoryModal`/`modalRange`/`modalState`/`modalSeries` +
+`openHistoryModal()`/`closeHistoryModal()`/`changeModalRange()`/
+`loadModalSeries()` mirror `CpeSignalHistoryGraph`'s own method names
+one-for-one. Same `CpeSignalHistoryRange` 5-tab vocabulary reused a THIRD
+time in this codebase for an unrelated purpose (RX Power history, the
+v0.8.4 REST API's `?range=`, and now this) — the "5 named time windows"
+concept keeps turning out to be generically useful, not CPE-specific.
+
+**No new aggregation logic** — `loadModalSeries()` just converts the
+selected range to `windowHours() * 3600` and passes it straight through
+to the same `LibreNmsService::getTrafficHistory()` the main graph already
+uses; `rrdtool`'s own RRA consolidation handles wider windows internally,
+same reasoning already established for the Bagian A API's traffic
+endpoint. `trafficChart` (the existing Chart.js factory) is reused
+verbatim for both the main graph and the modal graph, exactly like
+`signalHistoryChart` already is for `CpeSignalHistoryGraph` — no new JS
+was needed, so no frontend rebuild was required for this change (unlike
+every other JS-touching change in this sprint cluster, since the
+`x-data="trafficChart(...)"` factory name was already present in the
+built bundle from v0.8.2).
+
+**Verified for real**: `Livewire::test(DeviceTrafficGraph::class,
+['deviceId' => 1])` against the live server (not a mocked service)
+confirmed the "Riwayat" button genuinely renders once a device has
+traffic data (`state === 'ok'`), and correctly does NOT render in the
+`empty` state (no device selected yet) — checked directly in the real
+rendered HTML from an authenticated page load, not assumed from the
+`@if` condition alone.
+
+## Custom Date Range Tab + Container Grouping (v0.8.3, built on `v0.8.2-monitoring-fixes`)
+
+**Two independent UI additions to the already-existing Riwayat modals and
+the "Container BOSS App" section on `/monitoring` — no pipeline/
+architecture change, both still on `v0.8.2-monitoring-fixes` per the
+standing "no new branches" instruction.**
+
+**Bagian 1 — a 6th "Custom" tab beside Jam/Hari/Minggu/Bulan/Tahun, in
+BOTH Riwayat modals (RX Power History on the CPE detail page, and Device/
+Traffic History on the Monitoring page) — genuinely shared, not two
+separate implementations.** Since `CpeSignalHistoryGraph`, `DeviceHistoryModal`,
+and `DeviceTrafficGraph` are architecturally distinct Livewire components
+(different backing services: `CpeSignalHistoryQueryService` vs
+`LibreNmsService`), literal single-implementation reuse isn't possible —
+reuse is achieved instead via:
+- `App\Livewire\Concerns\ValidatesCustomHistoryRange` (new `Livewire/
+  Concerns/` directory) — a trait declaring the 4 shared properties
+  (`customRangeMode`, `customFrom`, `customTo`, `customRangeError`) and
+  the shared validation (`validateCustomRange()`: both dates required,
+  `customFrom` normalized to `startOfDay()`/`customTo` to `endOfDay()`,
+  "Sampai" must not be before "Dari", max 730 days/2 years) plus
+  `selectCustomRangeTab()`. Each host component still writes its own
+  `applyCustomRange()`, since the actual data call genuinely differs per
+  component (`CpeSignalHistoryQueryService::customSeriesFor()` vs
+  `LibreNmsService::getMetricHistory()`/`getTrafficHistory()` with a new
+  `?Carbon $endAt` param — see below).
+- `resources/views/livewire/network/partials/history-range-tabs.blade.php`
+  (new `partials/` directory) — the shared 6-tab row + conditional "Dari"/
+  "Sampai"/"Terapkan" UI, `@include`'d by all 3 host views with
+  `['currentRangeValue' => ..., 'changeRangeMethod' => ...]`; the trait's
+  own properties/methods (`customRangeMode`, `applyCustomRange`, etc.) are
+  automatically in scope since Blade `@include` shares the parent
+  component's render-time view data — no extra params needed for those.
+  Date inputs reuse the existing `border-gray-300 rounded-md px-3 py-2
+  text-sm` styling already established for filter inputs elsewhere in this
+  app (Invoices/Payment Reconciliation), not a new input style.
+
+**Backend: `?Carbon $endAt = null` added to every RRD-backed
+`LibreNmsService` history method** (`getTrafficHistory`, `getCpuHistory`,
+`getMemoryHistory`, `getTemperatureHistory`, `getMetricHistory`) — `null`
+preserves the exact original relative-to-now `-s -{seconds} -e now`
+`rrdtool xport` window (every existing named-range caller, unchanged,
+confirmed via a dedicated regression test); a real `Carbon` switches to
+absolute `-s {start_epoch} -e {end_epoch}` timestamps via a new private
+`xportTimeWindowArgs()` helper. `CpeSignalHistoryQueryService::
+customSeriesFor(int $cpeDeviceId, Carbon $from, Carbon $to)` derives its
+SQL aggregation grain from the ACTUAL day-length of `[from, to]`, not from
+which named tab it resembles — `CpeSignalHistoryRange::
+aggregationGrainForDays(float $days): ?string` reuses the exact same 4
+tiers the named tabs already use (≤1 day → raw/`null`, ≤7 days → hourly,
+≤31 days → daily, >31 days → weekly), so a custom range matching a named
+range's length aggregates identically to that named tab, by construction
+rather than by coincidence.
+
+**Test coverage**: `CpeSignalHistoryRangeTest` (7 boundary cases at
+exactly 1/7/31 days and just past each), `CpeSignalHistoryQueryServiceTest`
+(5 new `customSeriesFor()` cases spanning all 4 grains + an upper-bound-
+exclusion check), `LibreNmsServiceTest` (2 new cases: explicit `$endAt`
+produces absolute timestamps, omitted `$endAt` keeps the original relative
+window unchanged), and 6 new Livewire tests per host component
+(select-custom-shows-inputs-without-loading, apply-success-with-correct-
+end-at-and-range-seconds, to-before-from-rejected, over-2-years-rejected,
+empty-dates-rejected, preset-tab-after-custom-exits-custom-mode) —
+`DeviceHistoryModal` additionally covers its own special case
+(`changeMetric()` while in custom mode must re-apply the SAME custom
+range, not silently fall back to a named range).
+
+**Real gotcha hit writing these tests, not a code bug**: `Carbon::
+endOfDay()` carries `:59.999999` microsecond precision — `diffInSeconds()`
+between an `endOfDay()` value and a `startOfDay()` value can differ by a
+fraction of a second depending on which side of the internal subtraction
+retains that precision, so the range-seconds assertions in
+`DeviceHistoryModalLivewireTest`/`DeviceTrafficGraphLivewireTest` use
+`assertEqualsWithDelta(..., 1)` rather than `assertSame()` — the actual
+production code (`$to->diffInSeconds($from)`) is unaffected, this is a
+test-assertion-precision detail only. Similarly, tests asserting "the
+service was NOT called again" had to account for each component's own
+mount-time default load (`open()`'s default `loadHistory()` call,
+`openHistoryModal()`'s default-Day load) already having called the fake
+service once — comparing a call COUNT before/after the invalid custom-range
+attempt, rather than asserting a bare `false`, which would have failed
+even on genuinely correct behavior.
+
+**Bagian 2 — the "Container BOSS App" section's ~27 flat rows grouped into
+VPN/LibreNMS/BOSS App Core/Lainnya, collapsible per group.**
+`App\Services\Infra\ContainerStatsService::CONTAINER_GROUPS` is a
+deliberately EXPLICIT allow-list of exact `container_name` values per
+category (matching `docker-compose.yml`'s own `container_name:` entries)
+— not a regex/prefix guess (a `"boss-"` prefix match, for instance, would
+be wrong the moment a future container happens to share that prefix
+without actually being core infra):
+
+| Group | Containers |
+|---|---|
+| VPN | `openvpn`, `openvpn-node2`, `openvpn-node3`, `wireguard`, `wireguard-node2`, `wireguard-node3`, `l2tp` |
+| LibreNMS | `librenms`, `librenms-db`, `librenms-dispatcher`, `librenms-redis` |
+| BOSS App Core | `boss-app`, `boss-worker`, `boss-nginx`, `boss-postgresql`, `boss-redis`, `boss-scheduler`, `boss-whatsapp-worker` |
+| Lainnya (fallback) | everything else — currently `mongo`, `whatsapp-gateway`, `freeradius`, `freeradius-db`, `genieacs-cwmp`, `genieacs-nbi`, `genieacs-fs`, `genieacs-ui`, `docker-stats-proxy` |
+
+`ContainerStatsService::groupFor(string $containerName): string` is the
+one place this mapping is consulted — anything not explicitly listed in
+`CONTAINER_GROUPS` falls through to `'Lainnya'` rather than being dropped;
+this fallback is the ONLY non-explicit part of the design, and is
+deliberate — it's what guarantees a brand-new container (a future
+module's own service) is never silently hidden from the UI just because
+nobody remembered to add it to a category yet. `ContainerStatsList::
+loadStats()` derives `$groupedRows` (`array<string, array<row>>`, ordered
+per `ContainerStatsService::GROUP_ORDER`) from the same `$rows` the
+existing flat list already builds — `$rows` itself is left untouched for
+backward compatibility, `$groupedRows` is strictly additive. A group with
+zero matching containers this cycle is simply absent from `$groupedRows`
+(never rendered as an empty section).
+
+**Collapsible headers reuse the sidebar's own v0.8.1 sub-group
+expand/collapse idiom verbatim** (`x-data="{ open: localStorage.getItem
+('container-group-{slug}') !== 'false' }"`, chevron rotates via
+`x-bind:class`, body via `x-show`/`x-transition`) — same own-localStorage-
+key-per-section persistence already established there, not a new pattern.
+Each group renders as its own `<table>` (own header row + own collapsible
+`<tbody>`-containing wrapper) rather than one shared table with a stub
+`<tr>` header row per group, so each group's column headers stay directly
+above its own rows even when a preceding group is collapsed.
+
+**Test coverage**: `ContainerStatsServiceTest` gained 4 new `groupFor()`
+cases (one per real container in VPN/LibreNMS/BOSS App Core, plus a
+fallback case covering every currently-real "Lainnya" container AND a
+made-up future one). `ContainerStatsListLivewireTest` gained 3 new cases:
+correct group split across a mixed set of real containers, an entirely
+unrecognized container name lands in Lainnya with the grouped-row total
+still matching the flat-row count exactly (nothing silently dropped), and
+a group with zero matching containers is genuinely absent from
+`$groupedRows`'s own keys (not present-but-empty).
+
+**Verification**: full regression suite green at 776/776 (up from 739
+before this v0.8.3 work — 26 new custom-range Livewire tests across 3
+components + 8 new backend/enum tests + 15 new container-grouping tests +
+a handful from other work already merged into this branch earlier).
+Pint clean on every touched file. Real-data rendering was verified
+directly via `tinker` (this environment still has no browser/screenshot
+tool — same documented limitation as several earlier sections in this
+file): the shared `history-range-tabs` partial rendered standalone
+confirmed the "Custom" tab, both date inputs, and the "Terapkan" button
+all present and correctly `wire:model`/`wire:click`-wired; `ContainerStatsList`
+rendered against real seeded rows (including two intentionally-unlisted
+container names, `mongo` and `genieacs-cwmp`) confirmed all 4 group
+headers render and both unlisted containers correctly land under
+"Lainnya", not dropped. **Not yet done: a real browser check** — per this
+sprint's own standing DoD, the branch stays uncommitted until Agung
+verifies visually.
+
+## Custom Range 500 on Device/Traffic History — two stacked real bugs (v0.8.3)
+
+**Agung reproduced a genuine 500 clicking "Terapkan" after picking a
+Custom Range in the Monitoring page's Device/Traffic History modal(s) —
+NOT in RX Power History (CPE Detail), which never used the buggy
+computation described below.** Root-caused via a genuine end-to-end HTTP
+reproduction (real `curl` through `boss-nginx`/php-fpm, replaying the
+exact Livewire wire-protocol sequence a browser sends: open modal →
+`selectCustomRangeTab` → one combined request carrying `customFrom`/
+`customTo` updates plus the `applyCustomRange` call, matching how a real
+`wire:model` deferred date input actually batches with the button click)
+— not tinker, not PHPUnit, both of which turned out to mask parts of this
+investigation (see below). Two independent, stacked real bugs were found,
+not one:
+
+**Bug #1 — the actual functional defect, present regardless of any
+permission issue.** `DeviceHistoryModal::applyCustomRange()` and
+`DeviceTrafficGraph::applyCustomRange()` both computed
+`$rangeSeconds = $to->diffInSeconds($from)` — confirmed for real
+(`var_export`'d from inside the live request) that this Carbon version
+returns a NEGATIVE float for this exact call order (`$to` chronologically
+AFTER `$from`), e.g. `-863999.999999` for a 10-day range — the opposite of
+what the code assumed. This negative value fed straight into
+`LibreNmsService::xportTimeWindowArgs()`'s `$end - $rangeSeconds`
+arithmetic, which INVERTS the `-s`/`-e` window (start ends up after end),
+and `rrdtool` rejects every such call outright
+(`ERROR: start (...) should be less than end (...)`) — meaning **Custom
+Range on these two modals had never once returned real data**, silently
+degrading to "Data riwayat tidak tersedia" for every single request,
+100% of the time, since the feature first shipped. Fixed with
+`(int) abs($to->diffInSeconds($from))` in both methods — `abs()` fixes the
+sign, the explicit `(int)` cast fixes a separate, independently-confirmed
+issue (Carbon's `diffInSeconds()` carries microsecond precision, i.e.
+returns a `float`, which PHP would otherwise silently truncate under a
+`E_DEPRECATED` notice — see the ruled-out hypothesis below for why this
+specific truncation was NOT itself the crash).
+
+**Bug #1 also exposed a real gap in the v0.8.3 test suite's own
+methodology, not just missing coverage.** The 26 Custom Range tests
+written when this feature first shipped (all passing at the time) used
+`assertEqualsWithDelta($to->copy()->endOfDay()->diffInSeconds(...), ...)`
+to sidestep a *different*, legitimate Carbon microsecond-precision
+mismatch — but computing the EXPECTED value via the exact same
+`diffInSeconds()` call as the (buggy) production code meant both sides
+were silently negative and matched each other, so the sign bug passed
+clean through 26 tests without ever being exercised for real. Fixed by
+rewriting both `test_apply_custom_range_...` tests to compute the expected
+value via raw `getTimestamp()` subtraction (no `diffInSeconds()` at all)
+and assert `assertGreaterThan(0, ...)` explicitly — this is the specific
+change that would have caught the original bug, and does now (reverting
+the `abs()` fix locally and re-running these two tests fails them
+immediately, confirmed before finalizing).
+
+**Bug #2 — the actual proximate cause of the raw, undetailed 500 (as
+opposed to a graceful "Data tidak tersedia" amber message)**: this dev
+server's `storage/logs/laravel-2026-08-24.log` was `root:root`-owned at
+the moment of reproduction — the exact same recurring bug class already
+documented many times elsewhere in this file (OpenVPN PKI/`nas-11`,
+`freeradius_nas_config`, `vpn_wg_data` address fragments) — a root-run
+`docker compose exec boss-app ...` session (this investigation's own
+earlier diagnostic commands, `exec` defaulting to root same as every prior
+incident) wrote a line into today's log file, flipping its owner away from
+`www-data`. Confirmed deterministically, not by guessing: with the log
+file root-owned, the EXACT SAME request that would normally hit Bug #1's
+rrdtool failure and gracefully degrade (its `catch (Throwable $e) {
+Log::warning(...); ... }` block is what normally handles this) instead
+produced a raw fallback `500 Server Error` page with NO corresponding log
+entry at all — because the catch block's own `Log::warning()` call failed
+trying to open the now-unwritable file, escalating a handled, harmless
+failure into an unhandled one. Toggling the file's ownership back to
+`www-data:www-data` made the identical request succeed gracefully again
+(`state: unavailable`, real WARNING log lines written); toggling it back
+to `root:root` reproduced the 500 again — proven with a real on/off test,
+not asserted from a single observation.
+
+**Fixed the same way this codebase already fixes this exact bug class**:
+`docker/php/entrypoint.sh` (shared by `boss-app`/`boss-worker`/
+`boss-whatsapp-worker`/`boss-scheduler`, already had a self-healing `/tmp`
+permission loop from the earlier "419 on Riwayat" investigation) gained a
+second line in the SAME periodic loop —
+`chown www-data:www-data storage/logs/*.log 2>/dev/null || true` — applied
+once at container start and every ~30s for the container's lifetime.
+`storage/logs/` ITSELF is already `www-data:www-data 0775` (a fresh daily
+rotation file is created by www-data fine); only an EXISTING file that a
+root session has touched needs correcting, so this targets `*.log` files
+specifically, not a recursive directory chown. Required a full
+`docker compose up -d --build` (entrypoint.sh is `COPY`'d into the image at
+build time, not bind-mounted) + the now-standard `docker compose restart
+boss-nginx` afterward (stale FastCGI upstream IP on `boss-app` recreate,
+same rule documented at the end of the "Fragment+Reconcile Routing"
+section). **Verified for real, not just deployed**: after recreating,
+deliberately re-broke a log file's ownership (`chown root:root`), waited
+31 seconds, and confirmed the loop had corrected it back to
+`www-data:www-data` on its own — the self-healing mechanism genuinely
+works, not just present in the file.
+
+**One hypothesis chased at length and conclusively RULED OUT, not left
+ambiguous**: whether the float→int coercion `E_DEPRECATED` notice itself
+(from passing a non-integer float to `getTrafficHistory()`'s/
+`getMetricHistory()`'s `int $rangeSeconds` parameter, pre-fix) was what
+caused the 500 — plausible on its face, since Laravel's `HandleExceptions`
+registers a global error handler that normally converts a reported PHP
+error into a thrown `ErrorException` if `error_reporting()` includes that
+level (confirmed this server's real `error_reporting()` is `-1`/`E_ALL`,
+which DOES include `E_DEPRECATED`). Directly disproven by reading Laravel
+12's own `HandleExceptions::handleError()` source and reproducing against
+it live (a raw script bootstrapping the framework exactly like
+`public/index.php`, not via `artisan tinker` — PsySH installs its own
+error handler that behaves differently and would have given a false
+negative here): deprecation-level errors (`isDeprecation($level)`) are
+special-cased to a SEPARATE `handleDeprecationError()` path that only logs
+to a "deprecations" channel (if configured) — they are deliberately NEVER
+converted into a thrown `ErrorException`, unlike every other PHP error
+level. This was checked and eliminated BEFORE settling on Bug #2 above,
+per instruction not to guess the root cause.
+
+**Verified end-to-end for real, both modals, after both fixes** (real
+`curl` through `boss-nginx`, not `Livewire::test()`): DeviceHistoryModal
+(device #2, CPU metric) and DeviceTrafficGraph (device #2, interface
+`gpon_1/3/1` — genuinely selected via the same `changeDevice()` handler a
+real row-click dispatches) both return `200` with `state`/`modalState:
+'ok'` and real per-sensor/traffic data for a 2026-06-01 → 2026-06-10
+custom range — where before the fix, the identical request 500'd (log
+root-owned) or gracefully failed with zero real data (log writable, Bug #1
+still present). Full regression suite green at 776/776, Pint clean.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Network;
 
+use App\Exceptions\LibreNmsDataUnavailableException;
 use App\Livewire\Network\DeviceMonitoringList;
 use App\Models\Tenant;
 use App\Models\User;
@@ -204,5 +205,103 @@ class DeviceMonitoringListLivewireTest extends TestCase
         $user = User::factory()->create(['tenant_id' => $tenant->id]);
 
         Livewire::actingAs($user)->test(DeviceMonitoringList::class)->assertForbidden();
+    }
+
+    // v0.8.4 Bagian D
+
+    public function test_open_history_dispatches_the_event_a_sibling_modal_listens_for(): void
+    {
+        $this->app->instance(LibreNmsService::class, $this->fakeService());
+
+        Livewire::actingAs($this->admin())
+            ->test(DeviceMonitoringList::class)
+            ->call('openHistory', 2, 'c300.kaliwungu')
+            ->assertDispatched('device-history-requested', deviceId: 2, deviceName: 'c300.kaliwungu');
+    }
+
+    public function test_open_edit_dispatches_the_event_a_sibling_form_listens_for(): void
+    {
+        $this->app->instance(LibreNmsService::class, $this->fakeService());
+
+        Livewire::actingAs($this->admin())
+            ->test(DeviceMonitoringList::class)
+            ->call('openEdit', 2)
+            ->assertDispatched('device-edit-requested', deviceId: 2);
+    }
+
+    public function test_remove_device_reloads_the_list_on_success(): void
+    {
+        $service = new class extends LibreNmsService
+        {
+            public array $devices = [];
+
+            public bool $deleted = false;
+
+            public function listDevices(): array
+            {
+                return $this->devices;
+            }
+
+            public function deleteDevice(int $deviceId): void
+            {
+                $this->deleted = true;
+                $this->devices = [];
+            }
+        };
+        $service->devices = [
+            ['device_id' => 2, 'hostname' => 'c300', 'sys_name' => 'c300', 'status' => true, 'uptime' => 1000],
+        ];
+        $this->app->instance(LibreNmsService::class, $service);
+
+        Livewire::actingAs($this->admin())
+            ->test(DeviceMonitoringList::class)
+            ->assertCount('rows', 1)
+            ->call('removeDevice', 2)
+            ->assertSet('rows', []);
+
+        $this->assertTrue($service->deleted);
+    }
+
+    public function test_remove_device_shows_librenms_own_error_and_keeps_the_row(): void
+    {
+        $service = new class extends LibreNmsService
+        {
+            public function listDevices(): array
+            {
+                return [['device_id' => 2, 'hostname' => 'c300', 'sys_name' => 'c300', 'status' => true, 'uptime' => 1000]];
+            }
+
+            public function deleteDevice(int $deviceId): void
+            {
+                throw new LibreNmsDataUnavailableException('Device does not exist');
+            }
+        };
+        $this->app->instance(LibreNmsService::class, $service);
+
+        Livewire::actingAs($this->admin())
+            ->test(DeviceMonitoringList::class)
+            ->call('removeDevice', 2)
+            ->assertSet('removeErrorMessage', 'Device does not exist')
+            ->assertCount('rows', 1);
+    }
+
+    public function test_remove_device_requires_monitoring_manage_permission(): void
+    {
+        // Deliberately NOT the `noc` role — both super_admin and noc
+        // already carry `monitoring.manage` too (RolesAndPermissionsSeeder),
+        // so a role-based test can't isolate `.view`-without-`.manage`.
+        // A direct permission grant with no role at all proves the guard
+        // is real, not accidentally satisfied by a role also carrying
+        // `.manage`.
+        $tenant = Tenant::factory()->create();
+        $user = User::factory()->create(['tenant_id' => $tenant->id]);
+        $user->givePermissionTo('monitoring.view');
+
+        $this->app->instance(LibreNmsService::class, $this->fakeService());
+
+        Livewire::actingAs($user)
+            ->test(DeviceMonitoringList::class)
+            ->call('removeDevice', 2)
+            ->assertForbidden();
     }
 }

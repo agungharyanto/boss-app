@@ -5173,6 +5173,72 @@ effect (boss-radius stays disabled, `/radius/monitor` showed `requests:
 0` for it) before removal. Deleted per Agung's explicit confirmation;
 `radcheck` now holds only the permanent QA fixture `085166445368`.
 
+### `boss.bajastu.id` — domain + TLS activated (first real HTTPS in this project)
+
+**`docs/DEPLOYMENT.md`'s own "HTTPS (menyusul, belum di v0.1.0)" section,
+deferred since the very first sprint, finally executed** — this server
+had no domain pointed at it until now (`APP_URL` was the bare IP). DNS
+for `boss.bajastu.id` → `45.123.142.242` confirmed independently (not
+just trusted) via `getent hosts` before touching anything.
+
+**Two-phase nginx rollout, not one file** — nginx refuses to start if
+`ssl_certificate` references a file that doesn't exist yet, so the
+domain's port-80 block (ACME challenge + redirect) had to be live and
+reloaded BEFORE requesting a certificate, with the port-443 block added
+as a genuinely separate file (`boss-domain-ssl.conf`) only once the
+certificate existed on disk. `app.conf`'s existing `server_name _;`
+catch-all block (IP access) was never touched — nginx resolves the more
+specific `server_name boss.bajastu.id` block for domain requests, the
+catch-all keeps serving bare-IP requests exactly as before, unredirected
+— **both access paths verified working end-to-end for real** (full
+login → dashboard flow via `curl`, both `https://boss.bajastu.id` and
+`http://45.123.142.242`, including checking the session cookie actually
+carries `Secure` + the right domain scope for the HTTPS path).
+
+**New `certbot` service** (`certbot/certbot:v2.11.0`, webroot mode —
+never `standalone`, so it needs no listener/port of its own, just the
+shared `certbot_www` volume `boss-nginx` also serves
+`/.well-known/acme-challenge/` from) runs a `certbot renew` loop every
+12h (Certbot's own documented recommendation) as its long-lived command;
+the FIRST certificate came from a one-off `docker compose run --rm
+--entrypoint certbot certbot certonly --webroot ...` instead — `certonly`
+doesn't fit a long-lived container command the way `renew` does.
+**Real gotcha hit issuing the first certificate**: `docker compose run
+--rm certbot certonly ...` silently ignored the `certonly ...` command
+entirely and ran the service's own custom `entrypoint:` (the renew loop)
+instead — Compose's `run <service> <command>` only overrides the
+container's CMD, not a service-level `entrypoint:` override, so the
+extra args were never actually passed to `certbot`. Fixed by explicitly
+passing `--entrypoint certbot` to reset it. Left a genuine leftover
+container running the infinite renew-loop in the background
+(`boss-app-certbot-run-...`) that had to be stopped/removed by hand
+before retrying — worth remembering for any FUTURE one-off `docker
+compose run` against a service that has its own custom `entrypoint:`.
+
+**No email registered with Let's Encrypt** (`--register-unsafely-without-
+email`) — a deliberate choice to avoid using anyone's personal email for
+this server's SSL renewal notifications without being asked; renewal
+itself doesn't depend on having an email on file (the `certbot` daemon
+loop handles that automatically), only expiry-warning notifications
+would be missed. Can be added later via `certbot update_account --email
+...` if wanted.
+
+**`APP_URL` updated in BOTH `.env` files** (`https://boss.bajastu.id`) —
+root `.env` (what `docker-compose.yml`'s `env_file:` actually feeds every
+PHP container, confirmed via `config('app.url')` matching root's value
+even though `app/.env` had a stale, different value) is the one that
+matters at runtime; `app/.env` was updated too purely for consistency/
+avoiding a misleading stale value for anyone reading that file directly,
+not because it has any live effect while shadowed by root's. Neither
+`.env.example` was touched — both stay generic placeholders
+(`APP_URL=http://YOUR_SERVER_IP` in root's example), per this project's
+established "templates stay generic, never a specific real server's
+value" convention. Required the now-standard `docker compose up -d
+boss-app boss-worker boss-whatsapp-worker boss-scheduler` (env var
+changes need a recreate, not just a restart) followed by `docker compose
+restart boss-nginx` (stale FastCGI upstream IP rule, same as every prior
+`boss-app` recreate in this file) — both done, both verified.
+
 ## WireGuard Per-NAS SNAT — global gateway bug fixed, real production incident (v0.8.4)
 
 **P0 found and root-caused via direct evidence during NAS #3 setup, not

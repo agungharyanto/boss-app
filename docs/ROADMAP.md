@@ -26,6 +26,8 @@
 | v0.7.7  | Network         | GenieACS Testing Refinements  | Verifikasi nyata v0.7.3-v0.7.5 ke device pelanggan asli, status Online/Offline dirombak jadi hybrid GenieACS (bukan router-ping), DataTables UI + halaman Detail, Remove/Ganti Modem, Cek Status Device, auto-matching legacy berkelanjutan, import 561 customer MixRadius, NIK encryption + CID — lihat bagian "Branch v0.7.x-testing-refinements" di bawah untuk detail lengkap | Selesai |
 | v0.8.0  | Network         | LibreNMS Install              | Install LibreNMS + MariaDB terpisah, onboarding router `test-x86-bajastu` dengan polling data nyata | Selesai |
 | v0.8.1  | Network         | OLT Onboarding & Dynamic Routing | OLT Credential Registry (manufacturer/model/device, SNMP/telnet/ssh), redesign addressing WireGuard ke `/30` per-NAS, OSPF dicoba lalu dinonaktifkan (referensi), fragment+reconcile dynamic routing, fix akar masalah SNMP OLT (kredensial) — 3 OLT real ter-onboard dengan bukti polling nyata | Selesai |
+| v0.8.2  | Network         | Dashboard Monitoring          | LibreNmsService (hybrid REST API + rrdtool), device list + traffic graph di `/monitoring`, add/edit/remove device manual, self-monitoring host (SNMP) + container (docker-socket-proxy, grouped VPN/LibreNMS/Core) — **tag digabung dengan v0.8.3, lihat catatan di bawah** | Selesai |
+| v0.8.3  | Network         | RX Power History, Custom Range & API | RX Power History terjadwal di Detail CPE, tab Custom Range dipakai ulang di 3 modal riwayat, REST API `/api/v1/monitoring/*` + RX Power API (foothold bot WhatsApp masa depan) — **satu branch/tag dengan v0.8.2 karena alasan workflow sesi, lihat catatan di bawah** | Selesai |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
 | v0.11.0 | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
@@ -888,3 +890,88 @@ gotcha `network_mode`, bug env var container lama, cache DNS nginx, dsb)
 ada di `CLAUDE.md` bagian "WireGuard /30 Per-NAS Tunnel Blocks", "OSPF
 Dynamic Routing", "Fragment+Reconcile Routing", dan "LibreNMS OLT
 Onboarding".
+
+## v0.8.2-v0.8.3 — Dashboard Monitoring, RX Power History, Custom Range & API (branch `v0.8.2-monitoring-fixes`, merged + tagged `v0.8.3` 2026-08-24)
+
+**Deviasi BOSS-002 eksplisit**: v0.8.2 (Dashboard Monitoring) dan v0.8.3
+(RX Power History/Custom Range/Self-Monitoring/API) dikerjakan berurutan
+dalam satu sesi/branch panjang (`v0.8.2-monitoring-fixes`) alih-alih dua
+branch terpisah — pola yang sama seperti v0.8.0-v0.8.1 di atas. Ditag
+**sekali sebagai `v0.8.3`** (state akhir yang lebih lengkap, mencakup
+scope keduanya) alih-alih dua tag terpisah, supaya histori git tidak
+membingungkan — lihat pesan tag `v0.8.3` sendiri untuk pengakuan eksplisit
+ini. Merge ke `develop` lalu `main`, regresi 776/776 hijau di setiap titik
+verifikasi (branch, develop, main).
+
+**v0.8.2 — Dashboard Monitoring**: `LibreNmsService` (hybrid REST API +
+`rrdtool xport` — LibreNMS versi ini tidak punya endpoint JSON untuk
+traffic history sama sekali, jadi baca file RRD LibreNMS sendiri langsung
+lewat volume bersama, sama seperti pola `vpn_pki`/`freeradius_nas_config`
+yang sudah ada). Device list + traffic graph reusable di `/monitoring`.
+Add/Edit/Remove device manual (SNMP onboarding generik + manajemen
+LibreNMS asli, `monitoring.manage` — mutating call pertama ke LibreNMS di
+codebase ini). Self-monitoring host (VM server BOSS App sendiri, lewat
+SNMP) dan container (`docker-socket-proxy`, read-only, `CONTAINERS=1`
+saja — satu-satunya container yang pernah mount socket Docker asli),
+dikelompokkan visual VPN/LibreNMS/BOSS App Core/Lainnya lewat allow-list
+eksplisit nama container (bukan tebak regex/prefix).
+
+**v0.8.3 — RX Power History, Custom Range, API**: Riwayat RX Power
+terjadwal (poll tiap 20 menit) di halaman Detail CPE, dengan tab "Custom"
+(rentang tanggal bebas, agregasi SQL otomatis dari panjang rentang
+sesungguhnya) yang dipakai ulang di 3 modal riwayat berbeda (RX Power CPE,
+CPU/Memory/Suhu Device, Traffic Device) lewat satu trait + satu partial
+Blade bersama — bukan tiga implementasi terpisah. REST API baru
+(`/api/v1/monitoring/*`, `/api/v1/cpe-devices/{id}/signal-history`) —
+fondasi untuk integrasi bot WhatsApp masa depan (bot-nya sendiri belum
+dibangun sesi ini), read-only kecuali `PATCH`/`DELETE` device
+(`monitoring.manage`).
+
+**Dua bug infrastruktur nyata ditemukan dan diperbaiki di sesi yang
+sama, kelas bug yang sudah berulang kali muncul di riwayat proyek ini
+("session root-run bikin file/volume bersama jadi tidak bisa ditulis
+www-data")**:
+1. **`WhatsappQueueNames` crash di setiap eksekusi** (root cause
+   `~12GB` `storage/logs/laravel.log`) — `Eloquent\Collection::unique()`
+   default ke Model-keyed uniqueness meski item-nya sudah bukan Model
+   lagi, crash total di string. Konsekuensi nyata: `boss-whatsapp-worker`
+   kemungkinan besar TIDAK PERNAH berhasil menjalankan `queue:work` sama
+   sekali selama bug ini ada — pengiriman WhatsApp diduga terhenti total.
+   Diperbaiki (`->toBase()`), `LOG_STACK` diganti `daily` supaya bug
+   sejenis di masa depan tidak lagi membengkak tanpa batas.
+2. **500 nyata di tombol "Terapkan" Custom Range** (Device/Traffic
+   History) — dua bug bertumpuk: (a) `Carbon::diffInSeconds()` mengembalikan
+   nilai NEGATIF untuk urutan pemanggilan yang dipakai, membalik jendela
+   waktu `rrdtool` sehingga Custom Range di dua modal itu TIDAK PERNAH
+   benar-benar mengembalikan data sejak fitur ini dibuat; (b) file log
+   hari itu kebetulan root-owned (sesi `docker compose exec` sebelumnya),
+   membuat `catch(Throwable) -> Log::warning()` di dalam kode yang
+   harusnya gagal-anggun malah gagal juga, mengeskalasi jadi 500 mentah.
+   Kedua diperbaiki: `abs()`+cast int untuk yang pertama, loop self-healing
+   permission (`docker/php/entrypoint.sh`, juga menutup `/tmp` yang sudah
+   diinvestigasi terpisah sebelumnya, lihat CLAUDE.md "419 on Riwayat")
+   untuk yang kedua.
+
+Detail teknis lengkap ada di `CLAUDE.md` — cari bagian "Dashboard
+Monitoring (v0.8.2)", "Dashboard Monitoring Fixes", "Branch
+Consolidation...", "RX Power History (v0.8.3)", "Dashboard Monitoring
+REST API", "Host Self-Monitoring via SNMP", "Container Stats via
+docker-socket-proxy", "Riwayat/Edit/Remove for Monitoring Devices",
+"Intermittent 419 Page Expired", "419 on Riwayat — Amendment", "Custom
+Date Range Tab + Container Grouping", dan "Custom Range 500 on
+Device/Traffic History".
+
+**Backlog terbuka dari sesi ini (belum dikerjakan, dicatat eksplisit
+supaya tidak hilang)**:
+- **Root cause pasti drift permission `/tmp` dan `storage/logs`** —
+  self-healing loop sudah ada dan terbukti bekerja (verifikasi nyata:
+  sengaja dirusak, terbukti pulih sendiri dalam satu siklus ~30 detik),
+  tapi MEKANISME PERSIS yang menyebabkan drift-nya (bukan cuma sesi
+  `docker compose exec` root yang sudah teridentifikasi sebagai satu
+  sumber) belum sepenuhnya dipastikan untuk `/tmp` — dicatat sebagai
+  pertanyaan terbuka, bukan sudah selesai diselesaikan akar masalahnya.
+- **Riset syslog** — sudah diriset di sesi ini, BELUM diimplementasikan.
+  Butuh keputusan sensitif-produksi terpisah sebelum dikerjakan (belum
+  dijadwalkan ke versi manapun).
+- **Audit "API wajib di semua fitur" (BOSS-006)** — masih menunggu
+  keputusan terpisah, belum dijadwalkan.

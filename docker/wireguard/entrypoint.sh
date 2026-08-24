@@ -337,9 +337,9 @@ while true; do
     # match via `grep -qw`, so a value already applied in an earlier cycle
     # is skipped rather than re-added every ~10s.
     #
-    # v0.8.4 — SAME loop also reconciles one per-NAS SNAT rule for traffic
-    # destined to FreeRADIUS, fixing a real production bug: the old
-    # single static rule (`-s $WG_SUBNET_CIDR -j SNAT --to-source
+    # v0.8.4 — SAME loop also reconciles one per-NAS reverse-NAT rule for
+    # traffic destined to FreeRADIUS, fixing a real production bug: the
+    # old single static rule (`-s $WG_SUBNET_CIDR -j SNAT --to-source
     # $WG_NAS_GATEWAY_IP`, applied ONCE at container start, removed above)
     # matched the WHOLE /24 — every NAS's block, not just the one
     # WG_NAS_GATEWAY_IP was actually pinned for — so a SECOND NAS's own
@@ -347,18 +347,40 @@ while true; do
     # NAS's gateway address instead of its own, and FreeRADIUS's reply
     # then went to the wrong address and was silently lost. Confirmed for
     # real via packet capture on a live NAS (see CLAUDE.md's own account
-    # of this incident) before writing this fix — the request genuinely
-    # arrived at FreeRADIUS with the WRONG source IP, not "arrived nowhere".
+    # of this incident) before writing the FIRST version of this fix.
     #
-    # Each $ADDRESSES_DIR/*.conf fragment already IS "gateway_ip/30" —
-    # exactly the two pieces of data this rule needs, no separate CIDR
-    # arithmetic required: used AS-IS for `-s` (iptables network-aligns a
-    # host+mask automatically, so "172.23.195.5/30" as a MATCH criterion
-    # is identical to "172.23.195.4/30" — it already means "this NAS's
-    # own /30 block, not the whole /24"), and stripped of its `/30` suffix
-    # for `--to-source` (the exact address this cycle's `ip address add`
-    # above just applied to wg0 — this node genuinely owns that address,
-    # so SNAT-ing to it is always valid).
+    # AMENDMENT — the first version of this fix (SNAT --to-source
+    # $gw_ip, i.e. this NAS's own wg0-side gateway address, e.g.
+    # 172.23.195.5) was ITSELF wrong, in a way ping could never catch:
+    # FreeRADIUS's per-NAS `clients {}` block (docker/freeradius's own
+    # FreeradiusVirtualServerService-generated config) is scoped to
+    # `ipaddr = 172.28.0.0/24` — boss-network — NOT the 172.23.195.0/24
+    # WireGuard tunnel subnet. SNAT-ing to a 172.23.195.x address made
+    # every real RADIUS request arrive as an "unknown client" to
+    # FreeRADIUS, which silently drops it (confirmed verbatim in
+    # /opt/var/log/radius/radius.log: "Ignoring request ... from unknown
+    # client 172.23.195.5 ... proto udp") — indistinguishable from a
+    # network-level timeout from the NAS's own point of view, which is
+    # exactly why the "verified for real" ping test in the first version
+    # of this fix never caught it: ICMP has no client-ACL concept at all,
+    # so it happily succeeded through a rule that real RADIUS UDP traffic
+    # could never actually pass. Fixed by switching to plain MASQUERADE
+    # instead of SNAT to a specific address — MASQUERADE rewrites the
+    # source to whatever address THIS node's own outgoing interface
+    # (eth0, boss-network) actually has, which is always inside
+    # 172.28.0.0/24 by construction, on every node, with no per-node
+    # config needed. (The OTHER masquerade rules in this file —
+    # TR069_MANAGEMENT_SUBNET/OLT_MANAGEMENT_SUBNET — are NOT the same
+    # bug and were correctly left alone: those rewrite traffic in the
+    # OPPOSITE direction, a boss-network service reaching OUT into a
+    # NAS's own LAN, where the NAS's `allowed-address`/firewall instead
+    # needs to see a trusted wg0-side address — 172.23.195.x is the
+    # CORRECT target there, not a mistake to copy from.)
+    #
+    # Each $ADDRESSES_DIR/*.conf fragment is still "gateway_ip/30" — only
+    # the `-s` match (this NAS's own /30 block, iptables network-aligns a
+    # host+mask automatically) is used now, not the address itself as a
+    # rewrite target.
     #
     # Idempotency via `iptables -C` (the standard idiomatic check-before-
     # add for iptables, mirroring the ip-address grep check above, which
@@ -381,12 +403,11 @@ while true; do
         fi
 
         if [ -n "$addr" ]; then
-            gw_ip="${addr%/*}"
             active_snat_nas["$nas_id"]=1
 
-            if ! iptables -t nat -C POSTROUTING -s "$addr" -d "$FREERADIUS_INTERNAL_IP" -j SNAT --to-source "$gw_ip" -m comment --comment "boss-vpn-snat-freeradius-${nas_id}" 2>/dev/null; then
-                iptables -t nat -A POSTROUTING -s "$addr" -d "$FREERADIUS_INTERNAL_IP" -j SNAT --to-source "$gw_ip" -m comment --comment "boss-vpn-snat-freeradius-${nas_id}" \
-                    2>&1 || echo ">> [reconcile] failed to add SNAT rule for ${nas_id}, will retry next cycle"
+            if ! iptables -t nat -C POSTROUTING -s "$addr" -d "$FREERADIUS_INTERNAL_IP" -j MASQUERADE -m comment --comment "boss-vpn-snat-freeradius-${nas_id}" 2>/dev/null; then
+                iptables -t nat -A POSTROUTING -s "$addr" -d "$FREERADIUS_INTERNAL_IP" -j MASQUERADE -m comment --comment "boss-vpn-snat-freeradius-${nas_id}" \
+                    2>&1 || echo ">> [reconcile] failed to add reverse-NAT rule for ${nas_id}, will retry next cycle"
             fi
         fi
     done
@@ -403,6 +424,47 @@ while true; do
             [ -n "$line_no" ] && { iptables -t nat -D POSTROUTING "$line_no" 2>/dev/null || true; }
         fi
     done
+
+    # v0.8.4 — write this node's own `wg show wg0 dump` (tab-delimited,
+    # machine-parseable — NOT the pretty-printed default `wg show` output)
+    # to the shared vpn_wg_data volume, which App\Console\Commands\
+    # VpnSyncRouteFragments (boss-app) already mounts read-only-in-practice
+    # at /vpn-wg-data. This REPLACES that command's old mechanism of
+    # logging into the NAS's own router via RouterOS API just to ask
+    # "which of the 3 pool nodes is your tunnel currently on" — that
+    # question is fully answerable from THIS side instead (this node
+    # already knows, from its own live wg0 state, which NAS public keys it
+    # currently has a handshake with) — see CLAUDE.md's "Router API Login
+    # Removal" section for the full investigation/reasoning. Confirmed
+    # this is genuinely necessary and not something `boss-app` could do
+    # unprompted: `boss-app` has no Docker exec access into this container
+    # (deliberate stance since v0.6.2) and no wg0 interface of its own —
+    # a file write from the SAME container that owns the interface is the
+    # only path, same idiom as the `heartbeat-*` file immediately below.
+    #
+    # Line 1 of `wg show dump` is the INTERFACE line
+    # (private-key\tpublic-key\tlisten-port\tfwmark) — field 1 (this
+    # node's own private WireGuard key) is deliberately replaced with the
+    # literal string REDACTED before writing. Not fixing a real
+    # vulnerability (this exact same private key already sits in this
+    # same shared volume as `server_private.key`, readable by boss-app
+    # today, a pre-existing accepted posture — see wg_peers_dir's own
+    # docblock in config/services.php) — just no reason to needlessly
+    # duplicate a secret into a second file when the reader
+    # (VpnSyncRouteFragments) never needs anything from that field beyond
+    # column 3 (listen-port). Every subsequent line is one PEER
+    # (public-key\tpreshared-key\tendpoint\tallowed-ips\tlatest-handshake
+    # \ttransfer-rx\ttransfer-tx\tpersistent-keepalive) — VpnSyncRouteFragments
+    # only reads columns 1 (public-key, matched against
+    # vpn_accounts.public_key) and 5 (latest-handshake, a Unix timestamp,
+    # 0 meaning "never handshaked").
+    #
+    # Atomic write (tmp file + `mv`, same idiom already used for the
+    # per-NAS address/route fragments elsewhere in this script) — a
+    # reader on the boss-app side must never observe a partially-written
+    # file mid-write.
+    wg show wg0 dump 2>/dev/null | awk 'BEGIN{FS=OFS="\t"} NR==1{$1="REDACTED"} {print}' > "$WG_DIR/wg-status-${NODE_HOSTNAME}.tmp" \
+        && mv "$WG_DIR/wg-status-${NODE_HOSTNAME}.tmp" "$WG_DIR/wg-status-${NODE_HOSTNAME}"
 
     date +%s > "$WG_DIR/heartbeat-${NODE_HOSTNAME}"
 

@@ -5345,6 +5345,81 @@ still had not reconnected as of this fix landing** — force-disconnected
 RADIUS auth, no WireGuard/SNAT involvement), reported as-is, not
 investigated further as part of this incident.
 
+## Router API Login Removal — `VpnSyncRouteFragments` (v0.8.4)
+
+**Symptom that triggered this**: `test-x86-bajastu`/`ro-hotspot.bajastu.id`'s own router logs were full of
+`user boss-apps logged in/out via api` noise, once a minute, forever — traced to
+`VpnSyncRouteFragments` (`->everyMinute()`) calling `RouterOsGateway::currentWireguardEndpointPort()` on
+every active WireGuard NAS's own router just to answer "which of the 3 pool nodes is your tunnel currently
+on" (needed because auto-switch, v0.6.4, happens entirely client-side on the router, invisible to boss-app
+any other way through the router's own state).
+
+**Investigated before touching anything, per Agung's own instruction**: confirmed every OTHER piece of data
+this command needs (`router_ip`/`gateway_ip` from `vpn_wireguard_nas_blocks`, `tr069_management_subnet` from
+`nas`, OLT existence from `OltDevice`) already lives in `boss_db` — the router login was purely for "which
+node" and nothing else. Also confirmed this is the **only** scheduled command in `routes/console.php` still
+doing this — `CpeDeviceStatusSyncService` already stopped calling `RouterOsGateway::pingHost()` back in
+v0.7.7 (a stale docblock mention was the only remaining trace); every other `RouterOsGateway` consumer
+(`NasService`, `OltDeviceService`, `NasApiUserProvisioningService`) is triggered by a real user action
+(Test Connection button, provisioning modal), not scheduled polling, so those logins are legitimate and
+out of scope.
+
+**Original instruction said "docker exec into the 3 node containers" — corrected before implementing, not
+followed literally.** `boss-app` has **no Docker exec access to any other container** (deliberate stance
+since v0.6.2, already the reason `CoaService`, v0.6.5, uses a shared-volume queue instead of exec'ing into
+`freeradius`) — a literal `docker exec` from `VpnSyncRouteFragments` would have been a real, unreviewed
+security-posture regression. The actual mechanism, confirmed to be exactly the pattern
+`App\Console\Commands\VpnCheckNodeHealth` already established (that command determines "is this node
+container alive" purely from a `heartbeat-{hostname}` file each node writes into the shared `vpn_wg_data`
+volume, which `boss-app` already mounts, zero network/exec involved): each WireGuard node's own
+`docker/wireguard/entrypoint.sh` reconcile loop (the same ~10s loop that already applies address/peer
+fragments and the per-NAS SNAT rules) now **also** writes `wg show wg0 dump` (tab-delimited, NOT the
+pretty-printed default output) to `wg-status-{NODE_HOSTNAME}` in that same volume, atomically (tmp file +
+`mv`, same idiom as every other fragment write in this script). `VpnSyncRouteFragments` reads all 3 files,
+matches `vpn_accounts.public_key` against each file's peer lines, and picks whichever node has the
+**freshest `latest-handshake`** for that key — since a NAS's WireGuard peer is provisioned onto all 3 nodes
+permanently (only one has a genuinely live handshake at a time). `HANDSHAKE_STALE_THRESHOLD_SECONDS = 300`
+(more generous than the disabled OSPF `handshake-watcher.sh`'s 150s — that mechanism needed sub-minute
+reaction to avoid flapping a route in/out of a live routing protocol; this command runs once a minute and
+only needs "plausibly still there", not real-time precision).
+
+**Private key handling**: `wg show wg0 dump`'s line 1 (the interface line) includes this node's own
+WireGuard **private** key in column 1 — `entrypoint.sh`'s write step replaces it with the literal string
+`REDACTED` via `awk` before writing to the shared file. Not closing a real new vulnerability (this exact
+same private key already sits in the same shared volume as `server_private.key`, readable by `boss-app`
+today — a pre-existing, already-accepted posture documented on `wg_peers_dir`'s own config comment) — just
+no reason to needlessly duplicate a secret into a second file when `VpnSyncRouteFragments` never reads
+anything from that field beyond column 3 (listen-port).
+
+**Verified for real, not just via the test suite**:
+- Route fragment output cross-checked against the router's own ground truth at the exact same moment:
+  `RouterOsApiGateway`-equivalent direct query showed `current-endpoint-port=51820` for BOTH NAS #1 and
+  NAS #3 (both had auto-switched to node1 after the 3-node container rebuild this change required); the
+  new file-based mechanism independently computed `172.28.0.11` (node1's IP) for both — byte-identical
+  result, confirmed via the router's own answer, not assumed correct.
+- Router log evidence: a clean **11-minute gap with zero `boss-apps` login/logout entries**
+  (`ro-hotspot.bajastu.id`, 05:15:20 → 05:26:11) spanning **5 full scheduler cycles** of the new code
+  (confirmed via `boss-scheduler`'s own log: 05:20:29, 05:22:32, 05:23:33, 05:24:34, 05:25:36, each
+  `DONE` in ~365-400ms) — the only two entries inside that window belong to this same investigation's own
+  manual diagnostic queries moments later (05:26:11/05:26:23), not the scheduled command; every entry
+  BEFORE 05:15 (the old code's last run) shows the old ~60-120s cadence exactly matching the pre-refactor
+  mechanism, confirming the "before" baseline was real and the "after" gap is a genuine change, not an
+  artifact of low traffic.
+- Full regression suite: 778/778 green (2 new cases: a stale-handshake-beyond-threshold NAS is treated as
+  undetectable exactly like the old "router unreachable" case, and — the one genuinely new scenario this
+  mechanism introduces that the old router-asks-once-directly approach never had to handle — when the same
+  public key appears with a LIVE entry on one node and a long-stale entry on another simultaneously (a NAS
+  mid-auto-switch, or a stale status file from a node that hasn't been provisioned that NAS in a while),
+  the freshest handshake wins, not whichever status file happened to be read first).
+
+**Rollback, if ever needed**: this is a single self-contained commit (`docker/wireguard/entrypoint.sh` +
+`VpnSyncRouteFragments.php` + its test file) — `git revert` it, then `docker compose up -d --build
+wireguard wireguard-node2 wireguard-node3` to restore the old `entrypoint.sh` behavior (the old
+`RouterOsGateway`-based command code needs no container rebuild, it's plain PHP). A rebuild of the 3
+WireGuard nodes is unavoidable either direction (this file is `COPY`'d into the image at build time, not
+bind-mounted) — same "brief auto-switch reconnect blip, self-heals in ~10-20s" risk already accepted for
+every prior `entrypoint.sh` change in this file, not a new risk class introduced by this one.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

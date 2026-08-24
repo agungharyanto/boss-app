@@ -35,6 +35,22 @@ mkdir -p app/database/seeders
 cp -f stubs/laravel-app/database/seeders/RolesAndPermissionsSeeder.php \
       app/database/seeders/RolesAndPermissionsSeeder.php
 
+echo "=== [5/5] Perbaiki ownership storage/ agar bisa ditulis www-data ==="
+# Real bug ditemukan & diperbaiki v0.8.x: `composer create-project` di atas
+# jalan sebagai ROOT di dalam container `docker run` sementara, menulis
+# langsung ke ./app yang di-bind-mount dari host — skeleton Laravel sendiri
+# sudah menyertakan storage/framework/{cache,sessions,testing} sebagai
+# direktori KOSONG (cuma berisi .gitignore), jadi ketiganya ikut ter-scaffold
+# dengan pemilik root:root. boss-app's php-fpm jalan sebagai www-data (uid/gid
+# 82, Alpine) — tanpa langkah ini, www-data TIDAK PERNAH bisa menulis file
+# session Laravel sendiri, yang bermuara ke 419 Page Expired terus-menerus
+# (CSRF token di session gagal tersimpan) begitu server pertama kali
+# dipakai. storage/logs dan bootstrap/cache kebetulan tidak kena bug ini
+# (php-fpm sendiri yang pertama kali membuatnya saat runtime, bukan
+# create-project), tapi di-chown juga di sini sebagai jaga-jaga, bukan cuma
+# tiga direktori yang sudah terbukti kena.
+chown -R 82:82 app/storage app/bootstrap/cache
+
 echo ">> Selesai. Langkah selanjutnya:"
 echo "   1. Salin APP_KEY: docker compose run --rm boss-app php artisan key:generate --show"
 echo "      lalu tempel ke .env (APP_KEY=...)"

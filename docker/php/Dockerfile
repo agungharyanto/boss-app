@@ -60,11 +60,30 @@ RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
 # see CLAUDE.md "Multi-Protocol VPN (v0.6.3)").
 RUN apk add --no-cache wireguard-tools
 
+# rrdtool: v0.8.2 — LibreNmsService::getTrafficHistory() shells out to
+# `rrdtool xport --json` (Process facade) directly against LibreNMS's own
+# RRD files (shared read-only volume, see docker-compose.yml's boss-app
+# librenms_data mount) — LibreNMS's REST API has no raw time-series JSON
+# endpoint in this version (confirmed by reading routes/api.php directly,
+# see CLAUDE.md's "Dashboard Monitoring (v0.8.2)" section). Own layer,
+# same cache-locality reasoning as wireguard-tools above — added after
+# the slow ext-sockets compile so it doesn't invalidate that layer's
+# cache.
+RUN apk add --no-cache rrdtool
+
 # Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# v0.8.x — self-heals /tmp's permission (1777) at container start AND
+# periodically for the container's whole lifetime, not just once at
+# boot — see entrypoint.sh's own docblock for the real "419 on Riwayat"
+# investigation this fixes and why a one-time chmod wasn't enough.
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 WORKDIR /var/www/html
 
 EXPOSE 9000
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["php-fpm"]

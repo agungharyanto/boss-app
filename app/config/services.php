@@ -180,4 +180,34 @@ return [
         'nbi_internal_ip' => env('GENIEACS_NBI_INTERNAL_IP'),
     ],
 
+    // v0.8.2 — LibreNMS REST API (v0.8.1 already brought the container up
+    // with token auth, see .env's LIBRENMS_API_URL/LIBRENMS_API_TOKEN).
+    // Container-to-container URL only, no host port published — same
+    // "network isolation is the security boundary, token is defense-in-
+    // depth on top" posture as every other internal service in this repo.
+    //
+    // rrd_data_dir is the boss-app side of the librenms_data named volume
+    // (docker-compose.yml, mounted read-only) — LibreNmsService::
+    // getTrafficHistory() shells out to `rrdtool xport --json` directly
+    // against files under here, since LibreNMS's own REST API has no raw
+    // time-series JSON endpoint in this installed version (confirmed by
+    // reading its routes/api.php directly — see CLAUDE.md's "Dashboard
+    // Monitoring (v0.8.2)"). cache_ttl is deliberately short (seconds, not
+    // minutes) so a widget appearing on both the Monitoring page and a
+    // future Dashboard placement doesn't multiply real hits to LibreNMS.
+    'librenms' => [
+        'api_url' => env('LIBRENMS_API_URL', 'http://librenms:8000/api/v0'),
+        'api_token' => env('LIBRENMS_API_TOKEN'),
+        'rrd_data_dir' => env('LIBRENMS_RRD_DATA_DIR', '/librenms-data/rrd'),
+        'cache_ttl' => (int) env('LIBRENMS_CACHE_TTL', 45),
+    ],
+
+    // v0.8.4 Bagian C — App\Services\Infra\ContainerStatsService's only
+    // dependency. Points at docker-stats-proxy (docker-compose.yml), never
+    // a direct docker.sock mount on this container — see CLAUDE.md
+    // "Container Stats via docker-socket-proxy (v0.8.4 Bagian C)".
+    'docker_stats' => [
+        'proxy_url' => env('DOCKER_STATS_PROXY_URL', 'http://docker-stats-proxy:2375'),
+    ],
+
 ];

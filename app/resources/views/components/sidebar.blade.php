@@ -63,7 +63,7 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*'),
             // v0.8.1 — nested one level deeper than a plain link: an item
             // with a 'children' key renders as its own expand/collapse
             // sub-group (own localStorage key, same pattern as the
@@ -84,6 +84,13 @@
                     : null,
                 auth()->user()->can('viewAny', \App\Models\OltDevice::class)
                     ? ['route' => 'web.olt-devices.index', 'label' => __('OLT')]
+                    : null,
+                // v0.8.2 — plain permission check (no Eloquent model backs
+                // this page, LibreNMS device data isn't a boss_db table),
+                // same posture as MonitoringIndex/DeviceMonitoringList/
+                // DeviceTrafficGraph's own $this->authorize('monitoring.view').
+                auth()->user()->can('monitoring.view')
+                    ? ['route' => 'web.monitoring.index', 'label' => __('Monitoring')]
                     : null,
                 auth()->user()->can('viewAny', \App\Models\CpeDevice::class)
                     ? [

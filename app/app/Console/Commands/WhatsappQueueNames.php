@@ -22,9 +22,19 @@ class WhatsappQueueNames extends Command
 
     public function handle(): int
     {
+        // Real, confirmed-for-real bug (root cause of a ~12GB
+        // storage/logs/laravel.log, see CLAUDE.md "Dashboard Monitoring
+        // Fixes"): ->map() on an Eloquent Collection stays an Eloquent
+        // Collection even once its items are no longer Model instances
+        // (plain session-key strings here) — Eloquent\Collection::unique()
+        // then defaults to Model-keyed uniqueness (getDictionary() calling
+        // ->getKey() on each item), which crashes outright on a string.
+        // ->toBase() downgrades to a plain Support\Collection first, whose
+        // unique() correctly compares by value instead.
         $sessionKeys = WhatsappSession::withoutGlobalScopes()
             ->get()
             ->map(fn (WhatsappSession $session) => $session->sessionKey())
+            ->toBase()
             ->push('direct')
             ->unique()
             ->values();

@@ -66,6 +66,15 @@ services:
       # every other cross-container coordination in this stack. See
       # CLAUDE.md "FreeRADIUS Core & NAS Management" v0.6.5 section.
       - freeradius_nas_config:/freeradius-nas-config
+      # v0.8.2 — read-only. LibreNmsService::getTrafficHistory() shells out
+      # to `rrdtool xport --json` directly against LibreNMS's own RRD files
+      # (LibreNMS's REST API has no raw time-series JSON endpoint in this
+      # version — confirmed by reading its own routes/api.php). Same
+      # "communicate via a shared volume, no Docker socket" posture as
+      # every other cross-container coordination in this stack, this one
+      # read-only since boss-app never writes LibreNMS's own poller data.
+      # See CLAUDE.md "Dashboard Monitoring (v0.8.2)".
+      - librenms_data:/librenms-data:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
@@ -115,7 +124,13 @@ services:
     # any newly created reseller session's queue included — same
     # polling-restart style as boss-scheduler below, no manual restart
     # needed when a reseller's WhatsApp session is set up.
-    entrypoint: ["sh", "-c", "while true; do php artisan queue:work --queue=$(php artisan whatsapp:queue-names) --sleep=3 --tries=3 --max-time=300; done"]
+    # /entrypoint.sh (docker/php/entrypoint.sh) prefixed here — this
+    # container's own `entrypoint:` override in compose bypasses the
+    # image's Dockerfile ENTRYPOINT entirely, so it must invoke the
+    # shared /tmp self-healing script explicitly rather than getting it
+    # automatically the way boss-app/boss-worker do. See that script's
+    # own docblock for why this matters.
+    entrypoint: ["/entrypoint.sh", "sh", "-c", "while true; do php artisan queue:work --queue=$(php artisan whatsapp:queue-names) --sleep=3 --tries=3 --max-time=300; done"]
     volumes:
       - ./app:/var/www/html
       - /etc/localtime:/etc/localtime:ro
@@ -149,7 +164,10 @@ services:
     # and wants faster feedback than the steady-state cadence) — change
     # cadence by editing that one .env value and recreating this container,
     # never by editing this entrypoint again.
-    entrypoint: ["sh", "-c", "(while true; do php artisan cpe:auto-match-legacy-devices --no-interaction; sleep \"${CPE_AUTO_MATCH_INTERVAL_SECONDS:-60}\"; done) & while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"]
+    # /entrypoint.sh prefixed here for the same reason as
+    # boss-whatsapp-worker above — this container's own `entrypoint:`
+    # override bypasses the Dockerfile ENTRYPOINT entirely.
+    entrypoint: ["/entrypoint.sh", "sh", "-c", "(while true; do php artisan cpe:auto-match-legacy-devices --no-interaction; sleep \"${CPE_AUTO_MATCH_INTERVAL_SECONDS:-60}\"; done) & while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"]
     volumes:
       - ./app:/var/www/html
       # v0.6.4 — VpnCheckNodeHealth (routes/console.php, ->everyMinute())
@@ -172,6 +190,45 @@ services:
       - .env
     depends_on:
       - boss-app
+    networks:
+      - boss-network
+
+  # v0.8.4 Bagian C — the ONLY container that ever mounts the real Docker
+  # socket (read-only). boss-app/boss-scheduler talk to THIS over plain
+  # HTTP on boss-network (ContainerStatsService, DOCKER_STATS_PROXY_URL) —
+  # neither of them ever mounts docker.sock directly, so a bug in
+  # ContainerStatsService's own HTTP calls can't touch the real socket no
+  # matter what. CONTAINERS=1 is the only endpoint family enabled; every
+  # other family (POST/EXEC/NETWORKS/VOLUMES/IMAGES/SWARM/...) defaults to
+  # 0/denied by this image itself — a mutating call is refused by the
+  # PROXY, not merely avoided by application-code discipline. No host port
+  # published (BOSS-010), same posture as freeradius/genieacs-cwmp/nbi.
+  docker-stats-proxy:
+    image: tecnativa/docker-socket-proxy:0.2
+    container_name: docker-stats-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      POST: 0
+      EXEC: 0
+      NETWORKS: 0
+      VOLUMES: 0
+      IMAGES: 0
+      INFO: 0
+      SWARM: 0
+      SYSTEM: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      NODES: 0
+      PLUGINS: 0
+      SECRETS: 0
+      SERVICES: 0
+      SESSION: 0
+      TASKS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - boss-network
 

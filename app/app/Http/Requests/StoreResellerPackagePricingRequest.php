@@ -32,7 +32,7 @@ class StoreResellerPackagePricingRequest extends FormRequest
             // context (an ISP admin creating pricing on a reseller's behalf)
             // — a reseller owner/staff always gets attributed to their own
             // context reseller regardless of what's sent here, same pattern
-            // as RegistrationService's agent attribution.
+            // as RegistrationService's referrer attribution.
             'reseller_id' => [
                 Rule::requiredIf(! $hasContext),
                 Rule::exists(Reseller::class, 'id')->where('tenant_id', $this->user()->tenant_id),

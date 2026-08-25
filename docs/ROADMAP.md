@@ -30,9 +30,11 @@
 | v0.8.3  | Network         | RX Power History, Custom Range & API | RX Power History terjadwal di Detail CPE, tab Custom Range dipakai ulang di 3 modal riwayat, REST API `/api/v1/monitoring/*` + RX Power API (foothold bot WhatsApp masa depan) — **satu branch/tag dengan v0.8.2 karena alasan workflow sesi, lihat catatan di bawah** | Selesai |
 | v0.8.4  | Network         | Dialup Syslog & RADIUS Migration | Fix SNAT per-NAS WireGuard, domain `boss.bajastu.id`+TLS, refactor `VpnSyncRouteFragments` (hilangkan router API login noise), pipeline syslog rsyslog→LibreNMS+UI+API, migrasi 295 akun PPPoE `ro-hotspot` ke RADIUS BOSS App, Riwayat Dialup di Detail CPE (reaktivasi `radacct`) | Selesai |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
+| v0.9.1  | Billing & Finance | Rename Agent → Referrer      | Rename fondasi sebelum logic Commission (v0.9.0) mulai — tabel/model `agents` (dari v0.3.0) jadi `referrers`, hindari tabrakan nama dengan `Agent` yang direncanakan khusus untuk modul Token/Hotspot masa depan | Implementasi selesai — verifikasi akhir pending |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
 | v0.11.0 | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
 | v0.12.0 | Network         | PPPoE Provisioning & Technician API | Provisioning kredensial PPPoE (`radcheck`) hasil instalasi teknisi — di luar scope v0.7.5 karena `work_order_devices` tidak punya link balik ke `radcheck`. Sekalian API/otorisasi resmi teknisi/bot WhatsApp submit device (menggantikan bridge CS manual sementara dari v0.7.5) | Backlog |
+| v0.13.0 | Komunikasi      | WhatsApp 2-Arah (Inbound + State Machine Percakapan) | Infrastruktur pesan masuk untuk `whatsapp-gateway` (Baileys) — v0.4.0 baru outbound-only (lihat CLAUDE.md). Mencakup listener inbound message, state machine percakapan per sesi, routing pesan masuk ke handler yang sesuai. Fondasi/wajah percakapan untuk fitur yang sudah/akan dibangun API-first di modul lain (bot WhatsApp jadi consumer tambahan, bukan desain ulang) — TIDAK termasuk logic bisnis spesifik per modul, itu tetap di endpoint masing-masing. **Nomor versi tentatif — belum dikonfirmasi ulang, konfirmasi ulang saat mau discope beneran (BOSS-003)** | Backlog — belum ada tanggal mulai |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
 (lihat Definition of Done di RULES.md) sebelum lanjut ke versi berikutnya.
@@ -1050,3 +1052,51 @@ seluruh ringkasan sesi, bukan delta) + baris Start baru, keduanya tampil benar d
 - **UX form OLT community auto-generate** — dari backlog v0.8.1 (form men-generate community string acak
   SEBELUM admin sempat lihat community asli yang sudah dikonfigurasi manual di perangkat lama), belum
   diperbaiki.
+
+## v0.9.1 — Rename Agent → Referrer (branch `v0.9.1-rename-agent-to-referrer`, implementasi selesai, belum di-merge/tag)
+
+Rename fondasi sebelum masuk logic Commission (v0.9.0): tabel/model `Agent` yang ada sejak v0.2.0-v0.3.0
+sebenarnya merepresentasikan "sales/referral internal", bukan konsep "Agent" yang akan dipakai khusus nanti
+untuk penjualan Token/Hotspot (modul masa depan, di luar scope sesi ini). Dikerjakan dua langkah: investigasi
+read-only dulu (grep seluruh codebase, cek tabrakan nama), baru eksekusi setelah nama final dikonfirmasi.
+
+**Kenapa "Referrer", bukan "Sales"** — nama "Sales" awalnya dipertimbangkan tapi ditolak karena tabrakan
+nyata dengan dua konsep independen yang sudah ada dan harus tetap utuh: `App\Enums\AgentType::Sales` (kini
+`App\Enums\ReferrerType::Sales` — value enum-nya sendiri sengaja TIDAK berubah, `'sales'`, jadi tidak ada
+migrasi data untuk kolom `type`), `App\Enums\RegistrationChannel::Sales`, dan role Spatie `sales_internal`/
+`sales_freelance`. Investigasi Tax Engine (v0.3.3) yang tadinya dicurigai user justru TIDAK ada tabrakan
+sama sekali — "sales tax" di modul itu murni istilah generik di komentar, bukan referensi ke model manapun.
+
+**Mapping rename (kunci, tidak diimprovisasi)**: `Agent`→`Referrer` (model), `AgentType`→`ReferrerType`
+(enum, value case tetap sama), `AgentFactory`→`ReferrerFactory`, `AgentSeeder`→`ReferrerSeeder`,
+`AgentReferralResource`→`ReferrerReferralResource`, `TopAgents`→`TopReferrers` (widget dashboard, value
+enum `DashboardWidget::TopReferrers` sengaja tetap `'top_agents'` karena sudah persisted di
+`user_preferences.dashboard_widgets` milik user nyata), tabel `agents`→`referrers`,
+`commission_ledger.agent_id`→`referrer_id`, `customers.referred_by_agent_id`→`referred_by_referrer_id`.
+`Customer::referredBy()` — nama method sendiri TIDAK berubah (sudah netral), cuma target relasinya jadi
+`belongsTo(Referrer::class, 'referred_by_referrer_id')`.
+
+**Migrasi data via rename, bukan drop+recreate** — migration baru
+`2026_08_25_161006_rename_agents_to_referrers.php` (`Schema::rename()`/`renameColumn()`), dijalankan nyata
+ke database dev (0 baris di tabel `agents` saat itu — belum pernah ada data referral nyata yang dibuat, jadi
+rename ini terverifikasi struktural lewat `--pretend` + eksekusi nyata, bukan lewat volume data). FK
+constraint auto-generated (`agents_tenant_id_foreign`, dst.) sengaja dibiarkan apa adanya — kosmetik saja,
+bukan diminta untuk diubah.
+
+**Breaking API contract, disengaja** — field request/response publik `referred_by_agent_id`→
+`referred_by_referrer_id` di `POST /api/v1/registrations` (lihat `docs/API.md`). Diterima sebagai breaking
+change karena project masih pre-production, belum ada consumer eksternal nyata — tidak ada periode
+transisi/alias field lama.
+
+**Tidak disentuh, sesuai instruksi eksplisit**: `App\Enums\RegistrationChannel::Sales`, role Spatie
+`sales_internal`/`sales_freelance` — konsep independen, tetap ada dan tetap dipakai persis seperti sebelumnya.
+
+**Verifikasi**: full regression suite 805/805 hijau, Pint clean di semua file yang disentuh (7 style issue
+pra-existing yang ditemukan ada di file Network module yang sama sekali tidak disentuh sesi ini — di luar
+scope, tidak diperbaiki). Re-grep case-insensitive "agent" setelah rename mengonfirmasi nol referensi
+tersisa di kode aplikasi, kecuali migrasi historis (tidak boleh diubah — merepresentasikan schema history
+apa adanya) dan satu false positive ("SNMP agent" di `AddMonitoringDeviceForm.php`).
+
+**Belum di-merge/tag** — menunggu verifikasi manual Agung lewat browser (form registrasi, dashboard widget
+"Referrer Teratas", API registrasi) sebelum `git merge --no-ff` ke `develop`/`main` dan tag `v0.9.1`, sesuai
+alur kerja standar repo ini (tidak ada PR flow).

@@ -2,18 +2,20 @@
 
 namespace App\Models;
 
-use App\Enums\AgentType;
+use App\Enums\ReferrerType;
 use App\Models\Concerns\BelongsToTenant;
-use Database\Factories\AgentFactory;
+use Database\Factories\ReferrerFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class Agent extends Model
+class Referrer extends Model
 {
-    /** @use HasFactory<AgentFactory> */
+    /** @use HasFactory<ReferrerFactory> */
     use BelongsToTenant, HasFactory;
+
+    protected $table = 'referrers';
 
     protected $fillable = [
         'tenant_id',
@@ -28,7 +30,7 @@ class Agent extends Model
     protected function casts(): array
     {
         return [
-            'type' => AgentType::class,
+            'type' => ReferrerType::class,
             'commission_rate' => 'decimal:2',
             'is_active' => 'boolean',
         ];
@@ -41,7 +43,7 @@ class Agent extends Model
 
     public function referrals(): HasMany
     {
-        return $this->hasMany(Customer::class, 'referred_by_agent_id');
+        return $this->hasMany(Customer::class, 'referred_by_referrer_id');
     }
 
     public function commissionLedgerEntries(): HasMany

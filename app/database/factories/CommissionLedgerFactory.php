@@ -3,9 +3,9 @@
 namespace Database\Factories;
 
 use App\Enums\CommissionStatus;
-use App\Models\Agent;
 use App\Models\CommissionLedger;
 use App\Models\Customer;
+use App\Models\Referrer;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -21,9 +21,9 @@ class CommissionLedgerFactory extends Factory
     public function definition(): array
     {
         return [
-            'agent_id' => Agent::factory(),
-            // Must match the agent's tenant, not an independent random tenant.
-            'tenant_id' => fn (array $attributes) => Agent::withoutGlobalScopes()->find($attributes['agent_id'])?->tenant_id,
+            'referrer_id' => Referrer::factory(),
+            // Must match the referrer's tenant, not an independent random tenant.
+            'tenant_id' => fn (array $attributes) => Referrer::withoutGlobalScopes()->find($attributes['referrer_id'])?->tenant_id,
             'customer_id' => Customer::factory(),
             'amount' => null,
             'status' => CommissionStatus::Pending,

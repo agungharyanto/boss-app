@@ -18,7 +18,7 @@ class CommissionLedger extends Model
 
     protected $fillable = [
         'tenant_id',
-        'agent_id',
+        'referrer_id',
         'customer_id',
         'amount',
         'status',
@@ -33,9 +33,9 @@ class CommissionLedger extends Model
         ];
     }
 
-    public function agent(): BelongsTo
+    public function referrer(): BelongsTo
     {
-        return $this->belongsTo(Agent::class);
+        return $this->belongsTo(Referrer::class);
     }
 
     public function customer(): BelongsTo

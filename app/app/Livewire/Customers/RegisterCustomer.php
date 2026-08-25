@@ -2,8 +2,8 @@
 
 namespace App\Livewire\Customers;
 
-use App\Models\Agent;
 use App\Models\Customer;
+use App\Models\Referrer;
 use App\Services\RegistrationService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Validation\Rule;
@@ -14,7 +14,7 @@ class RegisterCustomer extends Component
 {
     use AuthorizesRequests;
 
-    public ?Agent $linkedAgent = null;
+    public ?Referrer $linkedReferrer = null;
 
     #[Validate('required|string|max:255')]
     public string $name = '';
@@ -37,16 +37,16 @@ class RegisterCustomer extends Component
     #[Validate('nullable|string|max:255')]
     public string $package = '';
 
-    public ?int $selectedAgentId = null;
+    public ?int $selectedReferrerId = null;
 
     public function mount(): void
     {
         $this->authorize('register-customer');
 
-        $this->linkedAgent = Agent::where('user_id', auth()->id())->first();
+        $this->linkedReferrer = Referrer::where('user_id', auth()->id())->first();
 
-        if ($this->linkedAgent) {
-            $this->selectedAgentId = $this->linkedAgent->id;
+        if ($this->linkedReferrer) {
+            $this->selectedReferrerId = $this->linkedReferrer->id;
         }
     }
 
@@ -68,14 +68,14 @@ class RegisterCustomer extends Component
             return;
         }
 
-        if ($this->linkedAgent) {
-            $this->validate(['selectedAgentId' => 'required']);
-            $agent = $this->linkedAgent;
+        if ($this->linkedReferrer) {
+            $this->validate(['selectedReferrerId' => 'required']);
+            $referrer = $this->linkedReferrer;
         } else {
             $this->validate([
-                'selectedAgentId' => ['nullable', 'integer', Rule::exists('agents', 'id')->where('tenant_id', auth()->user()->tenant_id)],
+                'selectedReferrerId' => ['nullable', 'integer', Rule::exists('referrers', 'id')->where('tenant_id', auth()->user()->tenant_id)],
             ]);
-            $agent = $this->selectedAgentId ? Agent::find($this->selectedAgentId) : null;
+            $referrer = $this->selectedReferrerId ? Referrer::find($this->selectedReferrerId) : null;
         }
 
         $customer = $service->register([
@@ -86,7 +86,7 @@ class RegisterCustomer extends Component
             'latitude' => $this->latitude,
             'longitude' => $this->longitude,
             'package' => $data['package'],
-        ], $agent);
+        ], $referrer);
 
         session()->flash('status', "Pelanggan {$customer->name} berhasil diregistrasi.");
 
@@ -95,12 +95,12 @@ class RegisterCustomer extends Component
 
     public function render()
     {
-        $availableAgents = $this->linkedAgent
+        $availableReferrers = $this->linkedReferrer
             ? collect()
-            : Agent::where('is_active', true)->orderBy('name')->get();
+            : Referrer::where('is_active', true)->orderBy('name')->get();
 
         return view('livewire.customers.register-customer', [
-            'availableAgents' => $availableAgents,
+            'availableReferrers' => $availableReferrers,
         ]);
     }
 }

@@ -3,6 +3,31 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.9.1 — Rename Agent → Referrer (implementasi selesai 2026-08-25, belum di-merge/tag)
+
+**Catatan status**: branch `v0.9.1-rename-agent-to-referrer` — implementasi dan regresi selesai, TAPI
+belum di-merge ke `develop`/`main` dan belum di-tag, menunggu verifikasi manual Agung lewat browser dulu
+(sesuai alur kerja standar repo ini). Entri ini dicatat sekarang supaya histori kerja tetap akurat; update
+lanjutan (tanggal merge/tag sebenarnya) menyusul begitu verifikasi selesai.
+
+Rename fondasi sebelum masuk logic Commission (v0.9.0) — tabel/model `Agent` (ada sejak v0.2.0-v0.3.0,
+sebenarnya merepresentasikan referral sales/internal) di-rename jadi `Referrer`, supaya nama "Agent" bebas
+dipakai khusus untuk modul Token/Hotspot masa depan tanpa tabrakan. Detail teknis lengkap ada di
+`docs/ROADMAP.md` bagian "v0.9.1 — Rename Agent → Referrer" dan `CLAUDE.md`.
+
+- **Nama final "Referrer", bukan "Sales"** — dipilih setelah investigasi menemukan tabrakan nyata dengan
+  `AgentType::Sales`/`RegistrationChannel::Sales`/role Spatie `sales_internal`/`sales_freelance` (semuanya
+  tetap utuh, tidak disentuh).
+- **Rename penuh**: model, enum (`AgentType`→`ReferrerType`, value case tetap sama), factory, seeder,
+  API resource, widget dashboard (`TopAgents`→`TopReferrers`, label "Referrer Teratas"), tabel `agents`→
+  `referrers` dan kolom FK terkait — semua lewat migrasi `Schema::rename()`/`renameColumn()` (data
+  preserved, bukan drop+recreate).
+- **Breaking API contract disengaja**: `referred_by_agent_id`→`referred_by_referrer_id` di
+  `POST /api/v1/registrations` — diterima karena project masih pre-production, belum ada consumer
+  eksternal.
+- **Regresi**: 805/805 test hijau, Pint clean di semua file yang disentuh, re-grep "agent" case-insensitive
+  setelah rename bersih (kecuali migrasi historis dan satu false positive "SNMP agent").
+
 ## v0.8.4 — Dialup Syslog & RADIUS Migration (2026-08-25)
 
 Merge branch `v0.8.4-dialup-syslog` ke `develop` lalu `main`, tag `v0.8.4`

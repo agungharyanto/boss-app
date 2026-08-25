@@ -115,7 +115,24 @@ ip link set up dev wg0
 # three like OpenVPN's ccd+push-route+iptables. ---
 iptables -F FORWARD
 iptables -P FORWARD DROP
-iptables -A FORWARD -i wg0 -d "$FREERADIUS_INTERNAL_IP" -j ACCEPT
+# v0.8.4 — widened from a single "-d $FREERADIUS_INTERNAL_IP" to the
+# WHOLE reserved infra block. Found genuinely necessary, not just a
+# tidy-up: the router already has a block-wide `/ip route` (v0.8.1,
+# comment "boss-vpn-infra-block-route") and a matching block-wide
+# `allowed-address` — this FORWARD rule was the ONE remaining place
+# still gatekeeping per-service by a single IP, confirmed for real while
+# planning the rsyslog receiver (172.28.0.230): a router-initiated
+# packet toward it would have been silently DROPped by this exact rule's
+# old single-IP scope despite routing/WireGuard-layer trust already
+# covering the whole block. Widening here is what actually delivers on
+# the block's original promise ("a brand-new module just needs a free
+# IP... router's allowed-address never needs touching again") — every
+# FUTURE module in this block now also needs zero entrypoint.sh change,
+# not just this one. The CoA rule below (FreeRADIUS-initiated, opposite
+# direction) is deliberately NOT widened the same way — nothing else in
+# this block currently needs to INITIATE a connection toward a NAS the
+# way FreeRADIUS's CoA/Disconnect does.
+iptables -A FORWARD -i wg0 -d "$INFRA_TUNNEL_BLOCK_CIDR" -j ACCEPT
 iptables -A FORWARD -o wg0 -d "$WG_SUBNET_CIDR" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # v0.6.5 CoA/Disconnect — same narrow, deliberate reverse exception as
@@ -241,26 +258,31 @@ iptables -t nat -F POSTROUTING
 # "add an argument to MASQUERADE", it's switching the TARGET itself to
 # SNAT when a specific source is known.
 #
-# Pinned to WG_NAS_GATEWAY_IP — the ONE NAS this reverse-masquerade path
-# is currently configured for (same "one NAS only" limitation
-# TR069_MANAGEMENT_SUBNET/OLT_MANAGEMENT_SUBNET already have). Falls back
-# to plain MASQUERADE (old behavior) when WG_NAS_GATEWAY_IP is unset, so a
-# deployment that hasn't set the new var yet doesn't break — but that
-# fallback is exactly as ambiguous as described above the moment more
-# than one NAS block exists on this node, so it's a transitional safety
-# net, not a real fix for the general case.
-#
-# GENERALIZATION GAP, not silently hardcoded without a trace: a real
-# multi-NAS-aware version needs to match each packet's DESTINATION subnet
-# to the correct NAS's own gateway (not one global pinned value) — not
-# built here, same class of "single NAS only, documented, not yet
-# generalized" limitation as everywhere else in this file.
+# v0.8.4 — STILL pinned to the single global WG_NAS_GATEWAY_IP, used
+# below ONLY for the TR069/OLT management-subnet rules now (the
+# FreeRADIUS rule this variable used to also drive is generated
+# per-NAS inside the reconcile loop instead — see that loop's own
+# comment for the real production bug this fixes). TR069_MANAGEMENT_
+# SUBNET/OLT_MANAGEMENT_SUBNET are themselves single global env vars,
+# not per-NAS fragments the way addresses/peers/routes are — there is
+# only ever ONE NAS's management subnet configured system-wide at a
+# time by design (see those vars' own "one subnet only, static/manual"
+# docblocks above), so a single pinned gateway is CORRECT as long as it
+# points at the SAME NAS those subnet vars describe (true today: both
+# are configured for test-x86-bajastu). This remains a real, documented
+# generalization gap for the day a SECOND NAS gets its own TR069/OLT
+# management subnet configured — fixing that properly needs actual
+# per-NAS `nas.tr069_management_subnet`/`nas.olt_management_subnet`
+# fragments (a genuinely new mechanism, not something to retrofit as a
+# side effect of the FreeRADIUS fix) — not built here, same class of
+# "single NAS only, documented, not yet generalized" limitation as
+# everywhere else in this file. Falls back to plain MASQUERADE when
+# WG_NAS_GATEWAY_IP is unset, same transitional-safety-net reasoning as
+# before.
 REVERSE_NAT_TARGET=(-j MASQUERADE)
 if [ -n "$WG_NAS_GATEWAY_IP" ]; then
     REVERSE_NAT_TARGET=(-j SNAT --to-source "$WG_NAS_GATEWAY_IP")
 fi
-
-iptables -t nat -A POSTROUTING -s "$WG_SUBNET_CIDR" -d "$FREERADIUS_INTERNAL_IP" "${REVERSE_NAT_TARGET[@]}"
 
 if [ -n "$TR069_MANAGEMENT_SUBNET" ]; then
     # Masquerade genieacs's real boss-network IP into this node's own
@@ -331,15 +353,153 @@ while true; do
     # interface's current addresses first, one exact "IP/mask" token
     # match via `grep -qw`, so a value already applied in an earlier cycle
     # is skipped rather than re-added every ~10s.
+    #
+    # v0.8.4 — SAME loop also reconciles one per-NAS reverse-NAT rule for
+    # traffic destined to FreeRADIUS, fixing a real production bug: the
+    # old single static rule (`-s $WG_SUBNET_CIDR -j SNAT --to-source
+    # $WG_NAS_GATEWAY_IP`, applied ONCE at container start, removed above)
+    # matched the WHOLE /24 — every NAS's block, not just the one
+    # WG_NAS_GATEWAY_IP was actually pinned for — so a SECOND NAS's own
+    # traffic toward FreeRADIUS got its source rewritten to the FIRST
+    # NAS's gateway address instead of its own, and FreeRADIUS's reply
+    # then went to the wrong address and was silently lost. Confirmed for
+    # real via packet capture on a live NAS (see CLAUDE.md's own account
+    # of this incident) before writing the FIRST version of this fix.
+    #
+    # AMENDMENT — the first version of this fix (SNAT --to-source
+    # $gw_ip, i.e. this NAS's own wg0-side gateway address, e.g.
+    # 172.23.195.5) was ITSELF wrong, in a way ping could never catch:
+    # FreeRADIUS's per-NAS `clients {}` block (docker/freeradius's own
+    # FreeradiusVirtualServerService-generated config) is scoped to
+    # `ipaddr = 172.28.0.0/24` — boss-network — NOT the 172.23.195.0/24
+    # WireGuard tunnel subnet. SNAT-ing to a 172.23.195.x address made
+    # every real RADIUS request arrive as an "unknown client" to
+    # FreeRADIUS, which silently drops it (confirmed verbatim in
+    # /opt/var/log/radius/radius.log: "Ignoring request ... from unknown
+    # client 172.23.195.5 ... proto udp") — indistinguishable from a
+    # network-level timeout from the NAS's own point of view, which is
+    # exactly why the "verified for real" ping test in the first version
+    # of this fix never caught it: ICMP has no client-ACL concept at all,
+    # so it happily succeeded through a rule that real RADIUS UDP traffic
+    # could never actually pass. Fixed by switching to plain MASQUERADE
+    # instead of SNAT to a specific address — MASQUERADE rewrites the
+    # source to whatever address THIS node's own outgoing interface
+    # (eth0, boss-network) actually has, which is always inside
+    # 172.28.0.0/24 by construction, on every node, with no per-node
+    # config needed. (The OTHER masquerade rules in this file —
+    # TR069_MANAGEMENT_SUBNET/OLT_MANAGEMENT_SUBNET — are NOT the same
+    # bug and were correctly left alone: those rewrite traffic in the
+    # OPPOSITE direction, a boss-network service reaching OUT into a
+    # NAS's own LAN, where the NAS's `allowed-address`/firewall instead
+    # needs to see a trusted wg0-side address — 172.23.195.x is the
+    # CORRECT target there, not a mistake to copy from.)
+    #
+    # Each $ADDRESSES_DIR/*.conf fragment is still "gateway_ip/30" — only
+    # the `-s` match (this NAS's own /30 block, iptables network-aligns a
+    # host+mask automatically) is used now, not the address itself as a
+    # rewrite target.
+    #
+    # v0.8.4 amendment — widened from "-d $FREERADIUS_INTERNAL_IP" to
+    # "-d $INFRA_TUNNEL_BLOCK_CIDR" (whole reserved /27), renamed
+    # boss-vpn-snat-freeradius-* -> boss-vpn-snat-infra-block-* to match
+    # (sweep regex below updated too). Real bug found deploying the
+    # rsyslog receiver (172.28.0.230): the FORWARD rule above was widened
+    # to the whole block, but this POSTROUTING rule was NOT — a router-
+    # initiated packet toward .230 correctly passed the FORWARD filter
+    # but kept its tunnel-side source (172.23.195.x), which
+    # rsyslog-receiver (an ordinary boss-network container with no route
+    # back into the WireGuard tunnel subnet) could never reply to.
+    # Confirmed via a real `/ping` from the NAS: 100% loss to .230 while
+    # the SAME test to .225 (FreeRADIUS, still correctly masqueraded at
+    # the time) got real replies — proof this specific rule, not routing
+    # or the FORWARD chain, was the gap. Widening it here closes the same
+    # "future module needs zero entrypoint.sh change" gap the FORWARD
+    # rule's own v0.8.4 widening was meant to close in the first place —
+    # this rule was the missed half of that fix.
+    #
+    # Idempotency via `iptables -C` (the standard idiomatic check-before-
+    # add for iptables, mirroring the ip-address grep check above, which
+    # can't be reused as-is since NAT rules aren't listed by `ip addr`).
+    # A `-m comment` tag (unique per NAS id, parsed straight from the
+    # fragment's own filename) is what makes a rule identifiable enough
+    # to check/delete later — plain `-s`/`-d`/`-j` alone would already be
+    # unique per NAS in practice (no two NAS share a /30), but the
+    # comment makes the intent self-documenting to anyone reading
+    # `iptables -t nat -L POSTROUTING -n -v` directly on a live node.
+    declare -A active_snat_nas=()
     for addr_file in "$ADDRESSES_DIR"/*.conf; do
         [ -e "$addr_file" ] || continue
 
+        nas_id=$(basename "$addr_file" .conf)
         addr=$(tr -d '[:space:]' < "$addr_file")
 
         if [ -n "$addr" ] && ! ip -4 address show dev wg0 | grep -qw "$addr"; then
             ip address add "$addr" dev wg0 2>&1 || echo ">> [reconcile] failed to add address $addr from $addr_file, will retry next cycle"
         fi
+
+        if [ -n "$addr" ]; then
+            active_snat_nas["$nas_id"]=1
+
+            if ! iptables -t nat -C POSTROUTING -s "$addr" -d "$INFRA_TUNNEL_BLOCK_CIDR" -j MASQUERADE -m comment --comment "boss-vpn-snat-infra-block-${nas_id}" 2>/dev/null; then
+                iptables -t nat -A POSTROUTING -s "$addr" -d "$INFRA_TUNNEL_BLOCK_CIDR" -j MASQUERADE -m comment --comment "boss-vpn-snat-infra-block-${nas_id}" \
+                    2>&1 || echo ">> [reconcile] failed to add reverse-NAT rule for ${nas_id}, will retry next cycle"
+            fi
+        fi
     done
+
+    # Sweep per-NAS SNAT rules whose address fragment no longer exists
+    # (NAS revoked) — deleted by rule NUMBER (re-queried fresh before
+    # each single delete, since removing a rule shifts every later line
+    # number), not by a partial `-D <criteria>` spec, which iptables
+    # only matches against a rule's FULL original specification, not a
+    # comment alone.
+    for stale_nas in $(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep -oE 'boss-vpn-snat-infra-block-nas-[0-9]+' | sed 's/boss-vpn-snat-infra-block-//' | sort -u); do
+        if [ -z "${active_snat_nas[$stale_nas]:-}" ]; then
+            line_no=$(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep "boss-vpn-snat-infra-block-${stale_nas}\b" | head -1 | awk '{print $1}')
+            [ -n "$line_no" ] && { iptables -t nat -D POSTROUTING "$line_no" 2>/dev/null || true; }
+        fi
+    done
+
+    # v0.8.4 — write this node's own `wg show wg0 dump` (tab-delimited,
+    # machine-parseable — NOT the pretty-printed default `wg show` output)
+    # to the shared vpn_wg_data volume, which App\Console\Commands\
+    # VpnSyncRouteFragments (boss-app) already mounts read-only-in-practice
+    # at /vpn-wg-data. This REPLACES that command's old mechanism of
+    # logging into the NAS's own router via RouterOS API just to ask
+    # "which of the 3 pool nodes is your tunnel currently on" — that
+    # question is fully answerable from THIS side instead (this node
+    # already knows, from its own live wg0 state, which NAS public keys it
+    # currently has a handshake with) — see CLAUDE.md's "Router API Login
+    # Removal" section for the full investigation/reasoning. Confirmed
+    # this is genuinely necessary and not something `boss-app` could do
+    # unprompted: `boss-app` has no Docker exec access into this container
+    # (deliberate stance since v0.6.2) and no wg0 interface of its own —
+    # a file write from the SAME container that owns the interface is the
+    # only path, same idiom as the `heartbeat-*` file immediately below.
+    #
+    # Line 1 of `wg show dump` is the INTERFACE line
+    # (private-key\tpublic-key\tlisten-port\tfwmark) — field 1 (this
+    # node's own private WireGuard key) is deliberately replaced with the
+    # literal string REDACTED before writing. Not fixing a real
+    # vulnerability (this exact same private key already sits in this
+    # same shared volume as `server_private.key`, readable by boss-app
+    # today, a pre-existing accepted posture — see wg_peers_dir's own
+    # docblock in config/services.php) — just no reason to needlessly
+    # duplicate a secret into a second file when the reader
+    # (VpnSyncRouteFragments) never needs anything from that field beyond
+    # column 3 (listen-port). Every subsequent line is one PEER
+    # (public-key\tpreshared-key\tendpoint\tallowed-ips\tlatest-handshake
+    # \ttransfer-rx\ttransfer-tx\tpersistent-keepalive) — VpnSyncRouteFragments
+    # only reads columns 1 (public-key, matched against
+    # vpn_accounts.public_key) and 5 (latest-handshake, a Unix timestamp,
+    # 0 meaning "never handshaked").
+    #
+    # Atomic write (tmp file + `mv`, same idiom already used for the
+    # per-NAS address/route fragments elsewhere in this script) — a
+    # reader on the boss-app side must never observe a partially-written
+    # file mid-write.
+    wg show wg0 dump 2>/dev/null | awk 'BEGIN{FS=OFS="\t"} NR==1{$1="REDACTED"} {print}' > "$WG_DIR/wg-status-${NODE_HOSTNAME}.tmp" \
+        && mv "$WG_DIR/wg-status-${NODE_HOSTNAME}.tmp" "$WG_DIR/wg-status-${NODE_HOSTNAME}"
 
     date +%s > "$WG_DIR/heartbeat-${NODE_HOSTNAME}"
 

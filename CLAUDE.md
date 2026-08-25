@@ -5048,6 +5048,688 @@ custom range — where before the fix, the identical request 500'd (log
 root-owned) or gracefully failed with zero real data (log writable, Bug #1
 still present). Full regression suite green at 776/776, Pint clean.
 
+## Riwayat Dialup PPPoE & Syslog — Investigation Phase (v0.8.4, branch `v0.8.4-dialup-syslog`)
+
+**Two new features approved, both tested against a NEW NAS
+(`ro-hotspot.bajastu.id`, NAS #3, VLAN 110/"PPPoE Remote"), never
+`test-x86-bajastu` (441+ real production PPPoE sessions) — a
+deliberately different risk posture from the earlier deferred plan.**
+This section covers the investigation/prep work done before any actual
+feature code — PPPoE session history UI and per-device syslog are both
+still unbuilt as of this writing.
+
+**NAS #3 status, found via investigation (Bagian A)**: already
+registered in `nas` (id=3, ports 20070/20071 pre-allocated) with a LIVE,
+handshaking WireGuard tunnel — but two real gaps blocked accounting from
+ever working: (1) its RADIUS entry's `address=` was stale
+(`172.28.0.10`, the pre-v0.8.1 FreeRADIUS IP, never `172.28.0.225`), and
+(2) it had never been migrated to the v0.8.1 sticky `/30` block scheme —
+zero row in `vpn_wireguard_nas_blocks`, zero route fragment, confirmed
+directly (`freeradius`'s own route to the NAS's tunnel address fell
+through to the default gateway, not any WireGuard node). Both are
+exactly the same "packet arrives, no reply" class of gap already solved
+for `test-x86-bajastu` in v0.8.1 — this NAS just never got the same
+treatment.
+
+**Fixed via the EXISTING Script Generator flow, not new code** — Agung
+regenerated both scripts himself through `/nas` → Script Generator
+("Cabut & Generate Ulang" for WireGuard, plain generate for RADIUS) and
+applied them via Winbox. **Verified for real, all three claims**:
+- `ip addr show wg0` on all 3 WireGuard node containers shows the new
+  block's gateway address (`172.23.195.5/30`) — fragment+reconcile
+  correctly replicated to every node for this NAS, same as it already
+  does for NAS #1.
+- `wg show wg0` on `vpn-node-2` (the node currently holding this NAS's
+  account) shows a genuine live handshake with the NEW public key
+  (`vpn_accounts` id #23 in the DB, matching — not a stale/leftover
+  keypair).
+- `/radius/print` on the router now shows `address=172.28.0.225`
+  (correct) — the stale-address gap is closed.
+- End-to-end connectivity proven with a REAL ping: `freeradius` →
+  `172.23.195.6` (the NAS's own `router_ip`, NOT `172.23.195.5` which is
+  the WireGuard node's own gateway-side address and was never expected
+  to answer a ping) succeeded with a genuine ~7ms RTT, via a route
+  fragment (`172.23.195.6/32 via 172.28.0.4`) that fragment+reconcile
+  wrote automatically — proof the routing actually works, not just that
+  addresses are configured.
+
+**Accounting SQL writes (`docker/freeradius/entrypoint.sh`'s commented-out
+`detail`/`-sql` in the shared `accounting {}` block) are architecturally
+GLOBAL to FreeRADIUS** — there is only ONE shared `accounting {}`
+processing section in `sites-enabled/default`, referenced by every NAS's
+own per-NAS virtual server, so this can't be toggled per-NAS at that
+level. The actual production risk is gated by whether a given NAS's
+`/radius` entry is enabled and reachable, not by this flag — confirmed
+live (read-only) that `test-x86-bajastu`'s own `boss-radius` entry stays
+`disabled=true`, so enabling SQL writes globally has zero effect on real
+production traffic, which continues flowing entirely through the
+separate "added by mixradius" entry. **Not yet actually enabled** —
+still pending Agung's go-ahead for the checkpoint (a real PPPoE test
+session via NAS #3).
+
+### PPP local-secret → RADIUS migration (v0.12.0-adjacent, investigation only)
+
+**A parallel, related need surfaced while investigating**: on
+`test-x86-bajastu` (production), a subset of real customers authenticate
+via LOCAL `/ppp secret` entries on the router itself, entirely bypassing
+RADIUS (both mixradius and boss-radius). Agung wants this subset moved
+to BOSS App's own `radcheck`. **Pure read-only investigation performed,
+zero writes to the production router** — findings:
+
+- **331 total `/ppp secret` entries**, of which 2 are NOT customers:
+  `agung-tokia` (service=pptp, comment "VPN" — Agung's own admin
+  credential) and `anten-palestina` (service=sstp, disabled, see its own
+  investigation below). **329 genuine PPPoE customer entries**: 297
+  still enabled, 32 already disabled at the local-secret level.
+- **Overlap between local secrets and mixradius, proven empirically, not
+  assumed**: of the 32 disabled local secrets, **27 are CURRENTLY ONLINE
+  right now via mixradius** (`radius=true` in `/ppp/active/print`,
+  uptime ranging ~1.5h to ~1d20h) — direct proof mixradius already has
+  its own copies of at least these 27 usernames and successfully
+  authenticates them once the local secret stops answering.
+- **Critical finding for migration strategy — mixradius answers with an
+  explicit REJECT for the vast majority of its traffic, not a timeout**:
+  `/radius/monitor` for the mixradius entry (lifetime counters):
+  `requests=447059, accepts=436528, rejects=10347, timeouts=184` — a
+  reject:timeout ratio of ~56:1. Since RouterOS only fails over to the
+  NEXT `/radius` entry on TIMEOUT, never on an explicit reject (already
+  established in the v0.6.5 investigation elsewhere in this file), this
+  means **simply enabling `boss-radius` after mixradius in the `/radius`
+  list order cannot be relied on to migrate anyone** — for any username
+  mixradius already "knows" (accept or reject), `boss-radius` would never
+  get a chance regardless of local-secret state. A per-user, verified
+  approach (insert `radcheck` row → disable local secret → reconnect →
+  watch `boss-radius`'s own `/radius/monitor` counters climb → instant
+  rollback via re-enabling the local secret if it fails) is the
+  recommended strategy over a "just flip the switch" batch approach,
+  precisely because of this finding.
+- **`anten-palestina` investigated in full, NOT concluded either way per
+  explicit instruction** — same comment text as a real customer
+  (`081210434558`/"sartini | Odp watiem"), but every other field differs:
+  service `sstp` (not `pppoe`), static tunnel IPs
+  (`local-address=144.79.52.6`/`remote-address=144.79.52.7` — typical of
+  a site-to-site link, not a residential dial-in), `last-caller-id` is an
+  IP not a MAC, hasn't logged in since 2026-05-31 (~3 months stale), and
+  **does not exist anywhere in BOSS App's own `customers` table** (no
+  `legacy_username` match, no name/address match) — unlike `081210434558`
+  itself, which maps cleanly to customer #228 ("sartini", real MixRadius
+  import). Left entirely untouched pending Agung's own determination.
+- **2 candidate customers proposed for the first real migration test**
+  (not executed): `081229565701` ("Taryo | ODP Nasirun") and
+  `082315432580` ("Pras Fidiyanto") — both residential (plain personal
+  name in comment, standard phone-number username), both currently
+  online via local secret with short uptime (~1h, ~47min — easy to ask
+  to reconnect without disrupting a long-stable session), and neither
+  proven "known" to mixradius yet (unlike the 27 above), so a successful
+  migration test for either would be genuinely informative.
+
+**Real cleanup performed**: a leftover test artifact was found in
+`radcheck`/`radreply` — a real customer (`082314874960`, "Warsigit",
+whose own local secret is disabled and who is currently online via
+mixradius, i.e. one of the 27 above) had been manually inserted at some
+point during earlier ad-hoc testing, including an odd
+`Framed-IP-Address := 0.0.0.0` reply attribute. Confirmed zero live
+effect (boss-radius stays disabled, `/radius/monitor` showed `requests:
+0` for it) before removal. Deleted per Agung's explicit confirmation;
+`radcheck` now holds only the permanent QA fixture `085166445368`.
+
+### PPP local-secret → RADIUS migration — batch execution (295 accounts, `test-x86-bajastu` untouched)
+
+**Executed in stages against `ro-hotspot` (NAS #3) only — `test-x86-bajastu`'s own local secrets were never
+disabled/removed as part of this work**, per Agung's explicit "that's a separate decision" instruction. Final
+`radcheck`/`radreply` state: **295 unique usernames** — the permanent QA fixture (`085166445368`) + Taryo
+(`081229565701`) + Pras (`082315432580`) + 5 candidates sourced from `ro-hotspot`'s own real auth-failure log
+(Kambari `081285205789`, Warisman `085643183971`, Neli Rofiqoh `085702560616`, Rachmat Widodo `0882006362155`,
+Radimin Ardiansyah `082324595863`) + a 285-account batch cross-checked 1:1 against `customers` (all `aktif`,
+0 unexpected non-matches, 8 coincidental same-name-different-person pairs, 2 empty addresses — none excluded,
+Agung approved "gass langsung" with these noted for later traceability, not treated as blockers) + 2 final
+accounts added without a `customers` row at all (see below). All entries follow the identical pattern:
+`radcheck.Cleartext-Password := <username>` (username = password, matching the pre-existing convention this
+whole codebase already used for Taryo/Pras), `radreply`: `Service-Type=Framed-User`, `Framed-Protocol=PPP`,
+`Framed-Pool:=PPPOE-REMOTE`.
+
+**Real production bug found and fixed mid-migration, NOT a config mistake in this batch's own data**: the
+per-NAS WireGuard SNAT rule (introduced same-session, see the "WireGuard Per-NAS SNAT" section below) was
+itself wrong on its first attempt — it rewrote a NAS's RADIUS-bound traffic to a `172.23.195.x` tunnel-side
+address, which FreeRADIUS's `clients { ipaddr = 172.28.0.0/24 }` ACL doesn't trust, so every real request was
+silently dropped as "unknown client" (confirmed via `tcpdump` + `/opt/var/log/radius/radius.log` on the
+`freeradius` container). Fixed by switching that rule to plain `MASQUERADE` — see that section for the full
+account. This is why the Radimin/5-candidate test initially looked like "RADIUS still broken" before this fix
+landed; after the fix, `boss-radius`'s own `/radius/monitor` went from `accepts:0` for its entire lifetime to
+real accepts climbing immediately (4→18→...) the moment real traffic hit the corrected rule.
+
+**Two accounts (`homebase@tokia.net.id`/"Rumah Mbah", `081295799278`/"Elfa Oktafiani") have NO `customer_id`
+at all — deliberately, not an oversight, and this is a real, standing gap that MUST be closed before the v0.12
+"tampilkan username/password PPPoE di Detail Pelanggan" UI is built.** Agung supplied legacy CIDs for both
+(`2492346768`/`268187506734`) hoping they'd resolve via `customers.cid`/`customers.legacy_mixradius_member_id`
+— neither matched (confirmed via exact match AND a wildcard `LIKE` sweep on both columns, ruling out a
+formatting/whitespace mismatch, not just a lookup mistake) — these two customers were simply never imported
+into BOSS App's `customers` table at all during whatever earlier MixRadius migration populated the other 551
+rows. Agung's explicit decision: insert the RADIUS side now anyway (both were confirmed still using
+`profile=PPPOE-REMOTE` on `test-x86-bajastu`, same as everyone else), create the real `customers` rows later,
+during v0.12 proper. **Any future code (or person) building that Detail Pelanggan PPPoE-credentials feature
+must handle a `radcheck` row with no matching `customers` row as a real, expected case for these two specific
+usernames** — not a data-integrity bug to "fix" by deleting the radcheck row, and not something to silently
+skip in the UI without an explicit "belum tertaut ke customer" state. A quick way to re-identify both later:
+`SELECT username FROM radcheck WHERE username IN ('homebase@tokia.net.id', '081295799278')` on `radius_db`
+has no corresponding row in `boss_db.customers` — that mismatch IS the marker, since no dedicated flag column
+exists (and one wasn't added for just these 2 rows — see the "no new DB table for this" instruction already
+followed for the 285-candidate CSV export below).
+
+**`hambalang`/`hambalang-baru`/`homebase@tokia.net.id`'s sibling business-style entries stay untouched** —
+only `homebase@tokia.net.id` itself was migrated this round (explicit ask); `hambalang`/`hambalang-baru`
+remain excluded pending their own separate, manual handling (never in scope for this batch).
+
+### `boss.bajastu.id` — domain + TLS activated (first real HTTPS in this project)
+
+**`docs/DEPLOYMENT.md`'s own "HTTPS (menyusul, belum di v0.1.0)" section,
+deferred since the very first sprint, finally executed** — this server
+had no domain pointed at it until now (`APP_URL` was the bare IP). DNS
+for `boss.bajastu.id` → `45.123.142.242` confirmed independently (not
+just trusted) via `getent hosts` before touching anything.
+
+**Two-phase nginx rollout, not one file** — nginx refuses to start if
+`ssl_certificate` references a file that doesn't exist yet, so the
+domain's port-80 block (ACME challenge + redirect) had to be live and
+reloaded BEFORE requesting a certificate, with the port-443 block added
+as a genuinely separate file (`boss-domain-ssl.conf`) only once the
+certificate existed on disk. `app.conf`'s existing `server_name _;`
+catch-all block (IP access) was never touched — nginx resolves the more
+specific `server_name boss.bajastu.id` block for domain requests, the
+catch-all keeps serving bare-IP requests exactly as before, unredirected
+— **both access paths verified working end-to-end for real** (full
+login → dashboard flow via `curl`, both `https://boss.bajastu.id` and
+`http://45.123.142.242`, including checking the session cookie actually
+carries `Secure` + the right domain scope for the HTTPS path).
+
+**New `certbot` service** (`certbot/certbot:v2.11.0`, webroot mode —
+never `standalone`, so it needs no listener/port of its own, just the
+shared `certbot_www` volume `boss-nginx` also serves
+`/.well-known/acme-challenge/` from) runs a `certbot renew` loop every
+12h (Certbot's own documented recommendation) as its long-lived command;
+the FIRST certificate came from a one-off `docker compose run --rm
+--entrypoint certbot certbot certonly --webroot ...` instead — `certonly`
+doesn't fit a long-lived container command the way `renew` does.
+**Real gotcha hit issuing the first certificate**: `docker compose run
+--rm certbot certonly ...` silently ignored the `certonly ...` command
+entirely and ran the service's own custom `entrypoint:` (the renew loop)
+instead — Compose's `run <service> <command>` only overrides the
+container's CMD, not a service-level `entrypoint:` override, so the
+extra args were never actually passed to `certbot`. Fixed by explicitly
+passing `--entrypoint certbot` to reset it. Left a genuine leftover
+container running the infinite renew-loop in the background
+(`boss-app-certbot-run-...`) that had to be stopped/removed by hand
+before retrying — worth remembering for any FUTURE one-off `docker
+compose run` against a service that has its own custom `entrypoint:`.
+
+**No email registered with Let's Encrypt** (`--register-unsafely-without-
+email`) — a deliberate choice to avoid using anyone's personal email for
+this server's SSL renewal notifications without being asked; renewal
+itself doesn't depend on having an email on file (the `certbot` daemon
+loop handles that automatically), only expiry-warning notifications
+would be missed. Can be added later via `certbot update_account --email
+...` if wanted.
+
+**`APP_URL` updated in BOTH `.env` files** (`https://boss.bajastu.id`) —
+root `.env` (what `docker-compose.yml`'s `env_file:` actually feeds every
+PHP container, confirmed via `config('app.url')` matching root's value
+even though `app/.env` had a stale, different value) is the one that
+matters at runtime; `app/.env` was updated too purely for consistency/
+avoiding a misleading stale value for anyone reading that file directly,
+not because it has any live effect while shadowed by root's. Neither
+`.env.example` was touched — both stay generic placeholders
+(`APP_URL=http://YOUR_SERVER_IP` in root's example), per this project's
+established "templates stay generic, never a specific real server's
+value" convention. Required the now-standard `docker compose up -d
+boss-app boss-worker boss-whatsapp-worker boss-scheduler` (env var
+changes need a recreate, not just a restart) followed by `docker compose
+restart boss-nginx` (stale FastCGI upstream IP rule, same as every prior
+`boss-app` recreate in this file) — both done, both verified.
+
+## WireGuard Per-NAS SNAT — global gateway bug fixed, real production incident (v0.8.4)
+
+**P0 found and root-caused via direct evidence during NAS #3 setup, not
+guessed**: `ro-hotspot.bajastu.id` (NAS #3)'s `boss-vpn-autoswitch-
+wireguard-script` was changing `endpoint-port` every exactly 30 seconds,
+continuously, for 11+ minutes with no settling — the auto-switch health
+check (`:ping 172.28.0.225 interface=boss-vpn-wireguard count=3`,
+switches node on 3/3 failure) never once succeeded.
+
+**Root cause, proven via packet capture, not inferred**: `tcpdump` on
+`freeradius`'s own `eth0` during a manual reproduction of the exact same
+ping showed the request arriving with source IP `172.23.195.1` —
+NAS #1 (`test-x86-bajastu`)'s own gateway address, not NAS #3's real
+`172.23.195.6`. `docker/wireguard/entrypoint.sh`'s POSTROUTING SNAT rule
+(`-s $WG_SUBNET_CIDR -d $FREERADIUS_INTERNAL_IP -j SNAT --to-source
+$WG_NAS_GATEWAY_IP`) matched the WHOLE `172.23.195.0/24` (every NAS's
+block) but rewrote EVERY NAS's source to the SAME single global
+`WG_NAS_GATEWAY_IP` (`.env`, pinned to NAS #1) — a "generalization gap"
+already flagged in the code's own comments since the v0.8.1 redesign,
+now actually triggered for real the moment a second NAS (#3) started
+using this same path. FreeRADIUS correctly replied to `172.23.195.1`
+(NAS #1's address), which of course never reached NAS #3. Confirmed
+identical on all 3 nodes (same rule, same `WG_NAS_GATEWAY_IP` value, same
+counters actively incrementing on all 3).
+
+**Addendum investigated in parallel, found to be a red herring**: Agung
+separately reported "host unreachable" pinging the router's own tunnel
+IP (`172.23.195.6`) from itself — checked directly (`/interface/
+wireguard/print`, `/ip/address/print`): interface `running=true`,
+address genuinely present and correctly attached, and a live retest got
+0% loss. No config was ever missing or corrupted; this was very likely a
+transient condition (possibly caught mid-handshake-renegotiation),
+unrelated to the SNAT bug — no action was needed or taken for this
+specific symptom.
+
+**Fix — generalized the SNAT rule to be per-NAS, reusing the EXISTING
+fragment+reconcile mechanism, not a new one**:
+- The one static rule (run once at container start) was removed. Instead,
+  `docker/wireguard/entrypoint.sh`'s existing ~10s reconcile loop — the
+  SAME loop that already applies each NAS's `$ADDRESSES_DIR/nas-{id}.conf`
+  fragment as a real `ip address` — now ALSO reconciles one SNAT rule per
+  NAS from that exact same fragment: each fragment already IS
+  `gateway_ip/30`, which doubles as both the correct `-s` match (iptables
+  network-aligns a host+mask automatically — `172.23.195.5/30` as a MATCH
+  criterion already means "this NAS's own /30 block", no separate CIDR
+  arithmetic needed) and, stripped of its `/30` suffix, the correct
+  `--to-source` target.
+- Idempotent via `iptables -C` (check-before-add, same idiom already
+  established for `ip address add`'s own `grep -qw` check). Stale rules
+  (NAS revoked, fragment gone) are swept every cycle via rule-NUMBER
+  deletion, re-queried fresh before each single delete since removing a
+  rule shifts every later line number — a partial `-D <criteria>` spec
+  doesn't work here since iptables only matches a full original rule
+  specification, not a comment alone.
+- **Second, non-obvious piece the fix also needed, found only by testing
+  end-to-end, not by code review alone**: even with the per-NAS SNAT rule
+  correct, both NAS #1 and NAS #3's pings STILL failed 100% — because
+  `App\Console\Commands\VpnSyncRouteFragments` only ever wrote a route to
+  a NAS's `router_ip`, never to its `gateway_ip` — and `gateway_ip` is
+  exactly the address the new SNAT rule rewrites traffic to, so
+  FreeRADIUS had no route back to it at all. Confirmed by manually adding
+  `ip route add {gateway_ip}/32 via {node_ip}` and watching the previously
+  100%-failing ping immediately succeed. Fixed by extending
+  `VpnSyncRouteFragments` to write a second `/32 via` line per NAS
+  alongside the existing `router_ip` one — same command, same schedule
+  (`->everyMinute()`), same fragment file, no new mechanism.
+- **TR069_MANAGEMENT_SUBNET/OLT_MANAGEMENT_SUBNET's own MASQUERADE rules
+  were audited and left UNCHANGED, deliberately** — they share the same
+  `REVERSE_NAT_TARGET`/`WG_NAS_GATEWAY_IP` variable and are structurally
+  exposed to the identical class of bug, but there is no per-NAS fragment
+  source for these two subnets to loop over (they're single global env
+  vars by design — "one subnet system-wide" was already a documented,
+  accepted limitation before this incident, not something to silently
+  fix as a side effect here). They stay correct today only because the
+  one NAS they're configured for happens to be the same NAS
+  `WG_NAS_GATEWAY_IP` already points at — flagged, not silently patched.
+
+**Deployment risk handled deliberately, not accidentally avoided**: NAS
+#1's own live tunnel was mid-test-migration (Taryo/Pras) when this fix
+needed deploying. `docker/wireguard/entrypoint.sh` is `COPY`'d into the
+image at build time, so `--build` + recreate was unavoidable for all 3
+nodes. **Confirmed the exact same `.env`-change-cascades-further-than-
+requested gotcha already documented elsewhere in this file recurred
+here too**: `docker compose up -d --build wireguard-node2` (deliberately
+NOT the node NAS #1 was live on) also recreated `wireguard` (node1,
+which WAS live) and `freeradius`, unprompted. NAS #1's own auto-switch
+self-healed within ~10-20 seconds each time (failed over to whichever
+sibling node was still up) — verified via `wg show` showing a fresh
+handshake on the new node immediately after, not assumed safe.
+
+**Verified for real, end-to-end, repeatedly — not a single lucky ping**:
+after both fixes (per-NAS SNAT + gateway_ip route) were live and
+`vpn:sync-route-fragments` had run for real: NAS #3 → FreeRADIUS ping
+5/5 success (0% loss, ~6.5ms), re-confirmed 4x back-to-back; NAS #1 →
+FreeRADIUS ping 5/5 success (regression check, no change in behavior);
+auto-switch flapping genuinely stopped — last port-switch log entry was
+several minutes before the check, with the script confirmed to have run
+again since (via its own `last-started` timestamp) without triggering
+another switch. Full regression suite green at 776/776.
+
+**Taryo/Pras (the unrelated PPP local-secret migration test on NAS #1)
+still had not reconnected as of this fix landing** — force-disconnected
+~20+ minutes prior, genuinely unrelated mechanism (PPP local-secret vs
+RADIUS auth, no WireGuard/SNAT involvement), reported as-is, not
+investigated further as part of this incident.
+
+## Router API Login Removal — `VpnSyncRouteFragments` (v0.8.4)
+
+**Symptom that triggered this**: `test-x86-bajastu`/`ro-hotspot.bajastu.id`'s own router logs were full of
+`user boss-apps logged in/out via api` noise, once a minute, forever — traced to
+`VpnSyncRouteFragments` (`->everyMinute()`) calling `RouterOsGateway::currentWireguardEndpointPort()` on
+every active WireGuard NAS's own router just to answer "which of the 3 pool nodes is your tunnel currently
+on" (needed because auto-switch, v0.6.4, happens entirely client-side on the router, invisible to boss-app
+any other way through the router's own state).
+
+**Investigated before touching anything, per Agung's own instruction**: confirmed every OTHER piece of data
+this command needs (`router_ip`/`gateway_ip` from `vpn_wireguard_nas_blocks`, `tr069_management_subnet` from
+`nas`, OLT existence from `OltDevice`) already lives in `boss_db` — the router login was purely for "which
+node" and nothing else. Also confirmed this is the **only** scheduled command in `routes/console.php` still
+doing this — `CpeDeviceStatusSyncService` already stopped calling `RouterOsGateway::pingHost()` back in
+v0.7.7 (a stale docblock mention was the only remaining trace); every other `RouterOsGateway` consumer
+(`NasService`, `OltDeviceService`, `NasApiUserProvisioningService`) is triggered by a real user action
+(Test Connection button, provisioning modal), not scheduled polling, so those logins are legitimate and
+out of scope.
+
+**Original instruction said "docker exec into the 3 node containers" — corrected before implementing, not
+followed literally.** `boss-app` has **no Docker exec access to any other container** (deliberate stance
+since v0.6.2, already the reason `CoaService`, v0.6.5, uses a shared-volume queue instead of exec'ing into
+`freeradius`) — a literal `docker exec` from `VpnSyncRouteFragments` would have been a real, unreviewed
+security-posture regression. The actual mechanism, confirmed to be exactly the pattern
+`App\Console\Commands\VpnCheckNodeHealth` already established (that command determines "is this node
+container alive" purely from a `heartbeat-{hostname}` file each node writes into the shared `vpn_wg_data`
+volume, which `boss-app` already mounts, zero network/exec involved): each WireGuard node's own
+`docker/wireguard/entrypoint.sh` reconcile loop (the same ~10s loop that already applies address/peer
+fragments and the per-NAS SNAT rules) now **also** writes `wg show wg0 dump` (tab-delimited, NOT the
+pretty-printed default output) to `wg-status-{NODE_HOSTNAME}` in that same volume, atomically (tmp file +
+`mv`, same idiom as every other fragment write in this script). `VpnSyncRouteFragments` reads all 3 files,
+matches `vpn_accounts.public_key` against each file's peer lines, and picks whichever node has the
+**freshest `latest-handshake`** for that key — since a NAS's WireGuard peer is provisioned onto all 3 nodes
+permanently (only one has a genuinely live handshake at a time). `HANDSHAKE_STALE_THRESHOLD_SECONDS = 300`
+(more generous than the disabled OSPF `handshake-watcher.sh`'s 150s — that mechanism needed sub-minute
+reaction to avoid flapping a route in/out of a live routing protocol; this command runs once a minute and
+only needs "plausibly still there", not real-time precision).
+
+**Private key handling**: `wg show wg0 dump`'s line 1 (the interface line) includes this node's own
+WireGuard **private** key in column 1 — `entrypoint.sh`'s write step replaces it with the literal string
+`REDACTED` via `awk` before writing to the shared file. Not closing a real new vulnerability (this exact
+same private key already sits in the same shared volume as `server_private.key`, readable by `boss-app`
+today — a pre-existing, already-accepted posture documented on `wg_peers_dir`'s own config comment) — just
+no reason to needlessly duplicate a secret into a second file when `VpnSyncRouteFragments` never reads
+anything from that field beyond column 3 (listen-port).
+
+**Verified for real, not just via the test suite**:
+- Route fragment output cross-checked against the router's own ground truth at the exact same moment:
+  `RouterOsApiGateway`-equivalent direct query showed `current-endpoint-port=51820` for BOTH NAS #1 and
+  NAS #3 (both had auto-switched to node1 after the 3-node container rebuild this change required); the
+  new file-based mechanism independently computed `172.28.0.11` (node1's IP) for both — byte-identical
+  result, confirmed via the router's own answer, not assumed correct.
+- Router log evidence: a clean **11-minute gap with zero `boss-apps` login/logout entries**
+  (`ro-hotspot.bajastu.id`, 05:15:20 → 05:26:11) spanning **5 full scheduler cycles** of the new code
+  (confirmed via `boss-scheduler`'s own log: 05:20:29, 05:22:32, 05:23:33, 05:24:34, 05:25:36, each
+  `DONE` in ~365-400ms) — the only two entries inside that window belong to this same investigation's own
+  manual diagnostic queries moments later (05:26:11/05:26:23), not the scheduled command; every entry
+  BEFORE 05:15 (the old code's last run) shows the old ~60-120s cadence exactly matching the pre-refactor
+  mechanism, confirming the "before" baseline was real and the "after" gap is a genuine change, not an
+  artifact of low traffic.
+- Full regression suite: 778/778 green (2 new cases: a stale-handshake-beyond-threshold NAS is treated as
+  undetectable exactly like the old "router unreachable" case, and — the one genuinely new scenario this
+  mechanism introduces that the old router-asks-once-directly approach never had to handle — when the same
+  public key appears with a LIVE entry on one node and a long-stale entry on another simultaneously (a NAS
+  mid-auto-switch, or a stale status file from a node that hasn't been provisioned that NAS in a while),
+  the freshest handshake wins, not whichever status file happened to be read first).
+
+**Rollback, if ever needed**: this is a single self-contained commit (`docker/wireguard/entrypoint.sh` +
+`VpnSyncRouteFragments.php` + its test file) — `git revert` it, then `docker compose up -d --build
+wireguard wireguard-node2 wireguard-node3` to restore the old `entrypoint.sh` behavior (the old
+`RouterOsGateway`-based command code needs no container rebuild, it's plain PHP). A rebuild of the 3
+WireGuard nodes is unavoidable either direction (this file is `COPY`'d into the image at build time, not
+bind-mounted) — same "brief auto-switch reconnect blip, self-heals in ~10-20s" risk already accepted for
+every prior `entrypoint.sh` change in this file, not a new risk class introduced by this one.
+
+## Syslog: rsyslog receiver → LibreNMS (v0.8.4)
+
+**Architecture, matches the reviewed design**: `rsyslog-receiver` (new sidecar, `docker/rsyslog/`,
+`alpine:3.20` + `rsyslog`/`rsyslog-http` packages — official `librenms/librenms:latest` has neither, and
+`omprog`-exec-into-`librenms` was rejected up front since `boss-app`-style cross-container exec isn't a
+pattern this codebase uses) listens `imudp:514` on `172.28.0.230` (next free slot in the reserved
+`172.28.0.224/27` block) and forwards every message to LibreNMS's own `POST /api/v0/syslogsink` via
+`omhttp`, using the SAME 8-field contract (`host/facility/priority/level/tag/timestamp/msg/program`)
+`includes/syslog.php`'s `process_syslog()` already consumes from the classic `omprog`+stdin path — confirmed
+by reading that function's source directly, not assumed. `X-Auth-Token` reuses the existing
+`LIBRENMS_API_TOKEN` (already used by `LibreNmsService`), no new credential.
+
+**Prerequisite closed first**: `ro-hotspot.bajastu.id` (NAS #3) had never been onboarded into LibreNMS at
+all — device-matching (`WHERE hostname = ? OR sysName = ?`) needs it there first. SNMP was disabled on this
+router; enabled it (`/snmp set enabled=yes`) with a freshly generated 16-char community (`Str::password(16)`,
+replacing the weak default `"public"` on the existing community entry) — same posture already established
+for the 3 OLTs' registry credentials. Onboarded via `addDevice(hostname: '144.79.52.10', ...)` (the real IP,
+not the domain-shaped identity string — `addDevice()`'s own reachability check tries to DNS-resolve whatever
+string it's given, which fails for a bare RouterOS identity that isn't a real DNS record). LibreNMS's own
+SNMP auto-discovery correctly filled `sysName = ro-hotspot.bajastu.id` (device_id 8) — an exact match to the
+router's own `/system identity`, confirmed directly, so no `syslog_xlate` mapping is needed.
+
+**Four real, independently-found bugs, fixed in the order discovered — worth reading in full before touching
+this mechanism again, since each one alone looked like "it's working" until the next layer was checked**:
+
+1. **The v0.8.4 FORWARD-chain generalization (see "WireGuard Per-NAS SNAT" section above) was only half
+   done.** Widening `FORWARD -i wg0 -d $FREERADIUS_INTERNAL_IP` to the whole `172.28.0.224/27` block let a
+   router-initiated packet toward `.230` LEAVE via `eth0` — but the matching `POSTROUTING` per-NAS
+   `MASQUERADE` rule (the reconcile-loop-written one, comment `boss-vpn-snat-freeradius-{nas_id}`) was still
+   scoped to `-d $FREERADIUS_INTERNAL_IP` only, so the packet kept its tunnel-side source
+   (`172.23.195.x`) — a plain `rsyslog-receiver` container has no route back into that subnet, so it could
+   never reply. Found via a real `/ping` from the NAS to `.230`: 100% loss, while the identical test to
+   `.225` (FreeRADIUS, correctly masqueraded) succeeded — proving this exact rule, not routing or the
+   FORWARD chain, was the gap. Fixed by widening the `MASQUERADE` rule to `-d $INFRA_TUNNEL_BLOCK_CIDR` too,
+   renaming the comment tag `boss-vpn-snat-freeradius-*` → `boss-vpn-snat-infra-block-*` (and the stale-rule
+   sweep regex to match) since it's no longer FreeRADIUS-specific. **General lesson for this exact class of
+   dual-rule (FORWARD + POSTROUTING) reachability fix**: widening one half without the other produces a
+   packet that visibly LEAVES the tunnel (passes FORWARD) but never gets a reply — indistinguishable from a
+   routing problem unless you specifically check `iptables -t nat -L POSTROUTING` too.
+2. **`omhttp` defaults to HTTPS.** `rsyslogd` logged `TLS connect error: wrong version number` on every
+   send attempt — `librenms:8000` is plain HTTP (confirmed, same URL `LibreNmsService` itself already uses).
+   Fixed with `usehttps="off"` in the action config.
+3. **RouterOS `/system logging add topics=a,b,c,...` is AND, not OR — the single originally-planned rule
+   (`topics=ppp,pppoe,system,critical,error,warning`) could essentially never fire.** A real log message
+   only ever carries 1-3 topics at once (confirmed against this router's own real traffic throughout this
+   whole v0.8.4 session — e.g. `pppoe,ppp,error` for an auth failure, `system,info,account` for a login) —
+   requiring all 6 simultaneously on one message matches nothing in practice. Confirmed empirically, not
+   from RouterOS docs alone: the original rule produced ZERO packets even under heavy real PPP/system
+   traffic and a forced `/log warning` test; a rule with a SINGLE topic (`topics=warning`) fired
+   immediately for the same kind of trigger. Fixed by replacing the one 6-topic rule with **six separate
+   single-topic rules**, all pointing at the same `bosssyslog` action — genuine OR coverage across
+   `ppp`/`pppoe`/`system`/`critical`/`error`/`warning`.
+4. **`bsd-syslog=false` (the action's default) sends a non-standard, structure-less payload — no `<PRI>`,
+   no embedded hostname, just `"topics message"` as the entire UDP body** (confirmed via a raw hex capture:
+   `73 63 72 69 70 74 2c 77 61 72 6e 69 6e 67 20 ...` = literally `"script,warning ..."`). `rsyslog`'s
+   `imudp` parser has nothing to extract a hostname from a packet shaped like that, which — combined with
+   LibreNMS's own `process_syslog()` silently no-op'ing (still returns `200 OK`, "Syslog received: N") when
+   `get_cache($host, 'device_id')` resolves nothing — meant messages could arrive, get acknowledged, and
+   still never reach the `syslog` table, with zero error anywhere to point at the real cause. Fixed with
+   `bsd-syslog=yes` on the `bosssyslog` action — RouterOS then sends genuine RFC 3164
+   (`<28>Aug 25 05:53:37 ro-hotspot.bajastu.id message...`), `hostname` resolves correctly, and
+   `program`/`msg` split cleanly for any real multi-word message (confirmed: `"user 081285205789
+   authentication failed ..."` → `program="USER"`, `msg="081285205789 authentication failed ..."` — a
+   single-word test message is the one edge case where the whole thing lands in `program` with an empty
+   `msg`, not representative of real router log content).
+
+**`rsyslog-receiver` needed the same `/etc/localtime`+`/etc/timezone`+`/usr/share/zoneinfo` host bind-mount
+every other container in this file already has** — a bare `TZ=Asia/Jakarta` env var does nothing on a
+minimal Alpine image with no `tzdata` package; confirmed the container showed UTC time even with `TZ` set,
+fixed by adding the same three read-only mounts already used everywhere else in `docker-compose.yml`.
+
+**Open finding, NOT acted on unilaterally — needs Agung's call**: the bare `ppp` topic alone (one of the six
+rules above) turned out to carry an enormous volume of low-level LCP keepalive/debug chatter (`<MAGIC
+0x...>`, `RCVD/SENT LCP ECHOREQ/ECHOREP`), not just meaningful auth/connect events — observed growing from 0
+to over 15,000 `syslog` rows within a few minutes of enabling it on just ONE NAS with its real customer
+traffic. No retention/pruning policy exists for LibreNMS's own `syslog` table (same class of accepted-for-now
+gap already flagged for `cpe_signal_history`/`container_stats_history`) — at this observed rate, left running
+long-term (and eventually extended to more NAS), this would grow very fast. Options not yet decided: drop the
+bare `ppp` rule (keep only `pppoe`/`system`/`critical`/`error`/`warning`, which appear to cover the
+meaningful auth/connect/session events without the raw LCP layer), filter LCP-shaped messages out at the
+rsyslog level before forwarding (rsyslog can match-and-discard by content), or accept the volume and address
+it later with a retention policy alongside the other two tables already in that boat.
+
+**`GET /api/v1/monitoring/devices/{device}/syslog`** (`App\Http\Controllers\Api\V1\MonitoringController::
+deviceSyslog()`, `LibreNmsService::getSyslog()`) — same `monitoring.view`/`throttle:60,1` posture as every
+other endpoint in this controller, WhatsApp-bot-integration-foothold framing unchanged from Bagian A. Reads
+via LibreNMS's own `GET /logs/syslog/{device_id}` (confirmed from `list_logs()`'s source: no
+`topic` filter exists there or anywhere in the ingested schema — RouterOS's topics are never persisted past
+ingestion, only `facility`/`priority`/`level`/`tag`/`program`/`msg` are — so only a numeric `level` (0-7)
+filter is offered, applied client-side since the LibreNMS route itself has no severity filter param either).
+Full suite 783/783 green (5 new tests), Pint clean.
+
+**Resource usage, measured for real under genuinely heavy live load, not a synthetic benchmark** — 9 samples
+over ~13 minutes while `ro-hotspot`'s real PPP/system traffic (plus this session's own diagnostic activity)
+drove the `syslog` table from 0 to 42,667+ rows: CPU 0.85-1.97% throughout (never a sustained spike). RAM
+climbed steadily, NOT a flat steady-state within this window — 4.4 MiB → 37.7 MiB over 13 minutes, growth
+rate visibly slowing toward the end (~2.4-4.4 MiB/min early, ~0.9 MiB/min in the last sample) but not yet
+conclusively plateaued. **Read this as "resource cost scales with real message RATE, still tiny in absolute
+terms" rather than "steady-state confirmed"** — this window's ~3,000 msg/min rate is itself inflated by the
+bare-`ppp` LCP-noise finding above plus this session's own testing, well above what one NAS's genuinely
+normal traffic would produce; a longer measurement under ordinary (non-test) conditions would give a truer
+steady-state figure, not attempted here since this session's own activity was still actively generating load
+throughout.
+
+### Final scope decision: `ppp`/`pppoe` topics deliberately NOT enabled — don't re-add without reading this
+
+**Confirmed with Agung, not a temporary state to "fix" later**: `ro-hotspot`'s `bosssyslog` action only has
+four `/system logging` rules pointed at it — `warning`, `system`, `critical`, `error`. **`ppp` and `pppoe`
+are deliberately excluded.** Two independent reasons, both real, both investigated (not assumed):
+
+1. **PPP session-level data (connect/disconnect, per-session accounting) is already covered by
+   `radacct`/the "Riwayat Dialup" work — that's its actual system of record, not syslog.** Duplicating it
+   into LibreNMS's `syslog` table would be redundant, not a gap.
+2. **Neither `ppp` nor `pppoe` can be enabled cleanly on its own — both carry the exact same LCP
+   keepalive/debug flood** (`<MAGIC 0x...>`, `SENT/RCVD LCP ECHOREQ/ECHOREP`), confirmed by testing EACH
+   topic independently: adding `ppp` alone produced pure LCP noise (0 → 15,000+ `syslog` rows in a few
+   minutes from one NAS); removing it and testing `pppoe` alone, in isolation, produced the identical LCP
+   shape — RouterOS tags this debug-layer chatter under both. There is no third option within RouterOS's own
+   topic vocabulary that isolates "PPPoE session established/ended" from "raw LCP link-layer debug" — a real
+   fix would need CONTENT-based filtering in `rsyslog.conf.template` (discard lines matching `LCP`/`MAGIC`
+   before the `omhttp` action, forward everything else tagged ppp/pppoe) — **not built**, since reason #1
+   above already made the whole topic moot once considered together with #2's cost.
+
+**A real incident happened while `ppp` was briefly active, worth remembering if `ppp`/`pppoe` is ever
+reconsidered**: `rsyslog-receiver`'s `omhttp` action has no disk-backed queue (in-memory only, default
+size) — during the LCP flood, its internal queue silently absorbed far more messages than it could forward
+in real time, building an unbounded backlog with NO warning logged anywhere (`rsyslogd` never logged a
+"queue full" message — the default queue size class this rsyslog build uses is large enough to not hit
+that ceiling before the underlying problem was caught by other means). Confirmed via the `syslog` table's
+own `timestamp` column lagging live wall-clock time by a CONSTANT ~21 minutes across several one-minute
+checks (not shrinking — a genuinely stuck/backlogged pipeline, not a briefly-busy one catching up) even
+though the router's own local log buffer had already rotated to zero LCP entries. Total backlog reached
+**over 1.29 MILLION rows** in `librenms_db.syslog` before being noticed. Resolved by simply restarting
+`rsyslog-receiver` (`docker compose restart rsyslog-receiver`) — the in-memory queue is discarded on
+restart, which is exactly what was wanted here since 100% of the backlogged content was worthless LCP
+chatter, not real data. **If `ppp`/`pppoe` is ever re-enabled (with content filtering built first, per the
+paragraph above), watch `syslog` row growth and `rsyslog-receiver`'s own memory footprint closely for the
+first several minutes** — this exact failure mode will recur immediately without the filter.
+
+**Official resource baseline — 4-topic normal operation (`warning`/`system`/`critical`/`error`, the actual
+shipped config), NOT the earlier heavy-load or idle-backlog numbers above, both superseded by this one**: 9
+samples over ~13 minutes, clean state (post-backlog-incident restart, no `ppp`/`pppoe` active). **CPU: a flat
+0.00% every single sample. RAM: 1.77-1.773 MiB, essentially flat** — only 2 new `syslog` rows landed during
+the entire 13-minute window (this router's real admin/error activity is inherently low-frequency, not a
+sustained stream) — this is the genuine, representative cost of this module at its actual shipped scope: a
+rounding error against this host's resources. Sample content confirmed genuinely useful, not just
+auth-failure noise: real admin login/logout audit trail (`agung logged in/out ... via winbox`, `boss-apps
+logged in/out ... via api`) plus a config-change record (`rule removed by api:boss-apps@...`) — exactly the
+kind of security/audit-relevant `system`-topic event this module exists to surface, alongside `error`-topic
+auth failures whenever they occur.
+
+### UI: "Log" on the Monitoring page
+
+`App\Livewire\Network\DeviceSyslogModal` — a "Log" link per device row in `DeviceMonitoringList`, same
+dispatched-event sibling-component pattern as `openHistory()`/`DeviceHistoryModal` (`device-syslog-requested`).
+Deliberately its OWN component rather than a 4th tab bolted onto `DeviceHistoryModal` — that component's whole
+shape (metric tabs + Jam/Hari/.../Custom range tabs + a Chart.js series) is built around time-series charts,
+which a paginated/level-filtered syslog TABLE doesn't fit. Reuses `LibreNmsService::getSyslog()` verbatim — the
+exact same method the REST endpoint already calls, no new query logic. Level filter (Critical/Error/Warning/
+Notice/Info/Debug, badge-colored) + a limit selector (25/50/100/200, no true offset pagination — judged
+disproportionate for this UI, `LibreNmsService::getSyslog()` doesn't expose `start` either). Two states, not
+three: `empty` (no rows yet — real for every device except `ro-hotspot.bajastu.id` today) vs `unavailable` (a
+genuine LibreNMS API failure) — there's no "no sensor" concept for syslog the way there is for CPU/Memory/Suhu.
+Verified for real: `Livewire::test()` against device #8 with the REAL `LibreNmsService` (not faked) returned
+`state=ok`, 50 real rows, correct field shapes.
+
+## Riwayat Dialup — radacct on the CPE detail page (v0.8.4)
+
+**Accounting SQL write re-enabled — a deliberate reversal of the v0.6.5 privacy decision, confirmed explicitly
+by Agung, not a bug fix.** `docker/freeradius/entrypoint.sh`'s config patch no longer comments out `-sql` in
+the shared `accounting {}` section (it still disables `detail`, the raw packet dump — not asked to change,
+still no real feature needs it). The original "don't collect data we don't need" rationale stopped applying
+the moment "Riwayat Dialup" became a real, wanted consumer of exactly this data — confirmed by direct
+investigation BEFORE touching anything: `radacct` had **zero rows for every single customer**, including ones
+already genuinely authenticating via RADIUS (Taryo, Pras) — an empty `radacct` was a hard, unconditional
+blocker for this feature, not a per-customer migration-status gap.
+
+**`Acct-Interim-Interval` is still NOT configured** — confirmed again after re-enabling `-sql` (zero
+`radreply` rows, zero live raddb references beyond a commented-out, unrelated `post-proxy` attr_filter
+example) — explicitly out of scope for this change, per instruction. Consequence: a still-ACTIVE session's
+`radacct` row (`acctstoptime IS NULL`) never gets a mid-session refresh — `acctsessiontime`/
+`acctinputoctets`/`acctoutputoctets` stay at their Accounting-Start values (0) until the session actually
+ends. `RadiusSessionHistoryService::sessionSeconds()` computes a live approximate duration
+(`now() - acctstarttime`) for that case rather than showing a static "0" for an obviously still-running
+session — upload/download stay 0 until Stop, since there's genuinely no better data available without
+interim updates.
+
+**Verified for real, immediately after the flip**: force-disconnected Taryo's live session via the router
+API (same mechanism used throughout this sprint's RADIUS testing) to trigger a real Accounting-Stop +
+fresh Accounting-Start. Result — TWO real rows: the STOP record for his session that had been running since
+the RADIUS migration itself (`acctstarttime` correctly shows the ORIGINAL start time from hours earlier,
+not "now" — proof RADIUS Stop packets are self-contained with the whole session summary, not a delta, so a
+session that started before accounting was even enabled still gets ONE complete row once it eventually
+stops), real byte counters (378714 in / 72 out), `acctterminatecause = 'NAS-Request'`; and a fresh Start row
+for the reconnected session (`acctstoptime IS NULL`, still active).
+
+**`radius` — a second, genuinely separate Eloquent connection (`config/database.php`), never a
+cross-database SQL join (BOSS-009)**: `RadiusSessionHistoryService` queries `radius_db.radacct` on its own
+connection, then matches results to `boss_db.customers` entirely in PHP (usernames resolved first, from the
+already-tenant-scoped `Customer`, then used to filter the separate `radacct` query — never the other way
+around). `RADIUS_DB_*` env vars already existed in root `.env` (used by `freeradius`/`freeradius-db`
+themselves since v0.6.1) and are already real process env vars inside `boss-app` via `env_file: - .env` —
+no new `.env` entry was needed.
+
+**Username resolution, confirmed by direct investigation before writing any query**: the v0.12 migration
+batch used `customers.phone_number` as the RADIUS username for the large majority of customers, but matched
+candidates via `phone_number` OR `legacy_username` — meaning 13 of 551 customers have a `legacy_username`
+that genuinely DIFFERS from `phone_number`, and either could be the real `radacct.username` for those 13.
+`RadiusSessionHistoryService` queries `username IN (phone_number, legacy_username)` (deduplicated) rather
+than guessing which one — the only way to be correct for both the common case and the 13 exceptions without
+a schema change.
+
+**Session timestamps — forced to Asia/Jakarta at the CONNECTION level (`config/database.php`'s `'timezone'`
+key on the `radius` connection, which Laravel's `PostgresConnector` turns into a real `SET time zone '...'`
+on connect), not converted in PHP after the fact.** Found necessary because the `radius` connection's
+session timezone defaulted to UTC (confirmed: `SHOW timezone`) — a real, reproducible gap between what
+`psql` showed directly (`12:18:58+07`) and what came back over this connection (`05:18:58+00`, the same
+instant, just UTC) before this fix. A PHP-side `Carbon::parse(...)->setTimezone(...)` band-aid was tried
+first and works too, but was deliberately reverted in favor of fixing it at the connection itself, per
+explicit instruction — every value now arrives already correctly offset, no per-row conversion needed
+anywhere that reads this connection.
+
+**Real bug found and fixed while testing against actual production fixtures, not a hypothetical**:
+`CpeDialupHistory`'s first version used `CpeDevice::with('customer')->findOrFail(...)` — `Customer`'s own
+`BelongsToTenant` global scope filters by the ACTING USER's `tenant_id` during eager-loading, which silently
+returns `null` for `$device->customer` whenever a test (or, in principle, any code path) constructs a
+`CpeDevice` whose `tenant_id` was overridden independently of its `customer_id`'s own real tenant — a latent
+inconsistency already present in several existing test fixtures (`CpeDevice::factory()->create(['tenant_id'
+=> $tenant->id])`, without also pinning `customer_id` to a customer in that same tenant) that had never
+surfaced before because nothing previously loaded the `customer` relation when rendering the CPE detail
+page. Caused 9 real test failures across `CpeSignalHistoryGraphLivewireTest`, `CpeDeviceController` tests,
+etc. the moment this section started rendering unconditionally on every CPE detail page load. Fixed by
+fetching the customer via `Customer::withoutGlobalScopes()->findOrFail($device->customer_id)` instead — safe
+because `CpeDevice` itself was already fetched tenant-scoped one line above (proving the acting request is
+entitled to see it), so re-applying `Customer`'s own tenant scope a second time is both unnecessary and, as
+this incident showed, actively wrong given how this codebase's own test fixtures are built. Same "derive
+tenant_id trust from customer_id, not the other way around" relationship `CpeDeviceFactory`'s own definition
+already relies on.
+
+**`cpe_devices.customer_id` is NOT NULL** (confirmed directly from its own migration —
+`foreignId('customer_id')->constrained()`, no `->nullable()`) — there is no "CPE device with no customer at
+all" state to design for; `RadiusSessionHistoryService` returning an empty array (never migrated to RADIUS,
+or genuinely hasn't dialed since accounting was re-enabled) is the ONLY empty state this UI renders.
+
+**Section placement**: full-width, directly below the RX Power graph on the CPE detail page — same
+"standalone section, not folded into an existing panel" placement convention already used there. Columns
+match the MixRadius reference layout exactly: Acct ID, Uptime, Waktu Mulai, Waktu Berakhir, NAS, Upload,
+Download, Terminate By. `RadiusSessionHistoryService::formatBytes()` is a dynamic-unit (B/KB/MB/GB)
+formatter — same "pick one unit that fits the magnitude" UX principle as the Monitoring traffic graph's own
+`pickBpsUnit` (`resources/js/app.js`), not a literal code reuse: that helper formats a bit RATE client-side
+for a chart axis, this formats a cumulative BYTE total server-side for a table cell — no existing PHP helper
+for this in the codebase to reuse instead, confirmed by searching before writing a new one.
+
+**Verified for real, end-to-end, through the actual HTTP path** — a real authenticated `curl` session
+(login + `GET /cpe-devices/144`, Taryo's real bound CPE device) rendered the section with his real two
+`radacct` rows: the completed ~8h9m session (`369.84 KB` upload, `NAS-Request` terminate cause) and the
+freshly-reconnected active one (`Aktif` badge, live duration ticking). Pras has no `CpeDevice` bound yet
+(not a bug — no work order/CPE binding has happened for him), so his own empty-state rendering was verified
+via the test suite instead, not against a real device.
+
+Full regression suite green at 805/805 (22 new tests across `DeviceSyslogModalLivewireTest`,
+`RadiusSessionHistoryServiceTest`, `CpeDialupHistoryLivewireTest`), Pint clean.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

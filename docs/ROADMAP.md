@@ -28,6 +28,7 @@
 | v0.8.1  | Network         | OLT Onboarding & Dynamic Routing | OLT Credential Registry (manufacturer/model/device, SNMP/telnet/ssh), redesign addressing WireGuard ke `/30` per-NAS, OSPF dicoba lalu dinonaktifkan (referensi), fragment+reconcile dynamic routing, fix akar masalah SNMP OLT (kredensial) — 3 OLT real ter-onboard dengan bukti polling nyata | Selesai |
 | v0.8.2  | Network         | Dashboard Monitoring          | LibreNmsService (hybrid REST API + rrdtool), device list + traffic graph di `/monitoring`, add/edit/remove device manual, self-monitoring host (SNMP) + container (docker-socket-proxy, grouped VPN/LibreNMS/Core) — **tag digabung dengan v0.8.3, lihat catatan di bawah** | Selesai |
 | v0.8.3  | Network         | RX Power History, Custom Range & API | RX Power History terjadwal di Detail CPE, tab Custom Range dipakai ulang di 3 modal riwayat, REST API `/api/v1/monitoring/*` + RX Power API (foothold bot WhatsApp masa depan) — **satu branch/tag dengan v0.8.2 karena alasan workflow sesi, lihat catatan di bawah** | Selesai |
+| v0.8.4  | Network         | Dialup Syslog & RADIUS Migration | Fix SNAT per-NAS WireGuard, domain `boss.bajastu.id`+TLS, refactor `VpnSyncRouteFragments` (hilangkan router API login noise), pipeline syslog rsyslog→LibreNMS+UI+API, migrasi 295 akun PPPoE `ro-hotspot` ke RADIUS BOSS App, Riwayat Dialup di Detail CPE (reaktivasi `radacct`) | Selesai |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
 | v0.11.0 | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
@@ -975,3 +976,77 @@ supaya tidak hilang)**:
   dijadwalkan ke versi manapun).
 - **Audit "API wajib di semua fitur" (BOSS-006)** — masih menunggu
   keputusan terpisah, belum dijadwalkan.
+
+## v0.8.4 — Dialup Syslog & RADIUS Migration (branch `v0.8.4-dialup-syslog`, merged + tagged `v0.8.4`)
+
+Branch berkembang jauh lebih luas dari nama awalnya ("dialup-syslog") — mencakup beberapa fix infrastruktur
+mendesak yang ditemukan di tengah jalan, migrasi RADIUS produksi nyata (295 akun), dan fitur syslog+Riwayat
+Dialup yang direncanakan sejak awal. Merge ke `develop` lalu `main`, regresi hijau di setiap titik verifikasi.
+Detail teknis lengkap ada di `CLAUDE.md` — cari bagian "WireGuard Per-NAS SNAT", "Router API Login Removal",
+"Syslog: rsyslog receiver → LibreNMS", "Riwayat Dialup — radacct on the CPE detail page", "PPP local-secret →
+RADIUS migration".
+
+**Fix infrastruktur (ditemukan mendesak, dikerjakan sebelum fitur utama)**:
+- **WireGuard per-NAS SNAT** — generalisasi block `172.28.0.224/27` (FORWARD + MASQUERADE) untuk NAS kedua
+  (`ro-hotspot`) sempat cuma setengah jadi (FORWARD digeneralisasi, MASQUERADE lupa) — ditemukan lewat test
+  ping 100% loss, diperbaiki keduanya.
+- **Domain `boss.bajastu.id` + TLS** — HTTPS pertama di proyek ini, Let's Encrypt/certbot, dua-fase rollout
+  nginx (port 80 dulu untuk ACME challenge, baru port 443 setelah sertifikat ada).
+- **`VpnSyncRouteFragments` refactor** — hilangkan login RouterOS API per-menit ke tiap NAS (sumber noise
+  `boss-apps logged in/out via api` di log router) — ganti ke file status `wg-status-*` yang ditulis tiap
+  node WireGuard sendiri ke shared volume, dibaca `boss-app` tanpa exec/network sama sekali (pola sama
+  seperti `VpnCheckNodeHealth`'s heartbeat file, bukan `docker exec` seperti disebut awalnya — `boss-app`
+  memang tidak punya akses exec ke container lain sejak v0.6.2).
+
+**Syslog: rsyslog receiver → LibreNMS**: sidecar baru (`rsyslog`+`rsyslog-http` di alpine, IP `172.28.0.230`
+dari block infra yang sudah disediakan) terima UDP:514 dari NAS MikroTik, teruskan ke
+`POST /api/v0/syslogsink` LibreNMS. Empat bug nyata ditemukan & diperbaiki mendapatkan ini bekerja
+end-to-end: generalisasi FORWARD/MASQUERADE yang belum lengkap (sama kelas dengan fix SNAT di atas), `omhttp`
+default coba HTTPS ke LibreNMS yang plain HTTP, topik RouterOS `topics=a,b,c` ternyata logika AND bukan OR
+(rule 6-topik original nyaris tidak pernah cocok — diganti 6 rule terpisah), `bsd-syslog=false` mengirim
+payload tanpa struktur (`<PRI>`/hostname) yang membuat device-matching LibreNMS gagal senyap. **Keputusan
+scope final**: topik `ppp`/`pppoe` sengaja TIDAK diaktifkan (data session PPP sudah tercover `radacct`/
+Riwayat Dialup; keduanya membawa noise LCP echo/keepalive yang sama, tidak bisa dipisah per-topik tanpa
+filter konten tambahan yang tidak dibangun). UI "Log" di halaman Monitoring (`DeviceSyslogModal`, filter
+level+limit) + REST API `GET /api/v1/monitoring/devices/{id}/syslog`.
+
+**Migrasi RADIUS PPPoE VLAN 10 (`ro-hotspot`) — 295 akun**: dimulai dari 5 kandidat bersumber log
+auth-failure real, lalu batch 285 akun (audit `test-x86-bajastu` yang eligible, cross-check ke `customers`),
+plus 2 akun tanpa `customer_id` (`homebase@tokia.net.id`, `081295799278` — CID legacy yang diberikan tidak
+match ke `customers` manapun). Root cause RADIUS awalnya "tidak jalan sama sekali" untuk NAS ini ternyata
+SAMA dengan bug SNAT di atas (ditemukan dalam sesi investigasi yang sama). **`test-x86-bajastu` TIDAK
+disentuh sama sekali** — local secret di sana tetap aktif untuk semua customer, ini murni migrasi jalur
+`ro-hotspot`.
+
+**Riwayat Dialup di Detail CPE**: mengaktifkan ulang accounting SQL write FreeRADIUS (`-sql`, dimatikan sejak
+v0.6.5 untuk alasan privasi) — keputusan sadar dikonfirmasi Agung, bukan bug fix, karena `radacct` kosong
+total untuk SEMUA customer termasuk yang sudah RADIUS-aktif adalah blocker keras untuk fitur ini. Koneksi
+Laravel kedua (`radius`, ke `radius_db` terpisah, BOSS-009 — tidak ada cross-database join) dipaksa timezone
+Asia/Jakarta di level koneksi (`SET time zone`, bukan konversi PHP). `RadiusSessionHistoryService` cocokkan
+username via `phone_number` ATAU `legacy_username` (13 dari 551 customer punya keduanya berbeda). Diverifikasi
+nyata: reconnect paksa sesi Taryo menghasilkan baris Stop retroaktif lengkap (paket RADIUS Stop membawa
+seluruh ringkasan sesi, bukan delta) + baris Start baru, keduanya tampil benar di halaman Detail CPE asli.
+
+**Backlog terbuka dari sesi ini (belum dikerjakan, dicatat eksplisit supaya tidak hilang)**:
+- **Migrasi PPPoE belum tuntas** — 295 akun sudah di `radcheck` BOSS App, TAPI local secret di
+  `test-x86-bajastu` MASIH AKTIF untuk mayoritas customer (belum di-disable satupun secara sengaja sebagai
+  bagian cutover — hanya Taryo yang pernah dipaksa reconnect untuk keperluan test/verifikasi). Cutover penuh
+  (disable local secret bertahap, monitoring `radius=true` per customer, rollback siap) masih pekerjaan
+  lanjutan terpisah, belum dijadwalkan ke versi manapun.
+- **3 akun pola menyimpang** (`hambalang`, `homebase@tokia.net.id` — sudah di-`radcheck` tapi belum ada
+  `customers`, `hambalang-baru`) — perlu penanganan manual terpisah, sengaja tidak diikutkan ke batch
+  otomatis.
+- **2 akun tanpa `customer_id`** (`homebase@tokia.net.id`, `081295799278`) — sudah di `radcheck`/`radacct`
+  tapi belum ada record `customers` (CID legacy yang diberikan Agung tidak match ke tabel manapun) — perlu
+  dibuatkan record customer-nya secara manual sebelum bisa tertaut ke fitur Detail CPE/Riwayat Dialup.
+- **`Acct-Interim-Interval` belum dikonfigurasi** — baris `radacct` untuk sesi yang masih berjalan cuma
+  ter-update saat Accounting-Stop, bukan berkala — upload/download di UI tetap 0 untuk sesi aktif sampai
+  sesi itu berakhir. Dikonfirmasi masih kosong, sengaja tidak dikonfigurasi sesi ini (di luar scope).
+- **Rule firewall router produksi #8** (`drop connection-state=invalid`, ~8.7 juta+ hit aktif) — masih
+  backlog dari investigasi v0.8.1 LibreNMS OLT Onboarding, fix permanen (accept eksplisit atau koreksi
+  level connection-tracking) belum dikerjakan.
+- **Syslog OLT** — baru MikroTik/router (`ro-hotspot`) yang jalan sesi ini; riset CLI per-vendor OLT (ZTE/
+  HSGQ) untuk syslog belum dimulai sama sekali, sengaja ditunda (di luar scope eksplisit sesi ini).
+- **UX form OLT community auto-generate** — dari backlog v0.8.1 (form men-generate community string acak
+  SEBELUM admin sempat lihat community asli yang sudah dikonfigurasi manual di perangkat lama), belum
+  diperbaiki.

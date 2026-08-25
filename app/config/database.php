@@ -99,6 +99,41 @@ return [
             'sslmode' => env('DB_SSLMODE', 'prefer'),
         ],
 
+        // v0.8.4 — second, genuinely separate connection to `radius_db`
+        // (BOSS-009: logically separated databases, no cross-database
+        // joins — RadiusSessionHistoryService queries this connection on
+        // its own, then joins the result to `boss_db.customers` in PHP,
+        // never in SQL). RADIUS_DB_* already exist in root `.env` (read by
+        // freeradius-db/freeradius themselves since v0.6.1) and are
+        // already real process env vars inside boss-app via
+        // docker-compose.yml's `env_file: - .env` — no new .env entry
+        // needed for this to work.
+        'radius' => [
+            'driver' => 'pgsql',
+            'host' => env('RADIUS_DB_HOST', '127.0.0.1'),
+            'port' => env('RADIUS_DB_PORT', '5432'),
+            'database' => env('RADIUS_DB_NAME', 'radius_db'),
+            'username' => env('RADIUS_DB_USER', 'freeradius'),
+            'password' => env('RADIUS_DB_PASSWORD', ''),
+            'charset' => 'utf8',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'sslmode' => 'prefer',
+            // radacct's timestamptz columns are stored as absolute
+            // instants (UTC internally, as always) but a timestamptz's
+            // WIRE representation depends on the session's own `timezone`
+            // GUC — this connection's session default was UTC (confirmed:
+            // `SHOW timezone`), so raw driver values came back as
+            // "...+00" instead of this app's own Asia/Jakarta convention.
+            // Laravel's PostgresConnector runs `SET time zone '...'` on
+            // connect when this key is present — forcing it here means
+            // every value already arrives correctly offset, no PHP-side
+            // ->setTimezone() conversion needed in
+            // RadiusSessionHistoryService.
+            'timezone' => 'Asia/Jakarta',
+        ],
+
         'sqlsrv' => [
             'driver' => 'sqlsrv',
             'url' => env('DB_URL'),

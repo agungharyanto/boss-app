@@ -124,6 +124,31 @@ class MonitoringController extends Controller
     }
 
     /**
+     * v0.8.4 — syslog entries for one LibreNMS device (rsyslog-receiver ->
+     * LibreNMS `POST /api/v0/syslogsink`, see CLAUDE.md's syslog section).
+     * `level` is the syslog table's own numeric severity (0-7) — see
+     * LibreNmsService::getSyslog()'s own docblock for why there is no
+     * "topic" filter: RouterOS's topics are never persisted once ingested.
+     */
+    public function deviceSyslog(Request $request, int $device, LibreNmsService $service): JsonResponse
+    {
+        $this->authorize('monitoring.view');
+
+        $validated = $request->validate([
+            'limit' => ['nullable', 'integer', 'min:1', 'max:500'],
+            'level' => ['nullable', 'integer', 'min:0', 'max:7'],
+        ]);
+
+        $rows = $service->getSyslog(
+            $device,
+            (int) ($validated['limit'] ?? 50),
+            isset($validated['level']) ? (int) $validated['level'] : null,
+        );
+
+        return $this->success($rows, 'Riwayat syslog device monitoring');
+    }
+
+    /**
      * v0.8.4 Bagian D — REST twin of App\Livewire\Network\DeviceEditForm,
      * same `LibreNmsService::updateDevice()` whitelist (display_template/
      * community/port/snmpver — see that method's own docblock for why

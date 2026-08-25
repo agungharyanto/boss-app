@@ -188,6 +188,15 @@
         @livewire('network.cpe-signal-history-graph', ['cpeDeviceId' => $device->id], key('cpe-signal-history-graph-'.$device->id))
     </div>
 
+    {{-- v0.8.4 — "Riwayat Dialup" (radacct via RadiusSessionHistoryService),
+         same full-width standalone-section placement as the RX Power graph
+         above — a separate concern (RADIUS accounting, not GenieACS/SNMP),
+         so its own component/section rather than folded into either
+         existing panel. --}}
+    <div class="bg-white border border-gray-200 rounded-md p-5 mt-6">
+        @livewire('network.cpe-dialup-history', ['cpeDeviceId' => $device->id], key('cpe-dialup-history-'.$device->id))
+    </div>
+
     {{-- WiFi/SSID — semua SSID yang ditemukan discovery, bukan cuma SSID1.
          "Ganti WiFi" (2026-08-17) is now per-row here instead of one
          standalone form below — a single flat form could only ever target

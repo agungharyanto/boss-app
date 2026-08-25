@@ -61,21 +61,27 @@ fi
 # retransmit forever for nothing. The correct fix is the other end of this:
 # FreeRADIUS DOES listen on the real accounting port (see the per-NAS
 # listen{} config above) and DOES answer every Accounting-Request with a
-# real Accounting-Response — it just never persists what's in it. `detail`
-# (raw packet dump to a logfile) and `-sql` (write to radacct) are both
-# disabled below, so nothing customer-identifiable is written to disk or
-# the database — same "don't collect data we don't need" posture already
-# applied to radacct/detail files earlier this session. `exec` and
-# `attr_filter.accounting_response` are left untouched (harmless — no
-# Exec-Program configured, and attribute filtering doesn't persist
-# anything). This patches the ONE shared `accounting {}` section in
-# sites-enabled/default, so it applies to every NAS's accounting listener,
-# not just this one — deliberate, since none of them should be logging raw
-# customer accounting data without a real reason to.
+# real Accounting-Response. `detail` (raw packet dump to a logfile) stays
+# disabled below — no real feature in this codebase needs the raw packet
+# log, only the parsed radacct row.
+#
+# v0.8.4 amendment (dialup-syslog branch) — REVERSED, deliberately, per
+# Agung's explicit instruction: `-sql` (write to radacct) is back ON.
+# The original privacy rationale ("don't collect data we don't need") no
+# longer held once the "Riwayat Dialup" feature became a real, wanted
+# consumer of exactly this data (Acct ID/uptime/start/stop/NAS/upload/
+# download/terminate-cause on the CPE detail page) — an empty radacct
+# was a hard blocker for it, confirmed by direct investigation (0 rows,
+# for every customer, including ones already genuinely authenticating via
+# RADIUS). This is a conscious reversal, not a bug fix — if `-sql` is
+# ever disabled again, this comment (and CLAUDE.md's own record of this
+# decision) is why. `Acct-Interim-Interval` is deliberately NOT
+# configured as part of this change — a radacct row is only written/
+# updated on Accounting-Start/Stop, never mid-session — see CLAUDE.md for
+# the current status of that separate, out-of-scope-for-now setting.
 if ! grep -q "boss-app: accounting logging disabled" /etc/raddb/sites-enabled/default 2>/dev/null; then
     sed -i '/^accounting {/,/^}/{
         s/^\tdetail$/#\tdetail\t# boss-app: accounting logging disabled (privacy - no raw packet log)/
-        s/^\t-sql$/#\t-sql\t# boss-app: accounting logging disabled (privacy - do not persist radacct)/
     }' /etc/raddb/sites-enabled/default
 fi
 

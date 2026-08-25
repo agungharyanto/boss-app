@@ -21,6 +21,7 @@
     {{-- v0.8.4 Bagian D — sibling components, opened via DeviceMonitoringList's
          dispatched device-history-requested/device-edit-requested events. --}}
     <livewire:network.device-history-modal />
+    <livewire:network.device-syslog-modal />
     @can('monitoring.manage')
         <livewire:network.device-edit-form />
     @endcan

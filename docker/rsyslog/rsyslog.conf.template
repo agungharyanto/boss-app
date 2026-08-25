@@ -1,0 +1,39 @@
+# BOSS App — rsyslog receiver (v0.8.4). Generated from this template by
+# entrypoint.sh at container start (__LIBRENMS_API_TOKEN__ substituted
+# via sed, same idiom docker/frr/entrypoint.sh already uses for its own
+# __PLACEHOLDER__ values) — never edited in place, never baked in with a
+# real token at build time.
+
+module(load="imudp")
+input(type="imudp" port="514")
+
+module(load="omhttp")
+
+# Field order/names match EXACTLY what LibreNMS's own includes/syslog.php
+# expects (`$keys = ['host', 'facility', 'priority', 'level', 'tag',
+# 'timestamp', 'msg', 'program']`, same 8 fields whether delivered via
+# stdin (pipe-delimited) or, as here, via POST /api/v0/syslogsink (JSON)
+# — both paths call the identical process_syslog() function underneath.
+# `format="json"` on every property does the necessary escaping (quotes,
+# backslashes, control characters in $msg) — a real router log line can
+# contain arbitrary characters.
+template(name="LibreNMSSyslogJson" type="list") {
+    constant(value="{\"host\":\"")      property(name="hostname" format="json")
+    constant(value="\",\"facility\":\"") property(name="syslogfacility-text" format="json")
+    constant(value="\",\"priority\":\"") property(name="syslogpriority-text" format="json")
+    constant(value="\",\"level\":\"")   property(name="syslogseverity" format="json")
+    constant(value="\",\"tag\":\"")     property(name="syslogtag" format="json")
+    constant(value="\",\"timestamp\":\"") property(name="timegenerated" dateformat="mysql" format="json")
+    constant(value="\",\"msg\":\"")     property(name="msg" format="json")
+    constant(value="\",\"program\":\"") property(name="programname" format="json")
+    constant(value="\"}")
+}
+
+action(type="omhttp"
+    server="librenms" serverport="8000"
+    usehttps="off"
+    restpath="api/v0/syslogsink"
+    httpheaders=["X-Auth-Token: __LIBRENMS_API_TOKEN__", "Content-Type: application/json"]
+    template="LibreNMSSyslogJson"
+    action.resumeRetryCount="-1"
+)

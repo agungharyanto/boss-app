@@ -7,7 +7,9 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      # - "443:443"   # aktifkan setelah TLS terpasang (lihat docs/DEPLOYMENT.md)
+      # v0.8.4 — boss.bajastu.id activation, TLS terpasang (Let's Encrypt
+      # via certbot, lihat service `certbot` di bawah).
+      - "443:443"
       # v0.7.1 — CPE devices dial this to reach genieacs-cwmp, fronted by
       # nginx rather than published on genieacs-cwmp itself directly (see
       # docker/nginx/conf.d/genieacs-cwmp.conf).
@@ -19,12 +21,36 @@ services:
       - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
       - ./docker/nginx/stream.conf.d:/etc/nginx/stream.conf.d:ro
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - certbot_conf:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     depends_on:
       - boss-app
       - genieacs-cwmp
+    networks:
+      - boss-network
+
+  # v0.8.4 — Let's Encrypt certificate for boss.bajastu.id. Webroot mode
+  # (not standalone) so it never needs its own listener/port — it just
+  # writes ACME challenge files into the shared certbot_www volume, which
+  # boss-nginx serves at /.well-known/acme-challenge/ on port 80 (see
+  # docker/nginx/conf.d/boss-domain.conf). The daemon loop (`certbot
+  # renew` every 12h, matching Certbot's own documented recommendation of
+  # checking twice daily) is what actually stays running long-term — the
+  # FIRST certificate is issued via a one-off `docker compose run --rm
+  # certbot certonly ...` invocation (see docs/DEPLOYMENT.md), not by this
+  # entrypoint itself, since certonly's own interactive-first-run shape
+  # doesn't fit a long-lived container command.
+  certbot:
+    image: certbot/certbot:v2.11.0
+    container_name: boss-certbot
+    restart: unless-stopped
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: "sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done;'"
     networks:
       - boss-network
 
@@ -231,6 +257,36 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - boss-network
+
+  # v0.8.4 — receives syslog UDP:514 from NAS MikroTik routers (reached
+  # over the existing WireGuard tunnel + reserved infra block, same
+  # posture as FreeRADIUS/GenieACS/LibreNMS below — no new public port)
+  # and forwards to LibreNMS via POST /api/v0/syslogsink. See
+  # docker/rsyslog/Dockerfile and CLAUDE.md's syslog design section for
+  # why this is a genuinely separate sidecar rather than rsyslog living
+  # inside the official librenms image.
+  rsyslog-receiver:
+    build:
+      context: ./docker/rsyslog
+    container_name: rsyslog-receiver
+    restart: unless-stopped
+    environment:
+      LIBRENMS_API_TOKEN: ${LIBRENMS_API_TOKEN}
+      TZ: Asia/Jakarta
+    volumes:
+      # TZ alone does nothing on a minimal Alpine image with no tzdata
+      # package — same host-mount idiom every other container in this
+      # file already uses for the same reason.
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    networks:
+      boss-network:
+        # Static IP from the reserved 172.28.0.224/27 infra block — see
+        # CLAUDE.md's "Infra Tunnel IP Block" table. No host port
+        # published (BOSS-010) — only reachable from inside boss-network/
+        # over the WireGuard tunnel, never the public internet.
+        ipv4_address: ${RSYSLOG_INTERNAL_IP}
 
   whatsapp-gateway:
     build:
@@ -1217,3 +1273,14 @@ volumes:
   freeradius_nas_config:
   librenms_db_data:
   librenms_data:
+  # v0.8.4 — boss.bajastu.id activation, the first real TLS deployment in
+  # this project (v0.1.0-foundation deliberately deferred it, see
+  # docs/DEPLOYMENT.md's own "HTTPS (menyusul)" note). certbot_conf holds
+  # the actual Let's Encrypt account/certificate state (/etc/letsencrypt);
+  # certbot_www is the shared webroot both boss-nginx and the certbot
+  # container use for the HTTP-01 ACME challenge — same "shared Docker
+  # volume between two containers" pattern already used everywhere else
+  # in this project (vpn_pki, freeradius_nas_config, etc.), not a new
+  # mechanism.
+  certbot_conf:
+  certbot_www:

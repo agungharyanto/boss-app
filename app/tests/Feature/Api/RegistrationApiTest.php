@@ -4,7 +4,7 @@ namespace Tests\Feature\Api;
 
 use App\Enums\CommissionStatus;
 use App\Enums\RegistrationChannel;
-use App\Models\Agent;
+use App\Models\Referrer;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -29,7 +29,7 @@ class RegistrationApiTest extends TestCase
         return $user;
     }
 
-    public function test_sales_internal_can_register_a_customer_without_an_agent(): void
+    public function test_sales_internal_can_register_a_customer_without_a_referrer(): void
     {
         $user = $this->userWithRole('sales_internal');
 
@@ -48,10 +48,10 @@ class RegistrationApiTest extends TestCase
         $this->assertDatabaseCount('commission_ledger', 0);
     }
 
-    public function test_a_user_linked_to_an_agent_is_auto_attributed_as_the_referrer(): void
+    public function test_a_user_linked_to_a_referrer_is_auto_attributed_as_the_referrer(): void
     {
         $user = $this->userWithRole('sales_freelance');
-        $agent = Agent::factory()->freelance()->create(['tenant_id' => $user->tenant_id, 'user_id' => $user->id]);
+        $referrer = Referrer::factory()->freelance()->create(['tenant_id' => $user->tenant_id, 'user_id' => $user->id]);
 
         $response = $this->actingAs($user)->postJson('/api/v1/registrations', [
             'name' => 'Siti Aminah',
@@ -62,30 +62,30 @@ class RegistrationApiTest extends TestCase
         $response->assertCreated();
         $this->assertDatabaseHas('customers', [
             'name' => 'Siti Aminah',
-            'referred_by_agent_id' => $agent->id,
+            'referred_by_referrer_id' => $referrer->id,
             'registration_channel' => RegistrationChannel::Freelance->value,
         ]);
         $this->assertDatabaseHas('commission_ledger', [
-            'agent_id' => $agent->id,
+            'referrer_id' => $referrer->id,
             'status' => CommissionStatus::Pending->value,
         ]);
     }
 
-    public function test_a_caller_without_a_linked_agent_can_optionally_attribute_a_referral(): void
+    public function test_a_caller_without_a_linked_referrer_can_optionally_attribute_a_referral(): void
     {
         $user = $this->userWithRole('super_admin');
-        $agent = Agent::factory()->create(['tenant_id' => $user->tenant_id]);
+        $referrer = Referrer::factory()->create(['tenant_id' => $user->tenant_id]);
 
         $response = $this->actingAs($user)->postJson('/api/v1/registrations', [
             'name' => 'Andi Wijaya',
             'address' => 'Jl. Kenanga No. 3',
             'phone_number' => '081234567892',
-            'referred_by_agent_id' => $agent->id,
+            'referred_by_referrer_id' => $referrer->id,
         ]);
 
         $response->assertCreated();
         $this->assertDatabaseHas('commission_ledger', [
-            'agent_id' => $agent->id,
+            'referrer_id' => $referrer->id,
             'status' => CommissionStatus::Pending->value,
         ]);
     }
@@ -163,10 +163,10 @@ class RegistrationApiTest extends TestCase
         $this->postJson('/api/v1/registrations', [])->assertUnauthorized();
     }
 
-    public function test_an_agent_sees_their_own_referrals_with_commission_status(): void
+    public function test_a_referrer_sees_their_own_referrals_with_commission_status(): void
     {
         $user = $this->userWithRole('sales_freelance');
-        $agent = Agent::factory()->freelance()->create(['tenant_id' => $user->tenant_id, 'user_id' => $user->id]);
+        $referrer = Referrer::factory()->freelance()->create(['tenant_id' => $user->tenant_id, 'user_id' => $user->id]);
 
         $this->actingAs($user)->postJson('/api/v1/registrations', [
             'name' => 'Rina Kusuma',
@@ -182,7 +182,7 @@ class RegistrationApiTest extends TestCase
         $response->assertJsonPath('data.0.commission_status', CommissionStatus::Pending->value);
     }
 
-    public function test_a_caller_with_permission_but_no_linked_agent_gets_not_found(): void
+    public function test_a_caller_with_permission_but_no_linked_referrer_gets_not_found(): void
     {
         $user = $this->userWithRole('sales_internal');
 

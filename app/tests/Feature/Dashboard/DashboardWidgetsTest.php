@@ -35,13 +35,13 @@ class DashboardWidgetsTest extends TestCase
 
         Livewire::actingAs($user)
             ->test(WidgetSelector::class)
-            ->set('selected.'.DashboardWidget::TopAgents->value, false)
+            ->set('selected.'.DashboardWidget::TopReferrers->value, false)
             ->call('save');
 
         $this->assertDatabaseHas('user_preferences', ['user_id' => $user->id]);
 
         $preference = $user->fresh()->preference;
-        $this->assertNotContains(DashboardWidget::TopAgents->value, $preference->dashboard_widgets);
+        $this->assertNotContains(DashboardWidget::TopReferrers->value, $preference->dashboard_widgets);
         $this->assertContains(DashboardWidget::TotalCustomers->value, $preference->dashboard_widgets);
 
         // Re-fetch the user: the original $user's "preference" relation was
@@ -52,7 +52,7 @@ class DashboardWidgetsTest extends TestCase
         $response->assertSee(__('Total Pelanggan'));
         $this->assertSame(
             1,
-            substr_count($response->getContent(), __('Agent Referral Teratas')),
+            substr_count($response->getContent(), __('Referrer Teratas')),
         );
     }
 
@@ -66,6 +66,6 @@ class DashboardWidgetsTest extends TestCase
         Livewire::actingAs($user)
             ->test(WidgetSelector::class)
             ->assertSet('selected.'.DashboardWidget::TotalCustomers->value, true)
-            ->assertSet('selected.'.DashboardWidget::TopAgents->value, false);
+            ->assertSet('selected.'.DashboardWidget::TopReferrers->value, false);
     }
 }

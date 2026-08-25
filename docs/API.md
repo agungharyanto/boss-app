@@ -139,27 +139,32 @@ dipakai bareng oleh endpoint ini dan Livewire `RegisterCustomer`.
 ### `POST /registrations`
 
 Body: `name`, `address`, `phone_number` (wajib), `nik`, `latitude`,
-`longitude`, `package` (opsional), `referred_by_agent_id` (opsional, harus
-`id` agent milik tenant yang sama).
+`longitude`, `package` (opsional), `referred_by_referrer_id` (opsional, harus
+`id` referrer milik tenant yang sama).
 
-Aturan atribusi agent: kalau user yang login sudah terhubung ke sebuah
-`Agent` (`agents.user_id`), registrasi **selalu** diatribusikan ke agent itu
-— `referred_by_agent_id` di body diabaikan. Kalau user tidak terhubung ke
-agent manapun (mis. `super_admin` mendaftarkan langsung), `referred_by_agent_id`
-dipakai kalau dikirim, atau `registration_channel` jadi `admin` tanpa
-referral kalau tidak.
+> **Breaking change v0.9.1**: field ini sebelumnya bernama `referred_by_agent_id`
+> (model `Agent` di-rename jadi `Referrer` — lihat CLAUDE.md bagian v0.9.1 untuk
+> alasannya). Project masih pre-production/belum ada consumer eksternal, jadi
+> rename field dilakukan langsung tanpa periode transisi/alias.
 
-Setiap registrasi dengan agent otomatis membuat satu baris `commission_ledger`
+Aturan atribusi referrer: kalau user yang login sudah terhubung ke sebuah
+`Referrer` (`referrers.user_id`), registrasi **selalu** diatribusikan ke
+referrer itu — `referred_by_referrer_id` di body diabaikan. Kalau user tidak
+terhubung ke referrer manapun (mis. `super_admin` mendaftarkan langsung),
+`referred_by_referrer_id` dipakai kalau dikirim, atau `registration_channel`
+jadi `admin` tanpa referral kalau tidak.
+
+Setiap registrasi dengan referrer otomatis membuat satu baris `commission_ledger`
 berstatus `pending` (`amount` masih null — diisi di sprint v0.9.0 Commission).
 Response `201` berisi `CustomerResource` seperti `POST /customers`.
 
 ### `GET /referrals`
 
-Daftar customer yang direferensikan oleh agent milik user yang login, plus
+Daftar customer yang direferensikan oleh referrer milik user yang login, plus
 status commission masing-masing. `404` kalau user yang login tidak terhubung
-ke `Agent` manapun (`agents.user_id`). Tidak ada konsep kode referral yang
-di-generate/divalidasi di codebase ini — atribusi agent murni lewat link
-`agents.user_id`, bukan kode.
+ke `Referrer` manapun (`referrers.user_id`). Tidak ada konsep kode referral
+yang di-generate/divalidasi di codebase ini — atribusi referrer murni lewat
+link `referrers.user_id`, bukan kode.
 
 ```json
 {
@@ -257,7 +262,7 @@ menghapus baris `reseller_users` — hanya mengubah `status` jadi `inactive`
 
 Reseller owner/staff mengelola pricing package milik reseller sendiri;
 `reseller_id` **selalu** diambil dari context yang ter-resolve (body
-`reseller_id` diabaikan untuk mereka, sama seperti pola atribusi agent di
+`reseller_id` diabaikan untuk mereka, sama seperti pola atribusi referrer di
 `POST /registrations`). ISP admin (tanpa context) **wajib** mengirim
 `reseller_id` eksplisit di `POST` — divalidasi harus reseller di tenant yang
 sama. `GET` (index) untuk admin bisa difilter opsional lewat query

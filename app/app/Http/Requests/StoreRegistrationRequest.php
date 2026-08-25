@@ -42,9 +42,9 @@ class StoreRegistrationRequest extends FormRequest
             'latitude' => ['nullable', 'numeric', 'between:-90,90'],
             'longitude' => ['nullable', 'numeric', 'between:-180,180'],
             'package' => ['nullable', 'string', 'max:255'],
-            'referred_by_agent_id' => [
+            'referred_by_referrer_id' => [
                 'nullable', 'integer',
-                Rule::exists('agents', 'id')->where('tenant_id', $tenantId),
+                Rule::exists('referrers', 'id')->where('tenant_id', $tenantId),
             ],
         ];
     }

@@ -26,7 +26,7 @@ class Customer extends Model
         'address',
         'phone_number',
         'status',
-        'referred_by_agent_id',
+        'referred_by_referrer_id',
         'registration_status',
         'registration_channel',
         'legacy_mixradius_member_id',
@@ -107,7 +107,7 @@ class Customer extends Model
 
     public function referredBy(): BelongsTo
     {
-        return $this->belongsTo(Agent::class, 'referred_by_agent_id');
+        return $this->belongsTo(Referrer::class, 'referred_by_referrer_id');
     }
 
     public function reseller(): BelongsTo

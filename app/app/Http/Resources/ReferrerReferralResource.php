@@ -9,7 +9,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * A referred Customer, annotated with the commission_ledger row created for
  * it at registration time (see RegistrationService::register()).
  */
-class AgentReferralResource extends JsonResource
+class ReferrerReferralResource extends JsonResource
 {
     /**
      * @return array<string, mixed>

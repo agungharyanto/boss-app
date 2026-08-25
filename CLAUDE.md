@@ -576,8 +576,9 @@ from "use the local disk").
 `WorkOrderPolicy` check `odps.*`/`technicians.*`/`work_orders.*` permissions (super_admin-only, seeded in
 `RolesAndPermissionsSeeder::seedInstallationPermissions()`) for full ISP-admin access, or **any active
 `reseller_users` membership** (owner **or** staff, not owner-only) for a reseller's own ODPs/
-technicians/work orders. The existing `teknisi` Spatie role (an `Agent` type used for field registration/
-commission since v0.3.0, a completely different concept from the new `Technician` model here) deliberately
+technicians/work orders. The existing `teknisi` Spatie role (a `Referrer` type — renamed from `Agent` in
+v0.9.1, see that section below — used for field registration/commission since v0.3.0, a completely
+different concept from the new `Technician` model here) deliberately
 does **not** get these permissions automatically — a technician's own scoped access (seeing only their own
 assigned work orders), if ever wanted, is new scope for a later sprint, not assumed here.
 
@@ -5729,6 +5730,68 @@ via the test suite instead, not against a real device.
 
 Full regression suite green at 805/805 (22 new tests across `DeviceSyslogModalLivewireTest`,
 `RadiusSessionHistoryServiceTest`, `CpeDialupHistoryLivewireTest`), Pint clean.
+
+## Rename: Agent → Referrer (v0.9.1)
+
+**The `Agent` model/table (`agents`, since v0.2.0-v0.3.0 — sales/referral/commission attribution on
+customer registration) was renamed to `Referrer`, freeing "Agent" for a genuinely different, unbuilt
+future module (Token/Hotspot sales agents) that needs that exact name.** Done as its own sprint,
+deliberately BEFORE v0.9.0 (Commission) so Commission's own logic is built directly against the final
+name rather than needing its own follow-up rename later.
+
+**Why "Referrer", not "Sales" (the name first considered)** — investigated and rejected because of real
+collisions with two independent, pre-existing concepts that had to stay untouched: `App\Enums\
+AgentType::Sales` (now `App\Enums\ReferrerType::Sales` — the enum's own backed VALUE stayed `'sales'`,
+only the case/class name changed, so no data migration was needed for the `type` column) and
+`App\Enums\RegistrationChannel::Sales`, plus the Spatie roles `sales_internal`/`sales_freelance`. A
+suspected third collision (v0.3.3 Tax Engine "sales tax") turned out NOT to exist at all — that module's
+own "sales tax" wording is generic prose in a comment, never a reference to any model.
+
+**Exact rename mapping (locked, not improvised)**: `Agent`→`Referrer` (model), `AgentType`→`ReferrerType`
+(enum, case VALUES unchanged), `AgentFactory`→`ReferrerFactory`, `AgentSeeder`→`ReferrerSeeder`,
+`AgentReferralResource`→`ReferrerReferralResource`, `TopAgents`→`TopReferrers` (dashboard widget Livewire
+component) — but `App\Enums\DashboardWidget::TopReferrers`'s own backed VALUE deliberately stayed
+`'top_agents'`, same "case name can change, persisted value must not" discipline as `ReferrerType` above,
+since this value is stored inside real users' `user_preferences.dashboard_widgets` (json) — changing it
+would have silently dropped this widget from every already-saved dashboard preference. Table `agents`→
+`referrers`, `commission_ledger.agent_id`→`referrer_id`, `customers.referred_by_agent_id`→
+`referred_by_referrer_id`. `Customer::referredBy()` — the method name itself stayed unchanged (already
+semantically neutral), only its target became `belongsTo(Referrer::class, 'referred_by_referrer_id')`.
+
+**Migrated via `Schema::rename()`/`renameColumn()`, never drop+recreate** — a new migration
+(`2026_08_25_161006_rename_agents_to_referrers.php`), `down()` reverses in the opposite order of `up()`.
+FK constraint auto-generated names (`agents_tenant_id_foreign`, etc.) were deliberately left as-is —
+cosmetic only, not renamed in this same migration, per explicit instruction. Run for real against the dev
+database (`agents` held 0 rows at the time — no real referral data had ever been created yet, confirmed
+both via `Referrer::count()` and a raw `DB::table('referrers')->count()` before trusting the model-level
+read), so this rename was verified structurally (`migrate --pretend` reviewed first, then executed
+cleanly) rather than via an actual data-preservation check with real rows.
+
+**Breaking HTTP contract change, deliberate** — `POST /api/v1/registrations`'s request field
+`referred_by_agent_id` became `referred_by_referrer_id`, and `GET /api/v1/referrals`'s underlying resource
+class renamed accordingly (its own JSON field names were already agent-neutral — `customer_id`/
+`commission_status`/etc. — so no field-level change there). Accepted as a genuine breaking change with no
+transition alias, since this project is still pre-production with no real external API consumer yet.
+`docs/API.md` updated to match, with an explicit note on the field rename for anyone reading it later.
+
+**Explicitly NOT touched, per instruction**: `App\Enums\RegistrationChannel::Sales` and the Spatie roles
+`sales_internal`/`sales_freelance` — independent, pre-existing concepts that happen to share the word
+"sales" with `ReferrerType::Sales`, not the same thing.
+
+**Verified**: full regression suite green at 805/805 after rewriting the 3 test files that referenced the
+old class/field/column names (`RegistrationServiceTest`, `RegistrationApiTest`, `DashboardWidgetsTest`),
+Pint clean on every touched file (7 pre-existing style issues found elsewhere, all in untouched Network
+module files — out of scope, not fixed here). A case-insensitive re-grep for "agent" across the whole
+codebase after the rename came back clean except: historical migration files (left untouched on
+purpose — they represent schema history as it actually happened, the new rename migration is the correct
+place for this change, not an edit to old files), the new rename migration's own comments (describing the
+FROM state), `DashboardWidget`'s own documented `'top_agents'` value (above), and one confirmed false
+positive ("SNMP agent" wording in `AddMonitoringDeviceForm.php`, unrelated to this module entirely).
+
+**Not merged/tagged as of this writing** — branch `v0.9.1-rename-agent-to-referrer`, implementation and
+regression complete, deliberately left for Agung's own manual browser verification (registration form,
+"Referrer Teratas" dashboard widget, registration API) before `git merge --no-ff` into `develop`/`main`
+and tagging `v0.9.1` — this repo's standing workflow, no PR flow.
 
 ## Architecture
 

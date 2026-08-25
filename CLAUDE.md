@@ -5633,6 +5633,103 @@ genuine LibreNMS API failure) — there's no "no sensor" concept for syslog the 
 Verified for real: `Livewire::test()` against device #8 with the REAL `LibreNmsService` (not faked) returned
 `state=ok`, 50 real rows, correct field shapes.
 
+## Riwayat Dialup — radacct on the CPE detail page (v0.8.4)
+
+**Accounting SQL write re-enabled — a deliberate reversal of the v0.6.5 privacy decision, confirmed explicitly
+by Agung, not a bug fix.** `docker/freeradius/entrypoint.sh`'s config patch no longer comments out `-sql` in
+the shared `accounting {}` section (it still disables `detail`, the raw packet dump — not asked to change,
+still no real feature needs it). The original "don't collect data we don't need" rationale stopped applying
+the moment "Riwayat Dialup" became a real, wanted consumer of exactly this data — confirmed by direct
+investigation BEFORE touching anything: `radacct` had **zero rows for every single customer**, including ones
+already genuinely authenticating via RADIUS (Taryo, Pras) — an empty `radacct` was a hard, unconditional
+blocker for this feature, not a per-customer migration-status gap.
+
+**`Acct-Interim-Interval` is still NOT configured** — confirmed again after re-enabling `-sql` (zero
+`radreply` rows, zero live raddb references beyond a commented-out, unrelated `post-proxy` attr_filter
+example) — explicitly out of scope for this change, per instruction. Consequence: a still-ACTIVE session's
+`radacct` row (`acctstoptime IS NULL`) never gets a mid-session refresh — `acctsessiontime`/
+`acctinputoctets`/`acctoutputoctets` stay at their Accounting-Start values (0) until the session actually
+ends. `RadiusSessionHistoryService::sessionSeconds()` computes a live approximate duration
+(`now() - acctstarttime`) for that case rather than showing a static "0" for an obviously still-running
+session — upload/download stay 0 until Stop, since there's genuinely no better data available without
+interim updates.
+
+**Verified for real, immediately after the flip**: force-disconnected Taryo's live session via the router
+API (same mechanism used throughout this sprint's RADIUS testing) to trigger a real Accounting-Stop +
+fresh Accounting-Start. Result — TWO real rows: the STOP record for his session that had been running since
+the RADIUS migration itself (`acctstarttime` correctly shows the ORIGINAL start time from hours earlier,
+not "now" — proof RADIUS Stop packets are self-contained with the whole session summary, not a delta, so a
+session that started before accounting was even enabled still gets ONE complete row once it eventually
+stops), real byte counters (378714 in / 72 out), `acctterminatecause = 'NAS-Request'`; and a fresh Start row
+for the reconnected session (`acctstoptime IS NULL`, still active).
+
+**`radius` — a second, genuinely separate Eloquent connection (`config/database.php`), never a
+cross-database SQL join (BOSS-009)**: `RadiusSessionHistoryService` queries `radius_db.radacct` on its own
+connection, then matches results to `boss_db.customers` entirely in PHP (usernames resolved first, from the
+already-tenant-scoped `Customer`, then used to filter the separate `radacct` query — never the other way
+around). `RADIUS_DB_*` env vars already existed in root `.env` (used by `freeradius`/`freeradius-db`
+themselves since v0.6.1) and are already real process env vars inside `boss-app` via `env_file: - .env` —
+no new `.env` entry was needed.
+
+**Username resolution, confirmed by direct investigation before writing any query**: the v0.12 migration
+batch used `customers.phone_number` as the RADIUS username for the large majority of customers, but matched
+candidates via `phone_number` OR `legacy_username` — meaning 13 of 551 customers have a `legacy_username`
+that genuinely DIFFERS from `phone_number`, and either could be the real `radacct.username` for those 13.
+`RadiusSessionHistoryService` queries `username IN (phone_number, legacy_username)` (deduplicated) rather
+than guessing which one — the only way to be correct for both the common case and the 13 exceptions without
+a schema change.
+
+**Session timestamps — forced to Asia/Jakarta at the CONNECTION level (`config/database.php`'s `'timezone'`
+key on the `radius` connection, which Laravel's `PostgresConnector` turns into a real `SET time zone '...'`
+on connect), not converted in PHP after the fact.** Found necessary because the `radius` connection's
+session timezone defaulted to UTC (confirmed: `SHOW timezone`) — a real, reproducible gap between what
+`psql` showed directly (`12:18:58+07`) and what came back over this connection (`05:18:58+00`, the same
+instant, just UTC) before this fix. A PHP-side `Carbon::parse(...)->setTimezone(...)` band-aid was tried
+first and works too, but was deliberately reverted in favor of fixing it at the connection itself, per
+explicit instruction — every value now arrives already correctly offset, no per-row conversion needed
+anywhere that reads this connection.
+
+**Real bug found and fixed while testing against actual production fixtures, not a hypothetical**:
+`CpeDialupHistory`'s first version used `CpeDevice::with('customer')->findOrFail(...)` — `Customer`'s own
+`BelongsToTenant` global scope filters by the ACTING USER's `tenant_id` during eager-loading, which silently
+returns `null` for `$device->customer` whenever a test (or, in principle, any code path) constructs a
+`CpeDevice` whose `tenant_id` was overridden independently of its `customer_id`'s own real tenant — a latent
+inconsistency already present in several existing test fixtures (`CpeDevice::factory()->create(['tenant_id'
+=> $tenant->id])`, without also pinning `customer_id` to a customer in that same tenant) that had never
+surfaced before because nothing previously loaded the `customer` relation when rendering the CPE detail
+page. Caused 9 real test failures across `CpeSignalHistoryGraphLivewireTest`, `CpeDeviceController` tests,
+etc. the moment this section started rendering unconditionally on every CPE detail page load. Fixed by
+fetching the customer via `Customer::withoutGlobalScopes()->findOrFail($device->customer_id)` instead — safe
+because `CpeDevice` itself was already fetched tenant-scoped one line above (proving the acting request is
+entitled to see it), so re-applying `Customer`'s own tenant scope a second time is both unnecessary and, as
+this incident showed, actively wrong given how this codebase's own test fixtures are built. Same "derive
+tenant_id trust from customer_id, not the other way around" relationship `CpeDeviceFactory`'s own definition
+already relies on.
+
+**`cpe_devices.customer_id` is NOT NULL** (confirmed directly from its own migration —
+`foreignId('customer_id')->constrained()`, no `->nullable()`) — there is no "CPE device with no customer at
+all" state to design for; `RadiusSessionHistoryService` returning an empty array (never migrated to RADIUS,
+or genuinely hasn't dialed since accounting was re-enabled) is the ONLY empty state this UI renders.
+
+**Section placement**: full-width, directly below the RX Power graph on the CPE detail page — same
+"standalone section, not folded into an existing panel" placement convention already used there. Columns
+match the MixRadius reference layout exactly: Acct ID, Uptime, Waktu Mulai, Waktu Berakhir, NAS, Upload,
+Download, Terminate By. `RadiusSessionHistoryService::formatBytes()` is a dynamic-unit (B/KB/MB/GB)
+formatter — same "pick one unit that fits the magnitude" UX principle as the Monitoring traffic graph's own
+`pickBpsUnit` (`resources/js/app.js`), not a literal code reuse: that helper formats a bit RATE client-side
+for a chart axis, this formats a cumulative BYTE total server-side for a table cell — no existing PHP helper
+for this in the codebase to reuse instead, confirmed by searching before writing a new one.
+
+**Verified for real, end-to-end, through the actual HTTP path** — a real authenticated `curl` session
+(login + `GET /cpe-devices/144`, Taryo's real bound CPE device) rendered the section with his real two
+`radacct` rows: the completed ~8h9m session (`369.84 KB` upload, `NAS-Request` terminate cause) and the
+freshly-reconnected active one (`Aktif` badge, live duration ticking). Pras has no `CpeDevice` bound yet
+(not a bug — no work order/CPE binding has happened for him), so his own empty-state rendering was verified
+via the test suite instead, not against a real device.
+
+Full regression suite green at 805/805 (22 new tests across `DeviceSyslogModalLivewireTest`,
+`RadiusSessionHistoryServiceTest`, `CpeDialupHistoryLivewireTest`), Pint clean.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

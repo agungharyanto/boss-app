@@ -338,6 +338,93 @@ class MonitoringApiTest extends TestCase
             ->assertForbidden();
     }
 
+    // v0.8.4 syslog
+
+    public function test_device_syslog_returns_the_service_rows(): void
+    {
+        $rows = [
+            ['timestamp' => '2026-08-25 05:56:53', 'host' => 'ro-hotspot.bajastu.id', 'program' => 'USER', 'level' => 4, 'msg' => '081285205789 authentication failed'],
+        ];
+
+        $service = new class($rows) extends LibreNmsService
+        {
+            public ?int $lastLimit = null;
+
+            public ?int $lastLevel = null;
+
+            public function __construct(private readonly array $rows) {}
+
+            public function getSyslog(int $deviceId, int $limit = 50, ?int $level = null): array
+            {
+                $this->lastLimit = $limit;
+                $this->lastLevel = $level;
+
+                return $this->rows;
+            }
+        };
+        $this->app->instance(LibreNmsService::class, $service);
+
+        $response = $this->actingAs($this->admin())
+            ->getJson('/api/v1/monitoring/devices/8/syslog?limit=10&level=4');
+
+        $response->assertOk();
+        $response->assertJsonCount(1, 'data');
+        $response->assertJsonPath('data.0.host', 'ro-hotspot.bajastu.id');
+        $response->assertJsonPath('data.0.program', 'USER');
+        $response->assertJsonPath('data.0.msg', '081285205789 authentication failed');
+        $this->assertSame(10, $service->lastLimit);
+        $this->assertSame(4, $service->lastLevel);
+    }
+
+    public function test_device_syslog_defaults_limit_to_50_and_level_to_null(): void
+    {
+        $service = new class extends LibreNmsService
+        {
+            public ?int $lastLimit = null;
+
+            public ?int $lastLevel = -1;
+
+            public function getSyslog(int $deviceId, int $limit = 50, ?int $level = null): array
+            {
+                $this->lastLimit = $limit;
+                $this->lastLevel = $level;
+
+                return [];
+            }
+        };
+        $this->app->instance(LibreNmsService::class, $service);
+
+        $this->actingAs($this->admin())->getJson('/api/v1/monitoring/devices/8/syslog')->assertOk();
+
+        $this->assertSame(50, $service->lastLimit);
+        $this->assertNull($service->lastLevel);
+    }
+
+    public function test_device_syslog_rejects_a_limit_above_500(): void
+    {
+        $this->app->instance(LibreNmsService::class, $this->fakeService());
+
+        $response = $this->actingAs($this->admin())
+            ->getJson('/api/v1/monitoring/devices/8/syslog?limit=501');
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['limit']);
+    }
+
+    public function test_device_syslog_requires_monitoring_view_permission(): void
+    {
+        $this->app->instance(LibreNmsService::class, $this->fakeService());
+
+        $this->actingAs($this->nonMonitoring())
+            ->getJson('/api/v1/monitoring/devices/8/syslog')
+            ->assertForbidden();
+    }
+
+    public function test_device_syslog_unauthenticated_is_rejected(): void
+    {
+        $this->getJson('/api/v1/monitoring/devices/8/syslog')->assertUnauthorized();
+    }
+
     public function test_destroy_device_calls_the_service_and_requires_manage_permission(): void
     {
         $service = new class extends LibreNmsService

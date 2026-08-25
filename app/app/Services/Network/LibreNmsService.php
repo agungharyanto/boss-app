@@ -298,6 +298,50 @@ class LibreNmsService
     }
 
     /**
+     * v0.8.4 — syslog entries for one device, via LibreNMS's own
+     * `GET /logs/syslog/{device_id}` (list_logs, includes.html/
+     * api_functions.inc.php) rather than a direct librenms_db query — same
+     * "use the REST API when one exists" posture as every other read in
+     * this class; `getTrafficHistory()`'s direct RRD file read is the one
+     * exception, made only because no API alternative exists there at all.
+     *
+     * `$level` filters client-side (0-7, the syslog table's own numeric
+     * severity column — 4=warning, 6=info, 7=debug, etc.) since
+     * `list_logs()` has no server-side level/severity filter parameter —
+     * confirmed by reading its own source, not assumed. There is no
+     * "topic" filter at all: RouterOS's own topics (ppp/pppoe/system/...)
+     * are never persisted anywhere in LibreNMS's `syslog` table schema
+     * (only facility/priority/level/tag/program/msg are) — a topic-based
+     * filter here would have nothing real to filter against.
+     *
+     * @return array<int, array{timestamp: ?string, host: ?string, program: ?string, level: ?int, msg: ?string}>
+     */
+    public function getSyslog(int $deviceId, int $limit = 50, ?int $level = null): array
+    {
+        return Cache::remember("librenms:syslog:{$deviceId}:{$limit}:{$level}", $this->cacheTtl, function () use ($deviceId, $limit, $level) {
+            $rows = $this->http()
+                ->get("/logs/syslog/{$deviceId}", ['limit' => $limit, 'sortorder' => 'DESC'])
+                ->throw()
+                ->json('logs') ?? [];
+
+            if ($level !== null) {
+                $rows = array_values(array_filter(
+                    $rows,
+                    fn (array $r) => isset($r['level']) && (int) $r['level'] === $level,
+                ));
+            }
+
+            return array_map(fn (array $r) => [
+                'timestamp' => $r['timestamp'] ?? null,
+                'host' => $r['hostname'] ?? $r['sysName'] ?? null,
+                'program' => $r['program'] ?? null,
+                'level' => isset($r['level']) ? (int) $r['level'] : null,
+                'msg' => $r['msg'] ?? null,
+            ], $rows);
+        });
+    }
+
+    /**
      * @return array<int, array{duration_seconds: int, availability_percent: float}>
      */
     public function getAvailability(int $deviceId): array

@@ -258,6 +258,36 @@ services:
     networks:
       - boss-network
 
+  # v0.8.4 — receives syslog UDP:514 from NAS MikroTik routers (reached
+  # over the existing WireGuard tunnel + reserved infra block, same
+  # posture as FreeRADIUS/GenieACS/LibreNMS below — no new public port)
+  # and forwards to LibreNMS via POST /api/v0/syslogsink. See
+  # docker/rsyslog/Dockerfile and CLAUDE.md's syslog design section for
+  # why this is a genuinely separate sidecar rather than rsyslog living
+  # inside the official librenms image.
+  rsyslog-receiver:
+    build:
+      context: ./docker/rsyslog
+    container_name: rsyslog-receiver
+    restart: unless-stopped
+    environment:
+      LIBRENMS_API_TOKEN: ${LIBRENMS_API_TOKEN}
+      TZ: Asia/Jakarta
+    volumes:
+      # TZ alone does nothing on a minimal Alpine image with no tzdata
+      # package — same host-mount idiom every other container in this
+      # file already uses for the same reason.
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    networks:
+      boss-network:
+        # Static IP from the reserved 172.28.0.224/27 infra block — see
+        # CLAUDE.md's "Infra Tunnel IP Block" table. No host port
+        # published (BOSS-010) — only reachable from inside boss-network/
+        # over the WireGuard tunnel, never the public internet.
+        ipv4_address: ${RSYSLOG_INTERNAL_IP}
+
   whatsapp-gateway:
     build:
       context: ./whatsapp-gateway

@@ -1073,6 +1073,43 @@ Query param: `metric` (**wajib**, salah satu dari `cpu`/`memory`/
 }
 ```
 
+### `GET /monitoring/devices/{device}/syslog`
+
+Riwayat syslog untuk satu device — cikal bakal integrasi WhatsApp bot
+(notifikasi PPP down, error kritis, dll), belum dibangun sekarang, tapi
+datanya sudah bisa diakses. Data ini datang dari NAS MikroTik yang
+dikonfigurasi kirim syslog (`/system logging action add type=remote`) ke
+`rsyslog-receiver` (sidecar baru, v0.8.4), yang meneruskannya ke LibreNMS
+via `POST /api/v0/syslogsink` — lihat CLAUDE.md bagian syslog untuk detail
+arsitektur. Delegasi ke `App\Services\Network\LibreNmsService::getSyslog()`,
+yang membaca LibreNMS's sendiri `GET /logs/syslog/{device_id}`, bukan query
+langsung ke `librenms_db`. Butuh permission `monitoring.view`.
+
+Query param: `limit` (opsional, default 50, maksimum 500), `level`
+(opsional, severity numerik syslog standar 0-7, mis. `4`=warning,
+`6`=info, `7`=debug — difilter di sisi BOSS App karena LibreNMS's sendiri
+tidak punya filter level di endpoint ini). **Tidak ada filter `topic`** —
+topik RouterOS (`ppp`/`pppoe`/`system`/dst) tidak pernah disimpan di skema
+tabel `syslog` LibreNMS begitu data masuk, jadi tidak ada yang bisa
+difilter berdasarkan itu setelah data ter-ingest.
+
+```json
+{
+  "success": true,
+  "message": "Riwayat syslog device monitoring",
+  "data": [
+    {
+      "timestamp": "2026-08-25 05:56:53",
+      "host": "ro-hotspot.bajastu.id",
+      "program": "USER",
+      "level": 4,
+      "msg": "081285205789 authentication failed"
+    }
+  ],
+  "meta": []
+}
+```
+
 ### `PATCH /monitoring/devices/{device}`
 
 Edit device — whitelist field yang sama dengan form Edit di UI:

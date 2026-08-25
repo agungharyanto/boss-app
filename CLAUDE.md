@@ -5467,6 +5467,157 @@ WireGuard nodes is unavoidable either direction (this file is `COPY`'d into the 
 bind-mounted) — same "brief auto-switch reconnect blip, self-heals in ~10-20s" risk already accepted for
 every prior `entrypoint.sh` change in this file, not a new risk class introduced by this one.
 
+## Syslog: rsyslog receiver → LibreNMS (v0.8.4)
+
+**Architecture, matches the reviewed design**: `rsyslog-receiver` (new sidecar, `docker/rsyslog/`,
+`alpine:3.20` + `rsyslog`/`rsyslog-http` packages — official `librenms/librenms:latest` has neither, and
+`omprog`-exec-into-`librenms` was rejected up front since `boss-app`-style cross-container exec isn't a
+pattern this codebase uses) listens `imudp:514` on `172.28.0.230` (next free slot in the reserved
+`172.28.0.224/27` block) and forwards every message to LibreNMS's own `POST /api/v0/syslogsink` via
+`omhttp`, using the SAME 8-field contract (`host/facility/priority/level/tag/timestamp/msg/program`)
+`includes/syslog.php`'s `process_syslog()` already consumes from the classic `omprog`+stdin path — confirmed
+by reading that function's source directly, not assumed. `X-Auth-Token` reuses the existing
+`LIBRENMS_API_TOKEN` (already used by `LibreNmsService`), no new credential.
+
+**Prerequisite closed first**: `ro-hotspot.bajastu.id` (NAS #3) had never been onboarded into LibreNMS at
+all — device-matching (`WHERE hostname = ? OR sysName = ?`) needs it there first. SNMP was disabled on this
+router; enabled it (`/snmp set enabled=yes`) with a freshly generated 16-char community (`Str::password(16)`,
+replacing the weak default `"public"` on the existing community entry) — same posture already established
+for the 3 OLTs' registry credentials. Onboarded via `addDevice(hostname: '144.79.52.10', ...)` (the real IP,
+not the domain-shaped identity string — `addDevice()`'s own reachability check tries to DNS-resolve whatever
+string it's given, which fails for a bare RouterOS identity that isn't a real DNS record). LibreNMS's own
+SNMP auto-discovery correctly filled `sysName = ro-hotspot.bajastu.id` (device_id 8) — an exact match to the
+router's own `/system identity`, confirmed directly, so no `syslog_xlate` mapping is needed.
+
+**Four real, independently-found bugs, fixed in the order discovered — worth reading in full before touching
+this mechanism again, since each one alone looked like "it's working" until the next layer was checked**:
+
+1. **The v0.8.4 FORWARD-chain generalization (see "WireGuard Per-NAS SNAT" section above) was only half
+   done.** Widening `FORWARD -i wg0 -d $FREERADIUS_INTERNAL_IP` to the whole `172.28.0.224/27` block let a
+   router-initiated packet toward `.230` LEAVE via `eth0` — but the matching `POSTROUTING` per-NAS
+   `MASQUERADE` rule (the reconcile-loop-written one, comment `boss-vpn-snat-freeradius-{nas_id}`) was still
+   scoped to `-d $FREERADIUS_INTERNAL_IP` only, so the packet kept its tunnel-side source
+   (`172.23.195.x`) — a plain `rsyslog-receiver` container has no route back into that subnet, so it could
+   never reply. Found via a real `/ping` from the NAS to `.230`: 100% loss, while the identical test to
+   `.225` (FreeRADIUS, correctly masqueraded) succeeded — proving this exact rule, not routing or the
+   FORWARD chain, was the gap. Fixed by widening the `MASQUERADE` rule to `-d $INFRA_TUNNEL_BLOCK_CIDR` too,
+   renaming the comment tag `boss-vpn-snat-freeradius-*` → `boss-vpn-snat-infra-block-*` (and the stale-rule
+   sweep regex to match) since it's no longer FreeRADIUS-specific. **General lesson for this exact class of
+   dual-rule (FORWARD + POSTROUTING) reachability fix**: widening one half without the other produces a
+   packet that visibly LEAVES the tunnel (passes FORWARD) but never gets a reply — indistinguishable from a
+   routing problem unless you specifically check `iptables -t nat -L POSTROUTING` too.
+2. **`omhttp` defaults to HTTPS.** `rsyslogd` logged `TLS connect error: wrong version number` on every
+   send attempt — `librenms:8000` is plain HTTP (confirmed, same URL `LibreNmsService` itself already uses).
+   Fixed with `usehttps="off"` in the action config.
+3. **RouterOS `/system logging add topics=a,b,c,...` is AND, not OR — the single originally-planned rule
+   (`topics=ppp,pppoe,system,critical,error,warning`) could essentially never fire.** A real log message
+   only ever carries 1-3 topics at once (confirmed against this router's own real traffic throughout this
+   whole v0.8.4 session — e.g. `pppoe,ppp,error` for an auth failure, `system,info,account` for a login) —
+   requiring all 6 simultaneously on one message matches nothing in practice. Confirmed empirically, not
+   from RouterOS docs alone: the original rule produced ZERO packets even under heavy real PPP/system
+   traffic and a forced `/log warning` test; a rule with a SINGLE topic (`topics=warning`) fired
+   immediately for the same kind of trigger. Fixed by replacing the one 6-topic rule with **six separate
+   single-topic rules**, all pointing at the same `bosssyslog` action — genuine OR coverage across
+   `ppp`/`pppoe`/`system`/`critical`/`error`/`warning`.
+4. **`bsd-syslog=false` (the action's default) sends a non-standard, structure-less payload — no `<PRI>`,
+   no embedded hostname, just `"topics message"` as the entire UDP body** (confirmed via a raw hex capture:
+   `73 63 72 69 70 74 2c 77 61 72 6e 69 6e 67 20 ...` = literally `"script,warning ..."`). `rsyslog`'s
+   `imudp` parser has nothing to extract a hostname from a packet shaped like that, which — combined with
+   LibreNMS's own `process_syslog()` silently no-op'ing (still returns `200 OK`, "Syslog received: N") when
+   `get_cache($host, 'device_id')` resolves nothing — meant messages could arrive, get acknowledged, and
+   still never reach the `syslog` table, with zero error anywhere to point at the real cause. Fixed with
+   `bsd-syslog=yes` on the `bosssyslog` action — RouterOS then sends genuine RFC 3164
+   (`<28>Aug 25 05:53:37 ro-hotspot.bajastu.id message...`), `hostname` resolves correctly, and
+   `program`/`msg` split cleanly for any real multi-word message (confirmed: `"user 081285205789
+   authentication failed ..."` → `program="USER"`, `msg="081285205789 authentication failed ..."` — a
+   single-word test message is the one edge case where the whole thing lands in `program` with an empty
+   `msg`, not representative of real router log content).
+
+**`rsyslog-receiver` needed the same `/etc/localtime`+`/etc/timezone`+`/usr/share/zoneinfo` host bind-mount
+every other container in this file already has** — a bare `TZ=Asia/Jakarta` env var does nothing on a
+minimal Alpine image with no `tzdata` package; confirmed the container showed UTC time even with `TZ` set,
+fixed by adding the same three read-only mounts already used everywhere else in `docker-compose.yml`.
+
+**Open finding, NOT acted on unilaterally — needs Agung's call**: the bare `ppp` topic alone (one of the six
+rules above) turned out to carry an enormous volume of low-level LCP keepalive/debug chatter (`<MAGIC
+0x...>`, `RCVD/SENT LCP ECHOREQ/ECHOREP`), not just meaningful auth/connect events — observed growing from 0
+to over 15,000 `syslog` rows within a few minutes of enabling it on just ONE NAS with its real customer
+traffic. No retention/pruning policy exists for LibreNMS's own `syslog` table (same class of accepted-for-now
+gap already flagged for `cpe_signal_history`/`container_stats_history`) — at this observed rate, left running
+long-term (and eventually extended to more NAS), this would grow very fast. Options not yet decided: drop the
+bare `ppp` rule (keep only `pppoe`/`system`/`critical`/`error`/`warning`, which appear to cover the
+meaningful auth/connect/session events without the raw LCP layer), filter LCP-shaped messages out at the
+rsyslog level before forwarding (rsyslog can match-and-discard by content), or accept the volume and address
+it later with a retention policy alongside the other two tables already in that boat.
+
+**`GET /api/v1/monitoring/devices/{device}/syslog`** (`App\Http\Controllers\Api\V1\MonitoringController::
+deviceSyslog()`, `LibreNmsService::getSyslog()`) — same `monitoring.view`/`throttle:60,1` posture as every
+other endpoint in this controller, WhatsApp-bot-integration-foothold framing unchanged from Bagian A. Reads
+via LibreNMS's own `GET /logs/syslog/{device_id}` (confirmed from `list_logs()`'s source: no
+`topic` filter exists there or anywhere in the ingested schema — RouterOS's topics are never persisted past
+ingestion, only `facility`/`priority`/`level`/`tag`/`program`/`msg` are — so only a numeric `level` (0-7)
+filter is offered, applied client-side since the LibreNMS route itself has no severity filter param either).
+Full suite 783/783 green (5 new tests), Pint clean.
+
+**Resource usage, measured for real under genuinely heavy live load, not a synthetic benchmark** — 9 samples
+over ~13 minutes while `ro-hotspot`'s real PPP/system traffic (plus this session's own diagnostic activity)
+drove the `syslog` table from 0 to 42,667+ rows: CPU 0.85-1.97% throughout (never a sustained spike). RAM
+climbed steadily, NOT a flat steady-state within this window — 4.4 MiB → 37.7 MiB over 13 minutes, growth
+rate visibly slowing toward the end (~2.4-4.4 MiB/min early, ~0.9 MiB/min in the last sample) but not yet
+conclusively plateaued. **Read this as "resource cost scales with real message RATE, still tiny in absolute
+terms" rather than "steady-state confirmed"** — this window's ~3,000 msg/min rate is itself inflated by the
+bare-`ppp` LCP-noise finding above plus this session's own testing, well above what one NAS's genuinely
+normal traffic would produce; a longer measurement under ordinary (non-test) conditions would give a truer
+steady-state figure, not attempted here since this session's own activity was still actively generating load
+throughout.
+
+### Final scope decision: `ppp`/`pppoe` topics deliberately NOT enabled — don't re-add without reading this
+
+**Confirmed with Agung, not a temporary state to "fix" later**: `ro-hotspot`'s `bosssyslog` action only has
+four `/system logging` rules pointed at it — `warning`, `system`, `critical`, `error`. **`ppp` and `pppoe`
+are deliberately excluded.** Two independent reasons, both real, both investigated (not assumed):
+
+1. **PPP session-level data (connect/disconnect, per-session accounting) is already covered by
+   `radacct`/the "Riwayat Dialup" work — that's its actual system of record, not syslog.** Duplicating it
+   into LibreNMS's `syslog` table would be redundant, not a gap.
+2. **Neither `ppp` nor `pppoe` can be enabled cleanly on its own — both carry the exact same LCP
+   keepalive/debug flood** (`<MAGIC 0x...>`, `SENT/RCVD LCP ECHOREQ/ECHOREP`), confirmed by testing EACH
+   topic independently: adding `ppp` alone produced pure LCP noise (0 → 15,000+ `syslog` rows in a few
+   minutes from one NAS); removing it and testing `pppoe` alone, in isolation, produced the identical LCP
+   shape — RouterOS tags this debug-layer chatter under both. There is no third option within RouterOS's own
+   topic vocabulary that isolates "PPPoE session established/ended" from "raw LCP link-layer debug" — a real
+   fix would need CONTENT-based filtering in `rsyslog.conf.template` (discard lines matching `LCP`/`MAGIC`
+   before the `omhttp` action, forward everything else tagged ppp/pppoe) — **not built**, since reason #1
+   above already made the whole topic moot once considered together with #2's cost.
+
+**A real incident happened while `ppp` was briefly active, worth remembering if `ppp`/`pppoe` is ever
+reconsidered**: `rsyslog-receiver`'s `omhttp` action has no disk-backed queue (in-memory only, default
+size) — during the LCP flood, its internal queue silently absorbed far more messages than it could forward
+in real time, building an unbounded backlog with NO warning logged anywhere (`rsyslogd` never logged a
+"queue full" message — the default queue size class this rsyslog build uses is large enough to not hit
+that ceiling before the underlying problem was caught by other means). Confirmed via the `syslog` table's
+own `timestamp` column lagging live wall-clock time by a CONSTANT ~21 minutes across several one-minute
+checks (not shrinking — a genuinely stuck/backlogged pipeline, not a briefly-busy one catching up) even
+though the router's own local log buffer had already rotated to zero LCP entries. Total backlog reached
+**over 1.29 MILLION rows** in `librenms_db.syslog` before being noticed. Resolved by simply restarting
+`rsyslog-receiver` (`docker compose restart rsyslog-receiver`) — the in-memory queue is discarded on
+restart, which is exactly what was wanted here since 100% of the backlogged content was worthless LCP
+chatter, not real data. **If `ppp`/`pppoe` is ever re-enabled (with content filtering built first, per the
+paragraph above), watch `syslog` row growth and `rsyslog-receiver`'s own memory footprint closely for the
+first several minutes** — this exact failure mode will recur immediately without the filter.
+
+**Official resource baseline — 4-topic normal operation (`warning`/`system`/`critical`/`error`, the actual
+shipped config), NOT the earlier heavy-load or idle-backlog numbers above, both superseded by this one**: 9
+samples over ~13 minutes, clean state (post-backlog-incident restart, no `ppp`/`pppoe` active). **CPU: a flat
+0.00% every single sample. RAM: 1.77-1.773 MiB, essentially flat** — only 2 new `syslog` rows landed during
+the entire 13-minute window (this router's real admin/error activity is inherently low-frequency, not a
+sustained stream) — this is the genuine, representative cost of this module at its actual shipped scope: a
+rounding error against this host's resources. Sample content confirmed genuinely useful, not just
+auth-failure noise: real admin login/logout audit trail (`agung logged in/out ... via winbox`, `boss-apps
+logged in/out ... via api`) plus a config-change record (`rule removed by api:boss-apps@...`) — exactly the
+kind of security/audit-relevant `system`-topic event this module exists to surface, alongside `error`-topic
+auth failures whenever they occur.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

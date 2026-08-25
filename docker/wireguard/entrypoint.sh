@@ -115,7 +115,24 @@ ip link set up dev wg0
 # three like OpenVPN's ccd+push-route+iptables. ---
 iptables -F FORWARD
 iptables -P FORWARD DROP
-iptables -A FORWARD -i wg0 -d "$FREERADIUS_INTERNAL_IP" -j ACCEPT
+# v0.8.4 — widened from a single "-d $FREERADIUS_INTERNAL_IP" to the
+# WHOLE reserved infra block. Found genuinely necessary, not just a
+# tidy-up: the router already has a block-wide `/ip route` (v0.8.1,
+# comment "boss-vpn-infra-block-route") and a matching block-wide
+# `allowed-address` — this FORWARD rule was the ONE remaining place
+# still gatekeeping per-service by a single IP, confirmed for real while
+# planning the rsyslog receiver (172.28.0.230): a router-initiated
+# packet toward it would have been silently DROPped by this exact rule's
+# old single-IP scope despite routing/WireGuard-layer trust already
+# covering the whole block. Widening here is what actually delivers on
+# the block's original promise ("a brand-new module just needs a free
+# IP... router's allowed-address never needs touching again") — every
+# FUTURE module in this block now also needs zero entrypoint.sh change,
+# not just this one. The CoA rule below (FreeRADIUS-initiated, opposite
+# direction) is deliberately NOT widened the same way — nothing else in
+# this block currently needs to INITIATE a connection toward a NAS the
+# way FreeRADIUS's CoA/Disconnect does.
+iptables -A FORWARD -i wg0 -d "$INFRA_TUNNEL_BLOCK_CIDR" -j ACCEPT
 iptables -A FORWARD -o wg0 -d "$WG_SUBNET_CIDR" -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # v0.6.5 CoA/Disconnect — same narrow, deliberate reverse exception as
@@ -382,6 +399,24 @@ while true; do
     # host+mask automatically) is used now, not the address itself as a
     # rewrite target.
     #
+    # v0.8.4 amendment — widened from "-d $FREERADIUS_INTERNAL_IP" to
+    # "-d $INFRA_TUNNEL_BLOCK_CIDR" (whole reserved /27), renamed
+    # boss-vpn-snat-freeradius-* -> boss-vpn-snat-infra-block-* to match
+    # (sweep regex below updated too). Real bug found deploying the
+    # rsyslog receiver (172.28.0.230): the FORWARD rule above was widened
+    # to the whole block, but this POSTROUTING rule was NOT — a router-
+    # initiated packet toward .230 correctly passed the FORWARD filter
+    # but kept its tunnel-side source (172.23.195.x), which
+    # rsyslog-receiver (an ordinary boss-network container with no route
+    # back into the WireGuard tunnel subnet) could never reply to.
+    # Confirmed via a real `/ping` from the NAS: 100% loss to .230 while
+    # the SAME test to .225 (FreeRADIUS, still correctly masqueraded at
+    # the time) got real replies — proof this specific rule, not routing
+    # or the FORWARD chain, was the gap. Widening it here closes the same
+    # "future module needs zero entrypoint.sh change" gap the FORWARD
+    # rule's own v0.8.4 widening was meant to close in the first place —
+    # this rule was the missed half of that fix.
+    #
     # Idempotency via `iptables -C` (the standard idiomatic check-before-
     # add for iptables, mirroring the ip-address grep check above, which
     # can't be reused as-is since NAT rules aren't listed by `ip addr`).
@@ -405,8 +440,8 @@ while true; do
         if [ -n "$addr" ]; then
             active_snat_nas["$nas_id"]=1
 
-            if ! iptables -t nat -C POSTROUTING -s "$addr" -d "$FREERADIUS_INTERNAL_IP" -j MASQUERADE -m comment --comment "boss-vpn-snat-freeradius-${nas_id}" 2>/dev/null; then
-                iptables -t nat -A POSTROUTING -s "$addr" -d "$FREERADIUS_INTERNAL_IP" -j MASQUERADE -m comment --comment "boss-vpn-snat-freeradius-${nas_id}" \
+            if ! iptables -t nat -C POSTROUTING -s "$addr" -d "$INFRA_TUNNEL_BLOCK_CIDR" -j MASQUERADE -m comment --comment "boss-vpn-snat-infra-block-${nas_id}" 2>/dev/null; then
+                iptables -t nat -A POSTROUTING -s "$addr" -d "$INFRA_TUNNEL_BLOCK_CIDR" -j MASQUERADE -m comment --comment "boss-vpn-snat-infra-block-${nas_id}" \
                     2>&1 || echo ">> [reconcile] failed to add reverse-NAT rule for ${nas_id}, will retry next cycle"
             fi
         fi
@@ -418,9 +453,9 @@ while true; do
     # number), not by a partial `-D <criteria>` spec, which iptables
     # only matches against a rule's FULL original specification, not a
     # comment alone.
-    for stale_nas in $(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep -oE 'boss-vpn-snat-freeradius-nas-[0-9]+' | sed 's/boss-vpn-snat-freeradius-//' | sort -u); do
+    for stale_nas in $(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep -oE 'boss-vpn-snat-infra-block-nas-[0-9]+' | sed 's/boss-vpn-snat-infra-block-//' | sort -u); do
         if [ -z "${active_snat_nas[$stale_nas]:-}" ]; then
-            line_no=$(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep "boss-vpn-snat-freeradius-${stale_nas}\b" | head -1 | awk '{print $1}')
+            line_no=$(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep "boss-vpn-snat-infra-block-${stale_nas}\b" | head -1 | awk '{print $1}')
             [ -n "$line_no" ] && { iptables -t nat -D POSTROUTING "$line_no" 2>/dev/null || true; }
         fi
     done

@@ -231,6 +231,9 @@ Route::prefix('v1')->group(function () {
         // v0.8.4 Bagian D
         Route::get('monitoring/devices/{device}/history', [MonitoringController::class, 'deviceHistory'])
             ->middleware('throttle:60,1');
+        // v0.8.4 syslog (rsyslog receiver -> LibreNMS)
+        Route::get('monitoring/devices/{device}/syslog', [MonitoringController::class, 'deviceSyslog'])
+            ->middleware('throttle:60,1');
         Route::patch('monitoring/devices/{device}', [MonitoringController::class, 'updateDevice'])
             ->middleware('throttle:60,1');
         Route::delete('monitoring/devices/{device}', [MonitoringController::class, 'destroyDevice'])

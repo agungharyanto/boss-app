@@ -17,7 +17,7 @@ class CreateCustomerAction
      * after an insert (the CustomerObserver's "created" listener needs the
      * enum populated on the same instance it just received).
      *
-     * reseller_id attribution (v0.3.2) mirrors RegistrationService's agent
+     * reseller_id attribution (v0.3.2) mirrors RegistrationService's referrer
      * attribution rule: a caller operating under a resolved reseller context
      * (reseller owner/staff — see ResolveResellerContext) is always
      * attributed to that reseller, ignoring any reseller_id passed in $data.

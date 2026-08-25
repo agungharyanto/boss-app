@@ -2,7 +2,7 @@
 
 namespace App\Enums;
 
-enum AgentType: string
+enum ReferrerType: string
 {
     case Sales = 'sales';
     case Teknisi = 'teknisi';

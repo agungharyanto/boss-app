@@ -49,20 +49,20 @@
         </div>
 
         <div>
-            <label class="block text-sm font-medium text-gray-700">Agent Referral</label>
+            <label class="block text-sm font-medium text-gray-700">Referrer</label>
 
-            @if ($linkedAgent)
-                <input type="text" value="{{ $linkedAgent->name }} ({{ $linkedAgent->type->label() }})" disabled
+            @if ($linkedReferrer)
+                <input type="text" value="{{ $linkedReferrer->name }} ({{ $linkedReferrer->type->label() }})" disabled
                     class="mt-1 block w-full rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm">
                 <p class="text-xs text-gray-500 mt-1">Otomatis terisi sesuai akun Anda yang login.</p>
             @else
-                <select wire:model="selectedAgentId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                <select wire:model="selectedReferrerId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                     <option value="">Tidak ada referral</option>
-                    @foreach ($availableAgents as $agent)
-                        <option value="{{ $agent->id }}">{{ $agent->name }} ({{ $agent->type->label() }})</option>
+                    @foreach ($availableReferrers as $referrer)
+                        <option value="{{ $referrer->id }}">{{ $referrer->name }} ({{ $referrer->type->label() }})</option>
                     @endforeach
                 </select>
-                @error('selectedAgentId') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                @error('selectedReferrerId') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             @endif
         </div>
 

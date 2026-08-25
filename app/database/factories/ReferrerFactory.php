@@ -2,15 +2,15 @@
 
 namespace Database\Factories;
 
-use App\Enums\AgentType;
-use App\Models\Agent;
+use App\Enums\ReferrerType;
+use App\Models\Referrer;
 use App\Models\Tenant;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
- * @extends Factory<Agent>
+ * @extends Factory<Referrer>
  */
-class AgentFactory extends Factory
+class ReferrerFactory extends Factory
 {
     /**
      * Define the model's default state.
@@ -24,7 +24,7 @@ class AgentFactory extends Factory
             'user_id' => null,
             'name' => $this->faker->name(),
             'phone' => $this->faker->numerify('08##########'),
-            'type' => AgentType::Sales,
+            'type' => ReferrerType::Sales,
             'commission_rate' => null,
             'is_active' => true,
         ];
@@ -32,11 +32,11 @@ class AgentFactory extends Factory
 
     public function teknisi(): static
     {
-        return $this->state(fn () => ['type' => AgentType::Teknisi]);
+        return $this->state(fn () => ['type' => ReferrerType::Teknisi]);
     }
 
     public function freelance(): static
     {
-        return $this->state(fn () => ['type' => AgentType::Freelance]);
+        return $this->state(fn () => ['type' => ReferrerType::Freelance]);
     }
 }

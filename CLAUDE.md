@@ -5173,6 +5173,53 @@ effect (boss-radius stays disabled, `/radius/monitor` showed `requests:
 0` for it) before removal. Deleted per Agung's explicit confirmation;
 `radcheck` now holds only the permanent QA fixture `085166445368`.
 
+### PPP local-secret → RADIUS migration — batch execution (295 accounts, `test-x86-bajastu` untouched)
+
+**Executed in stages against `ro-hotspot` (NAS #3) only — `test-x86-bajastu`'s own local secrets were never
+disabled/removed as part of this work**, per Agung's explicit "that's a separate decision" instruction. Final
+`radcheck`/`radreply` state: **295 unique usernames** — the permanent QA fixture (`085166445368`) + Taryo
+(`081229565701`) + Pras (`082315432580`) + 5 candidates sourced from `ro-hotspot`'s own real auth-failure log
+(Kambari `081285205789`, Warisman `085643183971`, Neli Rofiqoh `085702560616`, Rachmat Widodo `0882006362155`,
+Radimin Ardiansyah `082324595863`) + a 285-account batch cross-checked 1:1 against `customers` (all `aktif`,
+0 unexpected non-matches, 8 coincidental same-name-different-person pairs, 2 empty addresses — none excluded,
+Agung approved "gass langsung" with these noted for later traceability, not treated as blockers) + 2 final
+accounts added without a `customers` row at all (see below). All entries follow the identical pattern:
+`radcheck.Cleartext-Password := <username>` (username = password, matching the pre-existing convention this
+whole codebase already used for Taryo/Pras), `radreply`: `Service-Type=Framed-User`, `Framed-Protocol=PPP`,
+`Framed-Pool:=PPPOE-REMOTE`.
+
+**Real production bug found and fixed mid-migration, NOT a config mistake in this batch's own data**: the
+per-NAS WireGuard SNAT rule (introduced same-session, see the "WireGuard Per-NAS SNAT" section below) was
+itself wrong on its first attempt — it rewrote a NAS's RADIUS-bound traffic to a `172.23.195.x` tunnel-side
+address, which FreeRADIUS's `clients { ipaddr = 172.28.0.0/24 }` ACL doesn't trust, so every real request was
+silently dropped as "unknown client" (confirmed via `tcpdump` + `/opt/var/log/radius/radius.log` on the
+`freeradius` container). Fixed by switching that rule to plain `MASQUERADE` — see that section for the full
+account. This is why the Radimin/5-candidate test initially looked like "RADIUS still broken" before this fix
+landed; after the fix, `boss-radius`'s own `/radius/monitor` went from `accepts:0` for its entire lifetime to
+real accepts climbing immediately (4→18→...) the moment real traffic hit the corrected rule.
+
+**Two accounts (`homebase@tokia.net.id`/"Rumah Mbah", `081295799278`/"Elfa Oktafiani") have NO `customer_id`
+at all — deliberately, not an oversight, and this is a real, standing gap that MUST be closed before the v0.12
+"tampilkan username/password PPPoE di Detail Pelanggan" UI is built.** Agung supplied legacy CIDs for both
+(`2492346768`/`268187506734`) hoping they'd resolve via `customers.cid`/`customers.legacy_mixradius_member_id`
+— neither matched (confirmed via exact match AND a wildcard `LIKE` sweep on both columns, ruling out a
+formatting/whitespace mismatch, not just a lookup mistake) — these two customers were simply never imported
+into BOSS App's `customers` table at all during whatever earlier MixRadius migration populated the other 551
+rows. Agung's explicit decision: insert the RADIUS side now anyway (both were confirmed still using
+`profile=PPPOE-REMOTE` on `test-x86-bajastu`, same as everyone else), create the real `customers` rows later,
+during v0.12 proper. **Any future code (or person) building that Detail Pelanggan PPPoE-credentials feature
+must handle a `radcheck` row with no matching `customers` row as a real, expected case for these two specific
+usernames** — not a data-integrity bug to "fix" by deleting the radcheck row, and not something to silently
+skip in the UI without an explicit "belum tertaut ke customer" state. A quick way to re-identify both later:
+`SELECT username FROM radcheck WHERE username IN ('homebase@tokia.net.id', '081295799278')` on `radius_db`
+has no corresponding row in `boss_db.customers` — that mismatch IS the marker, since no dedicated flag column
+exists (and one wasn't added for just these 2 rows — see the "no new DB table for this" instruction already
+followed for the 285-candidate CSV export below).
+
+**`hambalang`/`hambalang-baru`/`homebase@tokia.net.id`'s sibling business-style entries stay untouched** —
+only `homebase@tokia.net.id` itself was migrated this round (explicit ask); `hambalang`/`hambalang-baru`
+remain excluded pending their own separate, manual handling (never in scope for this batch).
+
 ### `boss.bajastu.id` — domain + TLS activated (first real HTTPS in this project)
 
 **`docs/DEPLOYMENT.md`'s own "HTTPS (menyusul, belum di v0.1.0)" section,

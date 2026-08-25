@@ -121,6 +121,15 @@ class DeviceMonitoringList extends Component
     }
 
     /**
+     * v0.8.4 — "Log" per row, same dispatched-event pattern as
+     * openHistory() above, to App\Livewire\Network\DeviceSyslogModal.
+     */
+    public function openSyslog(int $deviceId, string $name): void
+    {
+        $this->dispatch('device-syslog-requested', deviceId: $deviceId, deviceName: $name);
+    }
+
+    /**
      * v0.8.4 Bagian D — same dispatched-event pattern as openHistory()
      * above, to App\Livewire\Network\DeviceEditForm.
      */

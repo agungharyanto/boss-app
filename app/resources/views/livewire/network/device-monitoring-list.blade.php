@@ -84,6 +84,13 @@
                                 >
                                     {{ __('Riwayat') }}
                                 </button>
+                                <button
+                                    type="button"
+                                    wire:click.stop="openSyslog({{ $row['device_id'] }}, '{{ addslashes($row['name']) }}')"
+                                    class="text-xs text-primary hover:underline ml-2"
+                                >
+                                    {{ __('Log') }}
+                                </button>
                                 @can('monitoring.manage')
                                     <button
                                         type="button"

@@ -5618,6 +5618,21 @@ logged in/out ... via api`) plus a config-change record (`rule removed by api:bo
 kind of security/audit-relevant `system`-topic event this module exists to surface, alongside `error`-topic
 auth failures whenever they occur.
 
+### UI: "Log" on the Monitoring page
+
+`App\Livewire\Network\DeviceSyslogModal` — a "Log" link per device row in `DeviceMonitoringList`, same
+dispatched-event sibling-component pattern as `openHistory()`/`DeviceHistoryModal` (`device-syslog-requested`).
+Deliberately its OWN component rather than a 4th tab bolted onto `DeviceHistoryModal` — that component's whole
+shape (metric tabs + Jam/Hari/.../Custom range tabs + a Chart.js series) is built around time-series charts,
+which a paginated/level-filtered syslog TABLE doesn't fit. Reuses `LibreNmsService::getSyslog()` verbatim — the
+exact same method the REST endpoint already calls, no new query logic. Level filter (Critical/Error/Warning/
+Notice/Info/Debug, badge-colored) + a limit selector (25/50/100/200, no true offset pagination — judged
+disproportionate for this UI, `LibreNmsService::getSyslog()` doesn't expose `start` either). Two states, not
+three: `empty` (no rows yet — real for every device except `ro-hotspot.bajastu.id` today) vs `unavailable` (a
+genuine LibreNMS API failure) — there's no "no sensor" concept for syslog the way there is for CPU/Memory/Suhu.
+Verified for real: `Livewire::test()` against device #8 with the REAL `LibreNmsService` (not faked) returned
+`state=ok`, 50 real rows, correct field shapes.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

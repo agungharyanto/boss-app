@@ -3,6 +3,38 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.8.4 — Dialup Syslog & RADIUS Migration (2026-08-25)
+
+Merge branch `v0.8.4-dialup-syslog` ke `develop` lalu `main`, tag `v0.8.4`
+dibuat. Detail teknis lengkap ada di `docs/ROADMAP.md` bagian "v0.8.4 —
+Dialup Syslog & RADIUS Migration" dan banyak bagian `CLAUDE.md` (lihat
+daftar di ROADMAP.md). Regresi hijau di branch, `develop`, dan `main`.
+
+Ringkasan singkat (lihat ROADMAP.md/CLAUDE.md untuk detail teknis penuh):
+- **Fix infrastruktur**: SNAT per-NAS WireGuard (generalisasi block infra
+  yang sebelumnya cuma setengah jadi), domain `boss.bajastu.id` + TLS
+  (HTTPS pertama di proyek ini), refactor `VpnSyncRouteFragments`
+  (hilangkan noise login RouterOS API per-menit, ganti file status
+  shared-volume).
+- **Syslog rsyslog→LibreNMS**: sidecar baru terima UDP:514 dari NAS
+  MikroTik, teruskan ke LibreNMS. Empat bug nyata ditemukan & diperbaiki
+  (termasuk topik RouterOS ternyata logika AND bukan OR). UI "Log" di
+  Monitoring + REST API baru.
+- **Migrasi RADIUS PPPoE VLAN 10**: 295 akun customer `ro-hotspot`
+  dipindah dari local-secret ke `radcheck` BOSS App (`test-x86-bajastu`
+  tidak disentuh sama sekali).
+- **Riwayat Dialup di Detail CPE**: reaktivasi accounting SQL write
+  FreeRADIUS (keputusan sadar, dikonfirmasi Agung — bukan bug fix),
+  koneksi DB kedua ke `radius_db` (BOSS-009 compliant), diverifikasi
+  nyata dengan data customer asli.
+- **Backlog terbuka (belum dikerjakan, lihat ROADMAP.md untuk daftar
+  lengkap)**: cutover penuh 295 akun (local secret `test-x86-bajastu`
+  masih aktif untuk mayoritas), 3 akun pola menyimpang + 2 akun tanpa
+  `customer_id` perlu penanganan manual, `Acct-Interim-Interval` belum
+  dikonfigurasi, rule firewall router produksi #8 (`connection-state=
+  invalid`), syslog OLT belum diriset, UX form OLT community
+  auto-generate.
+
 ## v0.8.3 — Dashboard Monitoring (v0.8.2) + RX Power History, Custom Range & API (v0.8.3) (2026-08-24)
 
 **Catatan penting**: tag ini mencakup DUA versi roadmap sekaligus, v0.8.2

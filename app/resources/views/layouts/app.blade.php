@@ -20,6 +20,8 @@
             </style>
         @endauth
 
+        <style>[x-cloak] { display: none !important; }</style>
+
         @livewireStyles
         @stack('styles')
     </head>
@@ -29,8 +31,34 @@
                 <x-sidebar />
 
                 <div class="flex-1 min-w-0">
-                    <div class="flex justify-end p-3">
+                    <div class="flex justify-end items-center gap-3 p-3">
                         <x-language-switcher />
+
+                        <div class="relative" x-data="{ profileMenuOpen: false }" x-on:click.outside="profileMenuOpen = false">
+                            <button
+                                type="button"
+                                x-on:click="profileMenuOpen = !profileMenuOpen"
+                                class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-medium hover:opacity-90"
+                            >
+                                {{ strtoupper(substr(auth()->user()->name, 0, 1)) }}
+                            </button>
+
+                            <div
+                                x-show="profileMenuOpen"
+                                x-cloak
+                                class="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-md shadow-lg z-50 py-1"
+                            >
+                                <p class="px-4 py-2 text-sm font-medium text-gray-700 border-b border-gray-100 truncate">
+                                    {{ auth()->user()->name }}
+                                </p>
+                                <form method="POST" action="{{ route('logout') }}">
+                                    @csrf
+                                    <button type="submit" class="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-50">
+                                        {{ __('Logout') }}
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
                     </div>
 
                     {{ $slot }}

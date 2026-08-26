@@ -73,7 +73,7 @@ class RegistrationApiTest extends TestCase
 
     public function test_a_caller_without_a_linked_referrer_can_optionally_attribute_a_referral(): void
     {
-        $user = $this->userWithRole('super_admin');
+        $user = $this->userWithRole('superadmin');
         $referrer = Referrer::factory()->create(['tenant_id' => $user->tenant_id]);
 
         $response = $this->actingAs($user)->postJson('/api/v1/registrations', [

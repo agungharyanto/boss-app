@@ -33,10 +33,10 @@ class ImportXenditEnvSettings extends Command
             return self::SUCCESS;
         }
 
-        $actor = User::role('super_admin')->first();
+        $actor = User::role('superadmin')->first();
 
         if ($actor === null) {
-            $this->error('Tidak ada user dengan role super_admin — jalankan RolesAndPermissionsSeeder/DemoUsersSeeder dulu, lalu ulangi command ini.');
+            $this->error('Tidak ada user dengan role superadmin — jalankan RolesAndPermissionsSeeder/DemoUsersSeeder dulu, lalu ulangi command ini.');
 
             return self::FAILURE;
         }

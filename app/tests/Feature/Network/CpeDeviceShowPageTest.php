@@ -36,7 +36,7 @@ class CpeDeviceShowPageTest extends TestCase
     private function admin(Tenant $tenant): User
     {
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->assignRole('super_admin');
+        $admin->assignRole('superadmin');
 
         return $admin;
     }

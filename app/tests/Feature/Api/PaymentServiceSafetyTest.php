@@ -41,7 +41,7 @@ class PaymentServiceSafetyTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->assignRole('super_admin');
+        $admin->assignRole('superadmin');
         $this->actingAs($admin);
 
         $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);
@@ -63,7 +63,7 @@ class PaymentServiceSafetyTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->assignRole('super_admin');
+        $admin->assignRole('superadmin');
         $this->actingAs($admin);
 
         $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);
@@ -84,7 +84,7 @@ class PaymentServiceSafetyTest extends TestCase
 
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->assignRole('super_admin');
+        $admin->assignRole('superadmin');
         $this->actingAs($admin);
 
         $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);

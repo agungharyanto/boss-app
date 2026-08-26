@@ -27,7 +27,7 @@ class DeviceMonitoringListLivewireTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $user = User::factory()->create(['tenant_id' => $tenant->id]);
-        $user->assignRole('super_admin');
+        $user->assignRole('superadmin');
 
         return $user;
     }
@@ -287,7 +287,7 @@ class DeviceMonitoringListLivewireTest extends TestCase
 
     public function test_remove_device_requires_monitoring_manage_permission(): void
     {
-        // Deliberately NOT the `noc` role — both super_admin and noc
+        // Deliberately NOT the `noc` role — both superadmin and noc
         // already carry `monitoring.manage` too (RolesAndPermissionsSeeder),
         // so a role-based test can't isolate `.view`-without-`.manage`.
         // A direct permission grant with no role at all proves the guard

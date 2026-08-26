@@ -23,7 +23,7 @@ class TaxComponentApiTest extends TestCase
     private function admin(Tenant $tenant): User
     {
         $user = User::factory()->create(['tenant_id' => $tenant->id]);
-        $user->assignRole('super_admin');
+        $user->assignRole('superadmin');
 
         return $user;
     }

@@ -5,6 +5,7 @@ namespace Tests\Feature\Dashboard;
 use App\Enums\DashboardWidget;
 use App\Livewire\Dashboard\WidgetSelector;
 use App\Models\User;
+use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -13,9 +14,22 @@ class DashboardWidgetsTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->seed(RolesAndPermissionsSeeder::class);
+    }
+
     public function test_all_widgets_show_by_default_with_no_saved_preference(): void
     {
         $user = User::factory()->create();
+        // v0.9.2 — admin.panel middleware now requires SOME admin-panel
+        // credential (a Spatie role/permission or an active reseller_users
+        // membership); a bare User::factory() has none by design, so a
+        // role must be assigned for this HTTP-level test to keep exercising
+        // the dashboard, not the (correctly) newly-added 403 gate.
+        $user->assignRole('noc');
 
         $response = $this->actingAs($user)->get('/dashboard');
         $content = $response->getContent();
@@ -32,6 +46,7 @@ class DashboardWidgetsTest extends TestCase
     public function test_deselecting_a_widget_persists_and_hides_it(): void
     {
         $user = User::factory()->create();
+        $user->assignRole('noc');
 
         Livewire::actingAs($user)
             ->test(WidgetSelector::class)

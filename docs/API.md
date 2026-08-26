@@ -56,7 +56,7 @@ Butuh Sanctum token. Mengembalikan data user yang sedang login.
 ## Customers
 
 Permission: `customers.view` (semua role) untuk baca, `customers.manage`
-(`customer_service`, `super_admin`) untuk tulis.
+(`customer_service`, `superadmin`) untuk tulis.
 
 ### `GET /customers`
 
@@ -91,7 +91,7 @@ Transisi yang tidak valid → `422` dengan pesan di bawah field `status`.
 ## Customer Contacts (kontak keluarga)
 
 Permission: `customers.view` untuk baca, `customer_contacts.manage`
-(`customer_service`, `super_admin`) untuk tulis. Nested di bawah customer —
+(`customer_service`, `superadmin`) untuk tulis. Nested di bawah customer —
 mengakses contact lewat `customer_id` yang salah (termasuk milik tenant lain)
 menghasilkan `404`.
 
@@ -132,7 +132,7 @@ kontak. `event_type` yang mungkin muncul: `customer_created`,
 
 ## Registration & Referral
 
-Permission: `register-customer` (`super_admin`, `sales_internal`, `teknisi`,
+Permission: `register-customer` (`superadmin`, `sales_internal`, `teknisi`,
 `sales_freelance`). Business logic ada di `App\Services\RegistrationService`,
 dipakai bareng oleh endpoint ini dan Livewire `RegisterCustomer`.
 
@@ -150,7 +150,7 @@ Body: `name`, `address`, `phone_number` (wajib), `nik`, `latitude`,
 Aturan atribusi referrer: kalau user yang login sudah terhubung ke sebuah
 `Referrer` (`referrers.user_id`), registrasi **selalu** diatribusikan ke
 referrer itu — `referred_by_referrer_id` di body diabaikan. Kalau user tidak
-terhubung ke referrer manapun (mis. `super_admin` mendaftarkan langsung),
+terhubung ke referrer manapun (mis. `superadmin` mendaftarkan langsung),
 `referred_by_referrer_id` dipakai kalau dikirim, atau `registration_channel`
 jadi `admin` tanpa referral kalau tidak.
 
@@ -245,7 +245,7 @@ user yang login — tanpa `where()` manual di controller, sama seperti pola
 ### `GET/POST /resellers` · `GET/PUT/DELETE /resellers/{reseller}`
 
 Admin-only (permission `resellers.manage` untuk create/update/delete,
-`resellers.view` untuk read — hanya `super_admin` yang punya keduanya).
+`resellers.view` untuk read — hanya `superadmin` yang punya keduanya).
 Business logic di `App\Services\ResellerService`. `slug` auto-generate dari
 `name` kalau tidak dikirim. `PUT` juga bisa mengubah `status` (`active`/
 `suspended`).
@@ -302,6 +302,79 @@ reseller aktif (ISP admin yang eksplisit menugaskan customer ke reseller
 tertentu). Untuk reseller owner/staff, `reseller_id` selalu diambil dari
 context, mengabaikan apa pun yang dikirim di body. `CustomerResource`
 sekarang menyertakan `reseller_id`/`reseller_name`.
+
+---
+
+## CRUD Referrer & Portal Login (v0.9.2)
+
+Permission: `referrers.view`/`referrers.manage`, tier admin saja (`superadmin`/`administrator` — lihat
+CLAUDE.md bagian "Two-Tier Admin"). Business logic ada di `App\Services\ReferrerService`, dipakai bareng
+oleh endpoint di bawah dan Livewire `Referrers\ReferrerIndex` (`/referrers`).
+
+### `GET /referrers`
+
+List referrer milik tenant yang login, opsional filter `?is_active=`.
+
+### `POST /referrers`
+
+Body: `name`, `phone` (wajib, unik per tenant), `type` (salah satu value `App\Enums\ReferrerType`:
+`sales`/`teknisi`/`freelance`/`admin`), `is_active` (opsional, default `true`), `create_login_account`
+(opsional boolean).
+
+Kalau `create_login_account=true`: sistem generate `User` baru (nama dari referrer, password acak 16
+karakter via `Str::password()`, TIDAK diberi role Spatie apa pun sama sekali — jadi tidak bisa akses panel
+admin, hanya portal referrer), lalu `referrers.user_id` ditautkan ke user itu. Response `201` berisi
+`{"referrer": {...}, "generated_password": "..."}` — **password mentah hanya muncul di response ini,
+sekali, tidak pernah disimpan/di-log/bisa ditampilkan ulang lewat endpoint manapun**. Kalau
+`create_login_account` tidak dikirim/`false`, `generated_password` bernilai `null` dan `referrer.user_id`
+tetap `null` (referrer dibuat tanpa akun login).
+
+### `GET /referrers/{referrer}` · `PUT /referrers/{referrer}`
+
+`PUT` body: `name`/`phone`/`type`/`is_active` (semua opsional, hanya field yang dikirim yang diubah).
+
+### `POST /referrers/{referrer}/deactivate`
+
+Set `is_active=false`. Tidak ada `DELETE` — referrer dengan riwayat referral/komisi tidak pernah
+di-hard-delete, hanya dinonaktifkan.
+
+### `POST /referrers/{referrer}/generate-login-account`
+
+Untuk referrer yang belum punya akun login (`user_id` masih `null`) — generate `User` baru + password acak,
+sama seperti alur `create_login_account=true` di atas. Response sama: `{"referrer": {...},
+"generated_password": "..."}`. `422` kalau referrer sudah punya akun.
+
+### `POST /referrers/{referrer}/link-user`
+
+Body: `user_id` (wajib, harus user di tenant yang sama, belum tertaut ke referrer lain — dicek di service
+DAN dijamin di level DB lewat unique constraint `referrers.user_id`). Menautkan `User` yang SUDAH ADA
+sebagai akun login referrer ini — tidak generate password baru, tidak menyentuh password `User` yang sudah
+ada. `422` kalau referrer sudah punya akun atau user sudah tertaut ke referrer lain.
+
+### `GET/POST /referrer/login`
+
+**Bukan bagian dari `/api/v1/*`** — endpoint web session (bukan Sanctum), sengaja terpisah dari `/login`
+bawaan Fortify (yang terikat ke `email` sebagai username). Body: `phone`, `password`. Berhasil login
+(`Auth::guard('web')->login()`, guard yang sama dengan panel admin) redirect ke `/referrer-portal`; gagal
+(HP tidak terdaftar, password salah, referrer nonaktif, atau belum punya akun login) menampilkan pesan
+generik "Nomor HP atau password salah." di form yang sama (tidak membocorkan bagian mana yang salah).
+Dibatasi `throttle:6,1`.
+
+### Portal Referrer (`/referrer-portal`)
+
+Halaman self-service minimal untuk referrer yang login: profil (nama bisa diubah sendiri, nomor HP
+read-only karena itu kredensial login), daftar pelanggan yang direferensikan
+(`Referrer::referrals()`, dari v0.9.1), dan placeholder "Rekap Komisi — Akan tersedia di update
+berikutnya" (logic komisi belum dibangun, menunggu v0.9.3-v0.9.6).
+
+### Middleware pemisah akses
+
+Dua middleware baru menutup celah "tidak ada yang memblokir akses lintas-persona" yang ada sejak v0.1.0:
+`admin.panel` (menutup seluruh grup route `/dashboard`, `/customers`, `/invoices`, dst. — mengizinkan user
+yang punya permission Spatie apa pun ATAU keanggotaan `reseller_users` aktif, menolak akun portal referrer
+murni) dan `referrer.portal` (menutup `/referrer-portal` — hanya user dengan baris `Referrer` aktif yang
+tertaut lewat `user_id`). Lihat CLAUDE.md bagian "Two-Tier Admin" dan "CRUD Referrer + Portal Login" untuk
+detail teknis lengkap termasuk dua regresi nyata yang ditemukan & diperbaiki saat membangun `admin.panel`.
 
 ---
 
@@ -732,7 +805,7 @@ benar-benar online.
 
 ## GenieACS Vendor Parameter Mapping (v0.7.2)
 
-Platform-level catalog (super_admin-only, permission `cpe_parameter_maps.view`/
+Platform-level catalog (superadmin-only, permission `cpe_parameter_maps.view`/
 `.manage`, **tidak** ada carve-out reseller seperti `nas`/`odps`) yang
 memetakan path parameter TR-069 per vendor/model (`oui` + `product_class`,
 persis nilai `_deviceId._OUI`/`_deviceId._ProductClass` dari GenieACS) ke

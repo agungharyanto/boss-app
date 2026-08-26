@@ -39,11 +39,11 @@ class TaxEngineDummyDataSeeder extends Seeder
         );
 
         $admin = User::where('tenant_id', $tenant->id)
-            ->whereHas('roles', fn ($q) => $q->where('name', 'super_admin'))
+            ->whereHas('roles', fn ($q) => $q->where('name', 'superadmin'))
             ->first();
 
         if ($admin === null) {
-            $this->command?->error('No super_admin user found for tenant "isp-demo" — run DemoUsersSeeder first.');
+            $this->command?->error('No superadmin user found for tenant "isp-demo" — run DemoUsersSeeder first.');
 
             return;
         }

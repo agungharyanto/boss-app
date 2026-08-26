@@ -25,7 +25,7 @@ class CpeParameterMapApiTest extends TestCase
     private function admin(): User
     {
         $user = User::factory()->create(['tenant_id' => Tenant::factory()->create()->id]);
-        $user->assignRole('super_admin');
+        $user->assignRole('superadmin');
 
         return $user;
     }

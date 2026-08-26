@@ -5,7 +5,7 @@ namespace App\Policies;
 use App\Models\User;
 
 /**
- * Strictly super_admin-only (v0.7.2) — same shape as
+ * Strictly superadmin-only (v0.7.2) — same shape as
  * PaymentGatewaySettingsPolicy/WhatsappGatewaySettingsPolicy: this is
  * platform-level technical config, not a per-reseller concern (unlike
  * NasPolicy/OdpPolicy, there is no reseller_users carve-out here).

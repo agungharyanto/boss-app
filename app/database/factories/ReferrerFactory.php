@@ -25,7 +25,6 @@ class ReferrerFactory extends Factory
             'name' => $this->faker->name(),
             'phone' => $this->faker->numerify('08##########'),
             'type' => ReferrerType::Sales,
-            'commission_rate' => null,
             'is_active' => true,
         ];
     }

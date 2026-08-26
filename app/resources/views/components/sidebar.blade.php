@@ -14,13 +14,16 @@
         [
             'id' => 'operasional',
             'label' => __('Operasional'),
-            'active' => request()->routeIs('web.resellers.*') || request()->routeIs('web.reseller-package-pricing.*'),
+            'active' => request()->routeIs('web.resellers.*') || request()->routeIs('web.reseller-package-pricing.*') || request()->routeIs('web.referrers.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\Reseller::class)
                     ? ['route' => 'web.resellers.index', 'label' => __('Reseller')]
                     : null,
                 auth()->user()->can('viewAny', \App\Models\ResellerPackagePricing::class)
                     ? ['route' => 'web.reseller-package-pricing.index', 'label' => __('Package Pricing')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\Referrer::class)
+                    ? ['route' => 'web.referrers.index', 'label' => __('Referrer')]
                     : null,
             ]),
         ],

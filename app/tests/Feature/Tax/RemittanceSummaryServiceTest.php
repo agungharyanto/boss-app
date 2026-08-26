@@ -43,7 +43,7 @@ class RemittanceSummaryServiceTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->assignRole('super_admin');
+        $admin->assignRole('superadmin');
         $this->actingAs($admin);
 
         $reseller = Reseller::factory()->for($tenant)->create();
@@ -80,7 +80,7 @@ class RemittanceSummaryServiceTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->assignRole('super_admin');
+        $admin->assignRole('superadmin');
         $this->actingAs($admin);
 
         $ppn = $this->componentService->create(['code' => 'PPN', 'name' => 'PPN', 'type' => 'percentage', 'rate' => 11, 'effective_from' => now()->startOfMonth()->toDateString()]);
@@ -104,7 +104,7 @@ class RemittanceSummaryServiceTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->assignRole('super_admin');
+        $admin->assignRole('superadmin');
         $this->actingAs($admin);
 
         $ppn = $this->componentService->create(['code' => 'PPN', 'name' => 'PPN', 'type' => 'percentage', 'rate' => 11, 'effective_from' => now()->startOfMonth()->toDateString()]);

@@ -9,6 +9,20 @@ use Spatie\Permission\Models\Role;
 class RolesAndPermissionsSeeder extends Seeder
 {
     /**
+     * v0.9.2 — two-tier admin (see CLAUDE.md's own "Two-Tier Admin: superadmin
+     * vs administrator" section for the full rationale). `superadmin` is
+     * reserved for role/permission management itself (not built yet — no such
+     * permission exists in this codebase as of v0.9.2) in addition to every
+     * operational permission below; `administrator` gets the exact same
+     * operational permission set but is deliberately never given a future
+     * role/permission-management permission automatically. Every
+     * seed*Permissions() method below that grants an "admin-only" permission
+     * loops over this constant instead of hardcoding 'superadmin' alone — a
+     * future module's seed method should do the same, not just 'superadmin'.
+     */
+    private const ADMIN_TIER_ROLES = ['superadmin', 'administrator'];
+
+    /**
      * Role dasar BOSS App, sesuai bab "Hak Akses Pengguna" di dokumen modul.
      * Permission detail per modul ditambahkan bertahap seiring sprint modul
      * yang bersangkutan dibangun (Customer CRM, ACS, Network, dst).
@@ -16,7 +30,8 @@ class RolesAndPermissionsSeeder extends Seeder
     public function run(): void
     {
         $roles = [
-            'super_admin',
+            'superadmin',
+            'administrator',
             'noc',
             'customer_service',
             'teknisi',
@@ -43,12 +58,23 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedCpeParameterMapPermissions();
         $this->seedOltDevicePermissions();
         $this->seedMonitoringPermissions();
+        $this->seedReferrerPermissions();
+    }
+
+    /**
+     * @param  array<string>  $permissions
+     */
+    private function giveToAdminTier(array $permissions): void
+    {
+        foreach (self::ADMIN_TIER_ROLES as $role) {
+            Role::findByName($role, 'web')->givePermissionTo($permissions);
+        }
     }
 
     /**
      * Permission modul Customer CRM (v0.2.0). Semua role bisa melihat data
      * pelanggan dan timeline (butuh untuk kerja masing-masing), tapi hanya
-     * customer_service dan super_admin yang bisa mengubah data pelanggan
+     * customer_service dan tier admin yang bisa mengubah data pelanggan
      * dan kontak keluarga.
      */
     private function seedCustomerCrmPermissions(array $allRoles): void
@@ -72,33 +98,33 @@ class RolesAndPermissionsSeeder extends Seeder
         }
 
         Role::findByName('customer_service', 'web')->givePermissionTo($managePermissions);
-        Role::findByName('super_admin', 'web')->givePermissionTo($managePermissions);
+        $this->giveToAdminTier($managePermissions);
     }
 
     /**
      * Permission modul Registration & Referral (v0.3.0). Hanya role yang
      * benar-benar melakukan registrasi pelanggan di lapangan/kantor yang
-     * dapat permission ini: admin (super_admin), sales (sales_internal),
-     * teknisi, dan freelance (sales_freelance) — bukan role administratif
-     * lain seperti billing/finance/noc.
+     * dapat permission ini: tier admin (superadmin/administrator), sales
+     * (sales_internal), teknisi, dan freelance (sales_freelance) — bukan
+     * role administratif lain seperti billing/finance/noc.
      */
     private function seedRegistrationPermissions(): void
     {
         Permission::firstOrCreate(['name' => 'register-customer', 'guard_name' => 'web']);
 
-        foreach (['super_admin', 'sales_internal', 'teknisi', 'sales_freelance'] as $role) {
+        foreach ([...self::ADMIN_TIER_ROLES, 'sales_internal', 'teknisi', 'sales_freelance'] as $role) {
             Role::findByName($role, 'web')->givePermissionTo('register-customer');
         }
     }
 
     /**
      * Permission modul Multi-Tenant Reseller (v0.3.2). Reseller sendiri
-     * hanya boleh dikelola (create/update/delete + kelola staff) oleh
-     * super_admin — reseller owner/staff diotorisasi lewat keanggotaan
+     * hanya boleh dikelola (create/update/delete + kelola staff) oleh tier
+     * admin — reseller owner/staff diotorisasi lewat keanggotaan
      * reseller_users mereka sendiri (lihat ResellerPolicy/CustomerPolicy/
      * ResellerPackagePricingPolicy), bukan lewat permission Spatie ini,
      * karena mereka adalah user eksternal (bisnis reseller), bukan staff
-     * internal ISP dengan salah satu dari 8 role di atas.
+     * internal ISP dengan salah satu dari role di atas.
      */
     private function seedResellerPermissions(): void
     {
@@ -108,12 +134,12 @@ class RolesAndPermissionsSeeder extends Seeder
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+        $this->giveToAdminTier($permissions);
     }
 
     /**
      * Permission modul Regulatory Tax Engine (v0.3.3). Sama seperti
-     * resellers.* di v0.3.2: hanya super_admin yang dapat permission ini
+     * resellers.* di v0.3.2: hanya tier admin yang dapat permission ini
      * ("admin-only untuk semua action" per TaxComponentPolicy, "admin: full
      * akses" per ResellerTaxPolicyPolicy) — meski role billing/finance ada,
      * mereka TIDAK otomatis dapat akses tax engine, mengikuti pola ketat
@@ -137,19 +163,19 @@ class RolesAndPermissionsSeeder extends Seeder
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+        $this->giveToAdminTier($permissions);
     }
 
     /**
-     * Permission modul Invoicing Core (v0.3.4). Beda dari pola
-     * super_admin-only yang ketat di reseller/tax-engine: `billing` role
-     * (ada sejak v0.1.0, belum pernah dapat permission apa pun sampai
-     * sprint ini) juga diberi akses — generate/lihat/ubah status invoice
-     * adalah pekerjaan operasional harian staff billing, beda konteks
-     * dengan konfigurasi reseller/kebijakan pajak yang memang keputusan
-     * level admin. Reseller owner/staff tetap diotorisasi lewat
-     * keanggotaan reseller_users mereka sendiri (lihat SubscriptionPolicy/
-     * InvoicePolicy), read-only, bukan lewat permission Spatie ini.
+     * Permission modul Invoicing Core (v0.3.4). Beda dari pola tier-admin-
+     * only yang ketat di reseller/tax-engine: `billing` role (ada sejak
+     * v0.1.0, belum pernah dapat permission apa pun sampai sprint ini) juga
+     * diberi akses — generate/lihat/ubah status invoice adalah pekerjaan
+     * operasional harian staff billing, beda konteks dengan konfigurasi
+     * reseller/kebijakan pajak yang memang keputusan level admin. Reseller
+     * owner/staff tetap diotorisasi lewat keanggotaan reseller_users mereka
+     * sendiri (lihat SubscriptionPolicy/InvoicePolicy), read-only, bukan
+     * lewat permission Spatie ini.
      */
     private function seedInvoicingPermissions(): void
     {
@@ -164,18 +190,19 @@ class RolesAndPermissionsSeeder extends Seeder
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        foreach (['super_admin', 'billing'] as $role) {
+        foreach ([...self::ADMIN_TIER_ROLES, 'billing'] as $role) {
             Role::findByName($role, 'web')->givePermissionTo($permissions);
         }
     }
 
     /**
      * Permission modul Payment Gateway Settings (v0.3.5 Fase H). Strictly
-     * super_admin-only — same posture as resellers.* / tax_components.* — this
-     * holds the actual Xendit API secret/webhook token, a security-critical
-     * credential, not an operational-billing concern like invoices.*.
-     * `billing` role can create/view payments (invoices.*) but must NOT be
-     * able to see/change which channels are enabled or rotate credentials.
+     * tier-admin-only — same posture as resellers.* / tax_components.* —
+     * this holds the actual Xendit API secret/webhook token, a security-
+     * critical credential, not an operational-billing concern like
+     * invoices.*. `billing` role can create/view payments (invoices.*) but
+     * must NOT be able to see/change which channels are enabled or rotate
+     * credentials.
      */
     private function seedPaymentGatewaySettingsPermissions(): void
     {
@@ -185,12 +212,12 @@ class RolesAndPermissionsSeeder extends Seeder
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+        $this->giveToAdminTier($permissions);
     }
 
     /**
      * Permission modul WhatsApp Gateway (v0.4.0). Two separate namespaces,
-     * both super_admin-only, same posture as payment_gateway_settings.*:
+     * both tier-admin-only, same posture as payment_gateway_settings.*:
      * whatsapp_gateway.* covers the ISP-admin overview (all sessions +
      * default templates + combined queue), whatsapp_gateway_settings.*
      * covers the platform-wide rate-limit policy. Reseller owner/staff
@@ -212,14 +239,14 @@ class RolesAndPermissionsSeeder extends Seeder
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+        $this->giveToAdminTier($permissions);
     }
 
     /**
-     * Permission modul Installation / Work Order (v0.5.0). Same
-     * super_admin-only posture as resellers.* / tax engine — reseller
-     * owner/staff access their OWN reseller's ODPs/technicians/work orders
-     * instead via reseller_users membership (see OdpPolicy/TechnicianPolicy/
+     * Permission modul Installation / Work Order (v0.5.0). Same tier-admin-
+     * only posture as resellers.* / tax engine — reseller owner/staff
+     * access their OWN reseller's ODPs/technicians/work orders instead via
+     * reseller_users membership (see OdpPolicy/TechnicianPolicy/
      * WorkOrderPolicy), never via these Spatie permissions. The existing
      * `teknisi` role (a Referrer type used for field registration/commission,
      * unrelated to the new Technician model) deliberately does NOT get
@@ -241,12 +268,12 @@ class RolesAndPermissionsSeeder extends Seeder
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+        $this->giveToAdminTier($permissions);
     }
 
     /**
      * Permission modul Network / FreeRADIUS (v0.6.1). Sama pola dengan
-     * seedInstallationPermissions() — super_admin-only; reseller mengelola
+     * seedInstallationPermissions() — tier-admin-only; reseller mengelola
      * NAS miliknya sendiri lewat reseller_users membership (dicek di
      * NasPolicy), bukan lewat permission Spatie ini.
      */
@@ -261,7 +288,7 @@ class RolesAndPermissionsSeeder extends Seeder
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+        $this->giveToAdminTier($permissions);
     }
 
     /**
@@ -281,7 +308,7 @@ class RolesAndPermissionsSeeder extends Seeder
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        Role::findByName('super_admin', 'web')->givePermissionTo($permissions);
+        $this->giveToAdminTier($permissions);
     }
 
     /**
@@ -302,11 +329,11 @@ class RolesAndPermissionsSeeder extends Seeder
         Permission::firstOrCreate(['name' => 'cpe_devices.view', 'guard_name' => 'web']);
         Permission::firstOrCreate(['name' => 'cpe_devices.manage', 'guard_name' => 'web']);
 
-        Role::findByName('super_admin', 'web')->givePermissionTo(['cpe_devices.view', 'cpe_devices.manage']);
+        $this->giveToAdminTier(['cpe_devices.view', 'cpe_devices.manage']);
     }
 
     /**
-     * v0.7.2 — strictly super_admin-only, same posture as
+     * v0.7.2 — strictly tier-admin-only, same posture as
      * payment_gateway_settings/whatsapp_gateway_settings: this is
      * platform-level technical config (per-vendor TR-069 parameter maps),
      * not a per-reseller concern.
@@ -316,10 +343,7 @@ class RolesAndPermissionsSeeder extends Seeder
         Permission::firstOrCreate(['name' => 'cpe_parameter_maps.view', 'guard_name' => 'web']);
         Permission::firstOrCreate(['name' => 'cpe_parameter_maps.manage', 'guard_name' => 'web']);
 
-        Role::findByName('super_admin', 'web')->givePermissionTo([
-            'cpe_parameter_maps.view',
-            'cpe_parameter_maps.manage',
-        ]);
+        $this->giveToAdminTier(['cpe_parameter_maps.view', 'cpe_parameter_maps.manage']);
     }
 
     /**
@@ -331,7 +355,7 @@ class RolesAndPermissionsSeeder extends Seeder
      * `monitoring.manage` added (v0.8.2-monitoring-fixes) once
      * LibreNmsService gained its first genuinely mutating call
      * (addDevice() — onboarding a generic SNMP device). Given to the same
-     * two roles as `.view`, not restricted further — onboarding a device
+     * roles as `.view`, not restricted further — onboarding a device
      * to be monitored is squarely within NOC's own operational duties,
      * same posture as `.view` already established for this role.
      */
@@ -340,8 +364,26 @@ class RolesAndPermissionsSeeder extends Seeder
         Permission::firstOrCreate(['name' => 'monitoring.view', 'guard_name' => 'web']);
         Permission::firstOrCreate(['name' => 'monitoring.manage', 'guard_name' => 'web']);
 
-        foreach (['super_admin', 'noc'] as $role) {
+        foreach ([...self::ADMIN_TIER_ROLES, 'noc'] as $role) {
             Role::findByName($role, 'web')->givePermissionTo(['monitoring.view', 'monitoring.manage']);
         }
+    }
+
+    /**
+     * v0.9.2 CRUD Referrer (admin-side) — tier-admin-only, same posture as
+     * resellers.* / tax_components.*: Referrer has no reseller_id (tenant-
+     * level only, not a reseller-owned resource), so there is no
+     * reseller_users membership carve-out here the way NasPolicy/OdpPolicy
+     * have.
+     */
+    private function seedReferrerPermissions(): void
+    {
+        $permissions = ['referrers.view', 'referrers.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
     }
 }

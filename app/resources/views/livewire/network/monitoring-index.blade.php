@@ -9,7 +9,7 @@
 
         {{-- v0.8.2-monitoring-fixes — guarded here (not just inside the
              component's own mount()), so a future monitoring.view-only
-             user (none exist today — super_admin/noc both get .manage
+             user (none exist today — superadmin/noc both get .manage
              too) never even mounts a component that would 403 for them. --}}
         @can('monitoring.manage')
             <livewire:network.add-monitoring-device-form />

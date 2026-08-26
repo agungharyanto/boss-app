@@ -5,7 +5,7 @@ namespace App\Policies;
 use App\Models\User;
 
 /**
- * Strictly super_admin-only, same posture as PaymentGatewaySettingsPolicy —
+ * Strictly superadmin-only, same posture as PaymentGatewaySettingsPolicy —
  * the global rate-limit policy (delay/batch size/daily schedule) applies to
  * every session platform-wide, so no reseller gets a say in it this sprint
  * (see docs/ROADMAP.md deferred: "rate limit setting per-reseller").

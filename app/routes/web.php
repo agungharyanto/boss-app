@@ -4,7 +4,9 @@ use App\Http\Controllers\Api\Internal\CpeDeviceActionController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDatatableController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDetailController;
 use App\Http\Controllers\Api\Internal\OltDeviceDatatableController;
+use App\Http\Controllers\Auth\ReferrerLoginController;
 use App\Http\Controllers\VpnScriptDownloadController;
+use App\Http\Middleware\EnsureAdminPanelAccess;
 use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
 use App\Livewire\Billing\SubscriptionIndex;
@@ -20,6 +22,7 @@ use App\Livewire\Network\MonitoringIndex;
 use App\Livewire\Network\NasIndex;
 use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\VpnScriptGenerator;
+use App\Livewire\Referrers\ReferrerIndex;
 use App\Livewire\Resellers\PackagePricingIndex;
 use App\Livewire\Resellers\ResellerIndex;
 use App\Livewire\Resellers\ResellerShow;
@@ -31,8 +34,24 @@ use App\Livewire\Whatsapp\WhatsappGatewayIndex;
 use App\Services\LocaleService;
 use Illuminate\Support\Facades\Route;
 
+// v0.9.2 — replaces Laravel's own scaffold default (bare "welcome" view,
+// never actually replaced since v0.1.0). Guest -> Fortify's /login. Logged
+// in -> branches by the EXACT same rule EnsureAdminPanelAccess enforces
+// (see that class's own userHasAccess() docblock for why this must reuse
+// the middleware's own check rather than a separately-computed one) —
+// admin-eligible goes to /dashboard, a pure Referrer-portal account goes
+// straight to /referrer-portal instead of /dashboard, so it never bounces
+// through a guaranteed 403 first.
 Route::get('/', function () {
-    return view('welcome');
+    if (! auth()->check()) {
+        return redirect()->route('login');
+    }
+
+    if (EnsureAdminPanelAccess::userHasAccess(auth()->user())) {
+        return redirect()->route('web.dashboard');
+    }
+
+    return redirect()->route('web.referrer-portal.dashboard');
 });
 
 // Deliberately unauthenticated — fetched by RouterOS's /tool fetch, which
@@ -57,7 +76,27 @@ Route::get('/lang/{locale}', function (string $locale, LocaleService $service) {
     return redirect()->back();
 })->name('lang.switch');
 
-Route::middleware('auth')->name('web.')->group(function () {
+// v0.9.2 — Referrer portal login, deliberately separate from Fortify's own
+// /login (hard-wired to email as the username field). Phone + password
+// instead, same 'web' guard/session as the admin panel — see
+// ReferrerLoginController's own docblock.
+Route::middleware('guest')->group(function () {
+    Route::get('/referrer/login', [ReferrerLoginController::class, 'show'])->name('referrer.login');
+    Route::post('/referrer/login', [ReferrerLoginController::class, 'login'])
+        ->middleware('throttle:6,1')
+        ->name('referrer.login.attempt');
+});
+
+// v0.9.2 — admin.panel closes the "no middleware blocks cross-persona
+// access" gap: only a User holding ANY Spatie role (every genuine staff
+// account has exactly one) may reach this whole group. A pure Referrer-
+// portal account (no Spatie role at all, see ReferrerService::
+// attachNewLoginAccount()) is refused here — see EnsureAdminPanelAccess's
+// own docblock for why this checks "any role" rather than a hardcoded
+// Administrator/superadmin-only list, which would have locked out every
+// other existing staff role (noc/customer_service/teknisi/billing/
+// sales_internal/sales_freelance/finance).
+Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     Route::get('/dashboard', Dashboard::class)->name('dashboard');
 
     // reseller.context: see routes/api.php's identical group for why —
@@ -113,6 +152,10 @@ Route::middleware('auth')->name('web.')->group(function () {
     Route::get('/resellers', ResellerIndex::class)->name('resellers.index');
     Route::get('/resellers/{reseller}', ResellerShow::class)->name('resellers.show');
 
+    // v0.9.2 — CRUD Referrer (admin-side), same posture as /resellers above
+    // (tenant-level, no reseller.context needed).
+    Route::get('/referrers', ReferrerIndex::class)->name('referrers.index');
+
     Route::get('/tax-components', TaxComponentIndex::class)->name('tax-components.index');
 
     Route::get('/settings/theme', ThemeSettings::class)->name('settings.theme');
@@ -125,3 +168,21 @@ Route::middleware('auth')->name('web.')->group(function () {
     // reseller.context group.
     Route::get('/monitoring', MonitoringIndex::class)->name('monitoring.index');
 });
+
+// v0.9.2 — Referrer self-service portal, deliberately its own route group
+// (never nested inside the admin.panel-protected group above) — a pure
+// Referrer-portal account has no Spatie role at all and would be refused by
+// admin.panel; referrer.portal is the mirror-image gate for this group (see
+// EnsureReferrerPortalAccess's own docblock).
+Route::middleware(['auth', 'referrer.portal'])->name('web.referrer-portal.')->group(function () {
+    Route::get('/referrer-portal', App\Livewire\ReferrerPortal\Dashboard::class)->name('dashboard');
+});
+
+// Deliberately NOT inside the referrer.portal-gated group above (nor
+// Fortify's own shared POST /logout — see ReferrerLoginController::
+// logout()'s own docblock for why) — just 'auth', so logging out still
+// works even in the edge case where the referrer.portal check itself
+// would otherwise fail.
+Route::post('/referrer/logout', [ReferrerLoginController::class, 'logout'])
+    ->middleware('auth')
+    ->name('referrer.logout');

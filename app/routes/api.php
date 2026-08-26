@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\V1\MonitoringController;
 use App\Http\Controllers\Api\V1\NasController;
 use App\Http\Controllers\Api\V1\OdpController;
 use App\Http\Controllers\Api\V1\PaymentController;
+use App\Http\Controllers\Api\V1\ReferrerController;
 use App\Http\Controllers\Api\V1\RegistrationController;
 use App\Http\Controllers\Api\V1\RemittanceSummaryController;
 use App\Http\Controllers\Api\V1\ResellerController;
@@ -196,7 +197,7 @@ Route::prefix('v1')->group(function () {
         Route::put('settings/whatsapp-gateway', [WhatsappGatewaySettingsController::class, 'update']);
 
         // v0.7.2 — per-vendor TR-069 parameter mapping catalog, platform-level
-        // (super_admin-only, see CpeParameterMapPolicy), no reseller.context
+        // (superadmin-only, see CpeParameterMapPolicy), no reseller.context
         // needed, same posture as tax-components/settings/* above.
         Route::get('cpe-parameter-maps', [CpeParameterMapController::class, 'index']);
         Route::post('cpe-parameter-maps', [CpeParameterMapController::class, 'store']);
@@ -218,6 +219,20 @@ Route::prefix('v1')->group(function () {
         Route::get('resellers/{reseller}/users', [ResellerUserController::class, 'index']);
         Route::post('resellers/{reseller}/users', [ResellerUserController::class, 'store']);
         Route::delete('resellers/{reseller}/users/{user}', [ResellerUserController::class, 'destroy']);
+
+        // v0.9.2 — CRUD Referrer (admin-side), tier-admin-only (see
+        // ReferrerPolicy), no reseller.context needed — Referrer has no
+        // reseller_id (tenant-level only), same posture as resellers.*
+        // above. No destroy() — deactivate (is_active=false) is the only
+        // "remove" action, a Referrer with referral/commission history is
+        // never hard-deleted.
+        Route::get('referrers', [ReferrerController::class, 'index']);
+        Route::post('referrers', [ReferrerController::class, 'store']);
+        Route::get('referrers/{referrer}', [ReferrerController::class, 'show']);
+        Route::put('referrers/{referrer}', [ReferrerController::class, 'update']);
+        Route::post('referrers/{referrer}/deactivate', [ReferrerController::class, 'deactivate']);
+        Route::post('referrers/{referrer}/generate-login-account', [ReferrerController::class, 'generateLoginAccount']);
+        Route::post('referrers/{referrer}/link-user', [ReferrerController::class, 'linkUser']);
 
         // v0.8.4 — read-only Dashboard Monitoring API, WhatsApp-bot
         // integration foothold (see App\Http\Controllers\Api\V1\

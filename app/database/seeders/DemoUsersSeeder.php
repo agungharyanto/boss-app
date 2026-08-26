@@ -16,7 +16,7 @@ class DemoUsersSeeder extends Seeder
      * One demo tenant with one user per role, for manual login testing.
      * Password for every account: "password".
      *
-     * Run RolesAndPermissionsSeeder first (this seeder assumes the 8 roles already exist).
+     * Run RolesAndPermissionsSeeder first (this seeder assumes the 9 roles already exist).
      */
     public function run(): void
     {
@@ -26,7 +26,8 @@ class DemoUsersSeeder extends Seeder
         );
 
         $roles = [
-            'super_admin',
+            'superadmin',
+            'administrator',
             'noc',
             'customer_service',
             'teknisi',

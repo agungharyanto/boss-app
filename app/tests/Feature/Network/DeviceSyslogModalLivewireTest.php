@@ -27,7 +27,7 @@ class DeviceSyslogModalLivewireTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $user = User::factory()->create(['tenant_id' => $tenant->id]);
-        $user->assignRole('super_admin');
+        $user->assignRole('superadmin');
 
         return $user;
     }

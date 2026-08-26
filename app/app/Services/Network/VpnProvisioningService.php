@@ -351,16 +351,37 @@ class VpnProvisioningService
         // direct `ping -I wg0` to an OLT's IP failed outright with "sendto:
         // Required key not available", never even reaching iptables/the
         // explicit route, while the exact same test against the
-        // TR069-widened subnet at least transmitted). No `nas.
-        // olt_management_subnet` column exists (same single-global-subnet
-        // limitation as OLT_MANAGEMENT_SUBNET/OLT_MANAGEMENT_GATEWAY
-        // everywhere else this env var is read — docker/wireguard/
-        // entrypoint.sh, docker/librenms/route-init.sh — so this
-        // deliberately widens EVERY WireGuard NAS's AllowedIPs the same
-        // way, not just the one NAS that currently has OLTs behind it).
+        // TR069-widened subnet at least transmitted).
+        //
+        // v0.14.x incident fix — the widening below used to be
+        // UNCONDITIONAL for every WireGuard NAS, on the reasoning that no
+        // `nas.olt_management_subnet` column exists (same single-global-
+        // subnet limitation as OLT_MANAGEMENT_SUBNET/OLT_MANAGEMENT_GATEWAY
+        // everywhere else this env var is read). That "accepted
+        // limitation" was wrong, not just imprecise: WireGuard only lets
+        // ONE peer on an interface claim a given AllowedIPs CIDR at a time
+        // — the moment a SECOND NAS's WireGuard account also unconditionally
+        // claimed this same subnet, it silently stole the crypto-routing
+        // claim away from whichever NAS actually has OLTs behind it. This
+        // is exactly what happened for real: ro-hotspot (no OLTs at all)
+        // was revoke-and-regenerated on 2026-08-24, its fresh peer fragment
+        // re-asserted the claim ahead of test-x86-bajastu's own turn in the
+        // reconcile loop's alphabetical peer ordering, and all 3 real OLTs
+        // behind test-x86-bajastu silently dropped off LibreNMS monitoring
+        // for ~2 days before the conflict was diagnosed. Fixed by only
+        // widening for a NAS that actually has at least one OltDevice
+        // registered (Nas::oltDevices(), v0.8.1 OLT Credential Registry) —
+        // see CLAUDE.md's "OLT AllowedIPs Conflict" section for the full
+        // incident writeup.
         $oltManagementSubnet = config('services.vpn.olt_management_subnet');
 
-        if (! empty($oltManagementSubnet)) {
+        // withoutGlobalScopes() — this must resolve correctly regardless of
+        // whether the calling context has an authenticated user (Auth::check()
+        // gates both BelongsToTenant's TenantScope and BelongsToResellerScope);
+        // $account->nas is already the correct, trusted NAS, so scoping the
+        // existence check by anything else would be redundant at best and
+        // wrong at worst (e.g. a queued/system context with no logged-in user).
+        if (! empty($oltManagementSubnet) && $account->nas->oltDevices()->withoutGlobalScopes()->exists()) {
             $allowedIps .= ', '.$oltManagementSubnet;
         }
 

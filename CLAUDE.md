@@ -2506,6 +2506,13 @@ point:**
    revoke-regenerate when a direct fragment edit would be far less
    disruptive.
 
+   **Amendment (v0.14.x) — the "same accepted single-global-subnet limitation" framing above was WRONG,
+   not just imprecise.** This unconditional-per-account widening caused a real ~2-day LibreNMS OLT
+   monitoring outage (2026-08-24 to 2026-08-26) — see "OLT AllowedIPs Conflict — Real Incident & Fix
+   (v0.14.x)" further down this file for the full root-cause writeup and the fix (now gated on
+   `Nas::oltDevices()->exists()`). Do not reintroduce unconditional-per-account subnet widening for any
+   future global subnet added to this codebase without reading that section first.
+
 3. **Real production drift caught and corrected, not silently
    "fixed"**: `TR069_MANAGEMENT_GATEWAY` had been stale (pointing to node1
    from an observed 2026-08-19 auto-switch) while the router's WireGuard
@@ -5987,6 +5994,85 @@ added to `ReferrerPortalLoginTest`), Pint clean. **Not merged/tagged as of this 
 `v0.9.2-referrer-crud-portal-rbac`, everything above (the original v0.9.2 scope and these two fixes) folded
 into the same not-yet-committed working tree, deliberately left for Agung's own manual browser verification
 before `git merge --no-ff` and tagging `v0.9.2`.
+
+## OLT AllowedIPs Conflict — Real Incident & Fix (branch `fix-wireguard-allowedips-olt-conflict`, fully resolved — code fix + live reconcile both done and verified)
+
+**A real, confirmed ~2-day LibreNMS OLT monitoring outage (2026-08-24 ~18:35 WIB through at least
+2026-08-27, when this was diagnosed), root-caused via read-only investigation before any fix was written.**
+This is the incident several earlier sections of this file (v0.8.1's "Infra Tunnel IP Block" — see the
+amendment added there — and the OLT Onboarding section) referred to as an "accepted single-global-subnet
+limitation." It was not accepted correctly — the actual failure mode was never tested against a second
+real WireGuard NAS sharing the same global subnet until this incident, and it turned out to be a hard
+outage, not a benign simplification.
+
+**Root cause**: `App\Services\Network\VpnProvisioningService::issueWireGuardCredentials()` added
+`config('services.vpn.olt_management_subnet')` (`10.168.100.0/24`) to **every** WireGuard NAS's `AllowedIPs`
+unconditionally — the same pattern already used for `tr069_management_subnet`, except that column IS
+per-NAS (`nas.tr069_management_subnet`, null for any NAS that doesn't need it) while the OLT subnet had no
+equivalent per-NAS gate at all. WireGuard only allows **one peer per interface** to claim a given
+`AllowedIPs` CIDR at a time (this is the whole point of AllowedIPs as a cryptokey-routing table, not just an
+access-list). The moment a **second** NAS's WireGuard peer also unconditionally claimed `10.168.100.0/24`,
+it silently stole the crypto-routing claim away from whichever NAS actually has real OLTs behind it.
+
+**Trigger, pinpointed via `vpn_accounts.created_at`/`revoked_at` timestamps**: NAS `ro-hotspot` (which has
+**zero** `OltDevice` rows — it has never had any OLT registered) was revoked-and-regenerated
+("Cabut & Generate Ulang") at **2026-08-24 18:37:09–18:42:30 WIB**, a few minutes after LibreNMS's own
+`last_polled` timestamp for all 3 real OLTs behind `test-x86-bajastu` froze at **18:35:42/18:36:38/18:35:45
+WIB** (cross-confirmed three independent ways: LibreNMS's own `devices.last_polled` column, real SNMP data
+RRD file mtimes — `port-id*.rrd`, not the availability-tracker RRD which updates on every poll ATTEMPT
+regardless of success — and `librenms-dispatcher`'s own ongoing "Polling device 2/3/4 unreachable" log
+lines). `ro-hotspot`'s fresh peer fragment re-asserted the `10.168.100.0/24` claim ahead of
+`test-x86-bajastu`'s own turn in the reconcile loop's alphabetical peer-file ordering
+(`cat "$PEERS_DIR"/*.conf` processes `nas-1.conf` then `nas-3.conf` — `ro-hotspot` is `nas-3`, sorts last,
+wins the claim on every single `wg syncconf` cycle since). Symptom observed from `librenms`: not a plain
+timeout, but an explicit **ICMP "Destination Host Unreachable" sent by `wireguard-node3` itself**
+(`172.28.0.5`, this NAS's currently-live pool node) — the packet never left our own infrastructure at all,
+because the peer that currently "owns" the AllowedIPs claim (`ro-hotspot`) had no live handshake to
+actually deliver anything through.
+
+**Verified this is not a transient timing glitch**: manually re-ran the exact `wg syncconf` command the
+reconcile loop itself runs every ~10s — the conflict persisted unchanged (`test-x86-bajastu`'s peer still
+missing `10.168.100.0/24`, `ro-hotspot`'s peer still holding it, despite having no live handshake at all).
+This is a standing architectural conflict, not something that self-heals on its own.
+
+**Fix (Tahap 1, code-only, done)**: `App\Models\Nas::oltDevices(): HasMany` (new relation, mirrors
+`OltDevice::nas()`) + `VpnProvisioningService::issueWireGuardCredentials()` now only adds
+`olt_management_subnet` to `AllowedIPs` when `$account->nas->oltDevices()->withoutGlobalScopes()->exists()`
+— `withoutGlobalScopes()` deliberately, since this must resolve correctly regardless of whether the calling
+context has an authenticated user (unlike a request-scoped read, `TenantScope`/`ResellerScope` gate on
+`Auth::check()`, and `$account->nas` is already the trusted, correct NAS regardless). `tr069_management_subnet`
+needed no equivalent fix — it was already per-NAS via a real column, never unconditional, and this incident
+never affected it (confirmed live: `test-x86-bajastu`'s peer never lost `10.1.0.0/20` throughout this whole
+incident, only `10.168.100.0/24`).
+
+**Test coverage updated** (`VpnProvisioningMultiProtocolTest`): the 3 existing OLT-widening tests didn't
+create an `OltDevice` fixture at all (they tested the OLD unconditional behavior) — updated to create one
+where widening is expected, added a NEW test for the actual real-world incident shape (config set globally,
+but THIS NAS has zero OltDevice rows — must be omitted), full regression suite green at 848/848 afterward.
+
+**Tahap 4 (reconcile to the live production tunnel) — executed and fully verified, real incident resolved.**
+Corrected `nas-3.conf` (ro-hotspot's fragment, with the OLT subnet claim removed) was written directly to
+`/etc/wireguard/peers/nas-3.conf` on all 3 pool nodes — deliberately NOT followed by a manual `wg syncconf`;
+the existing autonomous reconcile loop (already running continuously on every node, ~10s cycle) picked it
+up on its own within the next cycle, same mechanism already trusted for every other fragment change in this
+codebase. Verified end-to-end, with zero disruption to either live tunnel:
+- `test-x86-bajastu` (on node3 throughout): `AllowedIPs` gained `10.168.100.0/24` back; handshake stayed
+  fresh (48s old at check time) and the transfer counters kept climbing across the whole change
+  (1.85→2.00 MiB received, 1.71→1.78 MiB sent) — the tunnel carrying this NAS's real customer traffic was
+  never interrupted.
+- `ro-hotspot` (on node1 throughout): `AllowedIPs` correctly lost the claim it never needed; handshake
+  stayed fresh (24s old) and transfer counters likewise kept climbing normally (203.81→203.87 MiB received).
+- All 3 real OLTs confirmed reachable again for real: `snmpget`/`ping` succeeded from the `librenms`
+  container (the earlier "C300 times out on port 2161" read during verification was this session's OWN
+  testing mistake — both BOSS App's `olt_devices` registry and LibreNMS's own device row have always
+  correctly stored port 161 for it; retrying on the right port succeeded immediately). LibreNMS's own
+  `devices` table confirms all 3 back to `status=1` with a fresh `last_polled` timestamp, and
+  `librenms-dispatcher`'s own logs stopped emitting "Polling device unreachable" for these 3 device ids
+  entirely. Full regression suite green at 848/848 after the live change, same as before it.
+
+A full pre-reconcile snapshot (`wg show wg0 dump` from all 3 nodes, plus human-readable `wg show` output)
+was captured and preserved before this change as a rollback baseline — never needed, since the reconcile
+completed cleanly with no disruption to either NAS's live session.
 
 ## Architecture
 

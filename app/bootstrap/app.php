@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Middleware\EnsureAdminPanelAccess;
+use App\Http\Middleware\EnsureReferrerPortalAccess;
 use App\Http\Middleware\ResolveResellerContext;
 use App\Http\Middleware\SetLocale;
 use Illuminate\Foundation\Application;
@@ -16,7 +18,11 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->web(append: [SetLocale::class]);
-        $middleware->alias(['reseller.context' => ResolveResellerContext::class]);
+        $middleware->alias([
+            'reseller.context' => ResolveResellerContext::class,
+            'admin.panel' => EnsureAdminPanelAccess::class,
+            'referrer.portal' => EnsureReferrerPortalAccess::class,
+        ]);
 
         // Must run before SubstituteBindings — implicit route-model binding
         // (e.g. {pricing} -> ResellerPackagePricing) needs ResellerContext

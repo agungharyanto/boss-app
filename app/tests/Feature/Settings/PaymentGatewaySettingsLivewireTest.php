@@ -26,7 +26,7 @@ class PaymentGatewaySettingsLivewireTest extends TestCase
     private function admin(): User
     {
         $admin = User::factory()->create();
-        $admin->assignRole('super_admin');
+        $admin->assignRole('superadmin');
 
         return $admin;
     }

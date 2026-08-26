@@ -23,7 +23,6 @@ class Referrer extends Model
         'name',
         'phone',
         'type',
-        'commission_rate',
         'is_active',
     ];
 
@@ -31,7 +30,6 @@ class Referrer extends Model
     {
         return [
             'type' => ReferrerType::class,
-            'commission_rate' => 'decimal:2',
             'is_active' => 'boolean',
         ];
     }

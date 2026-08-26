@@ -10,7 +10,7 @@ use Livewire\Component;
 use Livewire\WithPagination;
 
 /**
- * "Pengaturan > Mapping Parameter CPE" (v0.7.2) — super_admin-only, no
+ * "Pengaturan > Mapping Parameter CPE" (v0.7.2) — superadmin-only, no
  * reseller branching at all (platform-level catalog, same posture as
  * PaymentGatewaySettings). Includes a "Test Resolve" panel against a real
  * GenieACS device id — the actual proof a mapping works, not just that a

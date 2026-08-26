@@ -5788,10 +5788,205 @@ place for this change, not an edit to old files), the new rename migration's own
 FROM state), `DashboardWidget`'s own documented `'top_agents'` value (above), and one confirmed false
 positive ("SNMP agent" wording in `AddMonitoringDeviceForm.php`, unrelated to this module entirely).
 
-**Not merged/tagged as of this writing** — branch `v0.9.1-rename-agent-to-referrer`, implementation and
-regression complete, deliberately left for Agung's own manual browser verification (registration form,
-"Referrer Teratas" dashboard widget, registration API) before `git merge --no-ff` into `develop`/`main`
-and tagging `v0.9.1` — this repo's standing workflow, no PR flow.
+**Merged and tagged** — Agung manually verified via browser (registration form, "Referrer Teratas"
+dashboard widget) before merge; `v0.9.1-rename-agent-to-referrer` merged `--no-ff` into `develop` then
+`main`, tagged `v0.9.1`, pushed to GitHub — this repo's standing workflow, no PR flow.
+
+## Two-Tier Admin: superadmin vs administrator (v0.9.2)
+
+**Renamed `super_admin` → `superadmin`, and added a new `administrator` role beside it** — done as the
+first step of v0.9.2, before any Referrer CRUD/portal work, because v0.9.2's new admin-panel-access
+middleware needs a resolved role model to check against. Investigated first (Langkah 0, per BOSS-003
+"stop and confirm before touching RBAC that already has a working full-access role") and found `super_admin`
+already functioned as exactly the "generic catch-all full-access role" the investigation was told to stop
+for — it was already given every single permission in every one of the 13 `seed*Permissions()` methods in
+`RolesAndPermissionsSeeder`, with no exception. Confirmed with Agung before proceeding: **rename in place**
+(`superadmin`), don't create a second, separate catch-all role alongside the old one.
+
+**Naming**: lowercase `snake_case`-consistent with the other 8 roles (`noc`, `customer_service`, `teknisi`,
+`billing`, `sales_internal`, `sales_freelance`, `finance`) — deliberately NOT `PascalCase`
+(`Administrator`/`Superadmin`) as the sprint brief first suggested, to avoid a codebase with one differently-
+cased role name among nine.
+
+**The distinction is forward-looking, not yet enforced by any permission** — `superadmin` is reserved for a
+future role/permission-management capability (there is no Filament or Livewire role/permission-editing UI
+anywhere in this codebase as of v0.9.2 — confirmed by grepping for Filament in `composer.json`, none
+installed, and no `roles.manage`-style permission exists). `administrator` gets the exact same *operational*
+permission set as `superadmin` — **identical today** (40/40 permissions, confirmed via `Role::permissions()->count()`
+on both after migration) — the two roles only diverge the moment a real role/permission-management
+permission is introduced and deliberately withheld from `administrator`. `RolesAndPermissionsSeeder::
+ADMIN_TIER_ROLES` (`['superadmin', 'administrator']`) is the one place this pairing is defined — every
+`seed*Permissions()` method loops over it via the new `giveToAdminTier()` helper instead of hardcoding
+`'superadmin'` alone; a future module's seed method should do the same, not just grant to `superadmin`.
+
+**Migrated via a real migration, not just a seeder edit** — `RolesAndPermissionsSeeder`'s own code only
+affects a fresh install (seeders don't re-run against already-seeded data). The real dev database already
+had a `super_admin` role row with a real user (`super_admin@boss.local`, id 1) attached via
+`model_has_roles` — a new migration
+(`2026_08_25_170000_rename_super_admin_role_and_add_administrator_tier.php`) does the rename with a plain
+`UPDATE roles SET name = 'superadmin' WHERE name = 'super_admin'` (preserves the row's `id`, so every
+existing `model_has_roles`/`role_has_permissions` pivot row — keyed by `role_id`, never by name — survives
+untouched, no re-assignment needed), then creates `administrator` and copies every one of `superadmin`'s
+current permission grants to it. Calls `PermissionRegistrar::forgetCachedPermissions()` at the end — Spatie
+caches the whole roles/permissions graph, so skipping this could leave an already-booted worker serving
+stale pre-rename data until the cache naturally expires. Verified for real: `super_admin@boss.local` (id 1)
+now holds role `superadmin` and passed `->can('nas.manage')` (a superadmin-only permission) immediately
+after the migration ran, with zero manual re-assignment.
+
+**`super_admin` renamed to `superadmin` everywhere it appeared as a literal string** across `app/`,
+`database/`, `routes/`, `resources/`, `tests/`, `stubs/laravel-app/`, and `docs/API.md` (~50 files, mostly
+test helper calls like `->assignRole('super_admin')`/`->userWithRole('super_admin')`) — full regression
+suite re-run clean at 805/805 after the rename. **Deliberately left untouched**: historical narrative in
+`CLAUDE.md`'s own older per-sprint sections and one historical detail in `docs/ROADMAP.md` (both describe a
+past decision as it was true at the time, same "don't rewrite history" discipline already established for
+old migration files in the v0.9.1 section above) — only this new section documents the current, renamed
+state going forward.
+
+## CRUD Referrer, Portal Login & Cross-Persona Middleware (v0.9.2)
+
+**First non-admin login persona in this codebase** — every prior "different kind of user" (reseller
+owner/staff since v0.3.2) still logs in through the exact same admin-facing `/login`/`web` guard/`users`
+table, differentiated only by data-scoping (`ResolveResellerContext`), never by a genuinely separate
+login flow or an access-blocking middleware. A Referrer is the first account type that logs in through its
+own route (`/referrer/login`, phone + password) and is structurally barred from the admin panel.
+
+**CRUD (admin side)**: REST API first (`App\Http\Controllers\Api\V1\ReferrerController`,
+`App\Services\ReferrerService`), then `App\Livewire\Referrers\ReferrerIndex` (`/referrers`) consumes the
+same `ReferrerService` directly (not an internal HTTP round-trip to its own API) — same established
+convention as every other admin CRUD Livewire page in this codebase (`OltDeviceIndex`, `NasIndex`,
+`ResellerIndex`). `referrers.commission_rate` (deprecated, superseded by a per-package rate table planned
+for v0.9.3) was dropped in the same sprint — confirmed via grep first that no code beyond `Referrer`'s own
+`$fillable`/casts and `ReferrerFactory`'s default read/wrote it, so the drop was safe. A new
+`referrers.user_id` unique constraint (nullable-and-unique — Postgres allows multiple NULLs through) was
+added, since a Referrer's login account is meant to be strictly 1:1, previously unenforced at the DB level.
+
+**Login-account generation, exactly as specified — never sent automatically over WhatsApp**:
+`ReferrerService::attachNewLoginAccount()` generates a `User` (`Str::password(16)`, same helper already
+used for `OltDeviceIndex`'s SNMP community generation) with **zero Spatie roles** — a fresh `User::create()`
+has none by default, and nothing in this flow ever calls `assignRole()` — this is the actual mechanism that
+keeps a Referrer account out of the admin panel, not just the middleware layer (defense in depth). The
+generated password is returned in-memory exactly once (API response / Livewire property) and never
+persisted, logged, or re-derivable — the admin relays it manually. `users.email` has no real login purpose
+for this account (login is phone + password) but the column is `NOT NULL` + globally unique at the schema
+level — a deterministic placeholder (`referrer-{id}@portal.local`) is synthesized rather than asking the
+admin to type one in.
+
+**Portal login tenant resolution — a genuinely new problem, no prior precedent in this codebase**:
+`referrers.phone` is only unique WITHIN a tenant (`(tenant_id, phone)` composite), but the login form has no
+tenant selector. `ReferrerLoginController::login()` queries `Referrer::where('phone', ...)` as a GUEST
+request — `BelongsToTenant`'s `TenantScope` only filters `if (Auth::check())`, so this is naturally
+unscoped already, searching every tenant, correct by construction for this deployment's documented
+single-tenant-per-instance reality. If more than one row ever matches (a future multi-tenant SaaS
+deployment with a colliding phone digit string across two tenants), it picks the first (by id) and logs a
+warning — same defensive "pick first + log" posture already established by `ResolveResellerContext`'s own
+2+-membership handling, not a silent wrong answer.
+
+**Two new middleware close the "nothing blocks cross-persona access" gap** (`ResolveResellerContext` only
+ever scoped data, never blocked a route — true since v0.3.2, first actually closed here):
+- **`admin.panel`** (`EnsureAdminPanelAccess`) wraps the WHOLE existing admin route group in `web.php`.
+  **Two real regressions were caught building this, in order, both via the full test suite — not
+  theoretical**: (1) an early version checked `$user->roles()->exists()` alone, which locked out several
+  existing tests granting a permission directly with no role wrapper (e.g.
+  `$viewer->givePermissionTo('cpe_devices.view')`, a real, already-established pattern in
+  `CpeDeviceDatatableControllerTest`/`OltDeviceDatatableControllerTest`/`CpeDeviceDetailControllerTest`/
+  `CpeDeviceShowPageTest`) — fixed by checking `getAllPermissions()->isNotEmpty()` instead, which Spatie
+  already unions across both sources; (2) that still locked out reseller owner/staff users, who are
+  authorized PURELY via an active `reseller_users` membership row and correctly hold ZERO Spatie
+  roles/permissions by this codebase's own established design (see the repeated "reseller owner/staff
+  diotorisasi lewat keanggotaan reseller_users... bukan lewat permission Spatie" note across the
+  resellers/tax-engine/invoicing/whatsapp-gateway/installation/network/OLT/GenieACS sections above) —
+  confirmed via `OltDeviceDatatableControllerTest::test_reseller_only_sees_their_own_olt_devices`. The
+  final check is `getAllPermissions()->isNotEmpty() || active reseller_users membership exists` — a pure
+  Referrer-portal account has none of the three (no role, no direct permission, no reseller_users row), so
+  this broader check is still exactly correct for the boundary this middleware exists to enforce.
+  **Deliberately NOT a hardcoded `superadmin`/`administrator`-only check** — the original sprint brief's own
+  wording suggested exactly that, which would have locked out `noc`/`customer_service`/`teknisi`/`billing`/
+  `sales_internal`/`sales_freelance`/`finance` from the ENTIRE admin panel, including pages they've always
+  legitimately used — flagged and confirmed with Agung before implementing, not silently "corrected."
+- **`referrer.portal`** (`EnsureReferrerPortalAccess`) wraps `/referrer-portal` — only a `User` with an
+  active `Referrer` row linked via `user_id` passes; resolves it once and stashes it on
+  `$request->attributes` (`referrer` key) so the portal component doesn't re-query.
+
+**Portal scope, deliberately minimal (v0.9.2)**: `App\Livewire\ReferrerPortal\Dashboard`
+(`layouts.referrer-portal`, a separate minimal layout — NOT `layouts.app`/`<x-sidebar>`, which is admin-
+oriented and would render mostly-empty for a Referrer with zero Spatie permissions) shows: profile (name
+editable via `updateName()`, phone read-only since it's the login credential), the Referrer's own
+`referrals()` list (already built in v0.9.1, zero new query logic needed), and a static "Rekap Komisi — Akan
+tersedia di update berikutnya" placeholder — **no commission/rate/"Titip" logic of any kind was built here**,
+deliberately deferred to v0.9.3-v0.9.6.
+
+**Standing principle for when that logic DOES land (v0.9.6 and beyond) — noted now, not implemented**:
+self-service actions from the Referrer portal must be **CREATE-ONLY**. A Referrer must never be able to
+edit or delete a record of their own past action (a referral, a future commission/"Titip" entry, etc.).
+Correcting a mistake is exclusively an Administrator/Superadmin action via a NEW adjustment entry, never a
+mutation of the original record — the audit-trail principle every future portal-facing write in this module
+must follow, matching this codebase's existing discipline elsewhere (e.g. `cpe_action_logs` is
+append-only, `reseller_tax_ledger`/`commission_ledger` rows are never edited in place, only voided/adjusted
+via a new row).
+
+**Verified for real, end-to-end, against the live HTTPS dev server (`boss.bajastu.id`), not just the test
+suite**: a real `ReferrerService::create()` call (with an authenticated tinker session, since `tenant_id`
+auto-fill needs `Auth::check()`) produced a genuine `User` with 0 roles and a real generated password; a
+real `curl` session then logged in via `POST /referrer/login` with that exact phone+password, got redirected
+to `/referrer-portal`, the portal page rendered correctly (`200`, all 3 sections present), and the SAME
+session then hit `GET /dashboard` and got a genuine `403` — proving both middleware boundaries work
+end-to-end, not just in isolation. Test data cleaned up afterward (real dev DB, not left behind).
+
+Full regression suite green at 842/842 (37 new tests across `AdminPanelAccessTest`,
+`ReferrerPortalLoginTest`, `ReferrerApiTest`, `ReferrerIndexLivewireTest`), Pint clean on every touched file
+(the same 7 pre-existing style issues in untouched Network module files remain, out of scope, not fixed
+here).
+
+**Two more fixes folded into this same branch during manual testing, before closure (not separate
+commits)**:
+
+1. **Root `/` routing** — still Laravel's own scaffold default (`view('welcome')`), never replaced since
+   v0.1.0. Now branches on auth state: guest → `/login`; logged in and admin-panel-eligible → `/dashboard`;
+   logged in as a pure Referrer → straight to `/referrer-portal`, never `/dashboard` first (which would
+   just 403 via `admin.panel`). Deliberately reuses `EnsureAdminPanelAccess::userHasAccess()` (extracted as
+   a public static method for exactly this reuse) rather than a separately-computed rule in the route
+   closure — two independent definitions of "admin-eligible" drifting apart would be a real, easy-to-miss
+   bug class. `welcome.blade.php` removed (grepped first — no other reference anywhere).
+2. **Logout UI** — the Fortify `POST /logout` route already worked, it just had no button anywhere.
+   `layouts/app.blade.php` gained a profile dropdown (initial-letter avatar, top-right) with the user's
+   name + a Logout button (form POST, CSRF). Building this surfaced a real, genuine gap in the portal
+   layout: the Referrer portal's own logout form (added back when the layout was first built) posts to
+   Fortify's *shared* `route('logout')` — but `Laravel\Fortify\Http\Responses\LogoutResponse` always
+   redirects to a single global target (`Fortify::redirects('logout', '/')`, unconfigured/default in this
+   app), which can't distinguish which persona just logged out. Once root `/` started branching by
+   *authenticated* eligibility, a logged-OUT request hitting `/` has no user left to branch on at all — it
+   would always land on `/login`, wrong for a Referrer who should land on `/referrer/login`. Fixed with a
+   dedicated `POST /referrer/logout` (`ReferrerLoginController::logout()`, mirrors Fortify's own
+   `AuthenticatedSessionController::destroy()` mechanics — guard logout + session invalidate/regenerate
+   token — but redirects explicitly to `route('referrer.login')`), and the portal layout's form now posts
+   there instead. The portal header was also updated to show the logged-in Referrer's own name (previously
+   just showed the app name), reading it off `request()->attributes->get('referrer')` (already stashed by
+   `EnsureReferrerPortalAccess`) rather than re-querying.
+
+**A real regression from fix #2 itself, caught by the full test suite, not spotted by review**: the new
+profile dropdown's `x-data="{ open: false }"` collided *literally* (exact substring) with an unrelated
+`x-data="{ open: false }"` pattern already used once per SSID row on the CPE detail page — a test asserting
+"exactly 5 occurrences of this string = 5 SSID rows" started seeing 6 (the dropdown added on every
+authenticated page, including that one) and failed. Fixed by renaming the dropdown's own state variable to
+`profileMenuOpen` (unique, no collision) rather than touching the older, working test — a reminder that a
+generic Alpine `x-data` snippet reused verbatim across a shared layout can collide with an unrelated page's
+own content-counting assertions in a way `grep`-based review alone wouldn't have caught. Laravel's own
+default `ExampleTest` (`GET / must return 200`) was also updated to match the new, deliberate `/` behavior
+(redirect, not a static page) — it was testing the scaffold default this whole change replaces.
+
+**Verified for real, end-to-end, against the live HTTPS dev server** (all 5 flows, not just the test suite):
+guest → `/` → `/login`; admin login → `/` → `/dashboard`; admin `POST /logout` → `/` → (as guest) `/login`;
+a real Referrer (created via an authenticated tinker session, cleaned up afterward) → `/referrer/login` →
+`/referrer-portal` (name + logout form present in the real rendered HTML) → `/` also lands back on
+`/referrer-portal` while still logged in → `POST /referrer/logout` → `/referrer/login`, and the portal
+becomes unreachable again afterward. Admin dashboard HTML confirmed to contain both `profileMenuOpen` and
+a real "Logout" button.
+
+Full regression suite green at 847/847 (5 more new tests: `RootRoutingTest` ×3, 2 logout-redirect cases
+added to `ReferrerPortalLoginTest`), Pint clean. **Not merged/tagged as of this writing** — still branch
+`v0.9.2-referrer-crud-portal-rbac`, everything above (the original v0.9.2 scope and these two fixes) folded
+into the same not-yet-committed working tree, deliberately left for Agung's own manual browser verification
+before `git merge --no-ff` and tagging `v0.9.2`.
 
 ## Architecture
 

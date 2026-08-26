@@ -30,7 +30,8 @@
 | v0.8.3  | Network         | RX Power History, Custom Range & API | RX Power History terjadwal di Detail CPE, tab Custom Range dipakai ulang di 3 modal riwayat, REST API `/api/v1/monitoring/*` + RX Power API (foothold bot WhatsApp masa depan) — **satu branch/tag dengan v0.8.2 karena alasan workflow sesi, lihat catatan di bawah** | Selesai |
 | v0.8.4  | Network         | Dialup Syslog & RADIUS Migration | Fix SNAT per-NAS WireGuard, domain `boss.bajastu.id`+TLS, refactor `VpnSyncRouteFragments` (hilangkan router API login noise), pipeline syslog rsyslog→LibreNMS+UI+API, migrasi 295 akun PPPoE `ro-hotspot` ke RADIUS BOSS App, Riwayat Dialup di Detail CPE (reaktivasi `radacct`) | Selesai |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
-| v0.9.1  | Billing & Finance | Rename Agent → Referrer      | Rename fondasi sebelum logic Commission (v0.9.0) mulai — tabel/model `agents` (dari v0.3.0) jadi `referrers`, hindari tabrakan nama dengan `Agent` yang direncanakan khusus untuk modul Token/Hotspot masa depan | Implementasi selesai — verifikasi akhir pending |
+| v0.9.1  | Billing & Finance | Rename Agent → Referrer      | Rename fondasi sebelum logic Commission (v0.9.0) mulai — tabel/model `agents` (dari v0.3.0) jadi `referrers`, hindari tabrakan nama dengan `Agent` yang direncanakan khusus untuk modul Token/Hotspot masa depan | Selesai |
+| v0.9.2  | Billing & Finance | CRUD Referrer, Portal Login & RBAC Two-Tier | CRUD Referrer (admin), portal login self-service pertama non-admin di codebase ini (HP+password, guard `web` sama), rename `super_admin`→`superadmin` + role baru `administrator` (permission operasional identik), middleware `admin.panel`/`referrer.portal` menutup celah akses lintas-persona pertama kali | Implementasi selesai — verifikasi akhir pending |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
 | v0.11.0 | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
 | v0.12.0 | Network         | PPPoE Provisioning & Technician API | Provisioning kredensial PPPoE (`radcheck`) hasil instalasi teknisi — di luar scope v0.7.5 karena `work_order_devices` tidak punya link balik ke `radcheck`. Sekalian API/otorisasi resmi teknisi/bot WhatsApp submit device (menggantikan bridge CS manual sementara dari v0.7.5) | Backlog |
@@ -1053,7 +1054,7 @@ seluruh ringkasan sesi, bukan delta) + baris Start baru, keduanya tampil benar d
   SEBELUM admin sempat lihat community asli yang sudah dikonfigurasi manual di perangkat lama), belum
   diperbaiki.
 
-## v0.9.1 — Rename Agent → Referrer (branch `v0.9.1-rename-agent-to-referrer`, implementasi selesai, belum di-merge/tag)
+## v0.9.1 — Rename Agent → Referrer (branch `v0.9.1-rename-agent-to-referrer`, merged + tagged `v0.9.1`)
 
 Rename fondasi sebelum masuk logic Commission (v0.9.0): tabel/model `Agent` yang ada sejak v0.2.0-v0.3.0
 sebenarnya merepresentasikan "sales/referral internal", bukan konsep "Agent" yang akan dipakai khusus nanti
@@ -1097,6 +1098,84 @@ scope, tidak diperbaiki). Re-grep case-insensitive "agent" setelah rename mengon
 tersisa di kode aplikasi, kecuali migrasi historis (tidak boleh diubah — merepresentasikan schema history
 apa adanya) dan satu false positive ("SNMP agent" di `AddMonitoringDeviceForm.php`).
 
-**Belum di-merge/tag** — menunggu verifikasi manual Agung lewat browser (form registrasi, dashboard widget
-"Referrer Teratas", API registrasi) sebelum `git merge --no-ff` ke `develop`/`main` dan tag `v0.9.1`, sesuai
-alur kerja standar repo ini (tidak ada PR flow).
+**Merged + tagged** — Agung memverifikasi manual lewat browser (form registrasi, dashboard widget "Referrer
+Teratas") dan lolos; merge `--no-ff` ke `develop` lalu `main`, tag `v0.9.1` dibuat, di-push ke GitHub.
+
+## v0.9.2 — CRUD Referrer, Portal Login & RBAC Two-Tier (branch `v0.9.2-referrer-crud-portal-rbac`, implementasi selesai, belum di-merge/tag)
+
+Dikerjakan setelah v0.9.1 di-merge (branch dibuat dari `main` yang sudah punya model/tabel `Referrer`).
+Detail teknis lengkap ada di `CLAUDE.md` bagian "Two-Tier Admin: superadmin vs administrator" dan "CRUD
+Referrer, Portal Login & Cross-Persona Middleware".
+
+**Langkah 0 — investigasi role Spatie ditemukan konflik substansial, dikonfirmasi ulang sebelum lanjut**:
+`super_admin` yang sudah ada ternyata SUDAH berfungsi persis sebagai "catch-all full-access role" yang
+menjadi alasan STOP di instruksi awal — dapat SEMUA permission di 13 method `seed*Permissions()` tanpa
+kecuali. Dikonfirmasi ke Agung: rename in-place `super_admin`→`superadmin` (bukan tambah role catch-all
+kedua terpisah), lalu buat role baru `administrator` (permission operasional identik — 40/40 sama persis
+saat ini — beda cuma di masa depan kalau kapabilitas manage role/permission dibangun, `superadmin`
+eksklusif dapat itu). Penamaan lowercase snake_case, konsisten dengan 8 role lain (bukan PascalCase seperti
+draf awal instruksi). Migrasi nyata (bukan cuma edit seeder) me-rename baris role `super_admin` di DB
+secara in-place (`UPDATE`, bukan drop+recreate) — `super_admin@boss.local` (user id 1) otomatis jadi
+`superadmin` tanpa re-assignment manual, dikonfirmasi lewat `->can('nas.manage')` langsung setelah migrasi.
+
+**Langkah 1** — kolom `referrers.commission_rate` (deprecated, akan digantikan rate table per-paket v0.9.3)
+di-drop lewat migration baru, dicek dulu via grep tidak ada kode lain yang membacanya.
+
+**Langkah 2 — CRUD Referrer**: REST API dulu (`ReferrerController`/`ReferrerService`), Livewire
+`ReferrerIndex` (`/referrers`) konsumsi service yang sama (bukan HTTP internal ke API sendiri — pola yang
+sudah baku di codebase ini). Create dengan 2 opsi: generate akun login (password acak 16 karakter,
+ditampilkan SEKALI di layar dengan tombol salin, TIDAK dikirim otomatis lewat WhatsApp) atau tanpa akun
+(bisa ditautkan/dibuatkan akun belakangan). User yang di-generate untuk Referrer sengaja TIDAK diberi role
+Spatie apa pun — itu sendiri sudah cukup mencegah akses panel admin, di luar lapisan middleware.
+
+**Langkah 3 — Portal Login Referrer**: route terpisah `/referrer/login` (HP+password, BUKAN lewat `/login`
+Fortify yang terikat email), guard `web` yang sama dengan admin (pola yang sama seperti `reseller_users`).
+Resolusi tenant untuk request guest (belum login) — `referrers.phone` cuma unik per-tenant, bukan global —
+diselesaikan dengan query tanpa scope tenant secara alami (guest request, `TenantScope` cuma aktif kalau
+`Auth::check()`), aman untuk deployment single-tenant-per-instance yang didokumentasikan berulang di
+CLAUDE.md; kalau collision phone lintas-tenant (skenario SaaS masa depan) — ambil yang pertama + log
+warning, pola defensif yang sama dengan `ResolveResellerContext`.
+
+**Langkah 4 — Middleware pemisah akses, DITEMUKAN & DIPERBAIKI konflik serius sebelum diimplementasikan
+persis seperti instruksi**: instruksi awal minta middleware admin cek "role Administrator ATAU Superadmin"
+diterapkan ke SELURUH grup route admin — kalau diikuti persis, akan me-lockout 7 role staff lain
+(`noc`/`customer_service`/`teknisi`/`billing`/`sales_internal`/`sales_freelance`/`finance`) dari SELURUH
+panel admin, termasuk halaman yang memang sah mereka akses sehari-hari. Dikonfirmasi ulang ke Agung sebelum
+lanjut: `admin.panel` akhirnya cek "punya permission Spatie apa pun (role atau langsung) ATAU keanggotaan
+`reseller_users` aktif" — bukan daftar role hardcoded. Dua regresi NYATA lagi ditemukan lewat full test
+suite saat membangun cek ini (bukan cuma dugaan): versi awal cuma cek `roles()->exists()`, ternyata
+me-lockout test user yang permission-nya di-assign langsung tanpa role wrapper; versi kedua
+(`getAllPermissions()`) masih me-lockout reseller owner/staff yang memang sengaja nol permission Spatie
+(diotorisasi murni lewat `reseller_users`). `referrer.portal` (mirror-nya) menutup `/referrer-portal` —
+hanya user dengan baris `Referrer` aktif yang tertaut lewat `user_id`.
+
+**Langkah 5 — Portal Referrer, scope minimal**: profil (nama bisa diubah sendiri, HP read-only), daftar
+pelanggan yang direferensikan (`Referrer::referrals()`, sudah ada dari v0.9.1, tidak ada logic query baru),
+placeholder "Rekap Komisi — Akan tersedia di update berikutnya". Tidak ada logic komisi/rate/Titip apa pun
+dibangun di sprint ini.
+
+**Catatan untuk v0.9.6 nanti (didokumentasikan sekarang, TIDAK diimplementasikan apa pun di v0.9.2)**: aksi
+self-service dari portal Referrer harus CREATE-ONLY — Referrer tidak boleh bisa edit/hapus record aksinya
+sendiri, koreksi kesalahan hanya lewat entry adjustment baru oleh Administrator/Superadmin, bukan mengubah
+record asli. Lihat CLAUDE.md untuk detail lengkap.
+
+**Verifikasi**: full regression suite 842/842 hijau (37 test baru), Pint clean di semua file yang disentuh.
+Diverifikasi nyata end-to-end lewat HTTPS dev server (`boss.bajastu.id`, bukan cuma test suite): buat
+Referrer + akun login lewat `ReferrerService` nyata, login lewat `curl` dengan HP+password itu, redirect ke
+`/referrer-portal` (200, semua 3 section tampil), sesi yang sama akses `/dashboard` admin → 403. Data uji
+coba dibersihkan dari DB dev setelahnya.
+
+**2 fix tambahan digabung ke branch yang sama sebelum closure (ditemukan saat testing manual, bukan scope
+asli v0.9.2)**: (1) root routing `/` masih bawaan scaffold Laravel (`view('welcome')`, belum pernah diganti
+sejak v0.1.0) — sekarang guest→`/login`, admin-eligible→`/dashboard`, Referrer murni→langsung
+`/referrer-portal` (pakai rule yang sama persis dengan `EnsureAdminPanelAccess`, supaya tidak 403 dulu baru
+redirect ulang); (2) tombol logout ditambahkan (dropdown profil di layout admin) — sekaligus menemukan gap
+nyata bahwa logout portal Referrer (sudah ada sejak awal v0.9.2) salah arah ke `/login` admin begitu root
+routing baru berlaku, karena Fortify cuma punya SATU target redirect logout global — diperbaiki dengan route
+logout khusus `/referrer/logout`. Satu regresi lagi ditemukan & diperbaiki dari fix ini sendiri (collision
+`x-data` Alpine dengan test halaman CPE). Detail lengkap di CLAUDE.md bagian yang sama. Regresi final:
+847/847 test hijau, diverifikasi nyata end-to-end untuk seluruh 5 alur (guest/admin/referrer × login/root/
+logout).
+
+**Belum di-merge/tag** — menunggu verifikasi manual Agung lewat browser sebelum `git merge --no-ff` ke
+`develop`/`main` dan tag `v0.9.2`.

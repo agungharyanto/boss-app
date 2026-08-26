@@ -25,7 +25,7 @@ class TaxComponentIndexLivewireTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->assignRole('super_admin');
+        $admin->assignRole('superadmin');
 
         Livewire::actingAs($admin)
             ->test(TaxComponentIndex::class)

@@ -3,12 +3,55 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## v0.9.1 — Rename Agent → Referrer (implementasi selesai 2026-08-25, belum di-merge/tag)
+## v0.9.2 — CRUD Referrer, Portal Login & RBAC Two-Tier (implementasi selesai 2026-08-26, belum di-merge/tag)
 
-**Catatan status**: branch `v0.9.1-rename-agent-to-referrer` — implementasi dan regresi selesai, TAPI
-belum di-merge ke `develop`/`main` dan belum di-tag, menunggu verifikasi manual Agung lewat browser dulu
-(sesuai alur kerja standar repo ini). Entri ini dicatat sekarang supaya histori kerja tetap akurat; update
-lanjutan (tanggal merge/tag sebenarnya) menyusul begitu verifikasi selesai.
+**Catatan status**: branch `v0.9.2-referrer-crud-portal-rbac` (dari `main` yang sudah include v0.9.1) —
+implementasi dan regresi selesai, menunggu verifikasi manual Agung lewat browser sebelum merge/tag.
+
+CRUD Referrer (admin) + portal login self-service pertama untuk persona non-admin di codebase ini, plus
+RBAC dua-tingkat (`superadmin`/`administrator`). Detail teknis lengkap ada di `docs/ROADMAP.md` bagian
+"v0.9.2" dan `CLAUDE.md` bagian "Two-Tier Admin" + "CRUD Referrer, Portal Login & Cross-Persona Middleware".
+
+- **RBAC**: `super_admin` di-rename in-place jadi `superadmin` (migrasi nyata, bukan cuma seeder — user
+  existing otomatis ikut tanpa re-assignment), role baru `administrator` dengan permission operasional
+  identik (beda cuma di kapabilitas manage role/permission masa depan, belum dibangun). Investigasi awal
+  menemukan `super_admin` SUDAH berfungsi sebagai catch-all full-access role — dikonfirmasi ulang ke Agung
+  sebelum lanjut (rename in-place, bukan tambah role catch-all kedua).
+- **CRUD Referrer**: REST API (`ReferrerController`/`ReferrerService`) + Livewire `/referrers`. Create bisa
+  sekalian generate akun login (password acak, ditampilkan SEKALI, TIDAK dikirim otomatis lewat WhatsApp)
+  atau tanpa akun. Kolom `referrers.commission_rate` (deprecated) di-drop.
+- **Portal login Referrer**: `/referrer/login` (HP+password, terpisah dari `/login` Fortify), guard `web`
+  sama dengan admin. Portal scope minimal: profil, daftar referral, placeholder rekap komisi.
+- **Middleware `admin.panel`/`referrer.portal`**: menutup celah "tidak ada yang blokir akses lintas-persona"
+  yang ada sejak v0.1.0. Instruksi awal minta cek role Administrator/Superadmin hardcoded — kalau diikuti
+  persis akan me-lockout 7 role staff lain dari seluruh panel admin; dikonfirmasi ulang ke Agung dan
+  diperbaiki jadi cek "permission Spatie apa pun ATAU keanggotaan reseller_users aktif". Dua regresi nyata
+  lagi ditemukan & diperbaiki lewat full test suite saat membangun cek ini.
+**Fixed (ditemukan saat testing manual v0.9.2, digabung ke branch yang sama sebelum closure)**:
+- **Root routing `/`** — masih route bawaan scaffold Laravel (`view('welcome')`), belum pernah diganti sejak
+  v0.1.0. Sekarang: guest → redirect `/login`; user dengan akses admin panel (rule yang SAMA persis dengan
+  `EnsureAdminPanelAccess::userHasAccess()`) → redirect `/dashboard`; Referrer murni (tanpa akses admin) →
+  redirect langsung `/referrer-portal`, bukan `/dashboard` (supaya tidak kena 403 dulu baru redirect ulang).
+  `welcome.blade.php` dihapus (dicek dulu tidak dipakai di tempat lain).
+- **Logout UI admin panel** — route logout Fortify sudah ada & berfungsi sejak awal, tapi belum ada tombol
+  di UI manapun. Ditambahkan dropdown profil (avatar inisial nama) di pojok kanan atas layout admin
+  (`layouts/app.blade.php`), berisi nama user + tombol Logout.
+- **Logout portal Referrer, gap nyata ditemukan saat membangun fix di atas**: route logout Fortify yang
+  sudah dipakai portal Referrer sejak awal v0.9.2 SELALU redirect ke `/` (target global Fortify, tidak bisa
+  dibedakan per-persona) — begitu root route baru berlaku, logout dari portal Referrer akan salah arah ke
+  `/login` admin, bukan `/referrer/login`. Dibuat route logout khusus (`POST /referrer/logout`,
+  `ReferrerLoginController::logout()`, mekanisme sama persis dengan Fortify tapi redirect eksplisit ke
+  `/referrer/login`). Header portal juga diperbarui menampilkan nama Referrer yang login.
+- **Regresi ditemukan & diperbaiki dari fix di atas sendiri**: `x-data="{ open: false }"` di dropdown profil
+  baru bentrok literal dengan string yang sama dipakai test lain untuk menghitung baris di halaman CPE
+  (`CpeDeviceShowPageTest`) — diganti jadi `profileMenuOpen` supaya unik. `ExampleTest` bawaan Laravel
+  (`GET / harus 200`) diupdate mengikuti perilaku baru (sekarang redirect, bukan 200 statis).
+- **Regresi**: 847/847 test hijau (5 test baru untuk root routing + logout), Pint clean. Diverifikasi nyata
+  end-to-end lewat HTTPS dev server untuk seluruh alur: guest→login, admin login→root→dashboard,
+  admin logout→root→login, referrer login→root→portal (dengan nama+tombol logout tampil benar di header),
+  referrer logout→`/referrer/login`.
+
+## v0.9.1 — Rename Agent → Referrer (2026-08-25, merged + tagged)
 
 Rename fondasi sebelum masuk logic Commission (v0.9.0) — tabel/model `Agent` (ada sejak v0.2.0-v0.3.0,
 sebenarnya merepresentasikan referral sales/internal) di-rename jadi `Referrer`, supaya nama "Agent" bebas

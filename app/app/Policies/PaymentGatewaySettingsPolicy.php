@@ -5,7 +5,7 @@ namespace App\Policies;
 use App\Models\User;
 
 /**
- * Strictly super_admin-only (v0.3.5 Fase H) — see
+ * Strictly superadmin-only (v0.3.5 Fase H) — see
  * RolesAndPermissionsSeeder::seedPaymentGatewaySettingsPermissions() for
  * why this is stricter than invoices.* / billing role access. No model
  * instance involved (singleton, no route-model binding) — same

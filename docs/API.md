@@ -378,6 +378,64 @@ detail teknis lengkap termasuk dua regresi nyata yang ditemukan & diperbaiki saa
 
 ---
 
+## Bandwidth Profile (v0.14.1)
+
+Fondasi cluster "Profil Paket" (terinspirasi MixRadius V3.2). Permission: `bandwidth_profiles.view`/
+`bandwidth_profiles.manage`, tier admin saja (`superadmin`/`administrator`). Business logic di
+`App\Services\Network\BandwidthProfileService`, dipakai bareng oleh endpoint di bawah dan Livewire
+`Network\BandwidthProfileIndex` (`/bandwidth-profiles`).
+
+### `GET /bandwidth-profiles`
+
+List bandwidth profile milik tenant yang login. Query opsional: `?search=` (cari nama), `?is_active=`,
+`?sort_by=`/`?sort_dir=` (default `name`/`asc`).
+
+### `POST /bandwidth-profiles`
+
+Body: `name` (wajib, unik per tenant — soft-deleted tidak menghalangi reuse nama), `upload_min`,
+`upload_max` (wajib `>= upload_min`), `download_min`, `download_max` (wajib `>= download_min`) — **semua
+dalam Kbps**, `is_active` (opsional, default `true`).
+
+> Satuan Kbps/Mbps di form Livewire murni kenyamanan input admin — dikonversi ke Kbps sebelum sampai ke
+> endpoint ini. API sendiri tidak punya konsep satuan, selalu Kbps.
+
+### `GET /bandwidth-profiles/{bandwidth_profile}` · `PUT /bandwidth-profiles/{bandwidth_profile}`
+
+`PUT` body: semua field opsional (`sometimes`), hanya yang dikirim yang diubah.
+
+### `DELETE /bandwidth-profiles/{bandwidth_profile}`
+
+Soft delete (`SoftDeletes`) — bukan hard delete, karena baris ini akan direferensikan Grup Profil/Profil
+Hotspot/Profil PPP (v0.14.3+) begitu sub-versi itu dibangun.
+
+```json
+{
+  "success": true,
+  "message": "Bandwidth profile berhasil dibuat",
+  "data": {
+    "id": 1,
+    "name": "10 Mbps",
+    "upload_min": 5000,
+    "upload_max": 10000,
+    "download_min": 5000,
+    "download_max": 10000,
+    "upload_min_display": "5 Mbps",
+    "upload_max_display": "10 Mbps",
+    "download_min_display": "5 Mbps",
+    "download_max_display": "10 Mbps",
+    "is_active": true,
+    "created_at": "2026-08-26T09:00:00+00:00",
+    "updated_at": "2026-08-26T09:00:00+00:00"
+  },
+  "meta": []
+}
+```
+
+`*_display` menampilkan >1000 Kbps sebagai Mbps (`App\Models\BandwidthProfile::formatKbps()`), sisanya
+tetap Kbps polos.
+
+---
+
 ## Payment Gateway (Xendit, v0.3.5)
 
 > Catatan: endpoint `invoices` (CRUD, generate, transisi status) dari v0.3.4

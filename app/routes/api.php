@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\BandwidthProfileController;
 use App\Http\Controllers\Api\V1\CpeDeviceController;
 use App\Http\Controllers\Api\V1\CpeParameterMapController;
 use App\Http\Controllers\Api\V1\CustomerContactController;
@@ -233,6 +234,15 @@ Route::prefix('v1')->group(function () {
         Route::post('referrers/{referrer}/deactivate', [ReferrerController::class, 'deactivate']);
         Route::post('referrers/{referrer}/generate-login-account', [ReferrerController::class, 'generateLoginAccount']);
         Route::post('referrers/{referrer}/link-user', [ReferrerController::class, 'linkUser']);
+
+        // v0.14.1 — fondasi cluster "Profil Paket". Tier-admin-only (see
+        // BandwidthProfilePolicy), no reseller.context needed —
+        // BandwidthProfile has no reseller_id at all, tenant-level only.
+        Route::get('bandwidth-profiles', [BandwidthProfileController::class, 'index']);
+        Route::post('bandwidth-profiles', [BandwidthProfileController::class, 'store']);
+        Route::get('bandwidth-profiles/{bandwidth_profile}', [BandwidthProfileController::class, 'show']);
+        Route::put('bandwidth-profiles/{bandwidth_profile}', [BandwidthProfileController::class, 'update']);
+        Route::delete('bandwidth-profiles/{bandwidth_profile}', [BandwidthProfileController::class, 'destroy']);
 
         // v0.8.4 — read-only Dashboard Monitoring API, WhatsApp-bot
         // integration foothold (see App\Http\Controllers\Api\V1\

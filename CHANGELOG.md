@@ -3,6 +3,47 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.1 — Bandwidth Profile (2026-08-27, merged + tagged)
+
+**Catatan status**: branch `v0.14.1-bandwidth-profile` (dari `main` yang sudah include v0.9.2), sprint
+pertama cluster baru "Profil Paket" (v0.14.0, 7 sub-versi, terinspirasi MixRadius V3.2) — implementasi dan
+regresi selesai, sudah diverifikasi manual Agung lewat browser, merge `--no-ff` ke `develop` lalu `main`,
+tag `v0.14.1` dibuat, di-push ke GitHub.
+
+Fondasi cluster: tabel `bandwidth_profiles` (profil reusable upload/download min-max, disimpan Kbps
+secara internal). Detail teknis lengkap ada di `docs/ROADMAP.md` bagian "v0.14.1" dan `CLAUDE.md`.
+
+- **Konversi satuan Kbps/Mbps di layer form** — pemilih satuan di Livewire murni kenyamanan input, REST
+  API selalu Kbps.
+- **Partial unique index** `(tenant_id, name) WHERE deleted_at IS NULL` — nama yang sudah di-soft-delete
+  bisa dipakai ulang.
+- **2 bug nyata ditemukan & diperbaiki lewat test suite**: `formatKbps()`'s `rtrim($str, '0')` memakan
+  digit signifikan bilangan bulat (`50000 Kbps` sempat tampil `"5 Mbps"`, bukan `"50 Mbps"`) — dihapus,
+  tidak diperlukan sama sekali karena PHP tidak pernah menghasilkan padding trailing-zero; `Rule::unique()`
+  tidak otomatis exclude baris soft-deleted (beda dari query Eloquent biasa) — diperbaiki dengan
+  `->whereNull('deleted_at')` eksplisit di 4 tempat.
+- **Governance note permanen ditambahkan ke CLAUDE.md**: NAS `test-x86-bajastu` adalah PRODUCTION (bukan
+  environment uji coba meski namanya mengandung "test"), `ro-hotspot.bajastu.id` yang aman untuk testing —
+  berlaku untuk seluruh cluster v0.14.x, krusial mulai v0.14.6 (RouterOS live-push).
+- **Bug nyata ke-3, ditemukan lewat testing manual UI Agung**: 2 baris "10Mbps" aktif berdampingan lolos
+  validasi unique — root cause BUKAN regresi fix soft-delete (dikonfirmasi lewat hex dump kolom `name`:
+  satu baris punya trailing space `"10Mbps "`, byte-berbeda dari `"10Mbps"`, jadi memang bukan nilai yang
+  sama di level DB). Akar masalah: tidak ada `trim()` di jalur create/update manapun. Diperbaiki dengan
+  `trim()` di 5 titik (defense-in-depth): mutator `BandwidthProfile::name()`, `prepareForValidation()` di
+  kedua FormRequest (Store/Update), dan trim eksplisit di `BandwidthProfileIndex`'s `createProfile()`/
+  `updateProfile()` (validasi inline Livewire tidak lewat hook `prepareForValidation()`). Data dev
+  dibersihkan (baris `id=3` yang terkontaminasi trailing space di-soft-delete, `id=4` yang bersih
+  dipertahankan — menyimpang dari default "pertahankan yang tertua" karena baris tertua justru yang
+  terkontaminasi). Diverifikasi ulang nyata lewat HTTPS live server (`curl` + Bearer token asli): duplikat
+  dengan/tanpa trailing space sama-sama `422` setelah fix.
+- **Konfirmasi eksplisit diminta & dibuktikan**: `trim()` di kelima titik hanya memotong spasi
+  depan/belakang, TIDAK menyentuh spasi di tengah kata (`"15 Mbps"` tetap tersimpan `"15 Mbps"`, bukan
+  `"15Mbps"`) — sudah benar sejak awal (semua 5 titik pakai `trim()` polos PHP, tidak ada
+  `preg_replace`/`str_replace`), dibuktikan lewat 4 test baru, tidak ada perubahan kode yang diperlukan.
+  Diverifikasi manual UI oleh Agung — LOLOS.
+- **Regresi final**: 873/873 test hijau (26 test khusus BandwidthProfile: 17 awal + 5 fix duplikat + 4
+  konfirmasi whitespace-tengah), Pint clean di semua file yang disentuh.
+
 ## v0.9.2.1 — Hotfix: Konflik AllowedIPs WireGuard, OLT LibreNMS down 2 hari (2026-08-27, merged + tagged)
 
 **Tag patch `v0.9.2.1`** (4-segmen di atas `v0.9.2`, sama pola dengan tag `v0.3.0.1`) — bukan sprint fitur
@@ -30,10 +71,11 @@ WireGuard NAS sejak v0.8.1 — WireGuard cuma izinkan 1 peer klaim 1 CIDR per in
 - **Regresi**: 848/848 test hijau (termasuk test baru untuk skenario insiden nyata: config OLT subnet
   di-set global tapi NAS tanpa OLT harus tetap di-omit), Pint clean.
 
-## v0.9.2 — CRUD Referrer, Portal Login & RBAC Two-Tier (implementasi selesai 2026-08-26, belum di-merge/tag)
+## v0.9.2 — CRUD Referrer, Portal Login & RBAC Two-Tier (2026-08-26, merged + tagged)
 
 **Catatan status**: branch `v0.9.2-referrer-crud-portal-rbac` (dari `main` yang sudah include v0.9.1) —
-implementasi dan regresi selesai, menunggu verifikasi manual Agung lewat browser sebelum merge/tag.
+implementasi dan regresi selesai, sudah diverifikasi manual Agung lewat browser, merge `--no-ff` ke
+`develop` lalu `main`, tag `v0.9.2` dibuat, di-push ke GitHub.
 
 CRUD Referrer (admin) + portal login self-service pertama untuk persona non-admin di codebase ini, plus
 RBAC dua-tingkat (`superadmin`/`administrator`). Detail teknis lengkap ada di `docs/ROADMAP.md` bagian

@@ -5990,10 +5990,78 @@ becomes unreachable again afterward. Admin dashboard HTML confirmed to contain b
 a real "Logout" button.
 
 Full regression suite green at 847/847 (5 more new tests: `RootRoutingTest` ×3, 2 logout-redirect cases
-added to `ReferrerPortalLoginTest`), Pint clean. **Not merged/tagged as of this writing** — still branch
-`v0.9.2-referrer-crud-portal-rbac`, everything above (the original v0.9.2 scope and these two fixes) folded
-into the same not-yet-committed working tree, deliberately left for Agung's own manual browser verification
-before `git merge --no-ff` and tagging `v0.9.2`.
+added to `ReferrerPortalLoginTest`), Pint clean. **Merged and tagged** — Agung manually verified via browser
+(all 8 demo accounts, root routing, both logout flows) before merge; `v0.9.2-referrer-crud-portal-rbac`
+merged `--no-ff` into `develop` then `main`, tagged `v0.9.2`, pushed to GitHub.
+
+## Cluster Profil Paket (v0.14.x) — Konstrain NAS Produksi
+
+**WAJIB dibaca sebelum eksekusi sub-versi apa pun di cluster v0.14.x (Bandwidth Profile → IP Pool
+Pelanggan → Grup Profil → Profil Hotspot → Profil PPP → RouterOS Live-Push → Push ke NAS/Rollout
+Produksi)** — governance note permanen, bukan catatan sekali sprint, karena risikonya meningkat drastis
+begitu cluster ini sampai ke v0.14.6 (kemampuan live-push RouterOS API yang belum pernah ada sebelumnya di
+codebase ini — lihat investigasi pra-sprint yang mengonfirmasi `MikrotikScriptGenerator` existing murni
+generate-once `.rsc`, tidak ada satu pun mekanisme push config live).
+
+**NAS `test-x86-bajastu` adalah PRODUCTION — nama mengandung kata "test" tapi ini BUKAN environment uji
+coba.** Ini adalah router nyata dengan ratusan pelanggan PPPoE real terhubung (lihat sejarah panjang
+investigasi RADIUS/CoA/firewall di seluruh bagian v0.6.x-v0.8.x file ini — semua dilakukan dengan hati-hati
+ekstra justru karena router ini production). **JANGAN PERNAH** jadikan NAS ini target testing live-push
+RouterOS API (v0.14.6 dan seterusnya) atau operasi apa pun yang berisiko mengubah konfigurasi live secara
+tidak sengaja.
+
+**NAS `ro-hotspot.bajastu.id` (id=3 di tabel `nas` — nama real dikonfirmasi langsung dari database, BUKAN
+`ro-hotspot450Gx4` seperti sempat disebutkan di satu instruksi sprint sebelumnya) yang aman dipakai untuk
+uji coba kemampuan baru** — ini NAS kedua yang ada di registry (`nas` table, 2 baris total saat ini: id=1
+`test-x86-bajastu`, id=3 `ro-hotspot.bajastu.id`), dipakai sebagai NAS uji coba sejak v0.8.4 (migrasi 295
+akun PPPoE VLAN 10). Tetap konfirmasi statusnya masih aman dipakai sebelum setiap sesi testing baru —
+jangan berasumsi kondisinya sama seperti terakhir dicatat di sini kalau sudah lama berlalu.
+
+**Kalau ragu NAS mana yang aman disentuh untuk operasi tertentu — TANYA dulu ke Agung sebelum eksekusi apa
+pun yang menyentuh NAS asli.** Ini bukan sekadar saran hati-hati generik — sudah ada preseden konkret di
+codebase ini soal betapa mudahnya operasi yang terlihat aman ternyata berdampak ke traffic produksi nyata
+(lihat investigasi FreeRADIUS `require_message_authenticator`/CoA di bagian v0.6.5, yang sempat mengubah
+urutan `/radius` entry `test-x86-bajastu` sungguhan saat proses debugging).
+
+## Bandwidth Profile (v0.14.1)
+
+Fondasi cluster "Profil Paket". Table `bandwidth_profiles` (`tenant_id`, `name`, `upload_min`/`upload_max`/
+`download_min`/`download_max` in Kbps, `is_active`, soft-deletable) with a partial unique index on
+`(tenant_id, name)` scoped `WHERE deleted_at IS NULL` (same technique as `customer_contacts`' own partial
+unique index) — a soft-deleted profile's name can be reused. `App\Models\BandwidthProfile::formatKbps()`
+formats a value as Mbps once it exceeds 1000 Kbps. Unit selection (Kbps/Mbps) is a Livewire-form-only
+convenience — `App\Livewire\Network\BandwidthProfileIndex` converts to Kbps before the REST API or
+`BandwidthProfileService` ever see a value; both always deal in Kbps exclusively.
+
+**Two real bugs caught by the test suite, not by review**:
+1. `formatKbps()`'s original `rtrim((string) $mbps, '0')` — meant to strip decimal padding — instead ate
+   significant trailing zeros off whole numbers, since PHP's own float-to-string cast never pads zeros to
+   begin with (`(string) 50.0` is already `"50"`, never `"50.00"`). `formatKbps(50000)` returned `"5 Mbps"`
+   instead of `"50 Mbps"`. Fixed by removing the rtrim entirely — it was never needed.
+2. `Rule::unique(BandwidthProfile::class, 'name')` queries the raw table directly, bypassing
+   `SoftDeletingScope` — a soft-deleted profile's name stayed permanently blocked despite the partial
+   unique index allowing reuse at the DB level. Fixed with an explicit `->whereNull('deleted_at')` on all
+   4 `Rule::unique()` call sites (Store/Update Requests + the Livewire component's own inline validation).
+
+**A third real gap found the day after, closing out this sprint — same bug class already documented
+repeatedly elsewhere in this file**: `bandwidth_profiles.view`/`.manage` were added to
+`RolesAndPermissionsSeeder`'s code, but `db:seed --class=RolesAndPermissionsSeeder` was never re-run
+against this server's real dev database after that — a migration only affects a fresh install; an
+already-seeded database needs the seeder re-run by hand. Consequence, reported as "menu Bandwidth Profile
+tidak muncul di sidebar": the sidebar link itself (`sidebar.blade.php`, added correctly in the same commit
+as the rest of v0.14.1) was never the bug — `auth()->user()->can('viewAny', BandwidthProfile::class)`
+correctly evaluated `false` for every real user, including `super_admin@boss.local`, because the
+permission row didn't exist in the real database at all yet (confirmed directly:
+`Permission::where('name','bandwidth_profiles.view')->exists()` was `false`). Fixed by re-running
+`php artisan db:seed --class=RolesAndPermissionsSeeder --force` against the real dev database — no code
+change needed. **Verified for real, end-to-end**: logged in as `super_admin@boss.local` via a real `curl`
+session against the live HTTPS server, confirmed "Bandwidth Profile" now renders in the sidebar with the
+correct `href`, and `GET /bandwidth-profiles` returns a real `200`.
+
+**Governance note reminder for future sub-versions in this cluster**: after `seedBandwidthProfilePermissions()`-
+style additions to `RolesAndPermissionsSeeder` for v0.14.2 onward, re-run the seeder against the real dev
+database as part of that sprint's own verification — don't rely on discovering the gap the same way this
+one was (a user-reported "menu missing" symptom after the fact).
 
 ## OLT AllowedIPs Conflict — Real Incident & Fix (branch `fix-wireguard-allowedips-olt-conflict`, fully resolved — code fix + live reconcile both done and verified)
 

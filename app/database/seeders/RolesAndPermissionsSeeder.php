@@ -59,6 +59,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedOltDevicePermissions();
         $this->seedMonitoringPermissions();
         $this->seedReferrerPermissions();
+        $this->seedBandwidthProfilePermissions();
     }
 
     /**
@@ -379,6 +380,23 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedReferrerPermissions(): void
     {
         $permissions = ['referrers.view', 'referrers.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
+    }
+
+    /**
+     * v0.14.1 CRUD Bandwidth Profile — fondasi cluster "Profil Paket".
+     * Tier-admin-only, same posture as referrers.*: BandwidthProfile has
+     * no reseller_id at all (tenant-level only this sub-version), so no
+     * reseller_users carve-out here.
+     */
+    private function seedBandwidthProfilePermissions(): void
+    {
+        $permissions = ['bandwidth_profiles.view', 'bandwidth_profiles.manage'];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

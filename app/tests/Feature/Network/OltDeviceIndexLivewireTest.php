@@ -62,6 +62,21 @@ class OltDeviceIndexLivewireTest extends TestCase
                 return ['success' => true, 'message' => null];
             }
 
+            public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function removePppProfile(Nas $nas, string $comment): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function syncHotspotServerPool(Nas $nas, string $poolName): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
             public function provisionApiUser(Nas $nas, string $a, string $b, string $c, string $d): array
             {
                 return ['success' => true, 'message' => null];

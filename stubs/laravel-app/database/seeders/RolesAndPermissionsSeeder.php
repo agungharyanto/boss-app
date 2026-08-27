@@ -61,6 +61,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedReferrerPermissions();
         $this->seedBandwidthProfilePermissions();
         $this->seedCustomerIpPoolPermissions();
+        $this->seedNetworkProfileGroupPermissions();
     }
 
     /**
@@ -414,6 +415,21 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedCustomerIpPoolPermissions(): void
     {
         $permissions = ['customer_ip_pools.view', 'customer_ip_pools.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
+    }
+
+    /**
+     * v0.14.3 CRUD Grup Profil — same "Profil Paket" cluster, same
+     * tier-admin-only posture and reasoning as customer_ip_pools.*.
+     */
+    private function seedNetworkProfileGroupPermissions(): void
+    {
+        $permissions = ['network_profile_groups.view', 'network_profile_groups.manage'];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

@@ -104,4 +104,51 @@ interface RouterOsGateway
      * @return array{success: bool, message: ?string}
      */
     public function removeIpPool(Nas $nas, string $comment): array;
+
+    /**
+     * v0.14.3 — Grup Profil, type PPP. Idempotent create/update of a
+     * single `/ppp profile` entry, found by $comment (same reasoning as
+     * syncIpPool() above — a Grup Profil can be renamed). $remoteAddress
+     * is a `/ip pool` NAME (RouterOS resolves the pool by name, not a raw
+     * range) — confirmed on the real router that `/ppp profile`'s
+     * `remote-address` field genuinely accepts a pool name this way (the
+     * existing HomeFixed-10Mbps/PPPOE-REMOTE profiles already do this).
+     * $dnsServer is a comma-separated string ("8.8.8.8,8.8.4.4") or null
+     * (omitted entirely — confirmed `dns-server` is a real, optional
+     * field). $parentQueue is a raw queue name or null (confirmed
+     * `parent-queue` is a real field on this RouterOS version via a live
+     * add/remove round-trip against ro-hotspot.bajastu.id).
+     *
+     * @return array{success: bool, message: ?string}
+     */
+    public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array;
+
+    /**
+     * Removes the `/ppp profile` entry matching $comment, if any — same
+     * no-op-on-missing semantics as removeIpPool().
+     *
+     * @return array{success: bool, message: ?string}
+     */
+    public function removePppProfile(Nas $nas, string $comment): array;
+
+    /**
+     * v0.14.3 — Grup Profil, type Hotspot. Confirmed empirically against a
+     * real router that `/ip hotspot user profile` has NO address-pool/
+     * dns-server/parent-queue fields at all (its real fields are
+     * idle-timeout/shared-users/mac-cookie-timeout/etc.) — a Hotspot
+     * client's IP pool is bound to the `/ip hotspot` SERVER instance
+     * itself (interface-scoped), never a reusable named profile the way
+     * `/ppp profile` works. Per Agung's explicit decision: this method
+     * refuses with a clear, specific error if the NAS has no `/ip hotspot`
+     * server configured at all yet (real infra decision for whoever runs
+     * the router, not something BOSS App invents on their behalf) —
+     * otherwise it updates the FIRST hotspot server found on this NAS to
+     * reference $poolName as its `address-pool`. There is no companion
+     * "remove" method — see PushNetworkProfileGroupToMikrotikJob's own
+     * docblock for why unsetting a live server's pool on delete is
+     * deliberately never attempted.
+     *
+     * @return array{success: bool, message: ?string}
+     */
+    public function syncHotspotServerPool(Nas $nas, string $poolName): array;
 }

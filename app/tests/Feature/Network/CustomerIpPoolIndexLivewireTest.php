@@ -47,6 +47,7 @@ class CustomerIpPoolIndexLivewireTest extends TestCase
             ->set('gatewayIp', '192.168.10.1')
             ->set('rangeStart', '192.168.10.10')
             ->set('rangeEnd', '192.168.10.200')
+            ->set('usageType', 'general')
             ->call('createPool')
             ->assertHasNoErrors();
 
@@ -70,6 +71,7 @@ class CustomerIpPoolIndexLivewireTest extends TestCase
             ->set('gatewayIp', '192.168.10.1')
             ->set('rangeStart', '192.168.10.200')
             ->set('rangeEnd', '192.168.10.10')
+            ->set('usageType', 'general')
             ->call('createPool');
 
         $component->assertHasErrors('rangeEnd');
@@ -89,6 +91,7 @@ class CustomerIpPoolIndexLivewireTest extends TestCase
             ->set('gatewayIp', '10.0.0.1')
             ->set('rangeStart', '192.168.10.10')
             ->set('rangeEnd', '192.168.10.200')
+            ->set('usageType', 'general')
             ->call('createPool');
 
         $component->assertHasErrors('gatewayIp');
@@ -115,6 +118,7 @@ class CustomerIpPoolIndexLivewireTest extends TestCase
             ->set('gatewayIp', '192.168.10.1')
             ->set('rangeStart', '192.168.10.150')
             ->set('rangeEnd', '192.168.10.250')
+            ->set('usageType', 'general')
             ->call('createPool');
 
         $component->assertHasErrors('rangeEnd');
@@ -143,6 +147,7 @@ class CustomerIpPoolIndexLivewireTest extends TestCase
             ->set('gatewayIp', '192.168.10.1')
             ->set('rangeStart', '192.168.10.10')
             ->set('rangeEnd', '192.168.10.200')
+            ->set('usageType', 'general')
             ->call('createPool')
             ->assertHasNoErrors();
 
@@ -165,6 +170,7 @@ class CustomerIpPoolIndexLivewireTest extends TestCase
             ->set('gatewayIp', '192.168.20.1')
             ->set('rangeStart', '192.168.20.10')
             ->set('rangeEnd', '192.168.20.200')
+            ->set('usageType', 'general')
             ->call('createPool')
             ->assertHasNoErrors();
 
@@ -185,6 +191,7 @@ class CustomerIpPoolIndexLivewireTest extends TestCase
             ->set('gatewayIp', '192.168.20.1')
             ->set('rangeStart', '192.168.20.10')
             ->set('rangeEnd', '192.168.20.200')
+            ->set('usageType', 'general')
             ->call('createPool');
 
         $component->assertHasErrors('name');

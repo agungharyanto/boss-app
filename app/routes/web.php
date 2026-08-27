@@ -22,6 +22,7 @@ use App\Livewire\Network\CpeParameterMapIndex;
 use App\Livewire\Network\CustomerIpPoolIndex;
 use App\Livewire\Network\MonitoringIndex;
 use App\Livewire\Network\NasIndex;
+use App\Livewire\Network\NetworkProfileGroupIndex;
 use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\VpnScriptGenerator;
 use App\Livewire\Referrers\ReferrerIndex;
@@ -166,6 +167,14 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // v0.14.2 — same cluster "Profil Paket", same posture as
     // /bandwidth-profiles above (tenant-level, no reseller.context needed).
     Route::get('/customer-ip-pools', CustomerIpPoolIndex::class)->name('customer-ip-pools.index');
+
+    // v0.14.3 — same cluster "Profil Paket", same posture as
+    // /customer-ip-pools above. URL/route name kept English kebab-case
+    // matching the class name, consistent with every other entity in this
+    // cluster (bandwidth-profiles, customer-ip-pools) — "Grup Profil" is
+    // this feature's Indonesian display label (sidebar/page title), not
+    // its URL.
+    Route::get('/network-profile-groups', NetworkProfileGroupIndex::class)->name('network-profile-groups.index');
 
     Route::get('/tax-components', TaxComponentIndex::class)->name('tax-components.index');
 

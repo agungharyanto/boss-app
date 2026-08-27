@@ -79,6 +79,21 @@ class CustomerIpPoolMikrotikSyncTest extends TestCase
             {
                 return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
             }
+
+            public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array
+            {
+                return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
+            }
+
+            public function removePppProfile(Nas $nas, string $comment): array
+            {
+                return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
+            }
+
+            public function syncHotspotServerPool(Nas $nas, string $poolName): array
+            {
+                return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
+            }
         });
     }
 

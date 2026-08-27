@@ -47,6 +47,21 @@ class NasApiUserProvisioningServiceTest extends TestCase
                 return ['success' => true, 'message' => null];
             }
 
+            public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function removePppProfile(Nas $nas, string $comment): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function syncHotspotServerPool(Nas $nas, string $poolName): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
             public function provisionApiUser(Nas $nas, string $connectAsUsername, string $connectAsPassword, string $newApiUsername, string $newApiPassword): array
             {
                 return ['success' => $this->success, 'message' => $this->message];

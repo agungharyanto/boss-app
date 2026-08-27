@@ -44,6 +44,7 @@ class CustomerIpPoolApiTest extends TestCase
         return array_merge([
             'nas_id' => $nasId,
             'name' => 'Pool Utama',
+            'usage_type' => 'general',
             'network_address' => '192.168.10.0/24',
             'gateway_ip' => '192.168.10.1',
             'range_start' => '192.168.10.10',
@@ -63,7 +64,54 @@ class CustomerIpPoolApiTest extends TestCase
         $response->assertCreated();
         $response->assertJsonPath('data.name', 'Pool Utama');
         $response->assertJsonPath('data.nas_id', $nas->id);
+        $response->assertJsonPath('data.usage_type', 'general');
         $this->assertDatabaseHas('customer_ip_pools', ['name' => 'Pool Utama', 'nas_id' => $nas->id, 'tenant_id' => $tenant->id]);
+    }
+
+    /**
+     * v0.14.3.1 — real bug found by Agung: nothing separated a PPP-only
+     * pool from a Hotspot-only pool in Grup Profil's own dropdown.
+     */
+    public function test_usage_type_is_required(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/customer-ip-pools', $this->payload($nas->id, ['usage_type' => null]));
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['usage_type']);
+    }
+
+    public function test_invalid_usage_type_is_rejected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/customer-ip-pools', $this->payload($nas->id, ['usage_type' => 'not-a-real-type']));
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['usage_type']);
+    }
+
+    public function test_each_valid_usage_type_can_be_created(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+
+        foreach (['ppp' => 101, 'hotspot' => 102, 'general' => 103] as $type => $octet) {
+            $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/customer-ip-pools', $this->payload($nas->id, [
+                'usage_type' => $type,
+                'name' => "Pool {$type}",
+                'network_address' => "192.168.{$octet}.0/24",
+                'gateway_ip' => "192.168.{$octet}.1",
+                'range_start' => "192.168.{$octet}.10",
+                'range_end' => "192.168.{$octet}.200",
+            ]));
+
+            $response->assertCreated();
+            $response->assertJsonPath('data.usage_type', $type);
+        }
     }
 
     public function test_a_role_without_customer_ip_pools_permission_cannot_list(): void

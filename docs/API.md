@@ -522,6 +522,89 @@ Manual retry for a pool whose last RouterOS live-push attempt is `Gagal` (`mikro
 
 ---
 
+## Grup Profil (v0.14.3)
+
+Third sub-version of "Profil Paket". A NAS-scoped RADIUS/Mikrotik profile TEMPLATE (type `hotspot` or
+`ppp`), referencing a CustomerIpPool from the SAME NAS. Used starting v0.14.4/v0.14.5 (Profil Hotspot/
+Profil PPP) as a selectable reference — this sub-version only builds the template, no customer is ever
+linked to one yet. Permission: `network_profile_groups.view`/`network_profile_groups.manage`, tier admin
+only, same posture as `customer_ip_pools.*`. Business logic in
+`App\Services\Network\NetworkProfileGroupService`.
+
+**v0.14.3 — RouterOS live-push + FreeRADIUS `radgroupreply`**: `POST`/`PUT`/`DELETE` below each queue a
+background Job that pushes to the real Mikrotik router — PPP type maps cleanly onto `/ppp profile`
+(`remote-address`/`dns-server`/`parent-queue`, found/updated by a stable comment, never `name`); Hotspot
+type has NO reusable per-profile RouterOS object (`/ip hotspot user profile` carries none of these fields)
+— it instead updates the NAS's own existing `/ip hotspot` SERVER's `address-pool`, and **refuses
+immediately** (no retry — this is a permanent config problem, not transient) if that NAS has no Hotspot
+Server configured at all yet. `mikrotik_sync_status`/`mikrotik_synced_at`/`mikrotik_sync_error` — same
+3-state contract as `customer_ip_pools`.
+
+Separately (synchronous, not queued — a local `radius_db` write, not a network call), `create()`/`update()`/
+`delete()` also rewrite `radgroupreply` rows for `GroupName = "boss-grup-profil-{id}"`: PPP type gets
+`Service-Type=Framed-User`/`Framed-Protocol=PPP`/`Framed-Pool=<pool_name>` (mirroring the same 3 attributes
+already used per-user for real migrated PPPoE customers); Hotspot type gets `Service-Type=Login-User`/
+`Framed-Pool=<pool_name>`. These rows currently have no live effect on any real RADIUS authentication —
+nothing yet writes a matching `radusergroup` row linking an individual customer to this GroupName (deferred
+to v0.14.4/v0.14.5).
+
+### `GET /network-profile-groups`
+
+List Grup Profil belonging to the logged-in tenant. Query optional: `?nas_id=`, `?type=hotspot|ppp`,
+`?search=` (name), `?sort_by=`/`?sort_dir=` (default `name`/`asc`).
+
+### `POST /network-profile-groups`
+
+Body: `nas_id` (required), `name` (required, unique per NAS), `type` (required, `hotspot` or `ppp`),
+`customer_ip_pool_id` (required — **must belong to the same `nas_id`**, rejected otherwise, and must not
+be a soft-deleted pool), `dns_primary`/`dns_secondary` (optional, valid IPs), `parent_queue` (optional
+string), `is_active` (optional, default `true`).
+
+### `GET /network-profile-groups/{network_profile_group}` · `PUT /network-profile-groups/{network_profile_group}`
+
+`PUT` body: all fields optional (`sometimes`). Changing `customer_ip_pool_id` (or `nas_id`) re-runs the
+same-NAS cross-check against the NEW values. **Editing ANY field — even one unrelated to the pool — also
+re-validates the group's currently-linked pool still exists and isn't soft-deleted**, since nothing
+prevents a pool from being soft-deleted independently after the group was created.
+
+### `DELETE /network-profile-groups/{network_profile_group}`
+
+Soft delete. Also synchronously removes this group's `radgroupreply` rows, and queues
+`RemoveNetworkProfileGroupFromMikrotikJob` — PPP type removes the `/ppp profile` object; Hotspot type does
+nothing to the router (see the section above for why).
+
+### `POST /network-profile-groups/{network_profile_group}/resync`
+
+Manual retry for a `Gagal` group — same shape as `customer-ip-pools`' own resync endpoint.
+
+```json
+{
+  "success": true,
+  "message": "Grup profil berhasil dibuat",
+  "data": {
+    "id": 1,
+    "nas_id": 3,
+    "nas_name": "ro-hotspot.bajastu.id",
+    "name": "Grup PPPoE Reguler",
+    "type": "ppp",
+    "customer_ip_pool_id": 5,
+    "customer_ip_pool_name": "PPPOE-REMOTE",
+    "dns_primary": "8.8.8.8",
+    "dns_secondary": "8.8.4.4",
+    "parent_queue": null,
+    "is_active": true,
+    "mikrotik_sync_status": "pending",
+    "mikrotik_synced_at": null,
+    "mikrotik_sync_error": null,
+    "created_at": "2026-08-28T09:00:00+00:00",
+    "updated_at": "2026-08-28T09:00:00+00:00"
+  },
+  "meta": []
+}
+```
+
+---
+
 ## Payment Gateway (Xendit, v0.3.5)
 
 > Catatan: endpoint `invoices` (CRUD, generate, transisi status) dari v0.3.4

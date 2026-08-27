@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\LocaleSettingController;
 use App\Http\Controllers\Api\V1\MonitoringController;
 use App\Http\Controllers\Api\V1\NasController;
+use App\Http\Controllers\Api\V1\NetworkProfileGroupController;
 use App\Http\Controllers\Api\V1\OdpController;
 use App\Http\Controllers\Api\V1\PaymentController;
 use App\Http\Controllers\Api\V1\ReferrerController;
@@ -257,6 +258,16 @@ Route::prefix('v1')->group(function () {
         Route::delete('customer-ip-pools/{customer_ip_pool}', [CustomerIpPoolController::class, 'destroy']);
         // v0.14.2.1 — manual retry for a pool whose RouterOS live-push failed.
         Route::post('customer-ip-pools/{customer_ip_pool}/resync', [CustomerIpPoolController::class, 'resync']);
+
+        // v0.14.3 — same cluster "Profil Paket", same tier-admin-only
+        // posture (see NetworkProfileGroupPolicy). customer_ip_pool_id
+        // must belong to the SAME nas_id (enforced in the FormRequest).
+        Route::get('network-profile-groups', [NetworkProfileGroupController::class, 'index']);
+        Route::post('network-profile-groups', [NetworkProfileGroupController::class, 'store']);
+        Route::get('network-profile-groups/{network_profile_group}', [NetworkProfileGroupController::class, 'show']);
+        Route::put('network-profile-groups/{network_profile_group}', [NetworkProfileGroupController::class, 'update']);
+        Route::delete('network-profile-groups/{network_profile_group}', [NetworkProfileGroupController::class, 'destroy']);
+        Route::post('network-profile-groups/{network_profile_group}/resync', [NetworkProfileGroupController::class, 'resync']);
 
         // v0.8.4 — read-only Dashboard Monitoring API, WhatsApp-bot
         // integration foothold (see App\Http\Controllers\Api\V1\

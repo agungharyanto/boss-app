@@ -85,4 +85,12 @@ class Nas extends Model
     {
         return $this->hasMany(CustomerIpPool::class);
     }
+
+    /**
+     * v0.14.3 — a NAS's own Grup Profil templates (Hotspot/PPP).
+     */
+    public function networkProfileGroups(): HasMany
+    {
+        return $this->hasMany(NetworkProfileGroup::class);
+    }
 }

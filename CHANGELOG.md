@@ -3,6 +3,30 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.3 — Grup Profil (implementasi selesai 2026-08-28, belum di-merge/tag)
+
+**Catatan status**: branch `v0.14.3-grup-profil` (dari `main` yang sudah include v0.14.2) — kelanjutan
+cluster "Profil Paket" — implementasi dan regresi selesai, menunggu verifikasi manual Agung lewat browser.
+Detail teknis lengkap ada di `docs/ROADMAP.md` bagian "v0.14.3" dan `CLAUDE.md`.
+
+Tabel `network_profile_groups` — template profil RADIUS/Mikrotik per-NAS (tipe Hotspot/PPP), terikat ke
+`CustomerIpPool` dari NAS yang sama. Dipakai mulai v0.14.4/v0.14.5 sebagai referensi.
+
+- **2 temuan arsitektural nyata dari investigasi, keduanya diputuskan eksplisit oleh Agung**: (1)
+  `/ip hotspot user profile` tidak punya field pool/dns/queue sama sekali (dikonfirmasi ke router asli) —
+  tipe Hotspot live-push justru update `address-pool` server `/ip hotspot` yang SUDAH ADA, menolak dengan
+  pesan jelas kalau NAS belum punya Hotspot Server; (2) mulai menulis ke `radgroupreply` (sebelumnya 0
+  baris/0 referensi kode di codebase ini) untuk PPP dan Hotspot, dengan atribut RADIUS standar yang sesuai.
+- **2 bug nyata ditemukan lewat verifikasi manual, bukan test unit**: kolom `radgroupreply` ternyata
+  lowercase di Postgres (`groupname` bukan `GroupName`) meski DDL `schema.sql` menulis mixed-case; dan
+  `restrictOnDelete()` CustomerIpPool cuma memblokir hard-delete, jadi pool bisa soft-deleted independen
+  dan bikin grup profil yang mereferensikannya crash — diperbaiki di 4 tempat (FormRequest + Livewire +
+  Service, defense-in-depth).
+- **Diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id`**: push/edit/delete PPP profile nyata,
+  precondition Hotspot (gagal langsung, bukan retry 3x) juga dikonfirmasi nyata. `test-x86-bajastu` tidak
+  disentuh.
+- **Regresi**: full suite hijau (45 test baru khusus Grup Profil), Pint clean.
+
 ## v0.14.2.2 — Auto-Refresh Status Sync Router (implementasi selesai 2026-08-27, belum di-merge/tag)
 
 **Catatan status**: masih di branch `v0.14.2-customer-ip-pool` — perbaikan bug UX ditemukan Agung: status

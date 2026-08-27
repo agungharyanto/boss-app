@@ -270,4 +270,115 @@ class RouterOsApiGateway implements RouterOsGateway
             return ['success' => false, 'message' => $e->getMessage()];
         }
     }
+
+    public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 10,
+            ]);
+
+            $find = new Query('/ppp/profile/print');
+            $find->where('comment', $comment);
+            $existing = $client->query($find)->read();
+
+            if ($existing === []) {
+                $add = new Query('/ppp/profile/add');
+                $add->equal('name', $name)->equal('remote-address', $remoteAddress)->equal('comment', $comment);
+
+                if ($dnsServer !== null) {
+                    $add->equal('dns-server', $dnsServer);
+                }
+
+                if ($parentQueue !== null) {
+                    $add->equal('parent-queue', $parentQueue);
+                }
+
+                $client->query($add)->read();
+            } else {
+                $set = new Query('/ppp/profile/set');
+                $set->equal('.id', $existing[0]['.id'])->equal('name', $name)->equal('remote-address', $remoteAddress);
+                $set->equal('dns-server', $dnsServer ?? '');
+                $set->equal('parent-queue', $parentQueue ?? 'none');
+                $client->query($set)->read();
+            }
+
+            return ['success' => true, 'message' => null];
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal sync /ppp profile (comment={$comment}) ke NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    public function removePppProfile(Nas $nas, string $comment): array
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 10,
+            ]);
+
+            $find = new Query('/ppp/profile/print');
+            $find->where('comment', $comment);
+            $existing = $client->query($find)->read();
+
+            if ($existing === []) {
+                return ['success' => true, 'message' => null];
+            }
+
+            $remove = new Query('/ppp/profile/remove');
+            $remove->equal('.id', $existing[0]['.id']);
+            $client->query($remove)->read();
+
+            return ['success' => true, 'message' => null];
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal hapus /ppp profile (comment={$comment}) di NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    public function syncHotspotServerPool(Nas $nas, string $poolName): array
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 10,
+            ]);
+
+            $servers = $client->query(new Query('/ip/hotspot/print'))->read();
+
+            if ($servers === []) {
+                return [
+                    'success' => false,
+                    'message' => 'NAS ini belum punya Hotspot Server di Mikrotik. Buat Hotspot Server terlebih dahulu (System > Hotspot Setup) sebelum push Grup Profil tipe Hotspot.',
+                ];
+            }
+
+            // Known, documented simplification: the FIRST hotspot server
+            // found is used — there is no UI yet for picking a specific
+            // one when a NAS has more than one, per the sprint's own
+            // scope (see NetworkProfileGroup's own docblock).
+            $set = new Query('/ip/hotspot/set');
+            $set->equal('.id', $servers[0]['.id'])->equal('address-pool', $poolName);
+            $client->query($set)->read();
+
+            return ['success' => true, 'message' => null];
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal sync address-pool hotspot server ke NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
 }

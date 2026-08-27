@@ -127,7 +127,7 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
                 // v0.14.4 — not exercised by this file's own tests (Grup
                 // Profil never calls these directly), present only to
                 // satisfy the interface.
-                public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout): array
+                public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout, ?string $addressPool = null): array
                 {
                     return ['success' => true, 'message' => null];
                 }

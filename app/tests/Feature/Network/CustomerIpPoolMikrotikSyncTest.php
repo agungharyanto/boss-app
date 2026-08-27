@@ -95,7 +95,7 @@ class CustomerIpPoolMikrotikSyncTest extends TestCase
                 return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
             }
 
-            public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout): array
+            public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout, ?string $addressPool = null): array
             {
                 return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
             }

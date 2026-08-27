@@ -173,6 +173,27 @@ interface RouterOsGateway
      * the same way (a Profil Hotspot always references a Grup Profil of
      * type Hotspot, which itself requires this to push at all).
      *
+     * $addressPool is the `/ip pool` NAME (e.g. CustomerIpPool::name — that
+     * model's own live-push already keeps the router-side pool's name in
+     * sync with it, see CustomerIpPoolService/syncIpPool()'s own comment-
+     * based rename handling, so this is always the CURRENT real router-side
+     * name) or null (field omitted). CORRECTION to this method's own
+     * original docblock/v0.14.3's docblock: `address-pool` IS a real,
+     * settable field on `/ip hotspot user profile` — confirmed via a real
+     * live SET round trip against ro-hotspot.bajastu.id (readback showed
+     * the value take effect). The original "no address-pool field" claim
+     * was wrong, not a RouterOS-version difference — it was inferred purely
+     * from the field's ABSENCE in a `print` of an object that had simply
+     * never had it SET (RouterOS omits every unset optional property from
+     * `print` output, the exact same "print of a never-set field looks
+     * identical to a nonexistent field" gotcha already documented several
+     * times elsewhere in this codebase for other RouterOS objects — e.g.
+     * rate-limit/session-timeout on this very object type, before THEY were
+     * first set). No live SET test was ever attempted for address-pool
+     * specifically in the original investigation; this claim was then
+     * carried forward uncritically into a second sprint before finally
+     * being re-tested for real.
+     *
      * @return array{success: bool, message: ?string}
      */
     public function syncHotspotUserProfile(
@@ -182,6 +203,7 @@ interface RouterOsGateway
         ?string $rateLimit,
         int $sharedUsers,
         ?string $sessionTimeout,
+        ?string $addressPool = null,
     ): array;
 
     /**

@@ -6570,6 +6570,93 @@ FormRequest) konsisten dengan Livewire — 9 test Livewire baru + 6 test API bar
 Full regression suite dijalankan setelah amandemen ini, Pint clean di semua file yang disentuh. Belum
 di-merge/tag.
 
+## Profil Hotspot — Address Pool Tidak Ter-set + Fix session-timeout (v0.14.4 amendment kedua)
+
+**Bukti nyata dari Agung**: "TOKEN-1Hp" sudah benar-benar dibuat di `ro-hotspot.bajastu.id` (name, Shared
+Users, Rate Limit semua cocok) tapi Address Pool masih "none", dan status di BOSS App macet "Pending".
+
+**Langkah 0 — koreksi temuan lama, dikonfirmasi SALAH lewat verifikasi ulang langsung ke router**:
+klaim v0.14.3/v0.14.4 sebelumnya ("`/ip hotspot user profile` TIDAK punya field address-pool sama sekali")
+TERBUKTI KELIRU — dikonfirmasi via live SET test langsung terhadap `ro-hotspot.bajastu.id`: `address-pool`
+adalah field nyata yang bisa di-set dan langsung terbaca kembali dengan benar. **Akar penyebab kekeliruan
+lama, penting supaya tidak terulang**: kesimpulan itu HANYA didasarkan pada ABSENNYA field ini di output
+`print` sebuah objek yang belum pernah di-set field-nya — persis gotcha RouterOS yang sudah didokumentasikan
+berkali-kali di file ini untuk objek lain (properti opsional yang belum di-set memang tidak muncul di
+`print`, gampang disalahartikan sebagai "field tidak ada"). Tidak pernah ada live SET test khusus untuk
+`address-pool` di investigasi aslinya — klaim itu lalu diwariskan begitu saja ke sprint berikutnya (v0.14.4
+kemarin) tanpa diverifikasi ulang secara independen, sampai akhirnya diuji ulang sungguhan sekarang.
+
+**Langkah 1 — investigasi status macet Pending, akar masalah SEBENARNYA ditemukan lewat pengujian
+langsung, bukan sekadar baca log**: log `boss-worker` menunjukkan job memang berjalan (bukan macet karena
+worker mati) dan `mikrotik_sync_status` DB sebenarnya sudah `failed` (bukan `pending`) dengan pesan error
+nyata `"invalid time value for argument session-timeout"` — jadi mekanisme error-handling yang sudah ada
+(`markSyncFailed()`) sebenarnya SUDAH bekerja benar untuk kasus ini; persepsi "macet Pending" kemungkinan
+besar cuma snapshot saat window retry (~7,5 menit, status tetap "Pending" sambil pesan error sudah
+tersimpan tapi TIDAK ditampilkan di UI sampai percobaan terakhir — gap UI nyata, diperbaiki juga di sini).
+`boss-worker` dikonfirmasi RESTART (per instruksi eksplisit) sebelum verifikasi ulang, dan restart ini
+sungguhan diperlukan — container terakhir start SEBELUM commit amandemen kuota kemarin selesai (proses
+`queue:work` yang sudah berjalan lama tidak pernah membaca ulang file dari disk, gotcha yang sama persis
+yang sudah didokumentasikan berkali-kali di file ini).
+
+**Root cause SEBENARNYA dari pesan "invalid time value for argument session-timeout"** — ditemukan lewat
+pemanggilan gateway langsung (bypass queue) untuk melihat request/response asli: BUKAN soal nilai
+`routerOsSessionTimeout()` yang salah (nilainya sudah benar, `NULL`, untuk paket quota_base) — melainkan
+bug di `RouterOsApiGateway::syncHotspotUserProfile()`'s cabang SET, yang SELALU mengirim
+`session-timeout='none'` (atau string kosong) sebagai fallback saat nilainya null. **Dikonfirmasi via live
+test langsung ke router**: RouterOS MENOLAK KEDUANYA (`'none'` DAN `''`) sebagai nilai `session-timeout`
+yang valid pada `/ip hotspot user profile set` — beda dengan `idle-timeout` yang genuinely menerima/
+menampilkan "none". Diperbaiki dengan pola yang SAMA seperti cabang ADD (yang sudah benar): sertakan
+`rate-limit`/`session-timeout`/`address-pool` HANYA kalau nilainya non-null, jangan pernah kirim
+nilai-clear sama sekali — ini menghindari seluruh pertanyaan "string apa yang berarti 'kosongkan field
+ini'" sepenuhnya, dikonfirmasi via live test bahwa mengosongkan parameter di `set` membiarkan field itu
+TIDAK TERSENTUH (bukan direset).
+
+**Trade-off yang diketahui dan diterima dari fix ini, bukan diam-diam disembunyikan**: mengganti Batasan
+paket yang SUDAH pernah sync dari TimeBase menjauh (sehingga `routerOsSessionTimeout()` baru mengembalikan
+null) TIDAK LAGI aktif mengosongkan nilai session-timeout yang sudah ter-set sebelumnya di router — field
+itu cuma tetap di nilai lamanya. Belum diselesaikan di sini — dicatat sebagai gap nyata, bukan dikerjakan
+diam-diam.
+
+**Langkah 2 — fix push address-pool**: `PushHotspotPackageToMikrotikJob` sekarang eager-load
+`networkProfileGroup.customerIpPool`, resolve nama pool dari sana (`CustomerIpPool::name` — selalu sama
+dengan nama nyata di router karena `syncIpPool()`-nya sendiri, v0.14.2.1, selalu menjaga nama pool di
+router tetap sinkron lewat lookup berbasis comment), dan meneruskannya sebagai parameter baru
+`$addressPool` ke `RouterOsGateway::syncHotspotUserProfile()`.
+
+**Langkah 3 — status tracking**: mekanisme `markSynced()`/`markSyncFailed()`/retry-backoff yang sudah ada
+dikonfirmasi SUDAH benar (lulus semua test lama + baru) — tidak ada perubahan struktural di sini selain
+menutup akar penyebab kegagalan asli (fix session-timeout di atas) dan menambah tampilan pesan error di
+UI meski status masih "Pending" pertengahan retry (lihat Langkah 1). Idempotensi sudah benar sejak awal
+(lookup by `mikrotik_profile_name`) — dikonfirmasi ulang lewat verifikasi nyata di bawah, termasuk sebuah
+kasus job berjalan DUA KALI berturut-turut untuk objek yang sama (kemungkinan reprocessing queue asli) yang
+tetap resolve ke `/set` tunggal, bukan objek duplikat.
+
+**Verifikasi REAL, end-to-end, semua terhadap `ro-hotspot.bajastu.id`, `test-x86-bajastu` tidak disentuh
+sama sekali**:
+1. **"TOKEN-1Hp" (baris nyata Agung)** — resync ulang sungguhan lewat `HotspotPackageService::resync()`
+   (jalur yang sama persis dengan tombol "Sync Ulang"): status BOSS App berubah jadi `synced`, router
+   menunjukkan `address-pool=Hotspot-1Hp` (benar, sesuai IP Pool yang terhubung lewat Grup Profil-nya),
+   dan jumlah objek `/ip hotspot user profile` di router tetap 2 (`default` + `TOKEN-1Hp`) — tidak ada
+   duplikat.
+2. **Paket baru dari nol** — dibuat, langsung `synced` di percobaan pertama, `address-pool` benar sejak
+   awal (bukan macet Pending). Sempat terproses job DUA KALI berturut-turut (kemungkinan reprocessing
+   queue Redis) — tetap resolve ke satu objek router yang sama (`/set`, bukan `/add` kedua), bukti
+   idempotensi nyata di bawah kondisi non-ideal, bukan cuma di jalur normal.
+3. **Kegagalan koneksi sengaja** — kloning in-memory `Nas` (TIDAK disimpan ke DB, kredensial NAS asli
+   tidak disentuh) dengan port tertutup, panggilan gateway langsung menghasilkan `success=false` dengan
+   pesan nyata ("Unable to establish socket session, Connection refused") — mekanisme retry→failed-nya
+   sendiri sudah tercakup penuh oleh test suite otomatis yang sudah ada (`test_push_job_releases_with_backoff_...`/
+   `test_push_job_marks_failed_on_the_final_attempt`), tidak diulang sebagai tunggu nyata ~7,5 menit
+   terhadap router asli.
+4. Kedua artefak test (`TEST-Fresh-DELETE-ME`, sekaligus objek router-nya) dibersihkan lewat jalur
+   delete asli setelahnya — router kembali ke `default` + `TOKEN-1Hp` saja.
+
+`boss-worker` di-restart 2x selama investigasi ini (sekali setelah fix address-pool, sekali lagi setelah
+fix session-timeout ditemukan) — keduanya dikonfirmasi perlu secara langsung, bukan langkah "jaga-jaga".
+
+Full regression suite dijalankan ulang setelah kedua fix ini, Pint clean di semua file yang disentuh. Belum
+di-merge/tag.
+
 ## OLT AllowedIPs Conflict — Real Incident & Fix (branch `fix-wireguard-allowedips-olt-conflict`, fully resolved — code fix + live reconcile both done and verified)
 
 **A real, confirmed ~2-day LibreNMS OLT monitoring outage (2026-08-24 ~18:35 WIB through at least

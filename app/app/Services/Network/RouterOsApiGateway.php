@@ -389,6 +389,7 @@ class RouterOsApiGateway implements RouterOsGateway
         ?string $rateLimit,
         int $sharedUsers,
         ?string $sessionTimeout,
+        ?string $addressPool = null,
     ): array {
         try {
             $client = new Client([
@@ -430,14 +431,54 @@ class RouterOsApiGateway implements RouterOsGateway
                     $add->equal('session-timeout', $sessionTimeout);
                 }
 
+                if ($addressPool !== null) {
+                    $add->equal('address-pool', $addressPool);
+                }
+
                 $response = $client->query($add)->read();
             } else {
                 $set = new Query('/ip/hotspot/user/profile/set');
                 $set->equal('.id', $existing[0]['.id'])
                     ->equal('name', $targetName)
-                    ->equal('shared-users', (string) $sharedUsers)
-                    ->equal('rate-limit', $rateLimit ?? '')
-                    ->equal('session-timeout', $sessionTimeout ?? 'none');
+                    ->equal('shared-users', (string) $sharedUsers);
+
+                // Real bug found and fixed against a real router (TOKEN-1Hp
+                // on ro-hotspot.bajastu.id, reported by Agung): the old
+                // unconditional `?? 'none'`/`?? ''` fallbacks here made
+                // EVERY set for a null session-timeout fail outright —
+                // confirmed via a live test that RouterOS rejects BOTH
+                // 'none' AND '' as an explicit session-timeout value
+                // ("invalid time value for argument session-timeout"),
+                // unlike idle-timeout, which genuinely does accept/display
+                // 'none'. Conditional inclusion (never sending the
+                // parameter at all when null), same as the add branch
+                // above, sidesteps the whole "what string means 'clear
+                // this'" question entirely — confirmed via a live test that
+                // omitting a parameter on `set` leaves that field
+                // untouched, not reset. Applied to rate-limit/address-pool
+                // too for the same reason, even though neither is ever
+                // actually null for a real HotspotPackage in practice
+                // (both are always derived from required, non-nullable
+                // relations) — consistency, and no reason to trust an
+                // untested clearing value for them either.
+                //
+                // Known, accepted trade-off from this fix: switching an
+                // EXISTING synced package's Batasan away from TimeBase (so
+                // routerOsSessionTimeout() newly returns null) no longer
+                // actively clears a previously-set session-timeout value on
+                // the router — the field simply stays at whatever it was.
+                // Not solved here — flagged, not silently worked around.
+                if ($rateLimit !== null) {
+                    $set->equal('rate-limit', $rateLimit);
+                }
+
+                if ($sessionTimeout !== null) {
+                    $set->equal('session-timeout', $sessionTimeout);
+                }
+
+                if ($addressPool !== null) {
+                    $set->equal('address-pool', $addressPool);
+                }
 
                 $response = $client->query($set)->read();
             }

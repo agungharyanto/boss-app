@@ -32,11 +32,11 @@ class PushHotspotPackageToMikrotikJob implements ShouldQueue
     public function handle(RouterOsGateway $gateway): void
     {
         $package = HotspotPackage::withoutGlobalScopes()->withTrashed()
-            ->with(['networkProfileGroup.nas', 'bandwidthProfile'])
+            ->with(['networkProfileGroup.nas', 'networkProfileGroup.customerIpPool', 'bandwidthProfile'])
             ->find($this->hotspotPackageId);
 
-        if ($package === null || $package->networkProfileGroup === null || $package->networkProfileGroup->nas === null || $package->bandwidthProfile === null) {
-            Log::warning("PushHotspotPackageToMikrotikJob: HotspotPackage #{$this->hotspotPackageId}, Grup Profil, NAS, atau Bandwidth Profile terkait tidak ditemukan, dilewati.");
+        if ($package === null || $package->networkProfileGroup === null || $package->networkProfileGroup->nas === null || $package->networkProfileGroup->customerIpPool === null || $package->bandwidthProfile === null) {
+            Log::warning("PushHotspotPackageToMikrotikJob: HotspotPackage #{$this->hotspotPackageId}, Grup Profil, NAS, IP Pool, atau Bandwidth Profile terkait tidak ditemukan, dilewati.");
 
             return;
         }
@@ -44,6 +44,15 @@ class PushHotspotPackageToMikrotikJob implements ShouldQueue
         $nas = $package->networkProfileGroup->nas;
         $bandwidth = $package->bandwidthProfile;
         $rateLimit = "{$bandwidth->upload_max}k/{$bandwidth->download_max}k";
+        // The `/ip pool` name a Profil Hotspot actually gets its clients'
+        // IP from — resolved via its own Grup Profil (v0.14.3), same
+        // relation Grup Profil's own PPP push already uses for
+        // remote-address. CustomerIpPool's OWN live-push (v0.14.2.1) always
+        // keeps the router-side pool's name in sync with ->name on every
+        // successful sync (comment-based lookup, unlike this object type —
+        // see RouterOsGateway::syncHotspotUserProfile()'s own docblock), so
+        // this is always the current real router-side name.
+        $addressPool = $package->networkProfileGroup->customerIpPool->name;
 
         $result = $gateway->syncHotspotUserProfile(
             $nas,
@@ -52,6 +61,7 @@ class PushHotspotPackageToMikrotikJob implements ShouldQueue
             $rateLimit,
             $package->shared_users,
             $package->routerOsSessionTimeout(),
+            $addressPool,
         );
 
         if ($result['success']) {

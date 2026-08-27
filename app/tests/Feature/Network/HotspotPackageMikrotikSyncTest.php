@@ -100,9 +100,9 @@ class HotspotPackageMikrotikSyncTest extends TestCase
                     return ['success' => true, 'message' => null];
                 }
 
-                public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout): array
+                public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout, ?string $addressPool = null): array
                 {
-                    $this->recorder[] = ['method' => 'syncHotspotUserProfile', 'args' => compact('lookupName', 'targetName', 'rateLimit', 'sharedUsers', 'sessionTimeout')];
+                    $this->recorder[] = ['method' => 'syncHotspotUserProfile', 'args' => compact('lookupName', 'targetName', 'rateLimit', 'sharedUsers', 'sessionTimeout', 'addressPool')];
 
                     return $this->result;
                 }
@@ -124,7 +124,7 @@ class HotspotPackageMikrotikSyncTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
-        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Hotspot-Pool-Sync']);
         $group = NetworkProfileGroup::factory()->create([
             'nas_id' => $nas->id, 'customer_ip_pool_id' => $pool->id, 'type' => NetworkProfileGroupType::Hotspot,
         ]);
@@ -157,6 +157,14 @@ class HotspotPackageMikrotikSyncTest extends TestCase
         $this->assertSame('syncHotspotUserProfile', $call['method']);
         $this->assertSame('Paket-A', $call['args']['lookupName']);
         $this->assertSame('Paket-A', $call['args']['targetName']);
+        // v0.14.4 amendment — real gap confirmed by Agung against a real
+        // router: the original push job never included address-pool at
+        // all. See RouterOsGateway::syncHotspotUserProfile()'s own
+        // corrected docblock for why the ORIGINAL "no address-pool field"
+        // claim was wrong (never actually tested with a live SET, only
+        // inferred from its absence in a print of an object that had
+        // simply never had it set).
+        $this->assertSame('Hotspot-Pool-Sync', $call['args']['addressPool']);
         $this->assertSame('5000k/10000k', $call['args']['rateLimit']);
         $this->assertSame(2, $call['args']['sharedUsers']);
         $this->assertNull($call['args']['sessionTimeout']);

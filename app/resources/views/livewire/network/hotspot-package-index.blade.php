@@ -341,8 +341,19 @@
                                 <span class="px-2 py-0.5 rounded-full text-xs {{ $package->mikrotik_sync_status->badgeClasses() }}">
                                     {{ $package->mikrotik_sync_status->label() }}
                                 </span>
-                                @if ($package->mikrotik_sync_status->value === 'failed' && $package->mikrotik_sync_error)
-                                    <p class="text-xs text-red-600 mt-1 max-w-xs truncate" title="{{ $package->mikrotik_sync_error }}">{{ $package->mikrotik_sync_error }}</p>
+                                {{-- v0.14.4 amendment — surfaced regardless of status, not just
+                                     'failed'. A mid-retry attempt (still 'pending', up to ~7.5
+                                     minutes across 3 tries) already has a real error message
+                                     stored the moment its first attempt fails — hiding it until
+                                     the FINAL attempt made a genuinely-failing sync look
+                                     indistinguishable from "stuck Pending with no explanation". --}}
+                                @if ($package->mikrotik_sync_error)
+                                    <p class="text-xs text-red-600 mt-1 max-w-xs truncate" title="{{ $package->mikrotik_sync_error }}">
+                                        @if ($package->mikrotik_sync_status->value !== 'failed')
+                                            {{ __('Percobaan terakhir gagal, akan dicoba ulang:') }}
+                                        @endif
+                                        {{ $package->mikrotik_sync_error }}
+                                    </p>
                                 @endif
                             </td>
                             <td class="px-4 py-2 text-sm text-right space-x-2 whitespace-nowrap">

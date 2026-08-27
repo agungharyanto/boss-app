@@ -3,6 +3,32 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.4 amendment kedua — Fix Address Pool + session-timeout (implementasi selesai 2026-08-27, belum di-merge/tag)
+
+**Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian
+"Profil Hotspot — Address Pool Tidak Ter-set + Fix session-timeout (v0.14.4 amendment kedua)".
+
+- **Koreksi temuan lama**: klaim "`/ip hotspot user profile` tidak punya field address-pool" (v0.14.3/
+  v0.14.4) TERBUKTI KELIRU — dikonfirmasi via live SET test langsung ke `ro-hotspot.bajastu.id`, field ini
+  nyata dan bisa di-set. Kekeliruan lama berasal dari salah baca "field tidak muncul di print" sebagai
+  "field tidak ada", padahal itu cuma berarti belum pernah di-set (gotcha RouterOS yang sudah
+  didokumentasikan berkali-kali di codebase ini untuk objek lain).
+- **Root cause pesan error "invalid time value for argument session-timeout"**: bug di cabang SET
+  `RouterOsApiGateway::syncHotspotUserProfile()` yang selalu mengirim `session-timeout='none'`/`''` saat
+  nilainya null — RouterOS menolak KEDUANYA. Diperbaiki dengan pola sama seperti cabang ADD: sertakan
+  field opsional hanya kalau non-null.
+- `PushHotspotPackageToMikrotikJob` sekarang menyertakan `address-pool`, diambil dari IP Pool yang
+  terhubung lewat Grup Profil.
+- `boss-worker` di-restart 2x (setelah masing-masing fix) — dikonfirmasi memang diperlukan, container
+  sempat menjalankan kode lama dari sebelum commit amandemen kuota selesai.
+- **Diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id`**: "TOKEN-1Hp" (baris nyata Agung)
+  di-resync ulang lewat jalur "Sync Ulang" asli — address-pool benar, status Tersinkron, tidak ada
+  duplikat objek. Paket baru dari nol langsung Tersinkron di percobaan pertama. Kegagalan koneksi sengaja
+  (kloning in-memory Nas, kredensial asli tidak disentuh) menghasilkan pesan error nyata, bukan macet
+  diam-diam. `test-x86-bajastu` tidak disentuh sama sekali.
+- **Regresi**: 66 test HotspotPackage-related dijalankan ulang (semua hijau), full suite dijalankan ulang,
+  Pint clean.
+
 ## v0.14.4 amendment — Field Kuota untuk QuotaBase (implementasi selesai 2026-08-30, belum di-merge/tag)
 
 **Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian

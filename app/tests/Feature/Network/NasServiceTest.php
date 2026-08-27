@@ -95,7 +95,7 @@ class NasServiceTest extends TestCase
                 return ['success' => true, 'message' => null];
             }
 
-            public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout): array
+            public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout, ?string $addressPool = null): array
             {
                 return ['success' => true, 'message' => null];
             }

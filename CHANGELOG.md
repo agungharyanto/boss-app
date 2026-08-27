@@ -3,6 +3,25 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.4 amendment ketiga — Field NAS + Tombol Simpan, 3 Form (implementasi selesai 2026-08-27, belum di-merge/tag)
+
+**Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian
+"Field NAS + Tombol Simpan — Investigasi 3 Form (v0.14.4 amendment ketiga)".
+
+- **Investigasi (Langkah 0), bukan asumsi**: laporan Agung "NAS nya harus di atas Simpan biar gak salah
+  save" di 3 form (IP Pool Pelanggan, Grup Profil, Profil Hotspot). Dikonfirmasi lewat pembacaan kode
+  langsung: TIDAK ADA race condition (field dependent selalu reset sinkron dalam request yang sama,
+  ditambah validasi cross-field yang sudah ada sejak v0.14.3 sebagai jaring pengaman kedua), dan urutan
+  visual NAS/Grup Profil SUDAH menjadi field paling atas di keenam varian form (create+edit × 3 modul).
+- **Yang genuinely hilang**: tombol Simpan tidak pernah disabled berdasarkan status pilihan NAS/Grup
+  Profil — user baru tahu ada masalah SETELAH klik. Kemungkinan besar ini akar keluhan sebenarnya.
+- **Fix**: tombol Simpan disabled (abu-abu) sampai NAS/Grup Profil dipilih, di ketiga form. Validasi
+  backend 'required' dikonfirmasi SUDAH ADA sejak awal (tidak perlu kode baru) — hanya ditambah test
+  eksplisit. Kolom `nas_id`/`network_profile_group_id` dikonfirmasi sudah NOT NULL di database real
+  (bukan cuma file migration) — tidak perlu migration tambahan.
+- **Regresi**: 9 test baru (3×disabled-button, 3×reject-via-Livewire, 3×reject-via-API), full suite
+  dijalankan ulang, Pint clean.
+
 ## v0.14.4 amendment kedua — Fix Address Pool + session-timeout (implementasi selesai 2026-08-27, belum di-merge/tag)
 
 **Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian

@@ -74,6 +74,27 @@ class NetworkProfileGroupApiTest extends TestCase
         ], $overrides);
     }
 
+    /**
+     * v0.14.4 amendment — see CustomerIpPoolApiTest's own docblock for
+     * the full investigation. Backend 'required' already existed on
+     * nas_id, just never explicitly tested — a direct API submission
+     * bypassing the frontend entirely must be rejected the same way.
+     */
+    public function test_creating_without_a_nas_is_rejected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $payload = $this->payload($nas->id, $pool->id);
+        unset($payload['nas_id']);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/network-profile-groups', $payload);
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['nas_id']);
+        $this->assertDatabaseMissing('network_profile_groups', ['name' => 'Grup Utama']);
+    }
+
     public function test_admin_can_create_a_network_profile_group(): void
     {
         $tenant = Tenant::factory()->create();

@@ -21,7 +21,10 @@
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
                     <label class="block text-sm font-medium text-gray-700">{{ __('Grup Profil (Hotspot)') }}</label>
-                    <select wire:model="networkProfileGroupId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                    {{-- .live so the disabled-Simpan-button check below
+                         reacts immediately the moment Grup Profil is
+                         picked. --}}
+                    <select wire:model.live="networkProfileGroupId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                         <option value="">{{ __('-- Pilih Grup Profil --') }}</option>
                         @foreach ($groupOptions as $groupOption)
                             <option value="{{ $groupOption->id }}">{{ $groupOption->name }} ({{ $groupOption->nas->name ?? '-' }})</option>
@@ -173,9 +176,16 @@
                 </label>
             </div>
 
-            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+            {{-- v0.14.4 amendment — Grup Profil (yang menentukan NAS
+                 implisit) wajib dipilih dulu sebelum Simpan bisa diklik,
+                 defense-in-depth di atas validasi backend 'required' yang
+                 sudah ada (baseRules()). --}}
+            <button type="submit" @if (! $networkProfileGroupId) disabled @endif class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-green-600">
                 {{ __('Simpan') }}
             </button>
+            @if (! $networkProfileGroupId)
+                <p class="text-xs text-amber-600 mt-1">{{ __('Pilih Grup Profil terlebih dahulu sebelum menyimpan.') }}</p>
+            @endif
         </form>
     @endif
 

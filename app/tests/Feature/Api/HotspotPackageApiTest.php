@@ -73,6 +73,27 @@ class HotspotPackageApiTest extends TestCase
         ], $overrides);
     }
 
+    /**
+     * v0.14.4 amendment — see CustomerIpPoolApiTest's own docblock for
+     * the full investigation. Profil Hotspot has no NAS field of its own
+     * — Grup Profil determines it implicitly — network_profile_group_id
+     * is the equivalent required field for this form. Already 'required'
+     * in StoreHotspotPackageRequest, just never explicitly tested.
+     */
+    public function test_creating_without_a_group_is_rejected(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+        $payload = $this->payload($f['group']->id, $f['bandwidth']->id);
+        unset($payload['network_profile_group_id']);
+
+        $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/hotspot-packages', $payload);
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['network_profile_group_id']);
+        $this->assertDatabaseMissing('hotspot_packages', ['name' => 'Paket Hotspot 10rb']);
+    }
+
     public function test_admin_can_create_a_hotspot_package(): void
     {
         Bus::fake();

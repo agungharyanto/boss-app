@@ -6657,6 +6657,56 @@ fix session-timeout ditemukan) — keduanya dikonfirmasi perlu secara langsung, 
 Full regression suite dijalankan ulang setelah kedua fix ini, Pint clean di semua file yang disentuh. Belum
 di-merge/tag.
 
+## Field NAS + Tombol Simpan — Investigasi 3 Form (v0.14.4 amendment ketiga)
+
+**Laporan Agung**: "NAS nya harus di atas Simpan biar gak salah save" di 3 form (IP Pool Pelanggan, Grup
+Profil, Profil Hotspot). Instruksi eksplisit: investigasi dulu, jangan asumsi race condition atau
+masalah layout tanpa bukti.
+
+**Hasil investigasi — TIDAK ADA race condition, TIDAK ADA masalah urutan visual, dikonfirmasi lewat
+pembacaan kode langsung, bukan tebakan**:
+- **Race condition**: dicek `wire:model` di ketiga form. Field dependent (IP Pool di Grup Profil,
+  `updatedNasId()`/`updatedType()`) selalu mereset diri SECARA SINKRON dalam request yang SAMA dengan
+  perubahan field penentu (NAS/Tipe) — tidak ada window di mana server menyimpan kombinasi NAS+field
+  dependent yang tidak konsisten. Bahkan seandainya ada race di sisi BROWSER (di luar jangkauan
+  environment ini untuk diuji langsung — tidak ada browser tool), validasi cross-field yang SUDAH ADA
+  sejak v0.14.3 (`validatePoolBelongsToSameNas()` dan sejenisnya, dikonfirmasi via test yang sudah lolos:
+  `test_customer_ip_pool_from_a_different_nas_is_rejected`) akan MENOLAK kombinasi yang tidak cocok, bukan
+  diam-diam menyimpannya. Profil Hotspot bahkan tidak punya field dependent kedua sama sekali (Grup
+  Profil satu-satunya field penentu di form itu) — tidak ada yang bisa race.
+- **Urutan visual**: dicek LANGSUNG di keenam varian form (create+edit × 3 modul) — NAS/Grup Profil
+  SUDAH menjadi field PALING ATAS di semuanya, bukan cuma di IP Pool Pelanggan/Grup Profil seperti
+  disebutkan di laporan awal — Profil Hotspot juga sudah benar.
+- **Placeholder dropdown**: dicek juga — ketiga form CREATE sudah punya `<option value="">-- Pilih ...
+  --</option>` eksplisit, jadi tidak ada risiko silent-default ke NAS pertama dalam daftar.
+
+**Yang GENUINELY hilang, ditemukan lewat audit langsung, bukan tebakan**: tombol Simpan di ketiga form
+TIDAK PERNAH di-disable berdasarkan status pilihan NAS/Grup Profil — user selalu bisa mengklik Simpan
+meski belum memilih apa pun, baru dapat pesan error SETELAH klik. Ini kemungkinan besar akar sebenarnya
+dari keluhan Agung — bukan bug data yang sudah terjadi, melainkan ketiadaan guardrail preventif.
+
+**Fix yang diterapkan**:
+1. **Tombol Simpan disabled** (abu-abu, `disabled:opacity-50 disabled:cursor-not-allowed`) selama NAS
+   (IP Pool Pelanggan, Grup Profil) atau Grup Profil (Profil Hotspot) belum dipilih, plus pesan bantuan
+   kecil di bawah tombol. `nasId` (IP Pool Pelanggan) dan `networkProfileGroupId` (Profil Hotspot)
+   diubah dari `wire:model` biasa jadi `wire:model.live` supaya status disabled bereaksi SEKETIKA saat
+   field dipilih, bukan menunggu round-trip lain — `nasId` di Grup Profil sudah `.live` sejak awal.
+   Diverifikasi tidak ada regresi dari perubahan `.live` ini (62 test lama tetap hijau).
+2. **Validasi backend 'required'** — dikonfirmasi SUDAH ADA di ketiga form (FormRequest dan Livewire
+   `validate()`) sejak sub-versi masing-masing dibangun — TIDAK PERLU kode baru, hanya ditambahkan test
+   eksplisit yang sebelumnya tidak ada (celah cakupan test nyata, bukan celah validasi nyata).
+3. **Kolom `nas_id`/`network_profile_group_id` NOT NULL** — dikonfirmasi LANGSUNG ke `information_schema`
+   database dev real (bukan cuma baca file migration) sudah `nullable=NO` di ketiga tabel sejak awal —
+   tidak perlu migration tambahan.
+
+**Test baru**: 3 test "submit tanpa NAS/Grup Profil ditolak" via Livewire + 3 test setara via API langsung
+(skip validasi frontend) + 3 test "tombol Simpan disabled sampai NAS/Grup Profil dipilih" (regex presisi
+`\bdisabled\b(?!:)` untuk membedakan atribut HTML asli dari kelas varian Tailwind `disabled:opacity-50`
+yang secara kebetulan mengandung substring sama — bug desain test nyata yang ditemukan dan diperbaiki
+sendiri selagi menulis test ini, bukan bug kode produksi).
+
+Full regression suite dijalankan ulang, Pint clean di semua file yang disentuh. Belum di-merge/tag.
+
 ## OLT AllowedIPs Conflict — Real Incident & Fix (branch `fix-wireguard-allowedips-olt-conflict`, fully resolved — code fix + live reconcile both done and verified)
 
 **A real, confirmed ~2-day LibreNMS OLT monitoring outage (2026-08-24 ~18:35 WIB through at least

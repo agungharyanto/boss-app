@@ -69,6 +69,49 @@ class HotspotPackageIndexLivewireTest extends TestCase
     }
 
     /**
+     * v0.14.4 amendment — see CustomerIpPoolIndexLivewireTest's own
+     * docblock for the full investigation (Agung's "NAS harus di atas
+     * Simpan" report). Profil Hotspot has no NAS field of its own — Grup
+     * Profil determines it implicitly — so this is the equivalent
+     * required-field check for THIS form.
+     */
+    public function test_submitting_without_selecting_a_group_is_rejected(): void
+    {
+        $f = $this->fixtures();
+
+        $component = Livewire::actingAs($this->admin($f['tenant']))
+            ->test(HotspotPackageIndex::class)
+            ->set('bandwidthProfileId', (string) $f['bandwidth']->id)
+            ->set('name', 'Paket Tanpa Grup')
+            ->set('costPrice', '2000')
+            ->set('sellPrice', '5000')
+            ->call('createPackage');
+
+        $component->assertHasErrors('networkProfileGroupId');
+        $this->assertDatabaseMissing('hotspot_packages', ['name' => 'Paket Tanpa Grup']);
+    }
+
+    public function test_simpan_button_is_disabled_until_a_group_is_selected(): void
+    {
+        $f = $this->fixtures();
+
+        $hasDisabledAttribute = fn (string $buttonHtml): bool => (bool) preg_match('/\bdisabled\b(?!:)/', $buttonHtml);
+
+        $component = Livewire::actingAs($this->admin($f['tenant']))
+            ->test(HotspotPackageIndex::class)
+            ->set('showCreateForm', true);
+
+        preg_match('/<button type="submit"[^>]*>/', $component->html(), $before);
+        $this->assertNotEmpty($before, 'Simpan button not found in rendered HTML');
+        $this->assertTrue($hasDisabledAttribute($before[0]));
+
+        $htmlAfterSelectingGroup = $component->set('networkProfileGroupId', (string) $f['group']->id)->html();
+        preg_match('/<button type="submit"[^>]*>/', $htmlAfterSelectingGroup, $after);
+        $this->assertNotEmpty($after, 'Simpan button not found in rendered HTML');
+        $this->assertFalse($hasDisabledAttribute($after[0]));
+    }
+
+    /**
      * v0.14.4 — dropdown only ever queries type=hotspot groups at the
      * source (HotspotPackageIndex::render()'s own 'groupOptions' query) —
      * a PPP-type group should never even appear as an option.

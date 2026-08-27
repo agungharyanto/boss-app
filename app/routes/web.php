@@ -19,6 +19,7 @@ use App\Livewire\Network\BandwidthProfileIndex;
 use App\Livewire\Network\CpeDeviceIndex;
 use App\Livewire\Network\CpeDeviceStatusCheck;
 use App\Livewire\Network\CpeParameterMapIndex;
+use App\Livewire\Network\CustomerIpPoolIndex;
 use App\Livewire\Network\MonitoringIndex;
 use App\Livewire\Network\NasIndex;
 use App\Livewire\Network\OltDeviceIndex;
@@ -161,6 +162,10 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // above (tenant-level, no reseller.context needed — BandwidthProfile
     // has no reseller_id at all).
     Route::get('/bandwidth-profiles', BandwidthProfileIndex::class)->name('bandwidth-profiles.index');
+
+    // v0.14.2 — same cluster "Profil Paket", same posture as
+    // /bandwidth-profiles above (tenant-level, no reseller.context needed).
+    Route::get('/customer-ip-pools', CustomerIpPoolIndex::class)->name('customer-ip-pools.index');
 
     Route::get('/tax-components', TaxComponentIndex::class)->name('tax-components.index');
 

@@ -36,8 +36,8 @@
 | v0.11.0 | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
 | v0.12.0 | Network         | PPPoE Provisioning & Technician API | Provisioning kredensial PPPoE (`radcheck`) hasil instalasi teknisi — di luar scope v0.7.5 karena `work_order_devices` tidak punya link balik ke `radcheck`. Sekalian API/otorisasi resmi teknisi/bot WhatsApp submit device (menggantikan bridge CS manual sementara dari v0.7.5) | Backlog |
 | v0.13.0 | Komunikasi      | WhatsApp 2-Arah (Inbound + State Machine Percakapan) | Infrastruktur pesan masuk untuk `whatsapp-gateway` (Baileys) — v0.4.0 baru outbound-only (lihat CLAUDE.md). Mencakup listener inbound message, state machine percakapan per sesi, routing pesan masuk ke handler yang sesuai. Fondasi/wajah percakapan untuk fitur yang sudah/akan dibangun API-first di modul lain (bot WhatsApp jadi consumer tambahan, bukan desain ulang) — TIDAK termasuk logic bisnis spesifik per modul, itu tetap di endpoint masing-masing. **Nomor versi tentatif — belum dikonfirmasi ulang, konfirmasi ulang saat mau discope beneran (BOSS-003)** | Backlog — belum ada tanggal mulai |
-| v0.14.1 | Network         | Bandwidth Profile              | Fondasi cluster "Profil Paket" (terinspirasi MixRadius V3.2, 7 sub-versi). Tabel `bandwidth_profiles` — profil reusable upload/download min-max, disimpan internal dalam Kbps terlepas satuan input user. REST API + Livewire `/bandwidth-profiles` | Implementasi selesai — verifikasi akhir pending |
-| v0.14.2 | Network         | IP Pool Pelanggan              | Konsep IP pool BARU untuk alokasi IP end-device pelanggan hotspot/PPP — beda total dari `VpnIpPool` (v0.6.2, itu untuk tunnel VPN NAS↔BOSS App). Belum ada konsep ini sama sekali di codebase sebelum cluster ini (dikonfirmasi via investigasi) | Backlog |
+| v0.14.1 | Network         | Bandwidth Profile              | Fondasi cluster "Profil Paket" (terinspirasi MixRadius V3.2, 7 sub-versi). Tabel `bandwidth_profiles` — profil reusable upload/download min-max, disimpan internal dalam Kbps terlepas satuan input user. REST API + Livewire `/bandwidth-profiles` | Merged + tagged (`v0.14.1`) |
+| v0.14.2 | Network         | IP Pool Pelanggan              | Konsep IP pool BARU untuk alokasi IP end-device pelanggan hotspot/PPP — beda total dari `VpnIpPool` (v0.6.2, itu untuk tunnel VPN NAS↔BOSS App). Tabel `customer_ip_pools`, wajib terikat `nas_id`. REST API + Livewire `/customer-ip-pools` | Implementasi selesai — verifikasi akhir pending |
 | v0.14.3 | Network         | Grup Profil                    | Konfigurasi RADIUS group per-NAS (tipe Hotspot/PPP), link ke IP Pool module (v0.14.2)/DNS server/parent queue — MASIH DATA SAJA di sub-versi ini, belum ada live provisioning ke NAS asli (itu v0.14.6) | Backlog |
 | v0.14.4 | Network         | Profil Hotspot                 | Paket voucher/token: harga modal/jual/promo, PPN, skema Unlimited/Limited (TimeBase/QuotaBase), link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, periode login (hari+jam) | Backlog |
 | v0.14.5 | Network         | Profil PPP                     | Paket bulanan: harga modal/jual/promo, PPN, link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, shared users, prioritas — direncanakan jadi anchor entity untuk Commission (v0.9.3) yang di-pause di v0.9.2, menggantikan `reseller_package_pricing` yang selama ini kosong data untuk ISP direct | Backlog |
@@ -1253,5 +1253,68 @@ Diverifikasi nyata lewat `tinker` terhadap DB dev real: buat profile 50000 Kbps,
 menghasilkan "50 Mbps" (bukan "5 Mbps" — bug sudah benar-benar hilang), soft-delete berfungsi
 (`trashed()` true setelah delete). Data uji coba dibersihkan (`forceDelete()`) setelahnya.
 
+**Merged + tagged** — diverifikasi manual Agung lewat browser (termasuk 2 putaran perbaikan tambahan: fix
+duplikat trailing-space dan konfirmasi whitespace-tengah dipertahankan), merge `--no-ff` ke `develop` lalu
+`main`, tag `v0.14.1` dibuat, di-push ke GitHub.
+
+## v0.14.2 — IP Pool Pelanggan (branch `v0.14.2-customer-ip-pool`, implementasi selesai, belum di-merge/tag)
+
+**Langkah 0 (investigasi pra-sprint, read-only) dilakukan dulu sebelum model apa pun dibuat** — grep
+"IpPool"/"ip_pool" ulang mengonfirmasi satu-satunya konsep existing adalah `VpnIpPool` (v0.6.2, tunnel IP
+pool antara NAS dan BOSS App sendiri — dipakai `VpnProvisioningService`/`VpnServer`) dan turunannya
+(`VpnIpPoolStatus`, `VpnIpPoolExhaustedException`) — tidak ada konsep IP pool pelanggan sama sekali,
+`CustomerIpPool` genuinely baru. Struktur `App\Models\Nas` dikonfirmasi ulang masih sama seperti investigasi
+sebelumnya (plus relasi `oltDevices()` yang ditambahkan saat hotfix v0.9.2.1).
+
+**Tabel `customer_ip_pools`**: `tenant_id` (FK NOT NULL), `nas_id` (FK ke `nas`, NOT NULL,
+`restrictOnDelete()` — sebuah IP pool pelanggan tidak masuk akal tanpa NAS fisik yang menaunginya, dan
+menghapus NAS yang masih punya pool harus jadi tindakan eksplisit, bukan cascade diam-diam), `name`,
+`network_address` (CIDR string), `gateway_ip`, `range_start`/`range_end`, `dns_primary`/`dns_secondary`
+(nullable), `is_active`, timestamps, `soft_deletes`. Unique constraint **`(nas_id, name)`** — bukan
+`(tenant_id, name)` seperti `bandwidth_profiles` — sebagai partial unique index (`WHERE deleted_at IS
+NULL`), sama pola dengan v0.14.1: dua NAS berbeda boleh masing-masing punya pool bernama sama, tapi satu
+NAS tidak boleh punya dua pool aktif dengan nama sama.
+
+**Validasi berlapis, "dasar, tidak terlalu ketat" sesuai instruksi sprint**:
+1. `range_start`/`range_end`/`gateway_ip` harus IP valid (rule `ip` bawaan Laravel); `range_end >=
+   range_start` dicek numerik via `ip2long()` (equal diizinkan — pool 1 alamat tetap valid).
+2. `gateway_ip`/`range_start`/`range_end` harus jatuh di dalam `network_address` (network..broadcast
+   inklusif — `CustomerIpPoolService::ipWithinCidr()`, sengaja LEBIH LONGGAR dari
+   `CidrRange::usableHostAddresses()` yang punya konsep "usable host" ketat untuk keperluan VPN — tidak
+   dipakai ulang di sini karena memang kebutuhan yang berbeda).
+3. **Overlap check antar pool di NAS yang sama** — `CustomerIpPool::overlapsRange()` (murni
+   perbandingan in-memory, `startA <= endB && startB <= endA`) dipanggil per kandidat oleh
+   `CustomerIpPoolService::overlapsExistingRange()`, yang query semua pool aktif (belum soft-delete) di
+   `nas_id` yang sama. Range identik di NAS BERBEDA tidak dianggap overlap — scoped per-NAS, bukan global.
+4. `name` unik per NAS (lihat di atas) — pool dengan nama sama **DIIZINKAN** di NAS berbeda, ditolak kalau
+   NAS sama, keduanya dibuktikan lewat test terpisah per instruksi sprint ("bukan cuma tolak semua").
+
+**Gotcha nyata ditemukan sebelum menulis test, dari factory pattern existing, bukan kode baru**:
+`OltDeviceFactory` (v0.8.1) menaruh closure `tenant_id` SEBELUM `nas_id` di array `definition()` — closure
+tenant_id membaca `$attributes['nas_id']` yang, pada urutan itu, MASIH berupa `NasFactory` instance yang
+belum resolve (Laravel resolve closure attribute berurutan sesuai posisi array — key yang lebih dulu
+dideklarasikan sudah resolved final saat closure key berikutnya jalan, key SESUDAHNYA masih raw). Dikonfirmasi
+langsung: `OltDevice::factory()->create()` tanpa override `nas_id` eksplisit **error nyata**
+("Object of class NasFactory could not be converted to string"). `CustomerContactFactory` (urutan
+`customer_id` SEBELUM `tenant_id`) sudah benar dan dikonfirmasi bekerja. `CustomerIpPoolFactory` dibuat
+dengan urutan yang benar (`nas_id` sebelum `tenant_id`) — dikonfirmasi `CustomerIpPool::factory()->create()`
+bare (tanpa override) bekerja tanpa error. `OltDeviceFactory`'s existing bug TIDAK diperbaiki di sini —
+di luar scope sprint ini, hanya dicatat supaya tidak tercopy ke factory baru manapun ke depannya.
+
+**Permission**: `customer_ip_pools.view`/`customer_ip_pools.manage`, tier-admin-only, sama posisi persis
+dengan `bandwidth_profiles.*` (tidak ada carve-out `reseller_users` — `CustomerIpPool` sengaja tidak punya
+kolom `reseller_id` sendiri di sub-versi ini, meskipun `nas_id`-nya bisa menunjuk NAS milik reseller).
+
+**Sidebar**: link "IP Pool Pelanggan" ditambahkan tepat setelah "Bandwidth Profile" di section "Network" —
+per instruksi eksplisit supaya tidak mengulang insiden v0.14.1 (link sempat lupa ditambahkan, ternyata
+gap permission-seeding, bukan bug kode, tapi checklist ini tetap ditambahkan sebagai pencegahan).
+
+**Verifikasi**: full regression suite 906/906 hijau (33 test baru — 19 API + 13 Livewire + 1 dari kerja
+lain di branch ini), Pint clean di semua file yang disentuh (2 isu style ditemukan & diperbaiki otomatis:
+`array_indentation` di `CustomerIpPoolFactory`, spasi operator di `routes/web.php`). Dikonfirmasi manual
+lewat `tinker` terhadap DB dev real sebelum test suite ditulis: factory bare `create()` bekerja,
+`overlapsExistingRange()` benar untuk kasus overlap dan non-overlap, `ipWithinCidr()` benar untuk IP di
+dalam/luar CIDR.
+
 **Belum di-merge/tag** — menunggu verifikasi manual Agung lewat browser sebelum `git merge --no-ff` ke
-`develop`/`main` dan tag `v0.14.1`.
+`develop`/`main` dan tag `v0.14.2`.

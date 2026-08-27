@@ -3,6 +3,37 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.2 — IP Pool Pelanggan (implementasi selesai 2026-08-27, belum di-merge/tag)
+
+**Catatan status**: branch `v0.14.2-customer-ip-pool` (dari `main` yang sudah include v0.14.1) — kelanjutan
+cluster "Profil Paket" — implementasi dan regresi selesai, menunggu verifikasi manual Agung lewat browser
+sebelum merge/tag. Detail teknis lengkap ada di `docs/ROADMAP.md` bagian "v0.14.2" dan `docs/API.md`.
+
+Tabel `customer_ip_pools` — IP range yang dialokasikan ke perangkat/end-device PELANGGAN (hotspot/PPP) di
+sebuah NAS, **genuinely berbeda dari `VpnIpPool`** (v0.6.2, tunnel IP pool antara NAS dan BOSS App sendiri)
+— dikonfirmasi lewat investigasi grep ulang sebelum model dibuat, tidak ada konsep lain yang bentrok.
+
+- **`nas_id` wajib (NOT NULL, `restrictOnDelete()`)** — sebuah IP pool pelanggan tidak masuk akal tanpa NAS
+  fisik yang menaunginya; menghapus NAS yang masih punya pool harus jadi tindakan eksplisit.
+- **Unique `(nas_id, name)`, bukan `(tenant_id, name)`** — dua NAS berbeda boleh masing-masing punya pool
+  bernama sama; satu NAS tidak boleh punya dua pool aktif nama sama. Partial index (`WHERE deleted_at IS
+  NULL`), sama pola dengan `bandwidth_profiles`.
+- **Validasi 3 lapis**: IP valid + `range_end >= range_start`; gateway/range harus di dalam
+  `network_address` (network..broadcast inklusif, sengaja lebih longgar dari `CidrRange`'s "usable host"
+  yang VPN-tunnel-specific); overlap range antar pool **di NAS yang sama** ditolak (`CustomerIpPool::
+  overlapsRange()` + `CustomerIpPoolService::overlapsExistingRange()`), range identik di NAS berbeda tetap
+  diizinkan.
+- **Gotcha nyata ditemukan dari pattern factory existing (bukan kode baru)**: `OltDeviceFactory` (v0.8.1)
+  menaruh closure `tenant_id` SEBELUM `nas_id` di `definition()` — dikonfirmasi langsung menyebabkan bare
+  `OltDevice::factory()->create()` (tanpa override `nas_id`) ERROR nyata, karena Laravel resolve attribute
+  closure sesuai URUTAN array, bukan nama. `CustomerIpPoolFactory` dibuat dengan urutan yang benar (`nas_id`
+  sebelum `tenant_id`, meniru `CustomerContactFactory` yang sudah benar) — tidak menyentuh bug existing di
+  `OltDeviceFactory`, di luar scope, hanya dicatat.
+- **Governance/sidebar checklist**: link sidebar ditambahkan tepat setelah Bandwidth Profile di section
+  "Network" — per instruksi eksplisit supaya tidak mengulang insiden v0.14.1.
+- **Regresi**: full suite 906/906 hijau (32 test baru khusus CustomerIpPool: 19 API + 13 Livewire), Pint
+  clean (2 isu style ditemukan & diperbaiki otomatis).
+
 ## v0.14.1 — Bandwidth Profile (2026-08-27, merged + tagged)
 
 **Catatan status**: branch `v0.14.1-bandwidth-profile` (dari `main` yang sudah include v0.9.2), sprint

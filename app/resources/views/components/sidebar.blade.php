@@ -66,7 +66,7 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*') || request()->routeIs('web.customer-ip-pools.*'),
             // v0.8.1 — nested one level deeper than a plain link: an item
             // with a 'children' key renders as its own expand/collapse
             // sub-group (own localStorage key, same pattern as the
@@ -91,6 +91,12 @@
                 // v0.14.1 — fondasi cluster "Profil Paket".
                 auth()->user()->can('viewAny', \App\Models\BandwidthProfile::class)
                     ? ['route' => 'web.bandwidth-profiles.index', 'label' => __('Bandwidth Profile')]
+                    : null,
+                // v0.14.2 — same cluster "Profil Paket", placed right after
+                // Bandwidth Profile per explicit instruction not to repeat
+                // the v0.14.1 "sidebar link forgotten" incident.
+                auth()->user()->can('viewAny', \App\Models\CustomerIpPool::class)
+                    ? ['route' => 'web.customer-ip-pools.index', 'label' => __('IP Pool Pelanggan')]
                     : null,
                 // v0.8.2 — plain permission check (no Eloquent model backs
                 // this page, LibreNMS device data isn't a boss_db table),

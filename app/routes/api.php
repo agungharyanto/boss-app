@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\CpeDeviceController;
 use App\Http\Controllers\Api\V1\CpeParameterMapController;
 use App\Http\Controllers\Api\V1\CustomerContactController;
 use App\Http\Controllers\Api\V1\CustomerController;
+use App\Http\Controllers\Api\V1\CustomerIpPoolController;
 use App\Http\Controllers\Api\V1\CustomerTimelineController;
 use App\Http\Controllers\Api\V1\DashboardWidgetSettingController;
 use App\Http\Controllers\Api\V1\HealthController;
@@ -243,6 +244,19 @@ Route::prefix('v1')->group(function () {
         Route::get('bandwidth-profiles/{bandwidth_profile}', [BandwidthProfileController::class, 'show']);
         Route::put('bandwidth-profiles/{bandwidth_profile}', [BandwidthProfileController::class, 'update']);
         Route::delete('bandwidth-profiles/{bandwidth_profile}', [BandwidthProfileController::class, 'destroy']);
+
+        // v0.14.2 — same cluster "Profil Paket", same tier-admin-only
+        // posture as bandwidth-profiles above (see CustomerIpPoolPolicy).
+        // Deliberately NOT the same concept as vpn-account-style VPN
+        // tunnel IP pooling (VpnIpPool, v0.8.1) — see CustomerIpPool's own
+        // docblock. ?nas_id= filters index() to one NAS's own pools.
+        Route::get('customer-ip-pools', [CustomerIpPoolController::class, 'index']);
+        Route::post('customer-ip-pools', [CustomerIpPoolController::class, 'store']);
+        Route::get('customer-ip-pools/{customer_ip_pool}', [CustomerIpPoolController::class, 'show']);
+        Route::put('customer-ip-pools/{customer_ip_pool}', [CustomerIpPoolController::class, 'update']);
+        Route::delete('customer-ip-pools/{customer_ip_pool}', [CustomerIpPoolController::class, 'destroy']);
+        // v0.14.2.1 — manual retry for a pool whose RouterOS live-push failed.
+        Route::post('customer-ip-pools/{customer_ip_pool}/resync', [CustomerIpPoolController::class, 'resync']);
 
         // v0.8.4 — read-only Dashboard Monitoring API, WhatsApp-bot
         // integration foothold (see App\Http\Controllers\Api\V1\

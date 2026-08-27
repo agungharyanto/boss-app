@@ -6063,6 +6063,164 @@ style additions to `RolesAndPermissionsSeeder` for v0.14.2 onward, re-run the se
 database as part of that sprint's own verification — don't rely on discovering the gap the same way this
 one was (a user-reported "menu missing" symptom after the fact).
 
+## IP Pool Pelanggan (v0.14.2)
+
+Second sub-version of the "Profil Paket" cluster. Table `customer_ip_pools` — an IP range allocated to a
+NAS's own end-CUSTOMER devices (hotspot/PPP), **genuinely distinct from `VpnIpPool`** (v0.6.2, the tunnel
+IP pool between a NAS and BOSS App itself) — confirmed via a fresh grep for "IpPool"/"ip_pool" before
+writing any model, per this sprint's own Langkah 0 instruction: the only existing hit was `VpnIpPool` and
+its own derivatives, nothing else. `App\Models\Nas` structure was reconfirmed unchanged (plus the
+`oltDevices()` relation added by the WireGuard hotfix above).
+
+**`nas_id` is required (`NOT NULL`, `restrictOnDelete()`)** — a customer IP pool makes no sense without a
+real NAS behind it, and deleting a NAS that still has pools attached must be an explicit action, never a
+silent cascade. **Unique constraint is `(nas_id, name)`, not `(tenant_id, name)`** like
+`bandwidth_profiles` — two different NAS may each have a pool named the same thing; one NAS may not have
+two active pools with the same name. Partial index (`WHERE deleted_at IS NULL`), same technique as
+`bandwidth_profiles`.
+
+**Validation, deliberately "dasar, tidak terlalu ketat" per the sprint brief** — not a strict
+usable-host-only check: IP fields valid + `range_end >= range_start` (equal allowed, a single-address pool
+is valid); `gateway_ip`/`range_start`/`range_end` must fall within `network_address`'s network..broadcast
+range inclusive (`CustomerIpPoolService::ipWithinCidr()` — deliberately looser than, and NOT reusing,
+`App\Support\CidrRange::usableHostAddresses()`, which has a stricter VPN-tunnel-specific "usable host"
+definition for an unrelated purpose); overlap check between pools **on the same NAS** rejected
+(`CustomerIpPool::overlapsRange()` pure comparison + `CustomerIpPoolService::overlapsExistingRange()` query)
+— the identical range on a *different* NAS is explicitly allowed, proven by its own test, not just the
+rejection case.
+
+**Real gotcha found in an existing factory pattern, not new code**: `OltDeviceFactory` (v0.8.1) declares
+its `tenant_id` closure BEFORE `nas_id` in `definition()` — confirmed directly that this makes a bare
+`OltDevice::factory()->create()` (no `nas_id` override) throw ("Object of class NasFactory could not be
+converted to string"), because Laravel resolves a factory's closure attributes in ARRAY ORDER, not by name
+— a key declared before a closure is already resolved to its final scalar by the time that closure runs; a
+key declared after is still the raw, unresolved `Factory` instance. `CustomerContactFactory` (which
+declares `customer_id` before `tenant_id`) already relies on this correctly and works.
+`CustomerIpPoolFactory` was written with the correct order (`nas_id` before `tenant_id`) — confirmed a bare
+`CustomerIpPool::factory()->create()` works with no error. **`OltDeviceFactory`'s own bug was NOT fixed**
+— out of scope for this sprint, noted here only so it isn't copied into a future factory.
+
+**Permission**: `customer_ip_pools.view`/`customer_ip_pools.manage`, tier-admin-only, same posture as
+`bandwidth_profiles.*` — no `reseller_users` carve-out (no `reseller_id` column of its own this
+sub-version, even though `nas_id` may point at a reseller-owned NAS). Sidebar link placed immediately after
+"Bandwidth Profile" in the "Network" section, per explicit instruction not to repeat the exact incident
+documented in the Bandwidth Profile section above — and it recurred anyway in a slightly different form:
+the permission WAS seeded in code from the first commit, but (same root cause as before) the real dev
+database hadn't had `db:seed --class=RolesAndPermissionsSeeder --force` re-run against it yet, so the link
+was genuinely absent from a real, live, authenticated page load until that was done — caught by checking
+the real rendered HTML, not assumed present just because the code was correct.
+
+**Verified for real against the live HTTPS server, using the designated safe-to-test NAS
+(`ro-hotspot.bajastu.id`), never `test-x86-bajastu`**: created a pool via the real REST API, then confirmed
+both an exact-duplicate-name attempt and an overlapping-range attempt on the SAME NAS were correctly
+rejected with `422` — test artifact deleted and the temporary API token revoked afterward.
+
+Full regression suite 906/906 green (32 new tests: 19 API + 13 Livewire), Pint clean.
+
+## RouterOS Live-Push (v0.14.2.1) — started at IP Pool, generalization to other Profil Paket entities is planned, deliberate future scope
+
+**Real capability this codebase never had before**: every previous NAS-facing config change
+(`MikrotikScriptGenerator`) was generate-once `.rsc` output an admin manually pastes/imports on the router
+— confirmed by re-reading that class before writing any new code, there was no live RouterOS API push
+mechanism anywhere in this codebase prior to this sub-version. `App\Services\Network\Contracts\
+RouterOsGateway` (v0.6.1-v0.6.5) had exactly 4 narrow, single-purpose methods (`ping`, `pingHost`,
+`provisionApiUser`, `currentWireguardEndpointPort`) — no generic "run any RouterOS API command" method
+existed, confirmed directly before designing `syncIpPool()`/`removeIpPool()` as two more narrow, purpose-
+built methods on the same interface, following the exact same per-call `Client`/`Query` pattern
+`RouterOsApiGateway`'s existing methods already establish (fresh `Client` per call, per-row NAS credentials,
+never a static/cached connection).
+
+**Deliberately scoped to CustomerIpPool only this sub-version — NOT a generic push engine for every Profil
+Paket entity.** The pattern (queued Job, `mikrotik_sync_status`/`mikrotik_synced_at`/`mikrotik_sync_error`
+columns, comment-based idempotent router-side lookup, manual "Sync Ulang" retry) is explicitly intended to
+be generalized to Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP in later sub-versions — tracked as
+planned future scope in `docs/ROADMAP.md`, not attempted here per the sprint's own explicit "jangan bangun
+mesin generik untuk semua sekaligus" instruction.
+
+**Credentials reused, not re-provisioned** — confirmed directly against `ro-hotspot.bajastu.id`'s real
+stored `nas.api_username`/`api_password` (`boss-apps`) before writing any push code: a real
+`RouterOsGateway::ping()` call succeeded, and a direct `/user/print`/`/user/group/print` query confirmed
+this account sits in RouterOS's own built-in `full` group (real read+write access) — this NAS's stored
+credential is the router owner's own full-access admin login (an older, pre-dedicated-API-user setup, see
+the v0.6.5 "Root confusion identified and fixed" section above for the two-credential model this predates),
+not the restricted `boss-app-api` group `provisionApiUser()` normally creates. Sufficient for this sprint's
+`/ip pool` write operations; a **future NAS** provisioned only with the restricted `boss-app-api` group
+(policy `!write` — see `RouterOsApiGateway::API_USER_POLICY`) would need that policy widened before live-push
+could work against it — not needed for `ro-hotspot` as it stands today, flagged here for whoever touches
+this next.
+
+**RouterOS command shape**: `/ip pool print`/`add`/`set`/`remove`, looked up by a stable per-row `comment`
+(`CustomerIpPool::mikrotikComment()`, `"BOSS App - Customer IP Pool #{id}"` — same
+`"BOSS App - <thing> <identifier>"` convention `MikrotikScriptGenerator` already established elsewhere in
+this codebase) rather than by `name` — a pool can be renamed in BOSS App, and looking up by name would
+create an orphaned duplicate on the router instead of updating the existing object, same reasoning
+`RouterOsApiGateway::ensureUser()`/`ensureGroup()` already apply to `/user`/`/user/group`. `ranges` is
+RouterOS's own `"start-end"` string syntax. Only the pool object itself is pushed this sub-version —
+`gateway_ip`/`dns_primary`/`dns_secondary`/`network_address` are stored in `boss_db` for later sub-versions
+(Grup Profil/Profil Hotspot/Profil PPP referencing this pool for `local-address=`/`dns-server=` etc.) but
+have no RouterOS object of their own to push to yet — `/ip pool` itself only ever has `name`+`ranges`.
+
+**Async by design — a queued Job, never synchronous in the HTTP request**: `CustomerIpPoolService::create()`/
+`update()`/`delete()`/`resync()` dispatch `App\Jobs\PushCustomerIpPoolToMikrotikJob`/
+`RemoveCustomerIpPoolFromMikrotikJob` (by id, re-fetched fresh in `handle()` — same "pass an id, not a
+serialized model" posture as `SendWhatsappMessageJob`) AFTER the DB write already committed — a slow or
+unreachable router can never stall the form. `update()`/`resync()` eagerly reset
+`mikrotik_sync_status` to `Pending` synchronously, before the job even runs — otherwise the badge would
+keep showing a stale `Synced`/`Gagal` from a PREVIOUS sync while the new attempt is still queued, reading as
+"nothing happened." Retry: `tries = 3`, release-with-backoff 30s/2min/5min on a non-final failure — same
+exact schedule `SendWhatsappMessageJob` already uses, reused rather than invented fresh. A soft-deleted
+`CustomerIpPool` is still fully readable via `withTrashed()` (soft-delete never clears
+`nas_id`/`name`/`range_*`), which is what lets `RemoveCustomerIpPoolFromMikrotikJob` still find everything
+it needs after `CustomerIpPoolService::delete()` has already run.
+
+**Real bug caught before it ever ran**: an early docblock on `RemoveCustomerIpPoolFromMikrotikJob` wrote
+`nas_id/name/range_*/mikrotikComment()` in prose — `range_*/mikrotikComment` contains a literal `*/`
+sequence, which prematurely closed the PHP docblock comment and turned the rest of the sentence into
+invalid top-level code (`php -l` caught it immediately as a parse error on the following line). **Same bug
+class already documented in this file's "Infra Tunnel IP Block" section** (interpolating something that
+accidentally forms `*/` inside a `#`/`/** */` comment) — that entry was about a Mikrotik `.rsc` script
+comment, this one about a PHP docblock, same root mistake. Fixed by rewording to avoid the glob-shaped
+`range_*` substring entirely; every other new file in this sub-version was grepped for the same `*/`-forming
+pattern afterward and came back clean.
+
+**UI**: a "Sync Router" column on `/customer-ip-pools` shows a Pending/Tersinkron/Gagal badge
+(`App\Enums\MikrotikSyncStatus`), with the last error message shown truncated (full text in the `title`
+attribute) when Gagal. A "Sync Ulang" action link appears ONLY for a Gagal row (enforced both in the Blade
+`@if` and again inside `CustomerIpPoolIndex::resyncPool()` itself — defense in depth, same posture as every
+other authorize() check in this codebase) — re-dispatches the same push Job. `POST /customer-ip-pools/
+{id}/resync` is the REST equivalent, same `customer_ip_pools.manage` permission.
+
+**Testing**: never calls a real router in the automated suite — `RouterOsGateway` is bound to an anonymous
+fake implementation (same established pattern as `NasServiceTest`/`OltDeviceServiceTest`/
+`NasApiUserProvisioningServiceTest`, all 6 of which needed their own fake class updated with 2 new
+no-op methods once the interface grew — a real, mechanical but necessary consequence of adding to a shared
+interface with several independent test-side implementations). Job retry/release logic is exercised via
+Laravel's own `withFakeQueueInteractions()` (`$job->job = new FakeJob`, exposing `assertReleased(delay:
+...)`/`assertNotReleased()` and a directly-settable `attempts` property) rather than a real queue connection
+— confirmed correct for both the "released with 30s backoff on a non-final attempt" case and the "marked
+Failed with the error message on the final attempt" case, not just the happy path.
+
+**Verified for real, end-to-end, against `ro-hotspot.bajastu.id` only — all 4 Langkah 3 checks actually
+executed live, not deferred to Agung**:
+1. **Push**: resynced the real existing "Parent-10Mbps" (id=12, the pool from Agung's own screenshot) —
+   confirmed absent from `/ip pool print` beforehand, present afterward with the correct `name`/`ranges`
+   and the expected `"BOSS App - Customer IP Pool #12"` comment.
+2. **Edit**: changed `range_end`, confirmed the SAME router `.id` updated in place (not a new duplicate
+   entry) with the new range.
+3. **Failure + retry**: temporarily pointed this NAS's own stored `api_port` at a closed port (nothing on
+   the router itself touched) and re-triggered a sync — got a genuine `ECONNREFUSED`-class error
+   ("Unable to establish socket session, Connection refused"), correctly captured on the row while status
+   stayed `Pending` (mid-retry, non-final attempt) rather than jumping straight to `Gagal`. Restored the
+   real port before the scheduled 30s release fired; the automatic retry then genuinely succeeded on its
+   own (`Synced`, error cleared) — proving the real backoff/retry loop, not just the mocked unit test.
+4. **Delete**: used a separate throwaway pool (not Agung's real "Parent-10Mbps", to avoid destroying his
+   own test data) — confirmed it appeared on the router after create, then genuinely disappeared from
+   `/ip pool print` after `CustomerIpPoolService::delete()`. Force-deleted the throwaway row from `boss_db`
+   afterward; "Parent-10Mbps" itself was left exactly as Agung created it, now genuinely `Synced` on the
+   real router for him to see.
+
+**`test-x86-bajastu` was not touched in any way during this work.**
+
 ## OLT AllowedIPs Conflict — Real Incident & Fix (branch `fix-wireguard-allowedips-olt-conflict`, fully resolved — code fix + live reconcile both done and verified)
 
 **A real, confirmed ~2-day LibreNMS OLT monitoring outage (2026-08-24 ~18:35 WIB through at least

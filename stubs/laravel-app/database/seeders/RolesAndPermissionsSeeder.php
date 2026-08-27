@@ -60,6 +60,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedMonitoringPermissions();
         $this->seedReferrerPermissions();
         $this->seedBandwidthProfilePermissions();
+        $this->seedCustomerIpPoolPermissions();
     }
 
     /**
@@ -397,6 +398,22 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedBandwidthProfilePermissions(): void
     {
         $permissions = ['bandwidth_profiles.view', 'bandwidth_profiles.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
+    }
+
+    /**
+     * v0.14.2 CRUD Customer IP Pool — same "Profil Paket" cluster as
+     * bandwidth_profiles.*, same tier-admin-only posture and same reasoning
+     * (no reseller_id column, tenant-level only this sub-version).
+     */
+    private function seedCustomerIpPoolPermissions(): void
+    {
+        $permissions = ['customer_ip_pools.view', 'customer_ip_pools.manage'];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

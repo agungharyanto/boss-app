@@ -28,7 +28,10 @@
         <form wire:submit="createPool" class="mb-6 p-4 border border-gray-200 rounded-md bg-gray-50 space-y-3">
             <div>
                 <label class="block text-sm font-medium text-gray-700">{{ __('NAS') }}</label>
-                <select wire:model="nasId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                {{-- .live so the disabled-Simpan-button check below reacts
+                     immediately the moment NAS is picked, not only after
+                     some OTHER field's own round trip. --}}
+                <select wire:model.live="nasId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                     <option value="">{{ __('-- Pilih NAS --') }}</option>
                     @foreach ($nasOptions as $nasOption)
                         <option value="{{ $nasOption->id }}">{{ $nasOption->name }}</option>
@@ -98,9 +101,18 @@
                 <input type="checkbox" wire:model="isActive"> {{ __('Aktif') }}
             </label>
 
-            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+            {{-- v0.14.4 amendment — NAS wajib dipilih dulu sebelum Simpan
+                 bisa diklik sama sekali, bukan cuma andalkan pesan error
+                 setelah submit. Backend tetap validasi 'required' secara
+                 independen (defense-in-depth, sama seperti setiap gate
+                 authorize() lain di codebase ini) — disabled attribute
+                 murni UX, bukan satu-satunya lapisan proteksi. --}}
+            <button type="submit" @if (! $nasId) disabled @endif class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-green-600">
                 {{ __('Simpan') }}
             </button>
+            @if (! $nasId)
+                <p class="text-xs text-amber-600 mt-1">{{ __('Pilih NAS terlebih dahulu sebelum menyimpan.') }}</p>
+            @endif
         </form>
     @endif
 

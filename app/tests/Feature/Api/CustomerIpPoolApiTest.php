@@ -54,6 +54,29 @@ class CustomerIpPoolApiTest extends TestCase
         ], $overrides);
     }
 
+    /**
+     * v0.14.4 amendment — Agung reported field NAS/tombol Simpan issues
+     * across 3 forms ("NAS nya harus di atas Simpan biar gak salah save").
+     * Investigation found no data race and correct field ordering already
+     * in place — what was genuinely missing was explicit test coverage for
+     * the 'required' rule that already existed on nas_id. Direct API
+     * submission (bypassing the frontend entirely) must be rejected the
+     * same way.
+     */
+    public function test_creating_without_a_nas_is_rejected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $payload = $this->payload($nas->id);
+        unset($payload['nas_id']);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/customer-ip-pools', $payload);
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['nas_id']);
+        $this->assertDatabaseMissing('customer_ip_pools', ['name' => 'Pool Utama']);
+    }
+
     public function test_admin_can_create_a_customer_ip_pool(): void
     {
         $tenant = Tenant::factory()->create();

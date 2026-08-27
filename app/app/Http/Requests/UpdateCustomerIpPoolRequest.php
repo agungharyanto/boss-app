@@ -46,6 +46,7 @@ class UpdateCustomerIpPoolRequest extends FormRequest
                     ->whereNull('deleted_at')
                     ->ignore($this->pool->id),
             ],
+            'usage_type' => ['sometimes', 'required', 'string', 'in:ppp,hotspot,general'],
             'network_address' => ['sometimes', 'required', 'string', 'regex:/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/'],
             'gateway_ip' => ['sometimes', 'required', 'ip'],
             'range_start' => ['sometimes', 'required', 'ip'],

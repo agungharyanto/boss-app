@@ -5,7 +5,7 @@ namespace App\Http\Resources;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
-class CustomerIpPoolResource extends JsonResource
+class NetworkProfileGroupResource extends JsonResource
 {
     /**
      * @return array<string, mixed>
@@ -17,13 +17,12 @@ class CustomerIpPoolResource extends JsonResource
             'nas_id' => $this->nas_id,
             'nas_name' => $this->whenLoaded('nas', fn () => $this->nas->name),
             'name' => $this->name,
-            'usage_type' => $this->usage_type?->value,
-            'network_address' => $this->network_address,
-            'gateway_ip' => $this->gateway_ip,
-            'range_start' => $this->range_start,
-            'range_end' => $this->range_end,
+            'type' => $this->type->value,
+            'customer_ip_pool_id' => $this->customer_ip_pool_id,
+            'customer_ip_pool_name' => $this->whenLoaded('customerIpPool', fn () => $this->customerIpPool->name),
             'dns_primary' => $this->dns_primary,
             'dns_secondary' => $this->dns_secondary,
+            'parent_queue' => $this->parent_queue,
             'is_active' => $this->is_active,
             'mikrotik_sync_status' => $this->mikrotik_sync_status?->value,
             'mikrotik_synced_at' => $this->mikrotik_synced_at?->toIso8601String(),

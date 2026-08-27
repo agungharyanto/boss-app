@@ -6221,6 +6221,192 @@ executed live, not deferred to Agung**:
 
 **`test-x86-bajastu` was not touched in any way during this work.**
 
+## Auto-Refresh Status Sync (v0.14.2.2)
+
+Real bug UX Agung found: after RouterOS live-push (async Job), the "Sync Router" badge on
+`/customer-ip-pools` stayed "Pending" until a manual browser reload, even though the job had already
+finished in the background. Fixed with a **conditional** `wire:poll.5s="$refresh"` — `render()` computes
+`hasPendingSync` from the currently-displayed page's own rows; the Blade view only emits the `wire:poll`
+attribute while that's true. The moment every visible row is `Synced`/`Gagal`, the next render (triggered
+by the poll itself) omits the attribute and Livewire's own poll mechanism — tied to the attribute's
+presence in the DOM — stops firing on its own; this is Livewire's documented conditional-polling pattern,
+not a custom `setInterval`. A "Muat Ulang" button (`wire:click="$refresh"`) sits next to search/filter for
+manual refresh — plain Livewire AJAX, never a full page/URL navigation. No `wire:loading` exclusion was
+needed — neither `CustomerIpPoolIndex` nor `NetworkProfileGroupIndex` (v0.14.3) have any loading indicator
+at all, confirmed by grep before assuming one was needed. This exact pattern (compute `hasPendingSync` in
+`render()`, conditional `wire:poll.5s="$refresh"` on the root `<div>`, a "Muat Ulang" button) is reused
+verbatim by every subsequent "Profil Paket" entity, starting with Grup Profil below — not reinvented per
+entity.
+
+## Grup Profil (v0.14.3)
+
+Third sub-version of the "Profil Paket" cluster. Table `network_profile_groups` — a NAS-scoped RADIUS/
+Mikrotik profile TEMPLATE (type Hotspot or PPP), referencing a `CustomerIpPool` (v0.14.2) from the SAME
+NAS — used starting v0.14.4/v0.14.5 (Profil Hotspot/Profil PPP) as a selectable reference. This
+sub-version only builds the template itself; no customer/subscription is ever linked to one yet.
+
+**Two genuinely architectural findings from Langkah 0, both resolved with Agung's explicit decision before
+writing any push code — neither was guessed:**
+
+1. **`/ip hotspot user profile` has NO `address-pool`/`dns-server`/`parent-queue` fields at all** —
+   confirmed empirically against the real router (`/ip/hotspot/user/profile/print`'s actual fields are
+   `idle-timeout`/`shared-users`/`mac-cookie-timeout`/etc., nothing resembling PPP's per-profile pool/DNS/
+   queue). A Hotspot client's IP pool is bound to the `/ip hotspot` SERVER instance itself
+   (interface-scoped), never a reusable named profile — `/ppp profile`, by contrast, maps cleanly and
+   completely onto `NetworkProfileGroup`'s own schema (`remote-address=<pool_name>`, `dns-server=`,
+   `parent-queue=`, all confirmed real fields via a live add/set/remove round-trip). **Agung's explicit
+   decision**: refuse to push a Hotspot-type group with a clear, specific error unless the NAS already has
+   at least one real `/ip hotspot` server configured (`System > Hotspot Setup` — a real infra decision for
+   whoever runs the router, never invented on their behalf) — when one exists, live-push updates that
+   server's own `address-pool=` to the referenced pool's name. **No `/ip hotspot user profile` object is
+   ever created** — it would carry none of `NetworkProfileGroup`'s actual config fields, so creating one
+   would just be a confusing, empty placeholder.
+
+## Tipe Pemakaian IP Pool + Sidebar "Profil Paket" (v0.14.3.1)
+
+**Sama branch `v0.14.3-grup-profil`, digabung sebelum closure sprint itu — bukan sub-versi terpisah dari
+sisi git (tidak ada branch/tag baru), penomoran `.1` murni untuk penamaan bagian di CHANGELOG/dokumentasi.**
+
+**Bagian A — pemisahan `usage_type` pada `CustomerIpPool`**: bug nyata ditemukan Agung — form Grup Profil
+(Tipe=PPP) bisa memilih IP Pool yang namanya jelas untuk Hotspot ("Hotspot-10Mbps"), tidak ada pemisahan
+sama sekali. `App\Enums\CustomerIpPoolUsageType` (Ppp/Hotspot/General) ditambahkan sebagai kolom baru
+`customer_ip_pools.usage_type` (default `'general'` untuk baris existing — sengaja TIDAK ditebak dari nama,
+admin koreksi manual lewat form edit kalau perlu, lebih aman daripada tebakan salah).
+`CustomerIpPoolUsageType::isCompatibleWith(NetworkProfileGroupType $groupType)` adalah satu-satunya tempat
+aturan kompatibilitas didefinisikan — General cocok untuk KEDUA tipe Grup Profil, Ppp/Hotspot cuma cocok
+untuk tipe-nya sendiri — dipakai di 3 lapisan sekaligus (bukan cuma frontend): dropdown filter di
+`NetworkProfileGroupIndex::render()` (query `whereIn('usage_type', [$type, General])`, reaktif lewat
+`wire:model.live="type"`/`"editType"` + `updatedType()`/`updatedEditType()` yang mereset pool terpilih sama
+seperti `updatedNasId()` sudah lakukan untuk NAS), validasi Livewire (`validatePoolBelongsToSameNas()`,
+sekarang menerima parameter `$type`), dan validasi backend FormRequest
+(`StoreNetworkProfileGroupRequest::validatePool()`/`UpdateNetworkProfileGroupRequest::
+validatePoolBelongsToSameNas()` — sengaja tidak cuma andalkan filter dropdown, panggilan API langsung tetap
+ditolak kalau kombinasi tidak cocok). Update FormRequest fallback ke tipe TERSIMPAN grup
+(`$this->input('type', $this->group->type->value)`) kalau field `type` tidak ikut dikirim di request itu —
+sama pola fallback yang sudah dipakai `$nasId`/`$poolId` di file yang sama.
+
+**Bagian B — sidebar "Profil Paket" collapsible**: Bandwidth Profile/IP Pool Pelanggan/Grup Profil yang
+tadinya 3 item flat terpisah di cluster Network, dikelompokkan jadi 1 menu induk collapsible — replikasi
+PERSIS pola `'children'` yang sudah dipakai NAS→Script Generator dan Perangkat CPE→Cek Status Device
+(`resources/views/components/sidebar.blade.php`), bukan pola baru. Karena pola itu mengharuskan parent row
+punya link nyata ke halaman index-nya sendiri (bukan cuma header statis) dan sprint ini eksplisit tidak
+boleh menambah route baru, Bandwidth Profile (fondasi cluster sejak v0.14.1) dipakai sebagai link/route
+parent — labelnya berubah jadi "Profil Paket", IP Pool Pelanggan dan Grup Profil jadi children di
+bawahnya. Gate permission parent memakai `viewAny BandwidthProfile` saja (bukan OR ketiga permission) —
+aman karena ketiganya (`bandwidth_profiles.*`/`customer_ip_pools.*`/`network_profile_groups.*`) selalu
+di-`giveToAdminTier()` bersamaan di `RolesAndPermissionsSeeder`, dikonfirmasi lewat `grep` sebelum
+diasumsikan, bukan ditebak — tidak ada skenario nyata di codebase ini di mana satu permission ada tapi yang
+lain tidak. Setiap child tetap punya guard permission sendiri di dalam `array_filter()` (defense-in-depth),
+sama seperti pola children CPE. Murni reorganisasi visual — tidak ada route yang berubah, `active`-state
+check cluster Network di baris paling atas file sudah mencakup ketiga route ini sejak sebelumnya (tidak
+perlu diubah).
+
+**Test**: 16 test baru untuk kompatibilitas usage_type (API + Livewire — buat pool PPP/Hotspot/General,
+konfirmasi masing-masing hanya muncul di dropdown Grup Profil yang sesuai, pool General muncul di
+keduanya, submit kombinasi tidak cocok ditolak backend baik lewat form maupun API langsung, termasuk kasus
+fallback tipe tersimpan saat field `type` tidak dikirim ulang saat update), 4 test baru untuk sidebar
+(`SidebarNavigationTest` — label "Profil Paket"/"IP Pool Pelanggan"/"Grup Profil" muncul untuk user
+admin-tier, parent link mengarah ke `web.bandwidth-profiles.index`, children tetap mengarah ke route
+asli masing-masing, user non-admin-tier tidak melihat menu ini sama sekali). Pint clean di semua file yang
+disentuh.
+
+**Belum di-merge/tag** — menunggu verifikasi manual Agung (screenshot sidebar baru + konfirmasi filter IP
+Pool bekerja di browser sungguhan). Sama seperti beberapa entri sebelumnya di file ini, tidak ada
+browser/screenshot tool tersedia di environment ini untuk memverifikasi visual secara langsung. **No REMOVE action for Hotspot type on delete** — blanking
+   a live server's `address-pool` on a NAS `boss_db` doesn't own the lifecycle of could break IP assignment
+   for real, currently-connected clients; only the `boss_db` row and `radgroupreply` rows are ever cleaned
+   up for this type. A missing-Hotspot-Server failure is detected and treated as PERMANENT (immediate
+   `Gagal`, no 3x/backoff retry — retrying can't make a server appear), unlike every other push failure in
+   this codebase, which is always treated as potentially transient.
+2. **`radgroupcheck`/`radgroupreply`/`radusergroup` were confirmed via direct query to be 0 rows, 0 code
+   references anywhere in this codebase** before this sprint — the established RADIUS-pool-assignment
+   pattern (331 real migrated PPPoE customers) is per-USER `Framed-Pool` in `radreply`, never group
+   indirection. **Agung's explicit decision, reversing the "just use Mikrotik config" default recommendation
+   this investigation initially offered**: start writing to `radgroupreply` too (`radgroupcheck`/
+   `radusergroup` deliberately NOT populated — no meaningful per-group CHECK attribute exists at this
+   abstraction level yet, and `radusergroup` needs an individual customer/user concept `NetworkProfileGroup`
+   doesn't have, deferred to v0.14.4/v0.14.5). `NetworkProfileGroupService::writeRadiusGroupReply()`
+   rewrites (delete-then-insert, same "rewrite wholesale" idiom already established for `chap-secrets`)
+   every row for `GroupName = "boss-grup-profil-{id}"` — PPP type mirrors the EXACT 3-attribute per-user
+   shape (`Service-Type=Framed-User`, `Framed-Protocol=PPP`, `Framed-Pool:=<pool_name>`, same `op` values);
+   Hotspot type gets `Service-Type=Login-User` (the RFC 2865-conventional value for a web-authenticated
+   session) + `Framed-Pool` only. **Deliberately SYNCHRONOUS, not queued** — `radius_db` is a local,
+   reliable Postgres connection (same reliability posture `RadiusSessionHistoryService` already treats it
+   with), categorically different from a real network call to a remote router, so it doesn't need
+   RouterOS live-push's async/retry treatment. These rows have **no live effect on any real RADIUS
+   authentication yet** — nothing currently writes a matching `radusergroup` row — matching the same
+   "infrastructure ahead of the feature that uses it" pattern already established by v0.3.3's Tax Engine.
+
+**Real bug caught by `information_schema` inspection, not assumed from `schema.sql`'s own DDL text**:
+`radgroupcheck`/`radgroupreply`/`radusergroup`'s columns are written mixed-case in `schema.sql`
+(`GroupName`, `Attribute`, `Value`) but PostgreSQL folds any UNQUOTED identifier to lowercase at creation
+time — the REAL columns are `groupname`/`attribute`/`value`. Laravel's query builder double-quotes column
+names (case-sensitive), so `->where('GroupName', ...)` genuinely fails with "column does not exist" — same
+lowercase convention `RadiusSessionHistoryService` already uses for `radacct.username`, just not yet
+applied to these particular tables since nothing had written to them before. Caught immediately on the
+first real `create()` call, not by any unit test (the isolated SQLite test connection doesn't fold
+identifiers the same way Postgres does — same class of driver-behavior gap already documented for
+`whereDate()` elsewhere in this file, a reminder that a table's real column-name casing needs checking
+against the ACTUAL live schema, not just the DDL source, whenever a new table gets its first real writer).
+
+**Real bug caught by manual verification, not a unit test — the second real gap this sprint**:
+`customer_ip_pools`' `restrictOnDelete()` FK only blocks a HARD delete, never a SOFT one (soft-delete is
+just an `UPDATE deleted_at = ...`) — so a `NetworkProfileGroup` could end up referencing an already
+soft-deleted pool two independent ways: (a) `Rule::exists('customer_ip_pools', 'id')` alone (no
+`whereNull('deleted_at')`) would happily accept a soft-deleted pool's id at creation time, and (b) a pool
+valid at creation time could be soft-deleted LATER, completely independently, with nothing to stop it.
+Both crashed `NetworkProfileGroupService::writeRadiusGroupReply()` with a null-property-access error
+(`$group->customerIpPool->name` on a null relation) followed by an uncaught `NOT NULL` constraint
+violation on `radgroupreply.value`. Fixed in 4 places: `whereNull('deleted_at')` added to both
+Store/UpdateNetworkProfileGroupRequest's `Rule::exists()` checks; the cross-NAS `validatePoolBelongsToSameNas()`
+check in both FormRequests AND the Livewire component switched from `CustomerIpPool::withoutGlobalScopes()`
+to a plain SCOPED `find()` (which already excludes soft-deleted rows via `SoftDeletingScope`) and now
+explicitly rejects a null result with a clear message — critically, `UpdateNetworkProfileGroupRequest`'s
+check fires even when `customer_ip_pool_id` isn't part of the request at all (falls back to the group's
+own stored value), so editing an unrelated field on a group whose pool was deleted later still fails
+cleanly instead of crashing; `NetworkProfileGroupService::writeRadiusGroupReply()` itself also gained a
+defensive null-check (logs a warning and skips, doesn't throw) as a last line of defense for the same race
+window. Caught for real during manual Langkah 3 verification — the exact pool used in this investigation
+("Parent-10Mbps") had been independently soft-deleted mid-session by Agung's own parallel UI testing (see
+the v0.14.2.2 section above for that same incident), which is precisely the "later, independently"
+half of this bug, not a contrived edge case.
+
+**Gotcha carried forward from v0.14.2**: `CustomerIpPoolFactory`'s attribute-order lesson (a factory
+closure reading `$attributes['x']` needs `x` declared BEFORE it in `definition()`) applied again to
+`NetworkProfileGroupFactory` — `nas_id` declared first, then `customer_ip_pool_id` (a closure that
+CREATES a real `CustomerIpPool::factory()` tied to that same `nas_id`), then `tenant_id` last.
+
+**Livewire form**: NAS dropdown first → `customerIpPoolId` dropdown filtered to ONLY that NAS's own pools
+(`updatedNasId()` resets the selection the instant NAS changes, same "invalidate the field that depends on
+what changed" discipline as `OltDeviceIndex`'s `testPassedForKey`, v0.8.1) → Tipe (Hotspot/PPP) → DNS/
+parent queue. Sidebar link placed right after "IP Pool Pelanggan". Auto-refresh (conditional
+`wire:poll.5s="$refresh"` + "Muat Ulang") reused verbatim from v0.14.2.2, not rebuilt.
+
+**Verified for real, end-to-end, against `ro-hotspot.bajastu.id` only, all executed live**:
+- **PPP push**: created a real PPP-type group referencing this NAS's own real active pool
+  (`Hotspot-10Mbps`) — confirmed genuinely appeared as a new `/ppp profile` entry with the right
+  `remote-address`/`dns-server`/`parent-queue`/comment.
+- **PPP edit**: cleared `parent_queue`/`dns_secondary` — confirmed the SAME router `.id` updated in place
+  (`dns-server` correctly dropped to just the primary value).
+- **PPP delete**: confirmed the entry genuinely disappeared from `/ppp profile print` after
+  `NetworkProfileGroupService::delete()`.
+- **Hotspot precondition**: created a real Hotspot-type group — confirmed it failed IMMEDIATELY (not after
+  3 retries) with the exact expected message, since `/ip hotspot print` on this NAS is genuinely empty.
+  The success path (a real Hotspot Server already existing) was **not** exercised for real — per Agung's
+  own framing, creating one is the router administrator's job, not something this session should do
+  unilaterally — covered instead by `NetworkProfileGroupMikrotikSyncTest`'s mocked-gateway success case.
+- **Real infra gotcha hit mid-verification, same class already documented many times in this file**:
+  `boss-worker` (the long-lived queue-worker process) had the OLD `RouterOsApiGateway` class loaded in
+  memory from before `syncPppProfile()`/`removePppProfile()`/`syncHotspotServerPool()` existed — the first
+  real push failed with "Call to undefined method", resolved by `docker compose restart boss-worker`
+  (PHP class definitions load once at process start, a long-lived worker never picks up a code change
+  without a restart — same lesson as every other "container needs to be recreated/restarted after code it
+  loaded once changes" entry elsewhere in this file).
+
+`test-x86-bajastu` was not touched in any way during this sprint. All test artifacts (groups, their
+`radgroupreply` rows) were force-deleted afterward; the router's `/ppp profile` list is back to its
+original 4 entries (`default`, `HomeFixed-10Mbps`, `PPPOE-REMOTE`, `default-encryption`).
+
 ## OLT AllowedIPs Conflict — Real Incident & Fix (branch `fix-wireguard-allowedips-olt-conflict`, fully resolved — code fix + live reconcile both done and verified)
 
 **A real, confirmed ~2-day LibreNMS OLT monitoring outage (2026-08-24 ~18:35 WIB through at least

@@ -52,6 +52,14 @@ class StoreCustomerIpPoolRequest extends FormRequest
                     ->where('nas_id', $this->input('nas_id'))
                     ->whereNull('deleted_at'),
             ],
+            // v0.14.3.1 — real bug found by Agung: nothing separated a
+            // PPP-only pool from a Hotspot-only pool in Grup Profil's own
+            // dropdown. Required (not defaulted here) — a NEW pool must
+            // be tagged deliberately, unlike the existing-row migration
+            // default ('general'), which was a data-migration safety
+            // choice, not a statement that "general" is the normal case
+            // for a freshly-created pool.
+            'usage_type' => ['required', 'string', 'in:ppp,hotspot,general'],
             'network_address' => ['required', 'string', 'regex:/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/'],
             'gateway_ip' => ['required', 'ip'],
             'range_start' => ['required', 'ip'],

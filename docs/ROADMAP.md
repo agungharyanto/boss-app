@@ -39,7 +39,7 @@
 | v0.14.1 | Network         | Bandwidth Profile              | Fondasi cluster "Profil Paket" (terinspirasi MixRadius V3.2, 7 sub-versi). Tabel `bandwidth_profiles` — profil reusable upload/download min-max, disimpan internal dalam Kbps terlepas satuan input user. REST API + Livewire `/bandwidth-profiles` | Merged + tagged (`v0.14.1`) |
 | v0.14.2 | Network         | IP Pool Pelanggan              | Konsep IP pool BARU untuk alokasi IP end-device pelanggan hotspot/PPP — beda total dari `VpnIpPool` (v0.6.2, itu untuk tunnel VPN NAS↔BOSS App). Tabel `customer_ip_pools`, wajib terikat `nas_id`. REST API + Livewire `/customer-ip-pools` | Implementasi selesai — verifikasi akhir pending |
 | v0.14.2.1 | Network     | RouterOS Live-Push (mulai dari IP Pool) | **Dimajukan dari rencana semula v0.14.6** — kemampuan live-push RouterOS API PERTAMA di codebase ini, dimulai khusus untuk `CustomerIpPool` (`/ip pool add/set/remove`, lookup via comment stabil, bukan `name`). Job async (`PushCustomerIpPoolToMikrotikJob`/`RemoveCustomerIpPoolFromMikrotikJob`), retry 3x dengan backoff 30s/2min/5min, kolom `mikrotik_sync_status`/`mikrotik_synced_at`/`mikrotik_sync_error`, badge + tombol "Sync Ulang" di UI. **Sengaja TIDAK digeneralisasi ke entity lain di sub-versi ini** — pola ini jadi cetak biru untuk v0.14.6 nanti (Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP). Diverifikasi nyata end-to-end terhadap `ro-hotspot.bajastu.id` (push/edit/delete/simulasi-gagal-lalu-retry-otomatis-berhasil, semua dikonfirmasi lewat pembacaan `/ip pool print` router asli) | Implementasi selesai — verifikasi akhir pending |
-| v0.14.3 | Network         | Grup Profil                    | Konfigurasi RADIUS group per-NAS (tipe Hotspot/PPP), link ke IP Pool module (v0.14.2)/DNS server/parent queue — MASIH DATA SAJA di sub-versi ini, belum ada live provisioning ke NAS asli (itu v0.14.6) | Backlog |
+| v0.14.3 | Network         | Grup Profil                    | Konfigurasi RADIUS/Mikrotik group per-NAS (tipe Hotspot/PPP), link ke IP Pool (v0.14.2)/DNS server/parent queue. Tabel `network_profile_groups` + live-push RouterOS (`/ppp profile` untuk PPP; update `address-pool` server Hotspot existing untuk Hotspot) + tulis `radgroupreply` (keputusan eksplisit Agung) | Implementasi selesai — verifikasi akhir pending |
 | v0.14.4 | Network         | Profil Hotspot                 | Paket voucher/token: harga modal/jual/promo, PPN, skema Unlimited/Limited (TimeBase/QuotaBase), link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, periode login (hari+jam) | Backlog |
 | v0.14.5 | Network         | Profil PPP                     | Paket bulanan: harga modal/jual/promo, PPN, link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, shared users, prioritas — direncanakan jadi anchor entity untuk Commission (v0.9.3) yang di-pause di v0.9.2, menggantikan `reseller_package_pricing` yang selama ini kosong data untuk ISP direct | Backlog |
 | v0.14.6 | Network         | RouterOS Live-Push — Generalisasi | Fondasi live-push SUDAH ADA sejak v0.14.2.1 (khusus IP Pool) — sub-versi ini generalisasi pola yang sama (Job async, kolom sync status, komentar-stabil-sebagai-lookup-key, retry+backoff) ke Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP. **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Backlog |
@@ -1435,3 +1435,98 @@ refresh manual mengambil perubahan status dari luar komponen), Pint clean.
 
 **Belum di-merge/tag** — bagian dari branch `v0.14.2-customer-ip-pool` yang sama dengan v0.14.2/v0.14.2.1,
 menunggu instruksi eksplisit soal penggabungan closure.
+
+## v0.14.3 — Grup Profil (branch `v0.14.3-grup-profil`, implementasi selesai, belum di-merge/tag)
+
+Sub-versi ketiga cluster "Profil Paket". Tabel `network_profile_groups` — template profil RADIUS/Mikrotik
+per-NAS (tipe Hotspot/PPP), terikat ke `CustomerIpPool` (v0.14.2) dari NAS yang SAMA. Dipakai mulai
+v0.14.4/v0.14.5 (Profil Hotspot/Profil PPP) sebagai referensi — sub-versi ini murni membangun template-nya,
+belum ada pelanggan yang dikaitkan ke sini.
+
+**Langkah 0 — 2 temuan arsitektural nyata, keduanya diputuskan eksplisit oleh Agung sebelum kode push
+ditulis:**
+
+1. **`/ip hotspot user profile` TIDAK punya field `address-pool`/`dns-server`/`parent-queue` sama sekali**
+   — dikonfirmasi empiris langsung ke router asli (`/ip/hotspot/user/profile/print` field aslinya cuma
+   `idle-timeout`/`shared-users`/`mac-cookie-timeout` dll). Pool IP client Hotspot di RouterOS sebenarnya
+   terikat ke object SERVER `/ip hotspot` itu sendiri (scoped ke interface), bukan profil bernama yang bisa
+   dipakai ulang — beda total dari `/ppp profile` yang memetakan bersih ke skema `NetworkProfileGroup`
+   (`remote-address=`/`dns-server=`/`parent-queue=`, semua dikonfirmasi field asli lewat round-trip
+   add/set/remove nyata). **Keputusan Agung**: tolak push tipe Hotspot dengan pesan error jelas kalau NAS
+   belum punya minimal 1 `/ip hotspot` server (`System > Hotspot Setup` — keputusan infra asli admin
+   router, tidak dibuat otomatis oleh BOSS App) — kalau sudah ada, live-push update `address-pool=` server
+   itu ke pool yang direferensikan. **Tidak ada object `/ip hotspot user profile` yang dibuat sama sekali**
+   untuk tipe ini. **Tidak ada aksi hapus di router untuk tipe Hotspot saat delete** — mengosongkan
+   `address-pool` server yang lifecycle-nya bukan milik BOSS App berisiko memutus client aktif nyata; hanya
+   baris `boss_db` dan `radgroupreply` yang dibersihkan. Kegagalan "belum ada Hotspot Server" diperlakukan
+   PERMANEN (langsung `Gagal`, tanpa retry 3x — retry tidak bisa membuat server muncul), beda dari semua
+   kegagalan push lain di codebase ini yang selalu dianggap berpotensi transient.
+2. **`radgroupcheck`/`radgroupreply`/`radusergroup` dikonfirmasi 0 baris, 0 referensi kode di manapun**
+   sebelum sprint ini — pola established (331 pelanggan PPPoE real bermigrasi) adalah `Framed-Pool` per-user
+   langsung di `radreply`, bukan lewat tabel grup. **Keputusan Agung, membalik rekomendasi default awal
+   investigasi ini**: mulai tulis ke `radgroupreply` juga (`radgroupcheck`/`radusergroup` sengaja TIDAK
+   diisi — belum ada atribut CHECK per-grup yang bermakna di level abstraksi ini, dan `radusergroup` butuh
+   konsep pelanggan individual yang belum dimiliki `NetworkProfileGroup`, ditunda ke v0.14.4/v0.14.5).
+   `NetworkProfileGroupService::writeRadiusGroupReply()` menulis ulang (delete-lalu-insert, idiom "rewrite
+   wholesale" yang sama dengan `chap-secrets`) semua baris untuk `GroupName = "boss-grup-profil-{id}"` — tipe
+   PPP meniru PERSIS 3 atribut per-user yang sudah ada (`Service-Type=Framed-User`, `Framed-Protocol=PPP`,
+   `Framed-Pool:=<nama_pool>`); tipe Hotspot dapat `Service-Type=Login-User` (nilai konvensional RFC 2865
+   untuk sesi web-auth) + `Framed-Pool` saja. **Sengaja SYNCHRONOUS, bukan queued** — `radius_db` koneksi
+   Postgres lokal yang reliable, beda kelas dengan panggilan jaringan nyata ke router jauh. Baris-baris ini
+   BELUM berdampak nyata ke autentikasi RADIUS manapun — belum ada yang menulis `radusergroup` yang
+   mengaitkan pelanggan ke `GroupName` ini (ditunda ke v0.14.4/v0.14.5).
+
+**Bug nyata #1, ditemukan lewat `information_schema`, bukan diasumsikan dari teks DDL `schema.sql`**:
+kolom `radgroupcheck`/`radgroupreply`/`radusergroup` ditulis mixed-case di `schema.sql` (`GroupName` dll)
+tapi PostgreSQL melipat identifier UNQUOTED ke lowercase saat CREATE TABLE — kolom aslinya
+`groupname`/`attribute`/`value`. Query builder Laravel men-double-quote nama kolom (case-sensitive), jadi
+`->where('GroupName', ...)` genuinely gagal "column does not exist". Ditemukan langsung di percobaan
+`create()` pertama, bukan dari test unit (koneksi SQLite test terisolasi tidak melipat identifier dengan
+cara yang sama seperti Postgres).
+
+**Bug nyata #2, ditemukan lewat verifikasi manual, bukan test unit**: `restrictOnDelete()` FK
+`customer_ip_pools` cuma memblokir HARD delete, tidak pernah SOFT delete (soft-delete cuma `UPDATE
+deleted_at`) — jadi `NetworkProfileGroup` bisa berakhir mereferensikan pool yang sudah soft-deleted lewat 2
+jalur independen: (a) `Rule::exists()` tanpa `whereNull('deleted_at')` tetap menerima id pool yang sudah
+soft-deleted saat create, (b) pool yang valid saat create bisa di-soft-delete BELAKANGAN, sepenuhnya
+independen. Keduanya crash `writeRadiusGroupReply()` (akses property `->name` di objek null). Diperbaiki di
+4 tempat: `whereNull('deleted_at')` ditambahkan ke `Rule::exists()` kedua FormRequest; cross-check NAS-sama
+di kedua FormRequest DAN komponen Livewire beralih dari `withoutGlobalScopes()` ke `find()` scoped biasa
+(otomatis exclude soft-deleted) dan sekarang menolak eksplisit hasil null — krusial, cek di
+`UpdateNetworkProfileGroupRequest` tetap jalan walau `customer_ip_pool_id` TIDAK dikirim di request (fallback
+ke nilai tersimpan grup), jadi edit field lain pun tetap gagal bersih, bukan crash; `writeRadiusGroupReply()`
+sendiri dapat null-check defensif (log warning + skip) sebagai lapis terakhir. Ditemukan nyata saat
+verifikasi Langkah 3 — pool yang dipakai ("Parent-10Mbps") ternyata sudah di-soft-delete independen oleh
+pengujian UI Agung sendiri secara paralel (lihat bagian v0.14.2.2 di atas) — persis skenario (b), bukan edge
+case rekaan.
+
+**Gotcha dari v0.14.2 terulang**: urutan atribut `NetworkProfileGroupFactory` (`nas_id` sebelum
+`customer_ip_pool_id` sebelum `tenant_id`) — pola yang sama persis dengan `CustomerIpPoolFactory`.
+
+**Form Livewire**: NAS dulu → dropdown IP Pool ter-filter cuma milik NAS itu (`updatedNasId()` reset
+seleksi) → Tipe (Hotspot/PPP) → DNS/parent queue. Sidebar link tepat setelah "IP Pool Pelanggan".
+Auto-refresh (v0.14.2.2) dipakai ulang persis, tidak dibangun ulang.
+
+**Verifikasi manual REAL, end-to-end, terhadap `ro-hotspot.bajastu.id` saja, semua dieksekusi langsung**:
+- **Push PPP**: grup tipe PPP nyata mereferensikan pool aktif NAS ini (`Hotspot-10Mbps`) — dikonfirmasi
+  muncul sebagai `/ppp profile` baru dengan `remote-address`/`dns-server`/`parent-queue`/comment benar.
+- **Edit PPP**: hapus `parent_queue`/`dns_secondary` — `.id` router yang SAMA ter-update di tempat.
+- **Delete PPP**: dikonfirmasi genuinely hilang dari `/ppp profile print`.
+- **Precondition Hotspot**: grup tipe Hotspot nyata — gagal LANGSUNG (bukan setelah 3x retry) dengan pesan
+  persis sesuai desain, karena `/ip hotspot print` NAS ini genuinely kosong. Jalur sukses (server Hotspot
+  sudah ada) TIDAK dieksekusi nyata — sesuai keputusan Agung, membuat server adalah tugas admin router,
+  bukan tugas sesi ini — dicover lewat mocked test di `NetworkProfileGroupMikrotikSyncTest`.
+- **Gotcha infra nyata di tengah verifikasi**: `boss-worker` (proses queue-worker jangka panjang) masih
+  memuat class `RouterOsApiGateway` LAMA di memori dari sebelum method baru ditulis — push pertama gagal
+  "Call to undefined method", diperbaiki dengan `docker compose restart boss-worker` (definisi class PHP
+  di-load sekali saat proses mulai, worker jangka panjang tidak otomatis memuat ulang kode yang berubah).
+
+`test-x86-bajastu` tidak disentuh sama sekali. Semua artifact test (grup + baris `radgroupreply`-nya)
+di-force-delete setelahnya; `/ppp profile` router kembali ke 4 entry aslinya.
+
+**Regresi**: full suite 970/970 hijau (45 test baru khusus Grup Profil: 21 API + 18 Livewire + 9 Job/
+RouterOS sync — plus beberapa dari perbaikan bug soft-delete-pool), Pint clean di semua file yang disentuh
+(2 isu style pre-existing ditemukan & diperbaiki otomatis di `routes/api.php`/`routes/web.php`: urutan
+import, spasi operator).
+
+**Belum di-merge/tag** — menunggu verifikasi manual Agung lewat browser.

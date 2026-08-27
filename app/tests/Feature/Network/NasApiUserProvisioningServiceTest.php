@@ -62,6 +62,16 @@ class NasApiUserProvisioningServiceTest extends TestCase
                 return ['success' => true, 'message' => null];
             }
 
+            public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function removeHotspotUserProfile(Nas $nas, string $lookupName): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
             public function provisionApiUser(Nas $nas, string $connectAsUsername, string $connectAsPassword, string $newApiUsername, string $newApiPassword): array
             {
                 return ['success' => $this->success, 'message' => $this->message];

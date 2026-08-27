@@ -86,6 +86,16 @@ class OltDeviceServiceTest extends TestCase
             {
                 return ['success' => true, 'message' => null];
             }
+
+            public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function removeHotspotUserProfile(Nas $nas, string $lookupName): array
+            {
+                return ['success' => true, 'message' => null];
+            }
         });
 
         $nas = new Nas(['name' => 'NAS Test']);
@@ -140,6 +150,16 @@ class OltDeviceServiceTest extends TestCase
             }
 
             public function syncHotspotServerPool(Nas $nas, string $poolName): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function removeHotspotUserProfile(Nas $nas, string $lookupName): array
             {
                 return ['success' => true, 'message' => null];
             }

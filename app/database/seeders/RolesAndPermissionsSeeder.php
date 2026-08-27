@@ -62,6 +62,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedBandwidthProfilePermissions();
         $this->seedCustomerIpPoolPermissions();
         $this->seedNetworkProfileGroupPermissions();
+        $this->seedHotspotPackagePermissions();
     }
 
     /**
@@ -430,6 +431,21 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedNetworkProfileGroupPermissions(): void
     {
         $permissions = ['network_profile_groups.view', 'network_profile_groups.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
+    }
+
+    /**
+     * v0.14.4 CRUD Profil Hotspot — same "Profil Paket" cluster, same
+     * tier-admin-only posture and reasoning as network_profile_groups.*.
+     */
+    private function seedHotspotPackagePermissions(): void
+    {
+        $permissions = ['hotspot_packages.view', 'hotspot_packages.manage'];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

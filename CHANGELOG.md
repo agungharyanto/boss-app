@@ -3,6 +3,42 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.4 — Profil Hotspot (implementasi selesai 2026-08-27, belum di-merge/tag)
+
+**Catatan status**: branch `v0.14.4-profil-hotspot` (dari `main`, sudah include v0.14.3). Detail teknis
+lengkap ada di `CLAUDE.md` bagian "Profil Hotspot (v0.14.4)".
+
+Tabel `hotspot_packages` — katalog paket voucher/token hotspot yang bisa dijual (harga modal/jual/promo,
+PPN, skema Unlimited/Limited dengan TimeBase/QuotaBase, masa aktif, shared users, prioritas, periode login),
+terikat ke Grup Profil (v0.14.3, WAJIB tipe Hotspot) dan Bandwidth Profile (v0.14.1). Dibangun sebagai
+entity berdiri sendiri, TIDAK terhubung ke `reseller_package_pricing` (v0.3.2) — `docs/ROADMAP.md` sendiri
+sudah menunjuk Profil PPP (v0.14.5), bukan Profil Hotspot, sebagai pengganti tabel itu nantinya.
+
+- **Investigasi Langkah 0 sebelum coding**: dikonfirmasi `reseller_package_pricing` genuinely 0 baris data
+  meski secara kode masih terhubung ke `Subscription` — aman dibangun terpisah. Field real
+  `/ip hotspot user profile` dikonfirmasi LANGSUNG ke router asli (`ro-hotspot.bajastu.id`, bukan
+  `test-x86-bajastu`): `rate-limit`/`session-timeout`/`shared-users` semua benar-benar ada dan bisa
+  di-set — tapi `comment` TERNYATA DITOLAK router untuk objek ini (beda dari `/ppp profile`/`/ip pool`),
+  jadi ditambah kolom baru `mikrotik_profile_name` (di luar spesifikasi migration awal) supaya rename di
+  BOSS App tidak bikin objek duplikat/orphan di router.
+- **`quota_base` belum punya kolom jumlah kuota** (spesifikasi awal cuma minta flag klasifikasi) — tidak
+  diciptakan sepihak, dilaporkan sebagai gap nyata untuk fitur voucher generation nanti. `priority` dan
+  `login_days`/`login_start_time`/`login_end_time` tersimpan di `boss_db` tapi belum di-push ke router sama
+  sekali sub-versi ini (tidak ada field RouterOS yang cocok, dikonfirmasi lewat pengujian langsung).
+- **2 bug nyata ditemukan saat verifikasi manual**: class Livewire baru butuh `composer dump-autoload`
+  dulu sebelum route-nya bisa dipakai (autoloader ter-optimasi); dan kesalahan setup pengujian sendiri
+  (bandwidth profile yang dipakai ternyata sudah soft-deleted dari sesi testing v0.14.1 sebelumnya).
+- **Diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id`**: jalur penolakan precondition (NAS
+  belum punya Hotspot Server) dikonfirmasi nyata lewat seluruh stack asli (Service → Job → queue Redis
+  asli → `boss-worker` asli → koneksi router asli), langsung `Failed` bukan retry 3x. Jalur sukses push
+  objek baru TIDAK bisa diuji penuh karena `ro-hotspot` masih belum punya Hotspot Server sungguhan (bukan
+  keputusan BOSS App untuk membuatkannya) — tapi bentuk perintah RouterOS yang sama persis sudah
+  diverifikasi nyata terpisah lewat pengujian manual raw add/read/remove. `test-x86-bajastu` tidak
+  disentuh sama sekali.
+- **Regresi**: test baru mencakup Mikrotik sync (push/remove/precondition/rename), API (CRUD + validasi
+  tipe Grup Profil + harga + durasi), Livewire (form + dropdown filter), unit model
+  (`routerOsSessionTimeout()`), dan sidebar. Pint clean.
+
 ## v0.14.3.1 — Tipe Pemakaian IP Pool + Sidebar "Profil Paket" (implementasi selesai 2026-08-27, belum di-merge/tag)
 
 **Catatan status**: sama branch `v0.14.3-grup-profil`, digabung sebelum closure sprint itu (bukan branch/tag

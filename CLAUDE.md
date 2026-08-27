@@ -6407,6 +6407,125 @@ parent queue. Sidebar link placed right after "IP Pool Pelanggan". Auto-refresh 
 `radgroupreply` rows) were force-deleted afterward; the router's `/ppp profile` list is back to its
 original 4 entries (`default`, `HomeFixed-10Mbps`, `PPPOE-REMOTE`, `default-encryption`).
 
+## Profil Hotspot (v0.14.4)
+
+**Langkah 0 investigation, done before any code — all three questions resolved with real evidence, not
+guessed:**
+
+1. **`reseller_package_pricing` (v0.3.2) overlap with `visible_to_reseller`/"Owner Data"**: confirmed via
+   grep + real DB counts that this table is NOT literal dead code — it IS wired as an optional FK into
+   `Subscription` (`Subscription::pricing()`, `StoreSubscriptionRequest`, `SubscriptionService`) — but has
+   **zero rows and zero real usage** in the dev DB (`Subscription::count()` itself is 0). More importantly,
+   `docs/ROADMAP.md`'s own v0.14.5 entry already answers the design question directly: Profil PPP (not
+   Profil Hotspot) is explicitly earmarked as `reseller_package_pricing`'s eventual replacement/anchor for
+   Commission (v0.9.3). This makes sense independently too — `reseller_package_pricing` is a recurring-
+   subscription pricing concept (feeds `Subscription`/`Invoice`), genuinely different from a hotspot
+   voucher's pay-per-token model. **Conclusion, not blocked on**: Profil Hotspot built as a fully standalone
+   entity this sub-version, per the sprint's own "default paling aman" instruction — `visible_to_reseller`
+   is a plain boolean, no relation to `reseller_package_pricing` at all.
+2. **`/ip hotspot user profile` RouterOS fields — verified via a real live add/read/remove round trip
+   against `ro-hotspot.bajastu.id`** (never `test-x86-bajastu`): the real, settable fields are
+   `rate-limit` (format `"{kbps}k/{kbps}k"`, confirmed accepted and echoed back unchanged — chosen over an
+   M-suffix conversion specifically to avoid any Kbps→Mbps rounding risk for non-round values),
+   `session-timeout` (accepts plain RouterOS time-interval strings like `"1d"`), `shared-users` (int),
+   `idle-timeout`. **Real, load-bearing finding**: unlike `/ppp profile`/`/ip pool` (both already used by
+   v0.14.2/v0.14.3), `/ip hotspot user profile` **rejects `comment` as a parameter outright** — confirmed
+   twice, both on `add` and a follow-up `set` (`"unknown parameter comment"`, returned inline in the API
+   response body, not thrown as an exception — a real gap in how this library surfaces RouterOS `!trap`
+   errors, see point 4 below). Without a comment-based stable identifier, a straightforward lookup-by-name
+   implementation would silently orphan the old object on every rename. Fixed by adding
+   `hotspot_packages.mikrotik_profile_name` (NOT in the original migration spec, added after this finding —
+   see the migration's own docblock) — tracks the name last successfully pushed, so a rename looks the old
+   object up by ITS name and renames it in place via `/set`, mirroring the INTENT of the comment-based
+   pattern with a mechanism this particular RouterOS object actually supports.
+3. **Hotspot Server precondition reuse — confirmed directly reusable, same real gap still present**:
+   `/ip/hotspot/print` on `ro-hotspot.bajastu.id` is still genuinely empty (same state as when this
+   precondition was first built for Grup Profil in v0.14.3) — `RouterOsGateway::syncHotspotUserProfile()`
+   checks this exact same condition and refuses with the same-shaped clear error message before ever
+   attempting to create/update a user profile, per Agung's explicit instruction that Profil Hotspot needs
+   this precondition too. **Interesting, separately-confirmed RouterOS behavior**: the router does NOT
+   structurally require a `/ip hotspot` server to exist before accepting a `/ip hotspot user profile add` —
+   this precondition is a deliberate BOSS App business-logic choice (a profile with no server behind it can
+   never authenticate anyone), not something RouterOS itself enforces.
+4. **A real, general gap found in this exact investigation, fixed only in the new code**:
+   `RouterOsApiGateway`'s existing `syncIpPool()`/`syncPppProfile()`/`syncHotspotServerPool()` never check
+   for an inline `['after' => ['message' => ...]]` error in the RouterOS API response — they only catch
+   thrown exceptions. The `comment`-rejection error above proved this class of failure does NOT throw, it
+   returns normally with an error message embedded in the response body — meaning a genuine RouterOS
+   parameter rejection on any of those 3 existing methods would currently be silently reported as
+   `success => true`. Not fixed in those 3 pre-existing methods (out of this sprint's scope, flagged here
+   for whoever touches them next) — but `syncHotspotUserProfile()`/`removeHotspotUserProfile()` (this
+   sprint's own new code) explicitly check for this and treat it as a failure.
+
+**`limit_type=quota_base` has no accompanying quota-AMOUNT column** — the sprint's own literal migration
+spec only asked for the `limit_type` classification flag itself, nothing to store how much quota. Not
+invented here (see `HotspotLimitType`'s own docblock) — there is no RouterOS profile-level byte-quota field
+to push to anyway (`/ip hotspot user profile` has none; a real quota only exists per-USER via
+`/ip hotspot user`'s own `limit-bytes-total`, which needs an individual voucher/user row that doesn't exist
+yet — Profil Hotspot this sub-version is the package TEMPLATE only). Flagged as a real, deliberate gap for
+whoever builds voucher/user generation later, not silently worked around.
+
+**`priority` (string, default `'Default'`) is stored but NOT pushed to RouterOS this sub-version** — no
+`/ip hotspot user profile` field named `priority` exists among the real fields confirmed in point 2 above.
+RouterOS's `rate-limit` DOES have an optional extended-syntax priority slot (a 1-8 number, several
+comma-separated positions deep, alongside burst-rate/burst-threshold placeholders) — deliberately NOT used
+here: getting that extended syntax wrong risks silently corrupting the actual bandwidth rate-limit itself,
+and the DB field's own default value (`'Default'`, a string, not a 1-8 number) doesn't map onto that slot
+cleanly anyway. Flagged as an open question rather than guessed.
+
+**`login_days`/`login_start_time`/`login_end_time` are stored but NOT pushed to RouterOS this sub-version**
+— confirmed via the same live investigation that `/ip hotspot user profile` has no day/time-restriction
+concept at all in its real field list. These fields have no RouterOS enforcement mechanism built this
+sprint (would need something like a scheduler script or a different RouterOS subsystem entirely) — stored
+purely as BOSS App business data for now, same "infrastructure/data ahead of the feature that enforces it"
+pattern already established elsewhere in this codebase (e.g. v0.3.3 Tax Engine before Invoicing existed).
+
+**Price validation kept deliberately simple, per explicit instruction**: `sell_price >= cost_price` only
+(Laravel's own `gte:cost_price` rule), no automatic reseller-fee calculation — flagged in Langkah 0 as an
+ambiguous business question, not invented. `UpdateHotspotPackageRequest` merges in the package's own stored
+`cost_price` when not resubmitted (same "fall back to stored value" discipline `UpdateNetworkProfileGroupRequest`
+already established), so a partial update touching only `sell_price` still validates against a real
+comparison value instead of a missing one.
+
+**Two real bugs found during Langkah 3 manual verification against `ro-hotspot.bajastu.id`, both fixed
+immediately, neither in the new business logic itself**:
+1. **A brand-new PHP class (`HotspotPackageIndex`) was not resolvable as a route action** ("Invalid route
+   action") the moment its route was registered — this codebase's Composer autoloader is optimized
+   (`composer dump-autoload` confirmed the class wasn't indexed yet), so a genuinely new class file needs an
+   explicit autoload regeneration before its route works, not just the file existing on the bind-mounted
+   `app/` directory. Fixed with `composer dump-autoload` inside `boss-app`; route confirmed resolving
+   correctly afterward (`php artisan route:list --path=hotspot-packages`).
+2. **Own test-setup mistake, not a code bug**: the first real `HotspotPackage` created for verification
+   referenced `bandwidth_profile_id=2`, which turned out to already be soft-deleted (leftover from earlier
+   v0.14.1 manual testing) — `HotspotPackage::bandwidthProfile()`'s standard `belongsTo` correctly excluded
+   it via `SoftDeletingScope`, so the push job's generic "related model not found" warning fired exactly as
+   designed. Re-pointed at a real, live Bandwidth Profile (`id=4`) and re-verified.
+
+**Verified for real, end-to-end, against `ro-hotspot.bajastu.id` only — the precondition-refusal path,
+through the FULL real stack (not mocked)**: created a real Grup Profil (type=hotspot) and two real
+HotspotPackage rows (one Unlimited, one Limited/TimeBase) referencing it, both dispatched through the real
+Redis queue and picked up by the real `boss-worker` process — both correctly hit the real router, correctly
+detected the still-empty `/ip/hotspot/print`, and correctly landed on `Failed` status immediately (not
+stuck retrying) with the exact expected message. `RemoveHotspotPackageFromMikrotikJob` also ran for real
+afterward (soft-delete → real removal attempt → correct no-op-on-missing success, since nothing was ever
+actually created on the router). All test rows force-deleted afterward; a final live `/ip hotspot user
+profile print` confirmed the router shows only its own stock `default` entry, nothing left behind.
+
+**Honest limitation, same class already accepted for Grup Profil's own Hotspot type in v0.14.3**: the
+actual SUCCESSFUL object-creation path (`/ip hotspot user profile add` with real rate-limit/session-timeout
+values) was NOT exercised through the full Job/Service pipeline, since `ro-hotspot.bajastu.id` still has no
+real Hotspot Server configured — setting one up is a router-administration decision for whoever owns that
+NAS, not something this sprint invents on their behalf (same reasoning already established in
+`RouterOsGateway::syncHotspotServerPool()`'s own docblock). The exact RouterOS command shape my
+implementation uses WAS independently verified for real during Langkah 0 (a raw add/read/remove round trip
+using the identical field names/value formats — rate-limit, session-timeout, shared-users all confirmed
+accepted and correctly echoed back) — so the underlying mechanism is proven correct, just not exercised
+through the complete business-logic pipeline end to end. `test-x86-bajastu` was not touched at any point in
+this sprint.
+
+Full regression suite green (990 pre-existing + this sprint's own new tests, see the sprint's own commit for
+the exact final count), Pint clean on every touched file.
+
 ## OLT AllowedIPs Conflict — Real Incident & Fix (branch `fix-wireguard-allowedips-olt-conflict`, fully resolved — code fix + live reconcile both done and verified)
 
 **A real, confirmed ~2-day LibreNMS OLT monitoring outage (2026-08-24 ~18:35 WIB through at least

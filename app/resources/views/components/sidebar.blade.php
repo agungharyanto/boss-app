@@ -66,7 +66,7 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*') || request()->routeIs('web.customer-ip-pools.*') || request()->routeIs('web.network-profile-groups.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*') || request()->routeIs('web.customer-ip-pools.*') || request()->routeIs('web.network-profile-groups.*') || request()->routeIs('web.hotspot-packages.*'),
             // v0.8.1 — nested one level deeper than a plain link: an item
             // with a 'children' key renders as its own expand/collapse
             // sub-group (own localStorage key, same pattern as the
@@ -115,6 +115,12 @@
                                 : null,
                             auth()->user()->can('viewAny', \App\Models\NetworkProfileGroup::class)
                                 ? ['route' => 'web.network-profile-groups.index', 'label' => __('Grup Profil')]
+                                : null,
+                            // v0.14.4 — same cluster "Profil Paket", same
+                            // giveToAdminTier() posture as its 2 siblings
+                            // above (see seedHotspotPackagePermissions()).
+                            auth()->user()->can('viewAny', \App\Models\HotspotPackage::class)
+                                ? ['route' => 'web.hotspot-packages.index', 'label' => __('Profil Hotspot')]
                                 : null,
                         ]),
                     ]

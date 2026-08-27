@@ -20,6 +20,7 @@ use App\Livewire\Network\CpeDeviceIndex;
 use App\Livewire\Network\CpeDeviceStatusCheck;
 use App\Livewire\Network\CpeParameterMapIndex;
 use App\Livewire\Network\CustomerIpPoolIndex;
+use App\Livewire\Network\HotspotPackageIndex;
 use App\Livewire\Network\MonitoringIndex;
 use App\Livewire\Network\NasIndex;
 use App\Livewire\Network\NetworkProfileGroupIndex;
@@ -175,6 +176,10 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // this feature's Indonesian display label (sidebar/page title), not
     // its URL.
     Route::get('/network-profile-groups', NetworkProfileGroupIndex::class)->name('network-profile-groups.index');
+
+    // v0.14.4 — same cluster "Profil Paket", same posture as
+    // /network-profile-groups above.
+    Route::get('/hotspot-packages', HotspotPackageIndex::class)->name('hotspot-packages.index');
 
     Route::get('/tax-components', TaxComponentIndex::class)->name('tax-components.index');
 

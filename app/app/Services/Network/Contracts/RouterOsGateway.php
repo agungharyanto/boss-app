@@ -151,4 +151,49 @@ interface RouterOsGateway
      * @return array{success: bool, message: ?string}
      */
     public function syncHotspotServerPool(Nas $nas, string $poolName): array;
+
+    /**
+     * v0.14.4 — Profil Hotspot. Idempotent create/update of a single
+     * `/ip hotspot user profile` entry. UNLIKE syncIpPool()/syncPppProfile()
+     * above, lookup is by $lookupName, not a stable comment — confirmed
+     * empirically (live add/set round trip against ro-hotspot.bajastu.id)
+     * that `/ip hotspot user profile` rejects `comment` as a parameter
+     * outright ("unknown parameter comment"). $lookupName is
+     * HotspotPackage::mikrotikLookupName() (the name last successfully
+     * pushed, so a rename can find and rename the SAME object rather than
+     * creating an orphaned duplicate); $targetName is the name to actually
+     * set (HotspotPackage::mikrotikTargetName(), i.e. the package's current
+     * name). $rateLimit is RouterOS rate-limit syntax ("{kbps}k/{kbps}k",
+     * confirmed accepted via a live test) or null (field omitted entirely).
+     * $sessionTimeout is a RouterOS time-interval string (e.g. "1d") or
+     * null (field omitted — confirmed via a live test that an omitted
+     * session-timeout leaves the router's own "none" default in place,
+     * i.e. no cap). Requires the NAS to already have a `/ip hotspot` server
+     * configured — same precondition as syncHotspotServerPool(), checked
+     * the same way (a Profil Hotspot always references a Grup Profil of
+     * type Hotspot, which itself requires this to push at all).
+     *
+     * @return array{success: bool, message: ?string}
+     */
+    public function syncHotspotUserProfile(
+        Nas $nas,
+        string $lookupName,
+        string $targetName,
+        ?string $rateLimit,
+        int $sharedUsers,
+        ?string $sessionTimeout,
+    ): array;
+
+    /**
+     * Removes the `/ip hotspot user profile` entry matching $lookupName, if
+     * any — same no-op-on-missing semantics as removeIpPool()/
+     * removePppProfile(). Safe to actually delete (unlike Grup Profil's
+     * Hotspot type, which only ever touches a shared, admin-owned `/ip
+     * hotspot` SERVER object it doesn't own the lifecycle of) — a
+     * `/ip hotspot user profile` created by this gateway's own
+     * syncHotspotUserProfile() is fully BOSS-App-owned.
+     *
+     * @return array{success: bool, message: ?string}
+     */
+    public function removeHotspotUserProfile(Nas $nas, string $lookupName): array;
 }

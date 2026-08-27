@@ -3,11 +3,12 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## Fix produksi — Konflik AllowedIPs WireGuard, OLT LibreNMS down 2 hari (branch `fix-wireguard-allowedips-olt-conflict`, implementasi + reconcile live selesai, belum di-merge/tag)
+## v0.9.2.1 — Hotfix: Konflik AllowedIPs WireGuard, OLT LibreNMS down 2 hari (2026-08-27, merged + tagged)
 
-**Bukan versi ber-nomor** — perbaikan insiden produksi mendesak, di luar alur sprint v0.14.x biasa (dari
-`main`, terpisah dari branch `v0.14.1-bandwidth-profile` yang di-stash sementara). Detail teknis lengkap
-ada di `CLAUDE.md` bagian "OLT AllowedIPs Conflict — Real Incident & Fix".
+**Tag patch `v0.9.2.1`** (4-segmen di atas `v0.9.2`, sama pola dengan tag `v0.3.0.1`) — bukan sprint fitur
+baru bernomor, murni perbaikan insiden produksi mendesak, di luar alur sprint v0.14.x biasa (dari `main`,
+terpisah dari branch `v0.14.1-bandwidth-profile` yang di-stash sementara selama fix ini dikerjakan). Detail
+teknis lengkap ada di `CLAUDE.md` bagian "OLT AllowedIPs Conflict — Real Incident & Fix".
 
 Root cause: `services.vpn.olt_management_subnet` (`10.168.100.0/24`) di-assign unconditional ke SEMUA akun
 WireGuard NAS sejak v0.8.1 — WireGuard cuma izinkan 1 peer klaim 1 CIDR per interface, jadi NAS `ro-hotspot`

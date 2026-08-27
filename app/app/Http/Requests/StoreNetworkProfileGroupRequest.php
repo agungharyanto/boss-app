@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Enums\NetworkProfileGroupType;
 use App\Models\CustomerIpPool;
 use App\Models\NetworkProfileGroup;
 use Illuminate\Foundation\Http\FormRequest;
@@ -65,20 +66,25 @@ class StoreNetworkProfileGroupRequest extends FormRequest
     public function withValidator(Validator $validator): void
     {
         $validator->after(function (Validator $validator) {
-            $this->validatePoolBelongsToSameNas($validator);
+            $this->validatePool($validator);
         });
     }
 
     /**
-     * The whole reason this check exists: a Grup Profil referencing an IP
-     * Pool from a DIFFERENT NAS would mean pushing a router-local `/ppp
+     * The whole reason the NAS check exists: a Grup Profil referencing an
+     * IP Pool from a DIFFERENT NAS would mean pushing a router-local `/ppp
      * profile`'s `remote-address` to a pool name that NEVER EXISTS on
      * that specific router (each NAS's `/ip pool` objects are entirely
      * separate, even if two CustomerIpPool rows happen to share a name).
+     *
+     * v0.14.3.1 — the usage_type check is the backend enforcement of the
+     * same rule the Livewire form's own dropdown filter already applies —
+     * never relying on the frontend filter alone (a direct API call
+     * bypasses it entirely).
      */
-    private function validatePoolBelongsToSameNas(Validator $validator): void
+    private function validatePool(Validator $validator): void
     {
-        if ($validator->errors()->hasAny(['nas_id', 'customer_ip_pool_id'])) {
+        if ($validator->errors()->hasAny(['nas_id', 'customer_ip_pool_id', 'type'])) {
             return;
         }
 
@@ -89,8 +95,20 @@ class StoreNetworkProfileGroupRequest extends FormRequest
         // sufficient and correctly excludes a soft-deleted row too.
         $pool = CustomerIpPool::find($this->integer('customer_ip_pool_id'));
 
-        if ($pool !== null && $pool->nas_id !== $nasId) {
+        if ($pool === null) {
+            return;
+        }
+
+        if ($pool->nas_id !== $nasId) {
             $validator->errors()->add('customer_ip_pool_id', 'IP Pool yang dipilih harus milik NAS yang sama.');
+
+            return;
+        }
+
+        $groupType = NetworkProfileGroupType::from((string) $this->input('type'));
+
+        if (! $pool->usage_type->isCompatibleWith($groupType)) {
+            $validator->errors()->add('customer_ip_pool_id', "IP Pool ini bertipe pemakaian \"{$pool->usage_type->label()}\", tidak cocok untuk Grup Profil tipe \"{$groupType->label()}\".");
         }
     }
 }

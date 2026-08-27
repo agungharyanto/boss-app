@@ -2,7 +2,9 @@
 
 namespace App\Livewire\Network;
 
+use App\Enums\CustomerIpPoolUsageType;
 use App\Enums\MikrotikSyncStatus;
+use App\Enums\NetworkProfileGroupType;
 use App\Models\CustomerIpPool;
 use App\Models\Nas;
 use App\Models\NetworkProfileGroup;
@@ -103,6 +105,23 @@ class NetworkProfileGroupIndex extends Component
         $this->editCustomerIpPoolId = '';
     }
 
+    /**
+     * v0.14.3.1 — real bug found by Agung: the pool dropdown could show a
+     * pool clearly meant for the other type (e.g. "Hotspot-10Mbps" while
+     * Tipe=PPP). Switching Tipe invalidates the selected pool the same way
+     * switching NAS already does — it may no longer be compatible with the
+     * newly-picked type.
+     */
+    public function updatedType(): void
+    {
+        $this->customerIpPoolId = '';
+    }
+
+    public function updatedEditType(): void
+    {
+        $this->editCustomerIpPoolId = '';
+    }
+
     public function sortByColumn(string $column): void
     {
         if ($this->sortBy === $column) {
@@ -132,16 +151,16 @@ class NetworkProfileGroupIndex extends Component
 
     /**
      * Mirrors StoreNetworkProfileGroupRequest/UpdateNetworkProfileGroupRequest's
-     * own validatePoolBelongsToSameNas() — Livewire's inline validate()
-     * array can't express a validator-level "after" hook the same way.
-     * Also covers what those FormRequests get for free from their own
-     * Rule::exists()->whereNull('deleted_at') (this component's baseRules()
-     * only checks required|integer for the pool field, not existence) —
-     * a plain SCOPED find() (not withoutGlobalScopes()) is what correctly
-     * excludes an already-soft-deleted pool here, same real bug/fix as
-     * both FormRequests.
+     * own validatePoolBelongsToSameNas()/validatePoolUsageTypeMatches() —
+     * Livewire's inline validate() array can't express a validator-level
+     * "after" hook the same way. Also covers what those FormRequests get
+     * for free from their own Rule::exists()->whereNull('deleted_at')
+     * (this component's baseRules() only checks required|integer for the
+     * pool field, not existence) — a plain SCOPED find() (not
+     * withoutGlobalScopes()) is what correctly excludes an already-
+     * soft-deleted pool here, same real bug/fix as both FormRequests.
      */
-    private function validatePoolBelongsToSameNas(string $nasId, string $poolId, string $errorField): bool
+    private function validatePoolBelongsToSameNas(string $nasId, string $poolId, string $type, string $errorField): bool
     {
         $pool = CustomerIpPool::find((int) $poolId);
 
@@ -153,6 +172,17 @@ class NetworkProfileGroupIndex extends Component
 
         if ($pool->nas_id !== (int) $nasId) {
             $this->addError($errorField, 'IP Pool yang dipilih harus milik NAS yang sama.');
+
+            return false;
+        }
+
+        // v0.14.3.1 — backend enforcement of the same rule the dropdown's
+        // own filter already applies, never relying on the frontend
+        // filter alone.
+        $groupType = NetworkProfileGroupType::from($type);
+
+        if (! $pool->usage_type->isCompatibleWith($groupType)) {
+            $this->addError($errorField, "IP Pool ini bertipe pemakaian \"{$pool->usage_type->label()}\", tidak cocok untuk Grup Profil tipe \"{$groupType->label()}\".");
 
             return false;
         }
@@ -174,7 +204,7 @@ class NetworkProfileGroupIndex extends Component
             'parentQueue' => ['nullable', 'string', 'max:255'],
         ]));
 
-        if (! $this->validatePoolBelongsToSameNas($this->nasId, $this->customerIpPoolId, 'customerIpPoolId')) {
+        if (! $this->validatePoolBelongsToSameNas($this->nasId, $this->customerIpPoolId, $this->type, 'customerIpPoolId')) {
             return;
         }
 
@@ -230,7 +260,7 @@ class NetworkProfileGroupIndex extends Component
             'editParentQueue' => ['nullable', 'string', 'max:255'],
         ]));
 
-        if (! $this->validatePoolBelongsToSameNas($this->editNasId, $this->editCustomerIpPoolId, 'editCustomerIpPoolId')) {
+        if (! $this->validatePoolBelongsToSameNas($this->editNasId, $this->editCustomerIpPoolId, $this->editType, 'editCustomerIpPoolId')) {
             return;
         }
 
@@ -277,14 +307,18 @@ class NetworkProfileGroupIndex extends Component
             // (v0.14.2.2) — reused, not reinvented.
             'hasPendingSync' => $groups->contains(fn (NetworkProfileGroup $group) => $group->mikrotik_sync_status === MikrotikSyncStatus::Pending),
             'nasOptions' => Nas::query()->orderBy('name')->get(['id', 'name']),
-            // Filtered per the CURRENTLY selected NAS in each form —
-            // computed here (not a separate Livewire computed()/query
-            // call) since render() already runs on every relevant update.
+            // Filtered per the CURRENTLY selected NAS AND Tipe in each
+            // form — computed here (not a separate Livewire computed()/
+            // query call) since render() already runs on every relevant
+            // update (NAS OR Tipe changing both trigger a re-render via
+            // wire:model.live). A "general" pool is shown for either Tipe
+            // (see CustomerIpPoolUsageType::isCompatibleWith()) — the
+            // whereIn() below mirrors that same rule at the query level.
             'poolOptionsForNas' => $this->nasId !== ''
-                ? CustomerIpPool::query()->where('nas_id', $this->nasId)->orderBy('name')->get(['id', 'name'])
+                ? CustomerIpPool::query()->where('nas_id', $this->nasId)->whereIn('usage_type', [$this->type, CustomerIpPoolUsageType::General->value])->orderBy('name')->get(['id', 'name'])
                 : collect(),
             'editPoolOptionsForNas' => $this->editNasId !== ''
-                ? CustomerIpPool::query()->where('nas_id', $this->editNasId)->orderBy('name')->get(['id', 'name'])
+                ? CustomerIpPool::query()->where('nas_id', $this->editNasId)->whereIn('usage_type', [$this->editType, CustomerIpPoolUsageType::General->value])->orderBy('name')->get(['id', 'name'])
                 : collect(),
             'canManage' => auth()->user()->can('manage', NetworkProfileGroup::class),
         ]);

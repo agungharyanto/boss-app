@@ -88,20 +88,36 @@
                 auth()->user()->can('viewAny', \App\Models\OltDevice::class)
                     ? ['route' => 'web.olt-devices.index', 'label' => __('OLT')]
                     : null,
-                // v0.14.1 — fondasi cluster "Profil Paket".
+                // v0.14.3.1 — was 3 separate flat items (Bandwidth Profile,
+                // IP Pool Pelanggan, Grup Profil), grouped into one
+                // collapsible "Profil Paket" parent, exact same 'children'
+                // pattern as NAS/Perangkat CPE above — Bandwidth Profile
+                // (the cluster's own v0.14.1 foundation) is the parent
+                // row's own link, the other two are its children. All 3
+                // permissions are always granted together (same
+                // giveToAdminTier() tier, see RolesAndPermissionsSeeder's
+                // own seedBandwidthProfilePermissions()/
+                // seedCustomerIpPoolPermissions()/
+                // seedNetworkProfileGroupPermissions() docblocks), so
+                // gating the whole group on BandwidthProfile's own
+                // viewAny() never hides a page a user could otherwise
+                // reach — each child still carries its own independent
+                // check too, same defense-in-depth as every other gated
+                // link in this file.
                 auth()->user()->can('viewAny', \App\Models\BandwidthProfile::class)
-                    ? ['route' => 'web.bandwidth-profiles.index', 'label' => __('Bandwidth Profile')]
-                    : null,
-                // v0.14.2 — same cluster "Profil Paket", placed right after
-                // Bandwidth Profile per explicit instruction not to repeat
-                // the v0.14.1 "sidebar link forgotten" incident.
-                auth()->user()->can('viewAny', \App\Models\CustomerIpPool::class)
-                    ? ['route' => 'web.customer-ip-pools.index', 'label' => __('IP Pool Pelanggan')]
-                    : null,
-                // v0.14.3 — same cluster "Profil Paket", placed right after
-                // IP Pool Pelanggan.
-                auth()->user()->can('viewAny', \App\Models\NetworkProfileGroup::class)
-                    ? ['route' => 'web.network-profile-groups.index', 'label' => __('Grup Profil')]
+                    ? [
+                        'id' => 'profil-paket',
+                        'route' => 'web.bandwidth-profiles.index',
+                        'label' => __('Profil Paket'),
+                        'children' => array_filter([
+                            auth()->user()->can('viewAny', \App\Models\CustomerIpPool::class)
+                                ? ['route' => 'web.customer-ip-pools.index', 'label' => __('IP Pool Pelanggan')]
+                                : null,
+                            auth()->user()->can('viewAny', \App\Models\NetworkProfileGroup::class)
+                                ? ['route' => 'web.network-profile-groups.index', 'label' => __('Grup Profil')]
+                                : null,
+                        ]),
+                    ]
                     : null,
                 // v0.8.2 — plain permission check (no Eloquent model backs
                 // this page, LibreNMS device data isn't a boss_db table),

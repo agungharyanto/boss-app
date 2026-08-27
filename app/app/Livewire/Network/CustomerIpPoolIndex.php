@@ -51,6 +51,11 @@ class CustomerIpPoolIndex extends Component
     #[Validate('required|ip')]
     public string $rangeEnd = '';
 
+    // v0.14.3.1 — required, no default here (see StoreCustomerIpPoolRequest's
+    // own docblock: a NEW pool must be tagged deliberately).
+    #[Validate('required|string|in:ppp,hotspot,general')]
+    public string $usageType = '';
+
     public string $dnsPrimary = '';
 
     public string $dnsSecondary = '';
@@ -70,6 +75,8 @@ class CustomerIpPoolIndex extends Component
     public string $editRangeStart = '';
 
     public string $editRangeEnd = '';
+
+    public string $editUsageType = '';
 
     public string $editDnsPrimary = '';
 
@@ -129,6 +136,7 @@ class CustomerIpPoolIndex extends Component
         $this->name = trim($this->name);
 
         $this->validate(array_merge($this->baseRules('nasId', 'name', null), [
+            'usageType' => ['required', 'string', 'in:ppp,hotspot,general'],
             'networkAddress' => ['required', 'string', 'regex:/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/'],
             'gatewayIp' => ['required', 'ip'],
             'rangeStart' => ['required', 'ip'],
@@ -144,6 +152,7 @@ class CustomerIpPoolIndex extends Component
         $service->create([
             'nas_id' => (int) $this->nasId,
             'name' => $this->name,
+            'usage_type' => $this->usageType,
             'network_address' => $this->networkAddress,
             'gateway_ip' => $this->gatewayIp,
             'range_start' => $this->rangeStart,
@@ -153,7 +162,7 @@ class CustomerIpPoolIndex extends Component
             'is_active' => $this->isActive,
         ]);
 
-        $this->reset(['nasId', 'name', 'networkAddress', 'gatewayIp', 'rangeStart', 'rangeEnd', 'dnsPrimary', 'dnsSecondary', 'isActive', 'showCreateForm']);
+        $this->reset(['nasId', 'name', 'usageType', 'networkAddress', 'gatewayIp', 'rangeStart', 'rangeEnd', 'dnsPrimary', 'dnsSecondary', 'isActive', 'showCreateForm']);
         $this->isActive = true;
     }
 
@@ -165,6 +174,7 @@ class CustomerIpPoolIndex extends Component
         $this->editingPoolId = $pool->id;
         $this->editNasId = (string) $pool->nas_id;
         $this->editName = $pool->name;
+        $this->editUsageType = $pool->usage_type->value;
         $this->editNetworkAddress = $pool->network_address;
         $this->editGatewayIp = $pool->gateway_ip;
         $this->editRangeStart = $pool->range_start;
@@ -176,7 +186,7 @@ class CustomerIpPoolIndex extends Component
 
     public function cancelEdit(): void
     {
-        $this->reset(['editingPoolId', 'editNasId', 'editName', 'editNetworkAddress', 'editGatewayIp', 'editRangeStart', 'editRangeEnd', 'editDnsPrimary', 'editDnsSecondary', 'editIsActive']);
+        $this->reset(['editingPoolId', 'editNasId', 'editName', 'editUsageType', 'editNetworkAddress', 'editGatewayIp', 'editRangeStart', 'editRangeEnd', 'editDnsPrimary', 'editDnsSecondary', 'editIsActive']);
     }
 
     public function updatePool(CustomerIpPoolService $service): void
@@ -187,6 +197,7 @@ class CustomerIpPoolIndex extends Component
         $this->editName = trim($this->editName);
 
         $this->validate(array_merge($this->baseRules('editNasId', 'editName', $pool->id), [
+            'editUsageType' => ['required', 'string', 'in:ppp,hotspot,general'],
             'editNetworkAddress' => ['required', 'string', 'regex:/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/'],
             'editGatewayIp' => ['required', 'ip'],
             'editRangeStart' => ['required', 'ip'],
@@ -202,6 +213,7 @@ class CustomerIpPoolIndex extends Component
         $service->update($pool, [
             'nas_id' => (int) $this->editNasId,
             'name' => $this->editName,
+            'usage_type' => $this->editUsageType,
             'network_address' => $this->editNetworkAddress,
             'gateway_ip' => $this->editGatewayIp,
             'range_start' => $this->editRangeStart,

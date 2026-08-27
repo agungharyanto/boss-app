@@ -104,6 +104,82 @@ class NetworkProfileGroupIndexLivewireTest extends TestCase
         $this->assertStringNotContainsString('Pool Milik B', $html);
     }
 
+    /**
+     * v0.14.3.1 — same "invalidate the dependent field on parent change"
+     * discipline as changing NAS already has, applied to Tipe.
+     */
+    public function test_changing_type_in_the_create_form_resets_the_selected_pool(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'ppp']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('nasId', (string) $nas->id)
+            ->set('type', 'ppp')
+            ->set('customerIpPoolId', (string) $pool->id)
+            ->set('type', 'hotspot')
+            ->assertSet('customerIpPoolId', '');
+    }
+
+    public function test_pool_dropdown_only_lists_pools_compatible_with_the_selected_type(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Pool PPP', 'usage_type' => 'ppp']);
+        CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Pool Hotspot', 'usage_type' => 'hotspot']);
+
+        $html = Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('showCreateForm', true)
+            ->set('nasId', (string) $nas->id)
+            ->set('type', 'ppp')
+            ->html();
+
+        $this->assertStringContainsString('Pool PPP', $html);
+        $this->assertStringNotContainsString('Pool Hotspot', $html);
+    }
+
+    public function test_general_pool_appears_in_the_dropdown_for_both_types(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Pool Umum', 'usage_type' => 'general']);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('showCreateForm', true)
+            ->set('nasId', (string) $nas->id);
+
+        $this->assertStringContainsString('Pool Umum', $component->set('type', 'ppp')->html());
+        $this->assertStringContainsString('Pool Umum', $component->set('type', 'hotspot')->html());
+    }
+
+    /**
+     * Backend enforcement, not just the dropdown filter — forcing an
+     * incompatible pool id directly (bypassing the updatedType() reset a
+     * real user interaction would trigger) proves the server-side check
+     * itself works.
+     */
+    public function test_a_hotspot_only_pool_is_rejected_for_a_ppp_group_via_the_form(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'hotspot']);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('nasId', (string) $nas->id)
+            ->set('name', 'Grup Utama')
+            ->set('type', 'ppp')
+            ->set('customerIpPoolId', (string) $pool->id)
+            ->call('createGroup');
+
+        $component->assertHasErrors('customerIpPoolId');
+        $this->assertDatabaseMissing('network_profile_groups', ['name' => 'Grup Utama']);
+    }
+
     public function test_customer_ip_pool_from_a_different_nas_is_rejected(): void
     {
         $tenant = Tenant::factory()->create();
@@ -210,6 +286,38 @@ class NetworkProfileGroupIndexLivewireTest extends TestCase
             ->test(NetworkProfileGroupIndex::class)
             ->call('edit', $group->id)
             ->set('editCustomerIpPoolId', (string) $poolB->id)
+            ->call('updateGroup');
+
+        $component->assertHasErrors('editCustomerIpPoolId');
+    }
+
+    public function test_changing_edit_type_resets_the_selected_pool(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pppPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'ppp']);
+        $group = NetworkProfileGroup::factory()->create(['nas_id' => $nas->id, 'customer_ip_pool_id' => $pppPool->id, 'type' => 'ppp']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->call('edit', $group->id)
+            ->assertSet('editCustomerIpPoolId', (string) $pppPool->id)
+            ->set('editType', 'hotspot')
+            ->assertSet('editCustomerIpPoolId', '');
+    }
+
+    public function test_editing_to_an_incompatible_usage_type_pool_is_rejected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pppPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'ppp']);
+        $hotspotOnlyPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'hotspot']);
+        $group = NetworkProfileGroup::factory()->create(['nas_id' => $nas->id, 'customer_ip_pool_id' => $pppPool->id, 'type' => 'ppp']);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->call('edit', $group->id)
+            ->set('editCustomerIpPoolId', (string) $hotspotOnlyPool->id)
             ->call('updateGroup');
 
         $component->assertHasErrors('editCustomerIpPoolId');

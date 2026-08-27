@@ -3,6 +3,26 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.3.1 — Tipe Pemakaian IP Pool + Sidebar "Profil Paket" (implementasi selesai 2026-08-27, belum di-merge/tag)
+
+**Catatan status**: sama branch `v0.14.3-grup-profil`, digabung sebelum closure sprint itu (bukan branch/tag
+terpisah). Detail teknis lengkap ada di `CLAUDE.md` bagian "Tipe Pemakaian IP Pool + Sidebar 'Profil
+Paket' (v0.14.3.1)".
+
+- **Bagian A**: kolom baru `customer_ip_pools.usage_type` (Ppp/Hotspot/General, default `general` untuk
+  baris existing — tidak ditebak dari nama). Bug nyata ditemukan Agung: form Grup Profil bisa memilih pool
+  yang jelas untuk tipe lain (mis. "Hotspot-10Mbps" muncul saat Tipe=PPP). Dropdown Grup Profil sekarang
+  filter reaktif berdasarkan NAS DAN Tipe (`General` selalu ikut muncul di keduanya), plus validasi backend
+  independen (`StoreNetworkProfileGroupRequest`/`UpdateNetworkProfileGroupRequest`) yang menolak kombinasi
+  tidak cocok meski request dikirim langsung ke API, bukan cuma andalkan filter frontend.
+- **Bagian B**: Bandwidth Profile/IP Pool Pelanggan/Grup Profil (3 item flat terpisah di sidebar)
+  dikelompokkan jadi 1 menu collapsible "Profil Paket" — replikasi persis pola `'children'` yang sudah
+  dipakai NAS/Perangkat CPE. Murni reorganisasi visual, tidak ada route yang berubah.
+- **Regresi**: 16 test baru (kompatibilitas usage_type, API + Livewire) + 4 test baru (sidebar), Pint
+  clean.
+- **Belum di-merge/tag** — menunggu verifikasi manual Agung (screenshot sidebar baru + konfirmasi filter
+  IP Pool bekerja di browser sungguhan).
+
 ## v0.14.3 — Grup Profil (implementasi selesai 2026-08-28, belum di-merge/tag)
 
 **Catatan status**: branch `v0.14.3-grup-profil` (dari `main` yang sudah include v0.14.2) — kelanjutan

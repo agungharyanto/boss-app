@@ -44,6 +44,20 @@
             </div>
 
             <div>
+                {{-- v0.14.3.1 — wajib diisi, tidak ada default dipilih di
+                     sini, supaya admin selalu sadar menentukan tipe
+                     pemakaian pool yang baru dibuat. --}}
+                <label class="block text-sm font-medium text-gray-700">{{ __('Tipe Pemakaian') }}</label>
+                <select wire:model="usageType" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                    <option value="">{{ __('-- Pilih Tipe --') }}</option>
+                    <option value="ppp">{{ __('PPP') }}</option>
+                    <option value="hotspot">{{ __('Hotspot') }}</option>
+                    <option value="general">{{ __('Umum') }}</option>
+                </select>
+                @error('usageType') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+            </div>
+
+            <div>
                 <label class="block text-sm font-medium text-gray-700">{{ __('Network Address (CIDR)') }}</label>
                 <input type="text" wire:model="networkAddress" placeholder="192.168.10.0/24" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                 @error('networkAddress') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
@@ -121,6 +135,7 @@
                         {{ __('Nama') }} @if ($sortBy === 'name') {{ $sortDir === 'asc' ? '▲' : '▼' }} @endif
                     </th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('NAS') }}</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Tipe') }}</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Network') }}</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Range') }}</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status') }}</th>
@@ -132,19 +147,25 @@
                 @forelse ($pools as $pool)
                     <tr wire:key="pool-{{ $pool->id }}">
                         @if ($editingPoolId === $pool->id)
-                            <td colspan="7" class="px-4 py-3">
+                            <td colspan="8" class="px-4 py-3">
                                 <form wire:submit="updatePool" class="space-y-3">
-                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
                                         <select wire:model="editNasId" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                                             @foreach ($nasOptions as $nasOption)
                                                 <option value="{{ $nasOption->id }}">{{ $nasOption->name }}</option>
                                             @endforeach
                                         </select>
                                         <input type="text" wire:model="editName" placeholder="{{ __('Nama Pool') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                        <select wire:model="editUsageType" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                            <option value="ppp">{{ __('PPP') }}</option>
+                                            <option value="hotspot">{{ __('Hotspot') }}</option>
+                                            <option value="general">{{ __('Umum') }}</option>
+                                        </select>
                                         <input type="text" wire:model="editNetworkAddress" placeholder="192.168.10.0/24" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                                     </div>
                                     @error('editNasId') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                                     @error('editName') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+                                    @error('editUsageType') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                                     @error('editNetworkAddress') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
 
                                     <div class="grid grid-cols-3 gap-3">
@@ -180,6 +201,7 @@
                         @else
                             <td class="px-4 py-2 text-sm text-gray-800">{{ $pool->name }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $pool->nas->name ?? '-' }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-600">{{ $pool->usage_type->label() }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $pool->network_address }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $pool->range_start }} - {{ $pool->range_end }}</td>
                             <td class="px-4 py-2 text-sm">
@@ -210,7 +232,7 @@
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="7" class="px-4 py-6 text-center text-sm text-gray-500">
+                        <td colspan="8" class="px-4 py-6 text-center text-sm text-gray-500">
                             {{ __('Belum ada customer IP pool.') }}
                         </td>
                     </tr>

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\CustomerIpPoolUsageType;
 use App\Enums\MikrotikSyncStatus;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CustomerIpPoolFactory;
@@ -27,6 +28,7 @@ class CustomerIpPool extends Model
         'tenant_id',
         'nas_id',
         'name',
+        'usage_type',
         'network_address',
         'gateway_ip',
         'range_start',
@@ -48,6 +50,7 @@ class CustomerIpPool extends Model
     {
         return [
             'is_active' => 'boolean',
+            'usage_type' => CustomerIpPoolUsageType::class,
             'mikrotik_sync_status' => MikrotikSyncStatus::class,
             'mikrotik_synced_at' => 'datetime',
         ];

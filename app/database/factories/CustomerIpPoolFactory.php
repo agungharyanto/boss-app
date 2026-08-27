@@ -43,6 +43,7 @@ class CustomerIpPoolFactory extends Factory
             // OltDeviceFactory (see CLAUDE.md's multi-tenancy section).
             'tenant_id' => fn (array $attributes) => Nas::withoutGlobalScopes()->find($attributes['nas_id'])?->tenant_id,
             'name' => 'Pool-'.$this->faker->unique()->numerify('###'),
+            'usage_type' => 'general',
             'network_address' => "192.168.{$octet}.0/24",
             'gateway_ip' => "192.168.{$octet}.1",
             'range_start' => "192.168.{$octet}.10",

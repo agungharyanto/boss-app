@@ -231,6 +231,118 @@ class NetworkProfileGroupApiTest extends TestCase
         $response->assertJsonValidationErrors(['customer_ip_pool_id']);
     }
 
+    /**
+     * v0.14.3.1 — backend enforcement of the usage_type compatibility rule
+     * the Livewire form's own dropdown filter already applies. A direct
+     * API call bypasses that frontend filter entirely, so this must be
+     * rejected here too.
+     */
+    public function test_a_hotspot_only_pool_is_rejected_for_a_ppp_group_on_create(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'hotspot']);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/network-profile-groups', $this->payload($nas->id, $pool->id, ['type' => 'ppp']));
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['customer_ip_pool_id']);
+        $this->assertDatabaseMissing('network_profile_groups', ['name' => 'Grup Utama']);
+    }
+
+    public function test_a_ppp_only_pool_is_rejected_for_a_hotspot_group_on_create(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'ppp']);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/network-profile-groups', $this->payload($nas->id, $pool->id, ['type' => 'hotspot']));
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['customer_ip_pool_id']);
+    }
+
+    public function test_a_general_pool_is_allowed_for_both_ppp_and_hotspot_groups(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $poolForPpp = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'general']);
+        $poolForHotspot = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'general']);
+
+        $pppResponse = $this->actingAs($this->admin($tenant))->postJson('/api/v1/network-profile-groups', $this->payload($nas->id, $poolForPpp->id, ['type' => 'ppp', 'name' => 'Grup PPP']));
+        $hotspotResponse = $this->actingAs($this->admin($tenant))->postJson('/api/v1/network-profile-groups', $this->payload($nas->id, $poolForHotspot->id, ['type' => 'hotspot', 'name' => 'Grup Hotspot']));
+
+        $pppResponse->assertCreated();
+        $hotspotResponse->assertCreated();
+    }
+
+    public function test_a_matching_type_pool_is_allowed_on_create(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pppPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'ppp']);
+        $hotspotPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'hotspot']);
+
+        $pppResponse = $this->actingAs($this->admin($tenant))->postJson('/api/v1/network-profile-groups', $this->payload($nas->id, $pppPool->id, ['type' => 'ppp', 'name' => 'Grup PPP']));
+        $hotspotResponse = $this->actingAs($this->admin($tenant))->postJson('/api/v1/network-profile-groups', $this->payload($nas->id, $hotspotPool->id, ['type' => 'hotspot', 'name' => 'Grup Hotspot']));
+
+        $pppResponse->assertCreated();
+        $hotspotResponse->assertCreated();
+    }
+
+    public function test_updating_to_an_incompatible_usage_type_pool_is_rejected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pppPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'ppp']);
+        $hotspotOnlyPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'hotspot']);
+        $group = NetworkProfileGroup::factory()->create(['nas_id' => $nas->id, 'customer_ip_pool_id' => $pppPool->id, 'type' => 'ppp']);
+
+        $response = $this->actingAs($this->admin($tenant))->putJson("/api/v1/network-profile-groups/{$group->id}", ['customer_ip_pool_id' => $hotspotOnlyPool->id]);
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['customer_ip_pool_id']);
+    }
+
+    /**
+     * Covers the fallback-to-stored-type branch specifically: 'type' isn't
+     * in THIS request at all, so the check must still fire using the
+     * group's own already-stored type ('ppp'), not skip validation just
+     * because 'type' wasn't submitted this time.
+     */
+    public function test_updating_the_pool_without_resubmitting_type_still_checks_against_the_groups_stored_type(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pppPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'ppp']);
+        $hotspotOnlyPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'hotspot']);
+        $group = NetworkProfileGroup::factory()->create(['nas_id' => $nas->id, 'customer_ip_pool_id' => $pppPool->id, 'type' => 'ppp']);
+
+        $response = $this->actingAs($this->admin($tenant))->putJson("/api/v1/network-profile-groups/{$group->id}", [
+            'customer_ip_pool_id' => $hotspotOnlyPool->id,
+        ]);
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['customer_ip_pool_id']);
+    }
+
+    public function test_updating_type_together_with_a_matching_pool_is_allowed(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pppPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'ppp']);
+        $hotspotPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'hotspot']);
+        $group = NetworkProfileGroup::factory()->create(['nas_id' => $nas->id, 'customer_ip_pool_id' => $pppPool->id, 'type' => 'ppp']);
+
+        $response = $this->actingAs($this->admin($tenant))->putJson("/api/v1/network-profile-groups/{$group->id}", [
+            'type' => 'hotspot',
+            'customer_ip_pool_id' => $hotspotPool->id,
+        ]);
+
+        $response->assertOk();
+        $response->assertJsonPath('data.type', 'hotspot');
+    }
+
     public function test_admin_can_soft_delete_a_network_profile_group(): void
     {
         $tenant = Tenant::factory()->create();

@@ -40,7 +40,7 @@
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                     <label class="block text-sm font-medium text-gray-700">{{ __('Tipe') }}</label>
-                    <select wire:model="type" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                    <select wire:model.live="type" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                         <option value="ppp">{{ __('PPP') }}</option>
                         <option value="hotspot">{{ __('Hotspot') }}</option>
                     </select>
@@ -139,7 +139,7 @@
                                     @error('editName') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
 
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                        <select wire:model="editType" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                        <select wire:model.live="editType" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                                             <option value="ppp">{{ __('PPP') }}</option>
                                             <option value="hotspot">{{ __('Hotspot') }}</option>
                                         </select>

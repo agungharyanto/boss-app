@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Enums\NetworkProfileGroupType;
 use App\Models\CustomerIpPool;
 use App\Models\NetworkProfileGroup;
 use Illuminate\Foundation\Http\FormRequest;
@@ -68,7 +69,7 @@ class UpdateNetworkProfileGroupRequest extends FormRequest
 
     private function validatePoolBelongsToSameNas(Validator $validator): void
     {
-        if ($validator->errors()->hasAny(['nas_id', 'customer_ip_pool_id'])) {
+        if ($validator->errors()->hasAny(['nas_id', 'customer_ip_pool_id', 'type'])) {
             return;
         }
 
@@ -93,6 +94,17 @@ class UpdateNetworkProfileGroupRequest extends FormRequest
 
         if ($pool->nas_id !== $nasId) {
             $validator->errors()->add('customer_ip_pool_id', 'IP Pool yang dipilih harus milik NAS yang sama.');
+
+            return;
+        }
+
+        // v0.14.3.1 — same backend enforcement as
+        // StoreNetworkProfileGroupRequest, falling back to the group's own
+        // stored type since 'type' is only 'sometimes' present here.
+        $groupType = NetworkProfileGroupType::from((string) $this->input('type', $this->group->type->value));
+
+        if (! $pool->usage_type->isCompatibleWith($groupType)) {
+            $validator->errors()->add('customer_ip_pool_id', "IP Pool ini bertipe pemakaian \"{$pool->usage_type->label()}\", tidak cocok untuk Grup Profil tipe \"{$groupType->label()}\".");
         }
     }
 }

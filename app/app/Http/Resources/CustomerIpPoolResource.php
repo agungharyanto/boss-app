@@ -17,6 +17,7 @@ class CustomerIpPoolResource extends JsonResource
             'nas_id' => $this->nas_id,
             'nas_name' => $this->whenLoaded('nas', fn () => $this->nas->name),
             'name' => $this->name,
+            'usage_type' => $this->usage_type?->value,
             'network_address' => $this->network_address,
             'gateway_ip' => $this->gateway_ip,
             'range_start' => $this->range_start,

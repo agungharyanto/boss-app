@@ -6260,7 +6260,59 @@ writing any push code — neither was guessed:**
    whoever runs the router, never invented on their behalf) — when one exists, live-push updates that
    server's own `address-pool=` to the referenced pool's name. **No `/ip hotspot user profile` object is
    ever created** — it would carry none of `NetworkProfileGroup`'s actual config fields, so creating one
-   would just be a confusing, empty placeholder. **No REMOVE action for Hotspot type on delete** — blanking
+   would just be a confusing, empty placeholder.
+
+## Tipe Pemakaian IP Pool + Sidebar "Profil Paket" (v0.14.3.1)
+
+**Sama branch `v0.14.3-grup-profil`, digabung sebelum closure sprint itu — bukan sub-versi terpisah dari
+sisi git (tidak ada branch/tag baru), penomoran `.1` murni untuk penamaan bagian di CHANGELOG/dokumentasi.**
+
+**Bagian A — pemisahan `usage_type` pada `CustomerIpPool`**: bug nyata ditemukan Agung — form Grup Profil
+(Tipe=PPP) bisa memilih IP Pool yang namanya jelas untuk Hotspot ("Hotspot-10Mbps"), tidak ada pemisahan
+sama sekali. `App\Enums\CustomerIpPoolUsageType` (Ppp/Hotspot/General) ditambahkan sebagai kolom baru
+`customer_ip_pools.usage_type` (default `'general'` untuk baris existing — sengaja TIDAK ditebak dari nama,
+admin koreksi manual lewat form edit kalau perlu, lebih aman daripada tebakan salah).
+`CustomerIpPoolUsageType::isCompatibleWith(NetworkProfileGroupType $groupType)` adalah satu-satunya tempat
+aturan kompatibilitas didefinisikan — General cocok untuk KEDUA tipe Grup Profil, Ppp/Hotspot cuma cocok
+untuk tipe-nya sendiri — dipakai di 3 lapisan sekaligus (bukan cuma frontend): dropdown filter di
+`NetworkProfileGroupIndex::render()` (query `whereIn('usage_type', [$type, General])`, reaktif lewat
+`wire:model.live="type"`/`"editType"` + `updatedType()`/`updatedEditType()` yang mereset pool terpilih sama
+seperti `updatedNasId()` sudah lakukan untuk NAS), validasi Livewire (`validatePoolBelongsToSameNas()`,
+sekarang menerima parameter `$type`), dan validasi backend FormRequest
+(`StoreNetworkProfileGroupRequest::validatePool()`/`UpdateNetworkProfileGroupRequest::
+validatePoolBelongsToSameNas()` — sengaja tidak cuma andalkan filter dropdown, panggilan API langsung tetap
+ditolak kalau kombinasi tidak cocok). Update FormRequest fallback ke tipe TERSIMPAN grup
+(`$this->input('type', $this->group->type->value)`) kalau field `type` tidak ikut dikirim di request itu —
+sama pola fallback yang sudah dipakai `$nasId`/`$poolId` di file yang sama.
+
+**Bagian B — sidebar "Profil Paket" collapsible**: Bandwidth Profile/IP Pool Pelanggan/Grup Profil yang
+tadinya 3 item flat terpisah di cluster Network, dikelompokkan jadi 1 menu induk collapsible — replikasi
+PERSIS pola `'children'` yang sudah dipakai NAS→Script Generator dan Perangkat CPE→Cek Status Device
+(`resources/views/components/sidebar.blade.php`), bukan pola baru. Karena pola itu mengharuskan parent row
+punya link nyata ke halaman index-nya sendiri (bukan cuma header statis) dan sprint ini eksplisit tidak
+boleh menambah route baru, Bandwidth Profile (fondasi cluster sejak v0.14.1) dipakai sebagai link/route
+parent — labelnya berubah jadi "Profil Paket", IP Pool Pelanggan dan Grup Profil jadi children di
+bawahnya. Gate permission parent memakai `viewAny BandwidthProfile` saja (bukan OR ketiga permission) —
+aman karena ketiganya (`bandwidth_profiles.*`/`customer_ip_pools.*`/`network_profile_groups.*`) selalu
+di-`giveToAdminTier()` bersamaan di `RolesAndPermissionsSeeder`, dikonfirmasi lewat `grep` sebelum
+diasumsikan, bukan ditebak — tidak ada skenario nyata di codebase ini di mana satu permission ada tapi yang
+lain tidak. Setiap child tetap punya guard permission sendiri di dalam `array_filter()` (defense-in-depth),
+sama seperti pola children CPE. Murni reorganisasi visual — tidak ada route yang berubah, `active`-state
+check cluster Network di baris paling atas file sudah mencakup ketiga route ini sejak sebelumnya (tidak
+perlu diubah).
+
+**Test**: 16 test baru untuk kompatibilitas usage_type (API + Livewire — buat pool PPP/Hotspot/General,
+konfirmasi masing-masing hanya muncul di dropdown Grup Profil yang sesuai, pool General muncul di
+keduanya, submit kombinasi tidak cocok ditolak backend baik lewat form maupun API langsung, termasuk kasus
+fallback tipe tersimpan saat field `type` tidak dikirim ulang saat update), 4 test baru untuk sidebar
+(`SidebarNavigationTest` — label "Profil Paket"/"IP Pool Pelanggan"/"Grup Profil" muncul untuk user
+admin-tier, parent link mengarah ke `web.bandwidth-profiles.index`, children tetap mengarah ke route
+asli masing-masing, user non-admin-tier tidak melihat menu ini sama sekali). Pint clean di semua file yang
+disentuh.
+
+**Belum di-merge/tag** — menunggu verifikasi manual Agung (screenshot sidebar baru + konfirmasi filter IP
+Pool bekerja di browser sungguhan). Sama seperti beberapa entri sebelumnya di file ini, tidak ada
+browser/screenshot tool tersedia di environment ini untuk memverifikasi visual secara langsung. **No REMOVE action for Hotspot type on delete** — blanking
    a live server's `address-pool` on a NAS `boss_db` doesn't own the lifecycle of could break IP assignment
    for real, currently-connected clients; only the `boss_db` row and `radgroupreply` rows are ever cleaned
    up for this type. A missing-Hotspot-Server failure is detected and treated as PERMANENT (immediate

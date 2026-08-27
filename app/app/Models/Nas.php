@@ -75,4 +75,14 @@ class Nas extends Model
     {
         return $this->hasMany(OltDevice::class);
     }
+
+    /**
+     * v0.14.2 — a NAS's own end-customer IP pools (hotspot/PPP), NOT the
+     * VPN tunnel address pool (that's VpnIpPool, unrelated to Nas at all —
+     * see CustomerIpPool's own docblock for the distinction).
+     */
+    public function customerIpPools(): HasMany
+    {
+        return $this->hasMany(CustomerIpPool::class);
+    }
 }

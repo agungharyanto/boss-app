@@ -77,4 +77,31 @@ interface RouterOsGateway
      * null the same as "can't currently be determined" — never guesses).
      */
     public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int;
+
+    /**
+     * v0.14.2.1 — RouterOS live-push, starting with CustomerIpPool. Idempotent
+     * create/update of a single `/ip pool` entry, found by $comment (a
+     * stable per-row identifier — see CustomerIpPool::mikrotikComment())
+     * rather than by $name: a pool can be RENAMED in BOSS App, and looking
+     * up by name would then create an orphaned duplicate on the router
+     * instead of updating the existing one — same reasoning
+     * RouterOsApiGateway::ensureUser()/ensureGroup() already established
+     * for `/user`/`/user/group`. $ranges is RouterOS's own
+     * "start-end" range syntax (e.g. "192.168.10.10-192.168.10.200").
+     *
+     * @return array{success: bool, message: ?string}
+     */
+    public function syncIpPool(Nas $nas, string $comment, string $name, string $ranges): array;
+
+    /**
+     * Removes the `/ip pool` entry matching $comment, if any — a no-op
+     * (success=true) when nothing matches, since deleting something
+     * already gone from the router is not a failure. Can genuinely fail
+     * (success=false) if RouterOS refuses because the pool is still
+     * referenced elsewhere (a DHCP server/PPP profile using it) — that
+     * error message is surfaced to the caller, not silently swallowed.
+     *
+     * @return array{success: bool, message: ?string}
+     */
+    public function removeIpPool(Nas $nas, string $comment): array;
 }

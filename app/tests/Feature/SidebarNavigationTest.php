@@ -68,6 +68,8 @@ class SidebarNavigationTest extends TestCase
         $response->assertSee('Profil Paket');
         $response->assertSee('IP Pool Pelanggan');
         $response->assertSee('Grup Profil');
+        // v0.14.4 — third child added to the same "Profil Paket" group.
+        $response->assertSee('Profil Hotspot');
     }
 
     public function test_profil_paket_parent_link_points_to_the_bandwidth_profiles_page(): void
@@ -87,6 +89,7 @@ class SidebarNavigationTest extends TestCase
 
         $response->assertSee(route('web.customer-ip-pools.index'), false);
         $response->assertSee(route('web.network-profile-groups.index'), false);
+        $response->assertSee(route('web.hotspot-packages.index'), false);
     }
 
     public function test_non_admin_tier_user_does_not_see_the_profil_paket_menu(): void
@@ -98,5 +101,6 @@ class SidebarNavigationTest extends TestCase
         $response->assertDontSee('Profil Paket');
         $response->assertDontSee('IP Pool Pelanggan');
         $response->assertDontSee('Grup Profil');
+        $response->assertDontSee('Profil Hotspot');
     }
 }

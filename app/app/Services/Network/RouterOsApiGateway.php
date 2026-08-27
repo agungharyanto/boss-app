@@ -381,4 +381,156 @@ class RouterOsApiGateway implements RouterOsGateway
             return ['success' => false, 'message' => $e->getMessage()];
         }
     }
+
+    public function syncHotspotUserProfile(
+        Nas $nas,
+        string $lookupName,
+        string $targetName,
+        ?string $rateLimit,
+        int $sharedUsers,
+        ?string $sessionTimeout,
+        ?string $addressPool = null,
+    ): array {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 10,
+            ]);
+
+            // Same precondition as syncHotspotServerPool() — a Hotspot
+            // user profile with no Hotspot Server behind it can never
+            // actually authenticate anyone, even though RouterOS itself
+            // happily lets the object be created regardless (confirmed
+            // empirically). Per Agung's explicit instruction, this refuses
+            // rather than push a profile that can't do anything yet.
+            $servers = $client->query(new Query('/ip/hotspot/print'))->read();
+
+            if ($servers === []) {
+                return [
+                    'success' => false,
+                    'message' => 'NAS ini belum punya Hotspot Server di Mikrotik. Buat Hotspot Server terlebih dahulu (System > Hotspot Setup) sebelum push Profil Hotspot.',
+                ];
+            }
+
+            $find = new Query('/ip/hotspot/user/profile/print');
+            $find->where('name', $lookupName);
+            $existing = $client->query($find)->read();
+
+            if ($existing === []) {
+                $add = new Query('/ip/hotspot/user/profile/add');
+                $add->equal('name', $targetName)->equal('shared-users', (string) $sharedUsers);
+
+                if ($rateLimit !== null) {
+                    $add->equal('rate-limit', $rateLimit);
+                }
+
+                if ($sessionTimeout !== null) {
+                    $add->equal('session-timeout', $sessionTimeout);
+                }
+
+                if ($addressPool !== null) {
+                    $add->equal('address-pool', $addressPool);
+                }
+
+                $response = $client->query($add)->read();
+            } else {
+                $set = new Query('/ip/hotspot/user/profile/set');
+                $set->equal('.id', $existing[0]['.id'])
+                    ->equal('name', $targetName)
+                    ->equal('shared-users', (string) $sharedUsers);
+
+                // Real bug found and fixed against a real router (TOKEN-1Hp
+                // on ro-hotspot.bajastu.id, reported by Agung): the old
+                // unconditional `?? 'none'`/`?? ''` fallbacks here made
+                // EVERY set for a null session-timeout fail outright —
+                // confirmed via a live test that RouterOS rejects BOTH
+                // 'none' AND '' as an explicit session-timeout value
+                // ("invalid time value for argument session-timeout"),
+                // unlike idle-timeout, which genuinely does accept/display
+                // 'none'. Conditional inclusion (never sending the
+                // parameter at all when null), same as the add branch
+                // above, sidesteps the whole "what string means 'clear
+                // this'" question entirely — confirmed via a live test that
+                // omitting a parameter on `set` leaves that field
+                // untouched, not reset. Applied to rate-limit/address-pool
+                // too for the same reason, even though neither is ever
+                // actually null for a real HotspotPackage in practice
+                // (both are always derived from required, non-nullable
+                // relations) — consistency, and no reason to trust an
+                // untested clearing value for them either.
+                //
+                // Known, accepted trade-off from this fix: switching an
+                // EXISTING synced package's Batasan away from TimeBase (so
+                // routerOsSessionTimeout() newly returns null) no longer
+                // actively clears a previously-set session-timeout value on
+                // the router — the field simply stays at whatever it was.
+                // Not solved here — flagged, not silently worked around.
+                if ($rateLimit !== null) {
+                    $set->equal('rate-limit', $rateLimit);
+                }
+
+                if ($sessionTimeout !== null) {
+                    $set->equal('session-timeout', $sessionTimeout);
+                }
+
+                if ($addressPool !== null) {
+                    $set->equal('address-pool', $addressPool);
+                }
+
+                $response = $client->query($set)->read();
+            }
+
+            // `/ip hotspot user profile` rejects an unexpected parameter
+            // (e.g. `comment`, confirmed empirically) by returning
+            // ['after' => ['message' => '...']] WITHOUT throwing — a real
+            // gap found while investigating this object type, worth
+            // guarding against explicitly here rather than trusting a bare
+            // try/catch the way the older syncIpPool()/syncPppProfile()
+            // methods do (a genuine RouterOS API parameter rejection would
+            // otherwise be silently reported as success by those).
+            if (isset($response['after']['message'])) {
+                throw new \RuntimeException((string) $response['after']['message']);
+            }
+
+            return ['success' => true, 'message' => null];
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal sync /ip hotspot user profile (name={$lookupName}) ke NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    public function removeHotspotUserProfile(Nas $nas, string $lookupName): array
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 10,
+            ]);
+
+            $find = new Query('/ip/hotspot/user/profile/print');
+            $find->where('name', $lookupName);
+            $existing = $client->query($find)->read();
+
+            if ($existing === []) {
+                return ['success' => true, 'message' => null];
+            }
+
+            $remove = new Query('/ip/hotspot/user/profile/remove');
+            $remove->equal('.id', $existing[0]['.id']);
+            $client->query($remove)->read();
+
+            return ['success' => true, 'message' => null];
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal hapus /ip hotspot user profile (name={$lookupName}) di NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
 }

@@ -6407,6 +6407,306 @@ parent queue. Sidebar link placed right after "IP Pool Pelanggan". Auto-refresh 
 `radgroupreply` rows) were force-deleted afterward; the router's `/ppp profile` list is back to its
 original 4 entries (`default`, `HomeFixed-10Mbps`, `PPPOE-REMOTE`, `default-encryption`).
 
+## Profil Hotspot (v0.14.4)
+
+**Langkah 0 investigation, done before any code — all three questions resolved with real evidence, not
+guessed:**
+
+1. **`reseller_package_pricing` (v0.3.2) overlap with `visible_to_reseller`/"Owner Data"**: confirmed via
+   grep + real DB counts that this table is NOT literal dead code — it IS wired as an optional FK into
+   `Subscription` (`Subscription::pricing()`, `StoreSubscriptionRequest`, `SubscriptionService`) — but has
+   **zero rows and zero real usage** in the dev DB (`Subscription::count()` itself is 0). More importantly,
+   `docs/ROADMAP.md`'s own v0.14.5 entry already answers the design question directly: Profil PPP (not
+   Profil Hotspot) is explicitly earmarked as `reseller_package_pricing`'s eventual replacement/anchor for
+   Commission (v0.9.3). This makes sense independently too — `reseller_package_pricing` is a recurring-
+   subscription pricing concept (feeds `Subscription`/`Invoice`), genuinely different from a hotspot
+   voucher's pay-per-token model. **Conclusion, not blocked on**: Profil Hotspot built as a fully standalone
+   entity this sub-version, per the sprint's own "default paling aman" instruction — `visible_to_reseller`
+   is a plain boolean, no relation to `reseller_package_pricing` at all.
+2. **`/ip hotspot user profile` RouterOS fields — verified via a real live add/read/remove round trip
+   against `ro-hotspot.bajastu.id`** (never `test-x86-bajastu`): the real, settable fields are
+   `rate-limit` (format `"{kbps}k/{kbps}k"`, confirmed accepted and echoed back unchanged — chosen over an
+   M-suffix conversion specifically to avoid any Kbps→Mbps rounding risk for non-round values),
+   `session-timeout` (accepts plain RouterOS time-interval strings like `"1d"`), `shared-users` (int),
+   `idle-timeout`. **Real, load-bearing finding**: unlike `/ppp profile`/`/ip pool` (both already used by
+   v0.14.2/v0.14.3), `/ip hotspot user profile` **rejects `comment` as a parameter outright** — confirmed
+   twice, both on `add` and a follow-up `set` (`"unknown parameter comment"`, returned inline in the API
+   response body, not thrown as an exception — a real gap in how this library surfaces RouterOS `!trap`
+   errors, see point 4 below). Without a comment-based stable identifier, a straightforward lookup-by-name
+   implementation would silently orphan the old object on every rename. Fixed by adding
+   `hotspot_packages.mikrotik_profile_name` (NOT in the original migration spec, added after this finding —
+   see the migration's own docblock) — tracks the name last successfully pushed, so a rename looks the old
+   object up by ITS name and renames it in place via `/set`, mirroring the INTENT of the comment-based
+   pattern with a mechanism this particular RouterOS object actually supports.
+3. **Hotspot Server precondition reuse — confirmed directly reusable, same real gap still present**:
+   `/ip/hotspot/print` on `ro-hotspot.bajastu.id` is still genuinely empty (same state as when this
+   precondition was first built for Grup Profil in v0.14.3) — `RouterOsGateway::syncHotspotUserProfile()`
+   checks this exact same condition and refuses with the same-shaped clear error message before ever
+   attempting to create/update a user profile, per Agung's explicit instruction that Profil Hotspot needs
+   this precondition too. **Interesting, separately-confirmed RouterOS behavior**: the router does NOT
+   structurally require a `/ip hotspot` server to exist before accepting a `/ip hotspot user profile add` —
+   this precondition is a deliberate BOSS App business-logic choice (a profile with no server behind it can
+   never authenticate anyone), not something RouterOS itself enforces.
+4. **A real, general gap found in this exact investigation, fixed only in the new code**:
+   `RouterOsApiGateway`'s existing `syncIpPool()`/`syncPppProfile()`/`syncHotspotServerPool()` never check
+   for an inline `['after' => ['message' => ...]]` error in the RouterOS API response — they only catch
+   thrown exceptions. The `comment`-rejection error above proved this class of failure does NOT throw, it
+   returns normally with an error message embedded in the response body — meaning a genuine RouterOS
+   parameter rejection on any of those 3 existing methods would currently be silently reported as
+   `success => true`. Not fixed in those 3 pre-existing methods (out of this sprint's scope, flagged here
+   for whoever touches them next) — but `syncHotspotUserProfile()`/`removeHotspotUserProfile()` (this
+   sprint's own new code) explicitly check for this and treat it as a failure.
+
+**`limit_type=quota_base` has no accompanying quota-AMOUNT column** — the sprint's own literal migration
+spec only asked for the `limit_type` classification flag itself, nothing to store how much quota. Not
+invented here (see `HotspotLimitType`'s own docblock) — there is no RouterOS profile-level byte-quota field
+to push to anyway (`/ip hotspot user profile` has none; a real quota only exists per-USER via
+`/ip hotspot user`'s own `limit-bytes-total`, which needs an individual voucher/user row that doesn't exist
+yet — Profil Hotspot this sub-version is the package TEMPLATE only). Flagged as a real, deliberate gap for
+whoever builds voucher/user generation later, not silently worked around.
+
+**`priority` (string, default `'Default'`) is stored but NOT pushed to RouterOS this sub-version** — no
+`/ip hotspot user profile` field named `priority` exists among the real fields confirmed in point 2 above.
+RouterOS's `rate-limit` DOES have an optional extended-syntax priority slot (a 1-8 number, several
+comma-separated positions deep, alongside burst-rate/burst-threshold placeholders) — deliberately NOT used
+here: getting that extended syntax wrong risks silently corrupting the actual bandwidth rate-limit itself,
+and the DB field's own default value (`'Default'`, a string, not a 1-8 number) doesn't map onto that slot
+cleanly anyway. Flagged as an open question rather than guessed.
+
+**`login_days`/`login_start_time`/`login_end_time` are stored but NOT pushed to RouterOS this sub-version**
+— confirmed via the same live investigation that `/ip hotspot user profile` has no day/time-restriction
+concept at all in its real field list. These fields have no RouterOS enforcement mechanism built this
+sprint (would need something like a scheduler script or a different RouterOS subsystem entirely) — stored
+purely as BOSS App business data for now, same "infrastructure/data ahead of the feature that enforces it"
+pattern already established elsewhere in this codebase (e.g. v0.3.3 Tax Engine before Invoicing existed).
+
+**Price validation kept deliberately simple, per explicit instruction**: `sell_price >= cost_price` only
+(Laravel's own `gte:cost_price` rule), no automatic reseller-fee calculation — flagged in Langkah 0 as an
+ambiguous business question, not invented. `UpdateHotspotPackageRequest` merges in the package's own stored
+`cost_price` when not resubmitted (same "fall back to stored value" discipline `UpdateNetworkProfileGroupRequest`
+already established), so a partial update touching only `sell_price` still validates against a real
+comparison value instead of a missing one.
+
+**Two real bugs found during Langkah 3 manual verification against `ro-hotspot.bajastu.id`, both fixed
+immediately, neither in the new business logic itself**:
+1. **A brand-new PHP class (`HotspotPackageIndex`) was not resolvable as a route action** ("Invalid route
+   action") the moment its route was registered — this codebase's Composer autoloader is optimized
+   (`composer dump-autoload` confirmed the class wasn't indexed yet), so a genuinely new class file needs an
+   explicit autoload regeneration before its route works, not just the file existing on the bind-mounted
+   `app/` directory. Fixed with `composer dump-autoload` inside `boss-app`; route confirmed resolving
+   correctly afterward (`php artisan route:list --path=hotspot-packages`).
+2. **Own test-setup mistake, not a code bug**: the first real `HotspotPackage` created for verification
+   referenced `bandwidth_profile_id=2`, which turned out to already be soft-deleted (leftover from earlier
+   v0.14.1 manual testing) — `HotspotPackage::bandwidthProfile()`'s standard `belongsTo` correctly excluded
+   it via `SoftDeletingScope`, so the push job's generic "related model not found" warning fired exactly as
+   designed. Re-pointed at a real, live Bandwidth Profile (`id=4`) and re-verified.
+
+**Verified for real, end-to-end, against `ro-hotspot.bajastu.id` only — the precondition-refusal path,
+through the FULL real stack (not mocked)**: created a real Grup Profil (type=hotspot) and two real
+HotspotPackage rows (one Unlimited, one Limited/TimeBase) referencing it, both dispatched through the real
+Redis queue and picked up by the real `boss-worker` process — both correctly hit the real router, correctly
+detected the still-empty `/ip/hotspot/print`, and correctly landed on `Failed` status immediately (not
+stuck retrying) with the exact expected message. `RemoveHotspotPackageFromMikrotikJob` also ran for real
+afterward (soft-delete → real removal attempt → correct no-op-on-missing success, since nothing was ever
+actually created on the router). All test rows force-deleted afterward; a final live `/ip hotspot user
+profile print` confirmed the router shows only its own stock `default` entry, nothing left behind.
+
+**Honest limitation, same class already accepted for Grup Profil's own Hotspot type in v0.14.3**: the
+actual SUCCESSFUL object-creation path (`/ip hotspot user profile add` with real rate-limit/session-timeout
+values) was NOT exercised through the full Job/Service pipeline, since `ro-hotspot.bajastu.id` still has no
+real Hotspot Server configured — setting one up is a router-administration decision for whoever owns that
+NAS, not something this sprint invents on their behalf (same reasoning already established in
+`RouterOsGateway::syncHotspotServerPool()`'s own docblock). The exact RouterOS command shape my
+implementation uses WAS independently verified for real during Langkah 0 (a raw add/read/remove round trip
+using the identical field names/value formats — rate-limit, session-timeout, shared-users all confirmed
+accepted and correctly echoed back) — so the underlying mechanism is proven correct, just not exercised
+through the complete business-logic pipeline end to end. `test-x86-bajastu` was not touched at any point in
+this sprint.
+
+Full regression suite green (990 pre-existing + this sprint's own new tests, see the sprint's own commit for
+the exact final count), Pint clean on every touched file.
+
+## Profil Hotspot — Field Kuota untuk QuotaBase (v0.14.4 amendment)
+
+**Gap yang sudah diflag sendiri di sprint aslinya ("`limit_type=quota_base` belum punya kolom jumlah
+kuota") dikonfirmasi nyata lewat screenshot Agung** — form tidak punya field "Kuota"/"Satuan Data" sama
+sekali untuk paket QuotaBase, cuma "Masa Aktif" yang tampil (konsep berbeda: kapan paket expire vs berapa
+banyak data yang diizinkan).
+
+**Langkah 0 — investigasi mekanisme quota RouterOS, sebelum implementasi apa pun**: dikonfirmasi ULANG
+secara empiris (live add/read/remove terhadap `ro-hotspot.bajastu.id`, bukan `test-x86-bajastu`) bahwa
+`/ip hotspot user` (objek USER/VOUCHER individual, BUKAN `/ip hotspot user profile`) punya field nyata
+`limit-bytes-total`/`limit-uptime` yang benar-benar bisa di-set. Ini menegaskan ulang temuan sprint
+sebelumnya: kuota HANYA bisa di-enforce per-USER, tidak pernah di level profil/template. Dua mekanisme lain
+yang diminta untuk dicek (`Mikrotik-Total-Limit` RADIUS VSA, atau script/scheduler custom) sama-sama
+butuh objek per-sesi/per-user yang belum ada — bukan "kompleks butuh scripting tambahan" dalam arti
+pekerjaan ekstra sekarang, tapi secara struktural TIDAK ADA objek RouterOS di antara "template paket" dan
+"voucher individual" yang bisa menyimpan kuota. Kesimpulan: **field DB + UI ditambahkan (Langkah 1/2), push
+ke router TIDAK diimplementasikan** — `PushHotspotPackageToMikrotikJob` sengaja tidak disentuh sama
+sekali, `quota_value`/`quota_unit` murni data untuk fitur voucher generation nanti.
+
+**Migration**: `quota_value` (`decimal(10,2)`, nullable), `quota_unit` (string, nullable, enum baru
+`App\Enums\HotspotQuotaUnit`: Mb/Gb). Validasi wajib-kalau-QuotaBase DAN terlarang-kalau-bukan, pakai
+kombinasi `required_if`+`prohibited_unless` Laravel di kedua FormRequest DAN komponen Livewire (konsisten,
+bukan cuma andalkan filter frontend).
+
+**Real bug ditemukan sendiri lewat test suite, bukan lewat verifikasi manual — 2 kali beruntun, kelas bug
+yang sama**: properti Livewire `quotaUnit`/`editQuotaUnit` awalnya default `'mb'` (nilai non-kosong) —
+`prohibited_unless` mensyaratkan field GENUINELY KOSONG kapan pun `limitType` bukan `quota_base`, jadi
+default non-kosong ini GAGAL validasi sendiri begitu Batasan bukan QuotaBase, padahal user tidak pernah
+menyentuhnya. Ini kebalikan dari bug `activeDurationUnit` yang sudah ditemukan sprint sebelumnya (default
+non-kosong yang membuat `required_if` LOLOS secara tidak sengaja) — kali ini default non-kosong membuat
+`prohibited_unless` GAGAL secara tidak sengaja. Diperbaiki: default properti diubah jadi string kosong,
+`updatedLimitType()`/`updatedEditLimitType()` baru yang mengisi `'mb'` HANYA saat QuotaBase benar-benar
+dipilih (dan mengosongkan KEDUA field kuota, bukan cuma nilainya, saat beralih menjauh). Bug kedua:
+`edit()` punya fallback `?? 'mb'` yang sama untuk paket yang genuinely BUKAN QuotaBase (quota_unit
+null di DB) — diperbaiki jadi fallback `?? ''`.
+
+**Test**: field Kuota/Satuan Data muncul reaktif hanya saat Batasan=QuotaBase (create dan edit form), wajib
+diisi sebelum submit, hilang+dikosongkan otomatis saat Batasan diganti ke TimeBase atau Tipe Profil ke
+Unlimited (termasuk kasus bolak-balik QuotaBase→TimeBase→QuotaBase), validasi backend (Store+Update
+FormRequest) konsisten dengan Livewire — 9 test Livewire baru + 6 test API baru.
+
+Full regression suite dijalankan setelah amandemen ini, Pint clean di semua file yang disentuh. Belum
+di-merge/tag.
+
+## Profil Hotspot — Address Pool Tidak Ter-set + Fix session-timeout (v0.14.4 amendment kedua)
+
+**Bukti nyata dari Agung**: "TOKEN-1Hp" sudah benar-benar dibuat di `ro-hotspot.bajastu.id` (name, Shared
+Users, Rate Limit semua cocok) tapi Address Pool masih "none", dan status di BOSS App macet "Pending".
+
+**Langkah 0 — koreksi temuan lama, dikonfirmasi SALAH lewat verifikasi ulang langsung ke router**:
+klaim v0.14.3/v0.14.4 sebelumnya ("`/ip hotspot user profile` TIDAK punya field address-pool sama sekali")
+TERBUKTI KELIRU — dikonfirmasi via live SET test langsung terhadap `ro-hotspot.bajastu.id`: `address-pool`
+adalah field nyata yang bisa di-set dan langsung terbaca kembali dengan benar. **Akar penyebab kekeliruan
+lama, penting supaya tidak terulang**: kesimpulan itu HANYA didasarkan pada ABSENNYA field ini di output
+`print` sebuah objek yang belum pernah di-set field-nya — persis gotcha RouterOS yang sudah didokumentasikan
+berkali-kali di file ini untuk objek lain (properti opsional yang belum di-set memang tidak muncul di
+`print`, gampang disalahartikan sebagai "field tidak ada"). Tidak pernah ada live SET test khusus untuk
+`address-pool` di investigasi aslinya — klaim itu lalu diwariskan begitu saja ke sprint berikutnya (v0.14.4
+kemarin) tanpa diverifikasi ulang secara independen, sampai akhirnya diuji ulang sungguhan sekarang.
+
+**Langkah 1 — investigasi status macet Pending, akar masalah SEBENARNYA ditemukan lewat pengujian
+langsung, bukan sekadar baca log**: log `boss-worker` menunjukkan job memang berjalan (bukan macet karena
+worker mati) dan `mikrotik_sync_status` DB sebenarnya sudah `failed` (bukan `pending`) dengan pesan error
+nyata `"invalid time value for argument session-timeout"` — jadi mekanisme error-handling yang sudah ada
+(`markSyncFailed()`) sebenarnya SUDAH bekerja benar untuk kasus ini; persepsi "macet Pending" kemungkinan
+besar cuma snapshot saat window retry (~7,5 menit, status tetap "Pending" sambil pesan error sudah
+tersimpan tapi TIDAK ditampilkan di UI sampai percobaan terakhir — gap UI nyata, diperbaiki juga di sini).
+`boss-worker` dikonfirmasi RESTART (per instruksi eksplisit) sebelum verifikasi ulang, dan restart ini
+sungguhan diperlukan — container terakhir start SEBELUM commit amandemen kuota kemarin selesai (proses
+`queue:work` yang sudah berjalan lama tidak pernah membaca ulang file dari disk, gotcha yang sama persis
+yang sudah didokumentasikan berkali-kali di file ini).
+
+**Root cause SEBENARNYA dari pesan "invalid time value for argument session-timeout"** — ditemukan lewat
+pemanggilan gateway langsung (bypass queue) untuk melihat request/response asli: BUKAN soal nilai
+`routerOsSessionTimeout()` yang salah (nilainya sudah benar, `NULL`, untuk paket quota_base) — melainkan
+bug di `RouterOsApiGateway::syncHotspotUserProfile()`'s cabang SET, yang SELALU mengirim
+`session-timeout='none'` (atau string kosong) sebagai fallback saat nilainya null. **Dikonfirmasi via live
+test langsung ke router**: RouterOS MENOLAK KEDUANYA (`'none'` DAN `''`) sebagai nilai `session-timeout`
+yang valid pada `/ip hotspot user profile set` — beda dengan `idle-timeout` yang genuinely menerima/
+menampilkan "none". Diperbaiki dengan pola yang SAMA seperti cabang ADD (yang sudah benar): sertakan
+`rate-limit`/`session-timeout`/`address-pool` HANYA kalau nilainya non-null, jangan pernah kirim
+nilai-clear sama sekali — ini menghindari seluruh pertanyaan "string apa yang berarti 'kosongkan field
+ini'" sepenuhnya, dikonfirmasi via live test bahwa mengosongkan parameter di `set` membiarkan field itu
+TIDAK TERSENTUH (bukan direset).
+
+**Trade-off yang diketahui dan diterima dari fix ini, bukan diam-diam disembunyikan**: mengganti Batasan
+paket yang SUDAH pernah sync dari TimeBase menjauh (sehingga `routerOsSessionTimeout()` baru mengembalikan
+null) TIDAK LAGI aktif mengosongkan nilai session-timeout yang sudah ter-set sebelumnya di router — field
+itu cuma tetap di nilai lamanya. Belum diselesaikan di sini — dicatat sebagai gap nyata, bukan dikerjakan
+diam-diam.
+
+**Langkah 2 — fix push address-pool**: `PushHotspotPackageToMikrotikJob` sekarang eager-load
+`networkProfileGroup.customerIpPool`, resolve nama pool dari sana (`CustomerIpPool::name` — selalu sama
+dengan nama nyata di router karena `syncIpPool()`-nya sendiri, v0.14.2.1, selalu menjaga nama pool di
+router tetap sinkron lewat lookup berbasis comment), dan meneruskannya sebagai parameter baru
+`$addressPool` ke `RouterOsGateway::syncHotspotUserProfile()`.
+
+**Langkah 3 — status tracking**: mekanisme `markSynced()`/`markSyncFailed()`/retry-backoff yang sudah ada
+dikonfirmasi SUDAH benar (lulus semua test lama + baru) — tidak ada perubahan struktural di sini selain
+menutup akar penyebab kegagalan asli (fix session-timeout di atas) dan menambah tampilan pesan error di
+UI meski status masih "Pending" pertengahan retry (lihat Langkah 1). Idempotensi sudah benar sejak awal
+(lookup by `mikrotik_profile_name`) — dikonfirmasi ulang lewat verifikasi nyata di bawah, termasuk sebuah
+kasus job berjalan DUA KALI berturut-turut untuk objek yang sama (kemungkinan reprocessing queue asli) yang
+tetap resolve ke `/set` tunggal, bukan objek duplikat.
+
+**Verifikasi REAL, end-to-end, semua terhadap `ro-hotspot.bajastu.id`, `test-x86-bajastu` tidak disentuh
+sama sekali**:
+1. **"TOKEN-1Hp" (baris nyata Agung)** — resync ulang sungguhan lewat `HotspotPackageService::resync()`
+   (jalur yang sama persis dengan tombol "Sync Ulang"): status BOSS App berubah jadi `synced`, router
+   menunjukkan `address-pool=Hotspot-1Hp` (benar, sesuai IP Pool yang terhubung lewat Grup Profil-nya),
+   dan jumlah objek `/ip hotspot user profile` di router tetap 2 (`default` + `TOKEN-1Hp`) — tidak ada
+   duplikat.
+2. **Paket baru dari nol** — dibuat, langsung `synced` di percobaan pertama, `address-pool` benar sejak
+   awal (bukan macet Pending). Sempat terproses job DUA KALI berturut-turut (kemungkinan reprocessing
+   queue Redis) — tetap resolve ke satu objek router yang sama (`/set`, bukan `/add` kedua), bukti
+   idempotensi nyata di bawah kondisi non-ideal, bukan cuma di jalur normal.
+3. **Kegagalan koneksi sengaja** — kloning in-memory `Nas` (TIDAK disimpan ke DB, kredensial NAS asli
+   tidak disentuh) dengan port tertutup, panggilan gateway langsung menghasilkan `success=false` dengan
+   pesan nyata ("Unable to establish socket session, Connection refused") — mekanisme retry→failed-nya
+   sendiri sudah tercakup penuh oleh test suite otomatis yang sudah ada (`test_push_job_releases_with_backoff_...`/
+   `test_push_job_marks_failed_on_the_final_attempt`), tidak diulang sebagai tunggu nyata ~7,5 menit
+   terhadap router asli.
+4. Kedua artefak test (`TEST-Fresh-DELETE-ME`, sekaligus objek router-nya) dibersihkan lewat jalur
+   delete asli setelahnya — router kembali ke `default` + `TOKEN-1Hp` saja.
+
+`boss-worker` di-restart 2x selama investigasi ini (sekali setelah fix address-pool, sekali lagi setelah
+fix session-timeout ditemukan) — keduanya dikonfirmasi perlu secara langsung, bukan langkah "jaga-jaga".
+
+Full regression suite dijalankan ulang setelah kedua fix ini, Pint clean di semua file yang disentuh. Belum
+di-merge/tag.
+
+## Field NAS + Tombol Simpan — Investigasi 3 Form (v0.14.4 amendment ketiga)
+
+**Laporan Agung**: "NAS nya harus di atas Simpan biar gak salah save" di 3 form (IP Pool Pelanggan, Grup
+Profil, Profil Hotspot). Instruksi eksplisit: investigasi dulu, jangan asumsi race condition atau
+masalah layout tanpa bukti.
+
+**Hasil investigasi — TIDAK ADA race condition, TIDAK ADA masalah urutan visual, dikonfirmasi lewat
+pembacaan kode langsung, bukan tebakan**:
+- **Race condition**: dicek `wire:model` di ketiga form. Field dependent (IP Pool di Grup Profil,
+  `updatedNasId()`/`updatedType()`) selalu mereset diri SECARA SINKRON dalam request yang SAMA dengan
+  perubahan field penentu (NAS/Tipe) — tidak ada window di mana server menyimpan kombinasi NAS+field
+  dependent yang tidak konsisten. Bahkan seandainya ada race di sisi BROWSER (di luar jangkauan
+  environment ini untuk diuji langsung — tidak ada browser tool), validasi cross-field yang SUDAH ADA
+  sejak v0.14.3 (`validatePoolBelongsToSameNas()` dan sejenisnya, dikonfirmasi via test yang sudah lolos:
+  `test_customer_ip_pool_from_a_different_nas_is_rejected`) akan MENOLAK kombinasi yang tidak cocok, bukan
+  diam-diam menyimpannya. Profil Hotspot bahkan tidak punya field dependent kedua sama sekali (Grup
+  Profil satu-satunya field penentu di form itu) — tidak ada yang bisa race.
+- **Urutan visual**: dicek LANGSUNG di keenam varian form (create+edit × 3 modul) — NAS/Grup Profil
+  SUDAH menjadi field PALING ATAS di semuanya, bukan cuma di IP Pool Pelanggan/Grup Profil seperti
+  disebutkan di laporan awal — Profil Hotspot juga sudah benar.
+- **Placeholder dropdown**: dicek juga — ketiga form CREATE sudah punya `<option value="">-- Pilih ...
+  --</option>` eksplisit, jadi tidak ada risiko silent-default ke NAS pertama dalam daftar.
+
+**Yang GENUINELY hilang, ditemukan lewat audit langsung, bukan tebakan**: tombol Simpan di ketiga form
+TIDAK PERNAH di-disable berdasarkan status pilihan NAS/Grup Profil — user selalu bisa mengklik Simpan
+meski belum memilih apa pun, baru dapat pesan error SETELAH klik. Ini kemungkinan besar akar sebenarnya
+dari keluhan Agung — bukan bug data yang sudah terjadi, melainkan ketiadaan guardrail preventif.
+
+**Fix yang diterapkan**:
+1. **Tombol Simpan disabled** (abu-abu, `disabled:opacity-50 disabled:cursor-not-allowed`) selama NAS
+   (IP Pool Pelanggan, Grup Profil) atau Grup Profil (Profil Hotspot) belum dipilih, plus pesan bantuan
+   kecil di bawah tombol. `nasId` (IP Pool Pelanggan) dan `networkProfileGroupId` (Profil Hotspot)
+   diubah dari `wire:model` biasa jadi `wire:model.live` supaya status disabled bereaksi SEKETIKA saat
+   field dipilih, bukan menunggu round-trip lain — `nasId` di Grup Profil sudah `.live` sejak awal.
+   Diverifikasi tidak ada regresi dari perubahan `.live` ini (62 test lama tetap hijau).
+2. **Validasi backend 'required'** — dikonfirmasi SUDAH ADA di ketiga form (FormRequest dan Livewire
+   `validate()`) sejak sub-versi masing-masing dibangun — TIDAK PERLU kode baru, hanya ditambahkan test
+   eksplisit yang sebelumnya tidak ada (celah cakupan test nyata, bukan celah validasi nyata).
+3. **Kolom `nas_id`/`network_profile_group_id` NOT NULL** — dikonfirmasi LANGSUNG ke `information_schema`
+   database dev real (bukan cuma baca file migration) sudah `nullable=NO` di ketiga tabel sejak awal —
+   tidak perlu migration tambahan.
+
+**Test baru**: 3 test "submit tanpa NAS/Grup Profil ditolak" via Livewire + 3 test setara via API langsung
+(skip validasi frontend) + 3 test "tombol Simpan disabled sampai NAS/Grup Profil dipilih" (regex presisi
+`\bdisabled\b(?!:)` untuk membedakan atribut HTML asli dari kelas varian Tailwind `disabled:opacity-50`
+yang secara kebetulan mengandung substring sama — bug desain test nyata yang ditemukan dan diperbaiki
+sendiri selagi menulis test ini, bukan bug kode produksi).
+
+Full regression suite dijalankan ulang, Pint clean di semua file yang disentuh. Belum di-merge/tag.
+
 ## OLT AllowedIPs Conflict — Real Incident & Fix (branch `fix-wireguard-allowedips-olt-conflict`, fully resolved — code fix + live reconcile both done and verified)
 
 **A real, confirmed ~2-day LibreNMS OLT monitoring outage (2026-08-24 ~18:35 WIB through at least

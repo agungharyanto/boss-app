@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\V1\CustomerIpPoolController;
 use App\Http\Controllers\Api\V1\CustomerTimelineController;
 use App\Http\Controllers\Api\V1\DashboardWidgetSettingController;
 use App\Http\Controllers\Api\V1\HealthController;
+use App\Http\Controllers\Api\V1\HotspotPackageController;
 use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\LocaleSettingController;
 use App\Http\Controllers\Api\V1\MonitoringController;
@@ -268,6 +269,16 @@ Route::prefix('v1')->group(function () {
         Route::put('network-profile-groups/{network_profile_group}', [NetworkProfileGroupController::class, 'update']);
         Route::delete('network-profile-groups/{network_profile_group}', [NetworkProfileGroupController::class, 'destroy']);
         Route::post('network-profile-groups/{network_profile_group}/resync', [NetworkProfileGroupController::class, 'resync']);
+
+        // v0.14.4 — same cluster "Profil Paket", same tier-admin-only
+        // posture (see HotspotPackagePolicy). network_profile_group_id
+        // must be type=hotspot (enforced in the FormRequest).
+        Route::get('hotspot-packages', [HotspotPackageController::class, 'index']);
+        Route::post('hotspot-packages', [HotspotPackageController::class, 'store']);
+        Route::get('hotspot-packages/{hotspot_package}', [HotspotPackageController::class, 'show']);
+        Route::put('hotspot-packages/{hotspot_package}', [HotspotPackageController::class, 'update']);
+        Route::delete('hotspot-packages/{hotspot_package}', [HotspotPackageController::class, 'destroy']);
+        Route::post('hotspot-packages/{hotspot_package}/resync', [HotspotPackageController::class, 'resync']);
 
         // v0.8.4 — read-only Dashboard Monitoring API, WhatsApp-bot
         // integration foothold (see App\Http\Controllers\Api\V1\

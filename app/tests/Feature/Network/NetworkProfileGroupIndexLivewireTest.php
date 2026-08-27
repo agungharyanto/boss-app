@@ -71,6 +71,47 @@ class NetworkProfileGroupIndexLivewireTest extends TestCase
         $this->assertDatabaseHas('network_profile_groups', ['nas_id' => $nas->id, 'name' => 'Grup Utama']);
     }
 
+    /**
+     * v0.14.4 amendment — see CustomerIpPoolIndexLivewireTest's own
+     * docblock for the full investigation (Agung's "NAS harus di atas
+     * Simpan" report) — no data race found, backend 'required' already
+     * existed but was never explicitly tested.
+     */
+    public function test_submitting_without_selecting_a_nas_is_rejected(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('name', 'Grup Tanpa NAS')
+            ->set('type', 'ppp')
+            ->call('createGroup');
+
+        $component->assertHasErrors('nasId');
+        $this->assertDatabaseMissing('network_profile_groups', ['name' => 'Grup Tanpa NAS']);
+    }
+
+    public function test_simpan_button_is_disabled_until_a_nas_is_selected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+
+        $hasDisabledAttribute = fn (string $buttonHtml): bool => (bool) preg_match('/\bdisabled\b(?!:)/', $buttonHtml);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('showCreateForm', true);
+
+        preg_match('/<button type="submit"[^>]*>/', $component->html(), $before);
+        $this->assertNotEmpty($before, 'Simpan button not found in rendered HTML');
+        $this->assertTrue($hasDisabledAttribute($before[0]));
+
+        $htmlAfterSelectingNas = $component->set('nasId', (string) $nas->id)->html();
+        preg_match('/<button type="submit"[^>]*>/', $htmlAfterSelectingNas, $after);
+        $this->assertNotEmpty($after, 'Simpan button not found in rendered HTML');
+        $this->assertFalse($hasDisabledAttribute($after[0]));
+    }
+
     public function test_changing_nas_in_the_create_form_resets_the_selected_pool(): void
     {
         $tenant = Tenant::factory()->create();

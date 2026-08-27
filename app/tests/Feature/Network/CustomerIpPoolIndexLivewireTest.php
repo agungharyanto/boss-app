@@ -58,6 +58,66 @@ class CustomerIpPoolIndexLivewireTest extends TestCase
         ]);
     }
 
+    /**
+     * v0.14.4 amendment — Agung reported field NAS/tombol Simpan issues
+     * across 3 forms ("NAS nya harus di atas Simpan biar gak salah save").
+     * Investigation found no data race (Livewire's own request queueing +
+     * synchronous updated*() hooks + existing cross-field validation
+     * already prevent a stale NAS+dependent-field combination from ever
+     * being submitted) and correct field ordering already in place (NAS is
+     * already the first field in every one of these 3 forms, both create
+     * and edit). What WAS genuinely missing: nothing stopped a submit
+     * attempt with NAS left completely unselected from reaching the
+     * server at all — backend 'required' validation already existed
+     * (baseRules()), but was never explicitly tested, and the button gave
+     * no visual feedback beforehand.
+     */
+    public function test_submitting_without_selecting_a_nas_is_rejected(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(CustomerIpPoolIndex::class)
+            ->set('name', 'Pool Tanpa NAS')
+            ->set('networkAddress', '192.168.10.0/24')
+            ->set('gatewayIp', '192.168.10.1')
+            ->set('rangeStart', '192.168.10.10')
+            ->set('rangeEnd', '192.168.10.200')
+            ->set('usageType', 'general')
+            ->call('createPool');
+
+        $component->assertHasErrors('nasId');
+        $this->assertDatabaseMissing('customer_ip_pools', ['name' => 'Pool Tanpa NAS']);
+    }
+
+    public function test_simpan_button_is_disabled_until_a_nas_is_selected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(CustomerIpPoolIndex::class)
+            ->set('showCreateForm', true);
+
+        // Isolate the Simpan button's own markup specifically — a bare
+        // "disabled" substring check is unreliable here on its own, since
+        // the button's own Tailwind classes (disabled:opacity-50 etc.)
+        // legitimately contain that substring regardless of whether the
+        // real HTML boolean attribute is present. \bdisabled\b(?!:)
+        // matches the real attribute (preceded/followed by a word
+        // boundary) while excluding disabled:-prefixed Tailwind variants.
+        $hasDisabledAttribute = fn (string $buttonHtml): bool => (bool) preg_match('/\bdisabled\b(?!:)/', $buttonHtml);
+
+        preg_match('/<button type="submit"[^>]*>/', $component->html(), $before);
+        $this->assertNotEmpty($before, 'Simpan button not found in rendered HTML');
+        $this->assertTrue($hasDisabledAttribute($before[0]), 'Expected the Simpan button to carry the disabled attribute before a NAS is selected.');
+
+        $htmlAfterSelectingNas = $component->set('nasId', (string) $nas->id)->html();
+        preg_match('/<button type="submit"[^>]*>/', $htmlAfterSelectingNas, $after);
+        $this->assertNotEmpty($after, 'Simpan button not found in rendered HTML');
+        $this->assertFalse($hasDisabledAttribute($after[0]), 'Expected the Simpan button to no longer carry the disabled attribute once a NAS is selected.');
+    }
+
     public function test_range_end_before_range_start_is_rejected(): void
     {
         $tenant = Tenant::factory()->create();

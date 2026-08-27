@@ -80,9 +80,15 @@
                 <input type="checkbox" wire:model="isActive"> {{ __('Aktif') }}
             </label>
 
-            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+            {{-- v0.14.4 amendment — NAS wajib dipilih dulu sebelum Simpan
+                 bisa diklik, defense-in-depth di atas validasi backend
+                 'required' yang sudah ada (baseRules()). --}}
+            <button type="submit" @if (! $nasId) disabled @endif class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-green-600">
                 {{ __('Simpan') }}
             </button>
+            @if (! $nasId)
+                <p class="text-xs text-amber-600 mt-1">{{ __('Pilih NAS terlebih dahulu sebelum menyimpan.') }}</p>
+            @endif
         </form>
     @endif
 

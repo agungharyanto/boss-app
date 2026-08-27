@@ -3,6 +3,108 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.4 amendment ketiga — Field NAS + Tombol Simpan, 3 Form (implementasi selesai 2026-08-27, belum di-merge/tag)
+
+**Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian
+"Field NAS + Tombol Simpan — Investigasi 3 Form (v0.14.4 amendment ketiga)".
+
+- **Investigasi (Langkah 0), bukan asumsi**: laporan Agung "NAS nya harus di atas Simpan biar gak salah
+  save" di 3 form (IP Pool Pelanggan, Grup Profil, Profil Hotspot). Dikonfirmasi lewat pembacaan kode
+  langsung: TIDAK ADA race condition (field dependent selalu reset sinkron dalam request yang sama,
+  ditambah validasi cross-field yang sudah ada sejak v0.14.3 sebagai jaring pengaman kedua), dan urutan
+  visual NAS/Grup Profil SUDAH menjadi field paling atas di keenam varian form (create+edit × 3 modul).
+- **Yang genuinely hilang**: tombol Simpan tidak pernah disabled berdasarkan status pilihan NAS/Grup
+  Profil — user baru tahu ada masalah SETELAH klik. Kemungkinan besar ini akar keluhan sebenarnya.
+- **Fix**: tombol Simpan disabled (abu-abu) sampai NAS/Grup Profil dipilih, di ketiga form. Validasi
+  backend 'required' dikonfirmasi SUDAH ADA sejak awal (tidak perlu kode baru) — hanya ditambah test
+  eksplisit. Kolom `nas_id`/`network_profile_group_id` dikonfirmasi sudah NOT NULL di database real
+  (bukan cuma file migration) — tidak perlu migration tambahan.
+- **Regresi**: 9 test baru (3×disabled-button, 3×reject-via-Livewire, 3×reject-via-API), full suite
+  dijalankan ulang, Pint clean.
+
+## v0.14.4 amendment kedua — Fix Address Pool + session-timeout (implementasi selesai 2026-08-27, belum di-merge/tag)
+
+**Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian
+"Profil Hotspot — Address Pool Tidak Ter-set + Fix session-timeout (v0.14.4 amendment kedua)".
+
+- **Koreksi temuan lama**: klaim "`/ip hotspot user profile` tidak punya field address-pool" (v0.14.3/
+  v0.14.4) TERBUKTI KELIRU — dikonfirmasi via live SET test langsung ke `ro-hotspot.bajastu.id`, field ini
+  nyata dan bisa di-set. Kekeliruan lama berasal dari salah baca "field tidak muncul di print" sebagai
+  "field tidak ada", padahal itu cuma berarti belum pernah di-set (gotcha RouterOS yang sudah
+  didokumentasikan berkali-kali di codebase ini untuk objek lain).
+- **Root cause pesan error "invalid time value for argument session-timeout"**: bug di cabang SET
+  `RouterOsApiGateway::syncHotspotUserProfile()` yang selalu mengirim `session-timeout='none'`/`''` saat
+  nilainya null — RouterOS menolak KEDUANYA. Diperbaiki dengan pola sama seperti cabang ADD: sertakan
+  field opsional hanya kalau non-null.
+- `PushHotspotPackageToMikrotikJob` sekarang menyertakan `address-pool`, diambil dari IP Pool yang
+  terhubung lewat Grup Profil.
+- `boss-worker` di-restart 2x (setelah masing-masing fix) — dikonfirmasi memang diperlukan, container
+  sempat menjalankan kode lama dari sebelum commit amandemen kuota selesai.
+- **Diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id`**: "TOKEN-1Hp" (baris nyata Agung)
+  di-resync ulang lewat jalur "Sync Ulang" asli — address-pool benar, status Tersinkron, tidak ada
+  duplikat objek. Paket baru dari nol langsung Tersinkron di percobaan pertama. Kegagalan koneksi sengaja
+  (kloning in-memory Nas, kredensial asli tidak disentuh) menghasilkan pesan error nyata, bukan macet
+  diam-diam. `test-x86-bajastu` tidak disentuh sama sekali.
+- **Regresi**: 66 test HotspotPackage-related dijalankan ulang (semua hijau), full suite dijalankan ulang,
+  Pint clean.
+
+## v0.14.4 amendment — Field Kuota untuk QuotaBase (implementasi selesai 2026-08-30, belum di-merge/tag)
+
+**Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian
+"Profil Hotspot — Field Kuota untuk QuotaBase (v0.14.4 amendment)".
+
+- **Gap yang sudah diflag sendiri kemarin** dikonfirmasi nyata lewat screenshot Agung: form Profil Hotspot
+  belum punya field "Kuota"/"Satuan Data" untuk paket QuotaBase.
+- **Langkah 0**: dikonfirmasi ulang secara empiris terhadap `ro-hotspot.bajastu.id` (bukan
+  `test-x86-bajastu`) bahwa kuota hanya bisa di-enforce per-USER (`/ip hotspot user`'s
+  `limit-bytes-total`), tidak pernah di level profil/template — sesuai kesimpulan Langkah 0 sprint
+  sebelumnya. Field DB + UI ditambahkan, push ke router **tidak** diimplementasikan (menunggu fitur
+  voucher generation nanti).
+- Kolom baru `quota_value`/`quota_unit`, validasi wajib-kalau-QuotaBase + terlarang-kalau-bukan
+  (`required_if`+`prohibited_unless`), konsisten di FormRequest dan Livewire.
+- **2 bug nyata ditemukan sendiri lewat test suite** (bukan verifikasi manual): default properti Livewire
+  yang salah membuat validasi `prohibited_unless` gagal sendiri saat field belum disentuh user — kelas bug
+  yang sama dengan `activeDurationUnit` kemarin, kali ini arah sebaliknya. Diperbaiki di source, bukan
+  di-workaround.
+- **Regresi**: 9 test Livewire baru (reaktivitas field, validasi, reset saat berpindah) + 6 test API baru
+  (create/update, wajib, terlarang), full suite dijalankan ulang, Pint clean.
+
+## v0.14.4 — Profil Hotspot (implementasi selesai 2026-08-27, belum di-merge/tag)
+
+**Catatan status**: branch `v0.14.4-profil-hotspot` (dari `main`, sudah include v0.14.3). Detail teknis
+lengkap ada di `CLAUDE.md` bagian "Profil Hotspot (v0.14.4)".
+
+Tabel `hotspot_packages` — katalog paket voucher/token hotspot yang bisa dijual (harga modal/jual/promo,
+PPN, skema Unlimited/Limited dengan TimeBase/QuotaBase, masa aktif, shared users, prioritas, periode login),
+terikat ke Grup Profil (v0.14.3, WAJIB tipe Hotspot) dan Bandwidth Profile (v0.14.1). Dibangun sebagai
+entity berdiri sendiri, TIDAK terhubung ke `reseller_package_pricing` (v0.3.2) — `docs/ROADMAP.md` sendiri
+sudah menunjuk Profil PPP (v0.14.5), bukan Profil Hotspot, sebagai pengganti tabel itu nantinya.
+
+- **Investigasi Langkah 0 sebelum coding**: dikonfirmasi `reseller_package_pricing` genuinely 0 baris data
+  meski secara kode masih terhubung ke `Subscription` — aman dibangun terpisah. Field real
+  `/ip hotspot user profile` dikonfirmasi LANGSUNG ke router asli (`ro-hotspot.bajastu.id`, bukan
+  `test-x86-bajastu`): `rate-limit`/`session-timeout`/`shared-users` semua benar-benar ada dan bisa
+  di-set — tapi `comment` TERNYATA DITOLAK router untuk objek ini (beda dari `/ppp profile`/`/ip pool`),
+  jadi ditambah kolom baru `mikrotik_profile_name` (di luar spesifikasi migration awal) supaya rename di
+  BOSS App tidak bikin objek duplikat/orphan di router.
+- **`quota_base` belum punya kolom jumlah kuota** (spesifikasi awal cuma minta flag klasifikasi) — tidak
+  diciptakan sepihak, dilaporkan sebagai gap nyata untuk fitur voucher generation nanti. `priority` dan
+  `login_days`/`login_start_time`/`login_end_time` tersimpan di `boss_db` tapi belum di-push ke router sama
+  sekali sub-versi ini (tidak ada field RouterOS yang cocok, dikonfirmasi lewat pengujian langsung).
+- **2 bug nyata ditemukan saat verifikasi manual**: class Livewire baru butuh `composer dump-autoload`
+  dulu sebelum route-nya bisa dipakai (autoloader ter-optimasi); dan kesalahan setup pengujian sendiri
+  (bandwidth profile yang dipakai ternyata sudah soft-deleted dari sesi testing v0.14.1 sebelumnya).
+- **Diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id`**: jalur penolakan precondition (NAS
+  belum punya Hotspot Server) dikonfirmasi nyata lewat seluruh stack asli (Service → Job → queue Redis
+  asli → `boss-worker` asli → koneksi router asli), langsung `Failed` bukan retry 3x. Jalur sukses push
+  objek baru TIDAK bisa diuji penuh karena `ro-hotspot` masih belum punya Hotspot Server sungguhan (bukan
+  keputusan BOSS App untuk membuatkannya) — tapi bentuk perintah RouterOS yang sama persis sudah
+  diverifikasi nyata terpisah lewat pengujian manual raw add/read/remove. `test-x86-bajastu` tidak
+  disentuh sama sekali.
+- **Regresi**: test baru mencakup Mikrotik sync (push/remove/precondition/rename), API (CRUD + validasi
+  tipe Grup Profil + harga + durasi), Livewire (form + dropdown filter), unit model
+  (`routerOsSessionTimeout()`), dan sidebar. Pint clean.
+
 ## v0.14.3.1 — Tipe Pemakaian IP Pool + Sidebar "Profil Paket" (implementasi selesai 2026-08-27, belum di-merge/tag)
 
 **Catatan status**: sama branch `v0.14.3-grup-profil`, digabung sebelum closure sprint itu (bukan branch/tag

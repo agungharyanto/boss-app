@@ -36,6 +36,13 @@
 | v0.11.0 | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
 | v0.12.0 | Network         | PPPoE Provisioning & Technician API | Provisioning kredensial PPPoE (`radcheck`) hasil instalasi teknisi — di luar scope v0.7.5 karena `work_order_devices` tidak punya link balik ke `radcheck`. Sekalian API/otorisasi resmi teknisi/bot WhatsApp submit device (menggantikan bridge CS manual sementara dari v0.7.5) | Backlog |
 | v0.13.0 | Komunikasi      | WhatsApp 2-Arah (Inbound + State Machine Percakapan) | Infrastruktur pesan masuk untuk `whatsapp-gateway` (Baileys) — v0.4.0 baru outbound-only (lihat CLAUDE.md). Mencakup listener inbound message, state machine percakapan per sesi, routing pesan masuk ke handler yang sesuai. Fondasi/wajah percakapan untuk fitur yang sudah/akan dibangun API-first di modul lain (bot WhatsApp jadi consumer tambahan, bukan desain ulang) — TIDAK termasuk logic bisnis spesifik per modul, itu tetap di endpoint masing-masing. **Nomor versi tentatif — belum dikonfirmasi ulang, konfirmasi ulang saat mau discope beneran (BOSS-003)** | Backlog — belum ada tanggal mulai |
+| v0.14.1 | Network         | Bandwidth Profile              | Fondasi cluster "Profil Paket" (terinspirasi MixRadius V3.2, 7 sub-versi). Tabel `bandwidth_profiles` — profil reusable upload/download min-max, disimpan internal dalam Kbps terlepas satuan input user. REST API + Livewire `/bandwidth-profiles` | Implementasi selesai — verifikasi akhir pending |
+| v0.14.2 | Network         | IP Pool Pelanggan              | Konsep IP pool BARU untuk alokasi IP end-device pelanggan hotspot/PPP — beda total dari `VpnIpPool` (v0.6.2, itu untuk tunnel VPN NAS↔BOSS App). Belum ada konsep ini sama sekali di codebase sebelum cluster ini (dikonfirmasi via investigasi) | Backlog |
+| v0.14.3 | Network         | Grup Profil                    | Konfigurasi RADIUS group per-NAS (tipe Hotspot/PPP), link ke IP Pool module (v0.14.2)/DNS server/parent queue — MASIH DATA SAJA di sub-versi ini, belum ada live provisioning ke NAS asli (itu v0.14.6) | Backlog |
+| v0.14.4 | Network         | Profil Hotspot                 | Paket voucher/token: harga modal/jual/promo, PPN, skema Unlimited/Limited (TimeBase/QuotaBase), link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, periode login (hari+jam) | Backlog |
+| v0.14.5 | Network         | Profil PPP                     | Paket bulanan: harga modal/jual/promo, PPN, link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, shared users, prioritas — direncanakan jadi anchor entity untuk Commission (v0.9.3) yang di-pause di v0.9.2, menggantikan `reseller_package_pricing` yang selama ini kosong data untuk ISP direct | Backlog |
+| v0.14.6 | Network         | RouterOS Live-Push              | Kemampuan BARU: push konfigurasi live ke NAS asli via RouterOS API (bukan generate `.rsc` sekali-jalan seperti `MikrotikScriptGenerator` yang sudah ada — lihat investigasi cluster ini di CLAUDE.md). **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Backlog |
+| v0.14.7 | Network         | Push ke NAS — UI & Rollout Produksi | Tombol "Push ke NAS" di UI Grup Profil/Profil Hotspot/Profil PPP, rollout ke NAS produksi setelah v0.14.6 diverifikasi aman di NAS uji coba | Backlog |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
 (lihat Definition of Done di RULES.md) sebelum lanjut ke versi berikutnya.
@@ -1177,5 +1184,74 @@ logout khusus `/referrer/logout`. Satu regresi lagi ditemukan & diperbaiki dari 
 847/847 test hijau, diverifikasi nyata end-to-end untuk seluruh 5 alur (guest/admin/referrer × login/root/
 logout).
 
+**Merged + tagged** — Agung memverifikasi manual lewat browser (8 akun demo, root routing, logout kedua sisi)
+dan lolos; merge `--no-ff` ke `develop` lalu `main`, tag `v0.9.2` dibuat, di-push ke GitHub.
+
+## v0.14.0 dipecah jadi sub-cluster v0.14.1-v0.14.7 (dikonfirmasi Agung saat v0.14.1 dimulai)
+
+Modul "Profil Paket", terinspirasi MixRadius V3.2 — 4 lapis entity berlapis (Bandwidth → Grup Profil →
+Profil Hotspot/Profil PPP), masing-masing punya dependency teknis ke yang sebelumnya, plus kemampuan baru
+(RouterOS live-push) yang sebelumnya tidak ada sama sekali di codebase ini (`MikrotikScriptGenerator`
+existing murni generate-once `.rsc`, bukan live API push — dikonfirmasi lewat investigasi sebelum sprint
+ini dimulai). Dipecah jadi 7 sub-versi mengikuti pola yang sama dengan `v0.6.0`/`v0.7.0`:
+
+- **v0.14.1 Bandwidth Profile** — fondasi, profil reusable upload/download min-max.
+- **v0.14.2 IP Pool Pelanggan** — konsep BARU (beda dari `VpnIpPool` v0.6.2 yang untuk tunnel VPN).
+- **v0.14.3 Grup Profil** — konfigurasi RADIUS group per-NAS, tipe Hotspot/PPP — masih data saja, belum ada
+  live provisioning.
+- **v0.14.4 Profil Hotspot** — paket voucher/token.
+- **v0.14.5 Profil PPP** — paket bulanan, direncanakan jadi anchor Commission (v0.9.3, di-pause di v0.9.2).
+- **v0.14.6 RouterOS Live-Push** — kemampuan baru push config live ke NAS asli.
+- **v0.14.7 Push ke NAS — UI & Rollout Produksi**.
+
+**KONSTRAIN KRITIS, berlaku untuk SELURUH cluster v0.14.x, bukan cuma v0.14.1** — lihat `CLAUDE.md` bagian
+"Cluster Profil Paket (v0.14.x) — Konstrain NAS Produksi" untuk governance note lengkap soal NAS mana yang
+aman disentuh untuk testing (terutama krusial mulai v0.14.6, saat live-push RouterOS API mulai ada) —
+WAJIB dibaca sebelum eksekusi sub-versi manapun di cluster ini.
+
+## v0.14.1 — Bandwidth Profile (branch `v0.14.1-bandwidth-profile`, implementasi selesai, belum di-merge/tag)
+
+Investigasi pra-sprint dulu (read-only) mengonfirmasi: tidak ada konsep bandwidth existing yang bentrok
+(grep "bandwidth" di `app/Models`/`database/migrations` nihil), dan tidak ada helper Kbps/Mbps PHP yang
+reusable — `window.pickBpsUnit` (v0.8.2) itu JS-only, basis bps (bukan Kbps), untuk pemilihan satuan chart
+axis lintas-dataset, bukan format satu nilai — dibangun baru untuk kebutuhan ini.
+
+**Tabel `bandwidth_profiles`**: `tenant_id` (FK NOT NULL), `name`, `upload_min`/`upload_max`/
+`download_min`/`download_max` (integer, Kbps), `is_active`, timestamps, `soft_deletes`. Unique constraint
+`(tenant_id, name)` dibuat sebagai **partial unique index** (`WHERE deleted_at IS NULL`) via `DB::statement`
+— pola yang sama dengan `customer_contacts`' partial unique index (portable ke PostgreSQL maupun
+SQLite/phpunit) — supaya nama yang sudah di-soft-delete bisa dipakai ulang.
+
+**Konversi satuan Kbps/Mbps di layer form, bukan disimpan sebagai kolom terpisah** — Livewire
+`BandwidthProfileIndex` punya pemilih satuan (Kbps/Mbps) murni untuk kenyamanan input; 4 nilai mentah
+dikonversi ke Kbps (`round($nilai * 1000)` kalau Mbps) sebelum validasi/simpan. REST API (`/api/v1/
+bandwidth-profiles`) selalu menerima/mengembalikan Kbps langsung, tidak tahu-menahu soal satuan input.
+Model punya 4 accessor (`upload_min_display`, dst.) yang menampilkan >1000 Kbps sebagai Mbps.
+
+**2 bug nyata ditemukan & diperbaiki lewat test suite, tidak diketahui dari review kode saja**:
+1. **`formatKbps()` — `rtrim($string, '0')` memakan digit signifikan bilangan bulat.** Versi awal
+   men-strip trailing `'0'` dari hasil `(string)` cast float untuk membuang padding desimal (`"1.50"` ->
+   `"1.5"`) — tapi PHP's float-to-string cast SUDAH TIDAK PERNAH menghasilkan padding seperti itu
+   (`(string)50.0` = `"50"`, bukan `"50.00"`), jadi rtrim itu justru memakan `"0"` yang signifikan dari
+   bilangan bulat: `formatKbps(50000)` menghasilkan `"5 Mbps"`, bukan `"50 Mbps"`. Ditemukan lewat
+   `BandwidthProfileApiTest::test_display_accessor_switches_to_mbps_above_1000_kbps` — diperbaiki dengan
+   menghapus rtrim sepenuhnya (tidak diperlukan sama sekali).
+2. **`Rule::unique()` tidak otomatis exclude baris soft-deleted.** Berbeda dari query Eloquent biasa,
+   `Rule::unique(Model::class, kolom)` query langsung ke tabel raw, tidak lewat `SoftDeletingScope` — jadi
+   nama yang sudah di-soft-delete tetap dianggap "sudah dipakai" selamanya, padahal partial unique index
+   di level DB sudah mengizinkan reuse. Ditemukan lewat
+   `test_a_soft_deleted_names_name_can_be_reused` — diperbaiki dengan menambahkan `->whereNull('deleted_at')`
+   eksplisit di 4 tempat (Store/Update Request + 2 validasi inline Livewire).
+
+**Permission**: `bandwidth_profiles.view`/`bandwidth_profiles.manage`, tier-admin-only (`superadmin`/
+`administrator`, lewat `ADMIN_TIER_ROLES`/`giveToAdminTier()` dari v0.9.2) — tidak ada reseller_users
+carve-out karena `BandwidthProfile` sengaja tidak punya `reseller_id` sama sekali (tenant-level saja untuk
+sub-versi ini).
+
+**Verifikasi**: full regression suite 864/864 hijau (17 test baru), Pint clean di semua file yang disentuh.
+Diverifikasi nyata lewat `tinker` terhadap DB dev real: buat profile 50000 Kbps, `upload_max_display`
+menghasilkan "50 Mbps" (bukan "5 Mbps" — bug sudah benar-benar hilang), soft-delete berfungsi
+(`trashed()` true setelah delete). Data uji coba dibersihkan (`forceDelete()`) setelahnya.
+
 **Belum di-merge/tag** — menunggu verifikasi manual Agung lewat browser sebelum `git merge --no-ff` ke
-`develop`/`main` dan tag `v0.9.2`.
+`develop`/`main` dan tag `v0.14.1`.

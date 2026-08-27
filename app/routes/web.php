@@ -15,6 +15,7 @@ use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
 use App\Livewire\Installation\WorkOrderShow;
+use App\Livewire\Network\BandwidthProfileIndex;
 use App\Livewire\Network\CpeDeviceIndex;
 use App\Livewire\Network\CpeDeviceStatusCheck;
 use App\Livewire\Network\CpeParameterMapIndex;
@@ -155,6 +156,11 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // v0.9.2 — CRUD Referrer (admin-side), same posture as /resellers above
     // (tenant-level, no reseller.context needed).
     Route::get('/referrers', ReferrerIndex::class)->name('referrers.index');
+
+    // v0.14.1 — fondasi cluster "Profil Paket", same posture as /referrers
+    // above (tenant-level, no reseller.context needed — BandwidthProfile
+    // has no reseller_id at all).
+    Route::get('/bandwidth-profiles', BandwidthProfileIndex::class)->name('bandwidth-profiles.index');
 
     Route::get('/tax-components', TaxComponentIndex::class)->name('tax-components.index');
 

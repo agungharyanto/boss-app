@@ -2,6 +2,8 @@
 
 namespace App\Services\Network;
 
+use App\Jobs\PushCustomerIpPoolToMikrotikJob;
+use App\Jobs\RemoveCustomerIpPoolFromMikrotikJob;
 use App\Models\CustomerIpPool;
 use InvalidArgumentException;
 
@@ -10,6 +12,10 @@ use InvalidArgumentException;
  * containment) lives here per BOSS-006, not in the Controller/Livewire
  * component. See CustomerIpPool's own docblock for why this is a
  * deliberately distinct concept from VpnIpPool (v0.8.1).
+ *
+ * v0.14.2.1 — create()/update()/delete() also dispatch the RouterOS
+ * live-push Job AFTER the row is committed — never blocking, never
+ * synchronous. See PushCustomerIpPoolToMikrotikJob's own docblock.
  */
 class CustomerIpPoolService
 {
@@ -22,7 +28,16 @@ class CustomerIpPoolService
      */
     public function create(array $data): CustomerIpPool
     {
-        return CustomerIpPool::create($data);
+        $pool = CustomerIpPool::create($data);
+
+        PushCustomerIpPoolToMikrotikJob::dispatch($pool->id);
+
+        // Eloquent's create() doesn't pull back DB-level column defaults
+        // (mikrotik_sync_status defaults to 'pending' at the schema level,
+        // never passed in $data) — refresh() is what actually populates it
+        // on the in-memory instance this method returns, same reasoning
+        // update() already has via its own refresh() call below.
+        return $pool->refresh();
     }
 
     /**
@@ -31,6 +46,14 @@ class CustomerIpPoolService
     public function update(CustomerIpPool $pool, array $data): CustomerIpPool
     {
         $pool->update($data);
+
+        // Reset to Pending eagerly, synchronously, BEFORE the queued job
+        // actually runs — otherwise the badge would keep showing a stale
+        // Synced/Gagal from a PREVIOUS sync while this new attempt is
+        // still sitting in the queue, which reads as "nothing happened."
+        $pool->markSyncPending();
+
+        PushCustomerIpPoolToMikrotikJob::dispatch($pool->id);
 
         return $pool->refresh();
     }
@@ -44,6 +67,21 @@ class CustomerIpPoolService
     public function delete(CustomerIpPool $pool): void
     {
         $pool->delete();
+
+        RemoveCustomerIpPoolFromMikrotikJob::dispatch($pool->id);
+    }
+
+    /**
+     * Manual "Sync Ulang" — re-dispatches the same push Job used by
+     * create()/update(). Not restricted to a Failed pool at the service
+     * layer (the UI only ever shows the button for one, but nothing here
+     * makes that a hard rule the caller must obey).
+     */
+    public function resync(CustomerIpPool $pool): void
+    {
+        $pool->markSyncPending();
+
+        PushCustomerIpPoolToMikrotikJob::dispatch($pool->id);
     }
 
     /**

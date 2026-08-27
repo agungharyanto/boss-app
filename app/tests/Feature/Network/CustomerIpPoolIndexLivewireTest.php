@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Network;
 
+use App\Enums\MikrotikSyncStatus;
+use App\Jobs\PushCustomerIpPoolToMikrotikJob;
 use App\Livewire\Network\CustomerIpPoolIndex;
 use App\Models\CustomerIpPool;
 use App\Models\Nas;
@@ -9,6 +11,7 @@ use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -298,5 +301,122 @@ class CustomerIpPoolIndexLivewireTest extends TestCase
         $user->assignRole('customer_service');
 
         Livewire::actingAs($user)->test(CustomerIpPoolIndex::class)->assertForbidden();
+    }
+
+    /** v0.14.2.1 — "Sync Ulang" only renders for a Gagal row, never Pending/Tersinkron. */
+    public function test_sync_ulang_button_only_shows_for_a_failed_pool(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pending = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Pool Pending']);
+        $failed = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Pool Gagal']);
+        $failed->markSyncFailed('router unreachable');
+
+        $html = Livewire::actingAs($this->admin($tenant))
+            ->test(CustomerIpPoolIndex::class)
+            ->html();
+
+        $this->assertStringContainsString('resyncPool('.$failed->id.')', $html);
+        $this->assertStringNotContainsString('resyncPool('.$pending->id.')', $html);
+    }
+
+    public function test_resync_pool_re_dispatches_the_push_job(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $pool->markSyncFailed('router unreachable');
+
+        Bus::fake();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CustomerIpPoolIndex::class)
+            ->call('resyncPool', $pool->id);
+
+        Bus::assertDispatched(PushCustomerIpPoolToMikrotikJob::class, fn ($job) => $job->customerIpPoolId === $pool->id);
+        $this->assertSame(MikrotikSyncStatus::Pending, $pool->fresh()->mikrotik_sync_status);
+    }
+
+    /**
+     * v0.14.2.2 — auto-refresh. wire:poll only appears in the rendered
+     * HTML while a visible row is still Pending — this is what makes
+     * Livewire's own conditional-polling mechanism actually stop once
+     * nothing is left to wait for.
+     */
+    public function test_wire_poll_is_present_when_a_visible_row_is_pending(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        CustomerIpPool::factory()->create(['nas_id' => $nas->id]); // defaults to Pending
+
+        $html = Livewire::actingAs($this->admin($tenant))
+            ->test(CustomerIpPoolIndex::class)
+            ->html();
+
+        $this->assertStringContainsString('wire:poll.5s="$refresh"', $html);
+    }
+
+    public function test_wire_poll_is_absent_when_no_visible_row_is_pending(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $synced = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $synced->markSynced();
+        $failed = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $failed->markSyncFailed('timeout');
+
+        $html = Livewire::actingAs($this->admin($tenant))
+            ->test(CustomerIpPoolIndex::class)
+            ->html();
+
+        $this->assertStringNotContainsString('wire:poll', $html);
+    }
+
+    public function test_wire_poll_stops_once_the_last_pending_row_resolves(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]); // Pending
+
+        $component = Livewire::actingAs($this->admin($tenant))->test(CustomerIpPoolIndex::class);
+        $this->assertStringContainsString('wire:poll.5s="$refresh"', $component->html());
+
+        // Simulate the queued Job finishing in the background, exactly
+        // like PushCustomerIpPoolToMikrotikJob::handle() would — this
+        // component never touches the row itself, it only re-queries.
+        $pool->markSynced();
+
+        $component->call('$refresh');
+
+        $this->assertStringNotContainsString('wire:poll', $component->html());
+    }
+
+    /** The "Muat Ulang" button issues a plain Livewire AJAX $refresh — never a full page/URL navigation. */
+    public function test_muat_ulang_button_is_wired_to_refresh_not_a_page_reload(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+
+        $html = Livewire::actingAs($this->admin($tenant))
+            ->test(CustomerIpPoolIndex::class)
+            ->html();
+
+        $this->assertStringContainsString('wire:click="$refresh"', $html);
+        $this->assertStringContainsString('Muat Ulang', $html);
+    }
+
+    public function test_manual_refresh_picks_up_a_status_change_made_outside_the_component(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Pool Refresh']);
+
+        $component = Livewire::actingAs($this->admin($tenant))->test(CustomerIpPoolIndex::class);
+        $component->assertSee('Pending');
+
+        $pool->markSynced();
+
+        $component->call('$refresh')->assertSee('Tersinkron');
     }
 }

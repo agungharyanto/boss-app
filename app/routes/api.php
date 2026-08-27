@@ -255,6 +255,8 @@ Route::prefix('v1')->group(function () {
         Route::get('customer-ip-pools/{customer_ip_pool}', [CustomerIpPoolController::class, 'show']);
         Route::put('customer-ip-pools/{customer_ip_pool}', [CustomerIpPoolController::class, 'update']);
         Route::delete('customer-ip-pools/{customer_ip_pool}', [CustomerIpPoolController::class, 'destroy']);
+        // v0.14.2.1 — manual retry for a pool whose RouterOS live-push failed.
+        Route::post('customer-ip-pools/{customer_ip_pool}/resync', [CustomerIpPoolController::class, 'resync']);
 
         // v0.8.4 — read-only Dashboard Monitoring API, WhatsApp-bot
         // integration foothold (see App\Http\Controllers\Api\V1\

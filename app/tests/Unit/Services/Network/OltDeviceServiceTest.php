@@ -61,6 +61,16 @@ class OltDeviceServiceTest extends TestCase
             {
                 return null;
             }
+
+            public function syncIpPool(Nas $nas, string $comment, string $name, string $ranges): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function removeIpPool(Nas $nas, string $comment): array
+            {
+                return ['success' => true, 'message' => null];
+            }
         });
 
         $nas = new Nas(['name' => 'NAS Test']);
@@ -92,6 +102,16 @@ class OltDeviceServiceTest extends TestCase
             public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int
             {
                 return null;
+            }
+
+            public function syncIpPool(Nas $nas, string $comment, string $name, string $ranges): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function removeIpPool(Nas $nas, string $comment): array
+            {
+                return ['success' => true, 'message' => null];
             }
         });
 

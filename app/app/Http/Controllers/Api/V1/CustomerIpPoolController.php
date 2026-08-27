@@ -70,4 +70,18 @@ class CustomerIpPoolController extends Controller
 
         return $this->success(null, 'Customer IP pool berhasil dihapus');
     }
+
+    /**
+     * v0.14.2.1 — manual "Sync Ulang" for a pool whose last RouterOS
+     * live-push attempt failed. Re-queues PushCustomerIpPoolToMikrotikJob,
+     * same as create()/update() — never synchronous.
+     */
+    public function resync(CustomerIpPool $customer_ip_pool, CustomerIpPoolService $service): JsonResponse
+    {
+        $this->authorize('manage', CustomerIpPool::class);
+
+        $service->resync($customer_ip_pool);
+
+        return $this->success(new CustomerIpPoolResource($customer_ip_pool->load('nas:id,name')), 'Sinkronisasi ke router dijadwalkan ulang');
+    }
 }

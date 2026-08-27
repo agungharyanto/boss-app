@@ -3,6 +3,59 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.2.2 — Auto-Refresh Status Sync Router (implementasi selesai 2026-08-27, belum di-merge/tag)
+
+**Catatan status**: masih di branch `v0.14.2-customer-ip-pool` — perbaikan bug UX ditemukan Agung: status
+"Sync Router" tetap tampil "Pending" sampai reload manual browser, padahal job async sudah selesai di
+belakang layar. Detail teknis lengkap ada di `docs/ROADMAP.md` bagian "v0.14.2.2".
+
+- **`wire:poll.5s="$refresh"` kondisional** — hanya ada di HTML kalau ada baris `Pending` di halaman yang
+  sedang ditampilkan (`hasPendingSync`, dihitung di `render()` dari `$pools` yang sudah di-fetch, bukan
+  query terpisah). Begitu semua baris sudah `Synced`/`Gagal`, atribut `wire:poll` hilang dari render
+  berikutnya dan mekanisme polling Livewire berhenti sendiri — bukan interval tetap selamanya, bukan
+  matikan manual.
+- **Tombol "Muat Ulang"** — `wire:click="$refresh"`, AJAX Livewire biasa, tidak ada navigasi
+  halaman/reload penuh.
+- **Tidak ada `wire:loading` yang perlu dikecualikan** — dikonfirmasi lewat grep dulu, komponen ini
+  memang belum punya indikator loading sama sekali, jadi tidak ada yang perlu di-flicker-proof.
+- Diverifikasi nyata lewat HTTPS live server (bukan cuma test suite): `wire:poll.5s="$refresh"` genuinely
+  muncul di HTML asli saat baris `Pending` (dipaksa lewat `tinker` untuk memisahkan pengujian logic render
+  dari timing job asli yang sudah dikonfirmasi cepat, ~1 detik, di sprint sebelumnya), dan genuinely hilang
+  lagi setelah `Synced`.
+- **Temuan tak terduga selama verifikasi**: pool nyata "Parent-10Mbps" milik Agung ternyata sudah
+  soft-delete (di-hapus lewat UI asli, bukan oleh sesi ini) saat verifikasi berlangsung — konsisten dengan
+  Agung menguji tombol "Hapus" sendiri secara paralel, dan entry-nya di router juga genuinely hilang
+  (bukti tambahan pipeline delete async bekerja benar di pemakaian nyata independen). Tidak dipulihkan
+  sepihak — dilaporkan apa adanya.
+- **Regresi**: 5 test baru (kondisional poll present/absent, poll berhenti begitu resolve, tombol Muat
+  Ulang, refresh mengambil data terbaru), Pint clean.
+
+## v0.14.2.1 — RouterOS Live-Push, dimulai dari IP Pool (implementasi selesai 2026-08-27, belum di-merge/tag)
+
+**Catatan status**: masih di branch `v0.14.2-customer-ip-pool` — **dimajukan dari rencana semula v0.14.6**,
+kemampuan live-push RouterOS API pertama di codebase ini, sengaja dimulai khusus dari `CustomerIpPool`
+(entity paling sederhana), bukan mesin generik untuk semua entity Profil Paket sekaligus. Detail teknis
+lengkap ada di `docs/ROADMAP.md` bagian "v0.14.2.1" dan `CLAUDE.md`.
+
+- **2 method baru di `RouterOsGateway`**: `syncIpPool()`/`removeIpPool()` — `/ip pool add/set/remove`,
+  lookup via `comment` stabil (`"BOSS App - Customer IP Pool #{id}"`), bukan `name` (rename di BOSS App
+  tetap update object yang sama di router, bukan bikin duplikat).
+- **3 kolom baru** `customer_ip_pools.mikrotik_sync_status`/`mikrotik_synced_at`/`mikrotik_sync_error` —
+  push selalu ASYNC lewat `PushCustomerIpPoolToMikrotikJob`/`RemoveCustomerIpPoolFromMikrotikJob` (queue),
+  tidak pernah blocking request HTTP. Retry 3x, backoff 30s/2min/5min (jadwal sama dengan
+  `SendWhatsappMessageJob`).
+- **UI**: badge status Pending/Tersinkron/Gagal + tombol "Sync Ulang" (khusus baris Gagal) di
+  `/customer-ip-pools`. `POST /customer-ip-pools/{id}/resync` di REST API.
+- **Bug nyata ditemukan sebelum sempat dijalankan**: docblock berisi `range_*/mikrotikComment()` — literal
+  `*/` di tengah kalimat menutup komentar PHP secara prematur, `php -l` menangkap parse error sebelum kode
+  ini sempat di-deploy. Kelas bug sama dengan yang sudah didokumentasikan sebelumnya soal komentar `.rsc`
+  Mikrotik, kali ini versi docblock PHP.
+- **Diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id` (NAS uji coba yang aman) — semua 4 langkah
+  benar-benar dieksekusi**: push pool nyata "Parent-10Mbps" milik Agung (muncul di router), edit (ter-update
+  di tempat), simulasi kegagalan nyata + retry otomatis berhasil sendiri, dan delete (pakai pool throwaway
+  terpisah supaya tidak menghapus data Agung). `test-x86-bajastu` tidak disentuh sama sekali.
+- **Regresi**: full suite 920/920 hijau (14 test baru), Pint clean.
+
 ## v0.14.2 — IP Pool Pelanggan (implementasi selesai 2026-08-27, belum di-merge/tag)
 
 **Catatan status**: branch `v0.14.2-customer-ip-pool` (dari `main` yang sudah include v0.14.1) — kelanjutan

@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Network;
 
+use App\Enums\MikrotikSyncStatus;
 use App\Models\CustomerIpPool;
 use App\Models\Nas;
 use App\Services\Network\CustomerIpPoolService;
@@ -255,6 +256,19 @@ class CustomerIpPoolIndex extends Component
         $service->delete(CustomerIpPool::findOrFail($poolId));
     }
 
+    /**
+     * v0.14.2.1 — "Sync Ulang" button, shown only for a pool whose last
+     * RouterOS live-push attempt is Gagal (enforced here too, not just by
+     * the button's own @if in the Blade view — defense in depth, same
+     * posture as every other authorize() check in this codebase).
+     */
+    public function resyncPool(int $poolId, CustomerIpPoolService $service): void
+    {
+        $this->authorize('manage', CustomerIpPool::class);
+
+        $service->resync(CustomerIpPool::findOrFail($poolId));
+    }
+
     public function render()
     {
         $pools = CustomerIpPool::query()
@@ -266,6 +280,15 @@ class CustomerIpPoolIndex extends Component
 
         return view('livewire.network.customer-ip-pool-index', [
             'pools' => $pools,
+            // v0.14.2.2 — drives conditional wire:poll in the Blade view:
+            // only the CURRENTLY DISPLAYED page's rows matter (a Pending
+            // row on some other page shouldn't keep this page polling
+            // forever), and only while at least one is still Pending —
+            // once every visible row is Synced/Gagal, the next render
+            // simply omits the wire:poll attribute and Livewire's own
+            // poll mechanism stops firing, no manual interval teardown
+            // needed (Livewire's documented conditional-polling pattern).
+            'hasPendingSync' => $pools->contains(fn (CustomerIpPool $pool) => $pool->mikrotik_sync_status === MikrotikSyncStatus::Pending),
             'nasOptions' => Nas::query()->orderBy('name')->get(['id', 'name']),
             'canManage' => auth()->user()->can('manage', CustomerIpPool::class),
         ]);

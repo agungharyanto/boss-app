@@ -38,10 +38,11 @@
 | v0.13.0 | Komunikasi      | WhatsApp 2-Arah (Inbound + State Machine Percakapan) | Infrastruktur pesan masuk untuk `whatsapp-gateway` (Baileys) — v0.4.0 baru outbound-only (lihat CLAUDE.md). Mencakup listener inbound message, state machine percakapan per sesi, routing pesan masuk ke handler yang sesuai. Fondasi/wajah percakapan untuk fitur yang sudah/akan dibangun API-first di modul lain (bot WhatsApp jadi consumer tambahan, bukan desain ulang) — TIDAK termasuk logic bisnis spesifik per modul, itu tetap di endpoint masing-masing. **Nomor versi tentatif — belum dikonfirmasi ulang, konfirmasi ulang saat mau discope beneran (BOSS-003)** | Backlog — belum ada tanggal mulai |
 | v0.14.1 | Network         | Bandwidth Profile              | Fondasi cluster "Profil Paket" (terinspirasi MixRadius V3.2, 7 sub-versi). Tabel `bandwidth_profiles` — profil reusable upload/download min-max, disimpan internal dalam Kbps terlepas satuan input user. REST API + Livewire `/bandwidth-profiles` | Merged + tagged (`v0.14.1`) |
 | v0.14.2 | Network         | IP Pool Pelanggan              | Konsep IP pool BARU untuk alokasi IP end-device pelanggan hotspot/PPP — beda total dari `VpnIpPool` (v0.6.2, itu untuk tunnel VPN NAS↔BOSS App). Tabel `customer_ip_pools`, wajib terikat `nas_id`. REST API + Livewire `/customer-ip-pools` | Implementasi selesai — verifikasi akhir pending |
+| v0.14.2.1 | Network     | RouterOS Live-Push (mulai dari IP Pool) | **Dimajukan dari rencana semula v0.14.6** — kemampuan live-push RouterOS API PERTAMA di codebase ini, dimulai khusus untuk `CustomerIpPool` (`/ip pool add/set/remove`, lookup via comment stabil, bukan `name`). Job async (`PushCustomerIpPoolToMikrotikJob`/`RemoveCustomerIpPoolFromMikrotikJob`), retry 3x dengan backoff 30s/2min/5min, kolom `mikrotik_sync_status`/`mikrotik_synced_at`/`mikrotik_sync_error`, badge + tombol "Sync Ulang" di UI. **Sengaja TIDAK digeneralisasi ke entity lain di sub-versi ini** — pola ini jadi cetak biru untuk v0.14.6 nanti (Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP). Diverifikasi nyata end-to-end terhadap `ro-hotspot.bajastu.id` (push/edit/delete/simulasi-gagal-lalu-retry-otomatis-berhasil, semua dikonfirmasi lewat pembacaan `/ip pool print` router asli) | Implementasi selesai — verifikasi akhir pending |
 | v0.14.3 | Network         | Grup Profil                    | Konfigurasi RADIUS group per-NAS (tipe Hotspot/PPP), link ke IP Pool module (v0.14.2)/DNS server/parent queue — MASIH DATA SAJA di sub-versi ini, belum ada live provisioning ke NAS asli (itu v0.14.6) | Backlog |
 | v0.14.4 | Network         | Profil Hotspot                 | Paket voucher/token: harga modal/jual/promo, PPN, skema Unlimited/Limited (TimeBase/QuotaBase), link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, periode login (hari+jam) | Backlog |
 | v0.14.5 | Network         | Profil PPP                     | Paket bulanan: harga modal/jual/promo, PPN, link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, shared users, prioritas — direncanakan jadi anchor entity untuk Commission (v0.9.3) yang di-pause di v0.9.2, menggantikan `reseller_package_pricing` yang selama ini kosong data untuk ISP direct | Backlog |
-| v0.14.6 | Network         | RouterOS Live-Push              | Kemampuan BARU: push konfigurasi live ke NAS asli via RouterOS API (bukan generate `.rsc` sekali-jalan seperti `MikrotikScriptGenerator` yang sudah ada — lihat investigasi cluster ini di CLAUDE.md). **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Backlog |
+| v0.14.6 | Network         | RouterOS Live-Push — Generalisasi | Fondasi live-push SUDAH ADA sejak v0.14.2.1 (khusus IP Pool) — sub-versi ini generalisasi pola yang sama (Job async, kolom sync status, komentar-stabil-sebagai-lookup-key, retry+backoff) ke Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP. **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Backlog |
 | v0.14.7 | Network         | Push ke NAS — UI & Rollout Produksi | Tombol "Push ke NAS" di UI Grup Profil/Profil Hotspot/Profil PPP, rollout ke NAS produksi setelah v0.14.6 diverifikasi aman di NAS uji coba | Backlog |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
@@ -1318,3 +1319,119 @@ dalam/luar CIDR.
 
 **Belum di-merge/tag** — menunggu verifikasi manual Agung lewat browser sebelum `git merge --no-ff` ke
 `develop`/`main` dan tag `v0.14.2`.
+
+## v0.14.2.1 — RouterOS Live-Push, dimulai dari IP Pool (branch `v0.14.2-customer-ip-pool`, implementasi selesai, belum di-merge/tag)
+
+**Dimajukan dari rencana semula v0.14.6** — kemampuan live-push RouterOS API pertama di codebase ini,
+sengaja dimulai dari `CustomerIpPool` (entity paling sederhana di cluster) dulu, bukan mesin generik untuk
+semua entity Profil Paket sekaligus, per instruksi eksplisit.
+
+**Langkah 0 (investigasi)**: `App\Services\Network\Contracts\RouterOsGateway` dikonfirmasi hanya punya 4
+method sempit (`ping`, `pingHost`, `provisionApiUser`, `currentWireguardEndpointPort`) — tidak ada method
+generic untuk eksekusi command API sembarang, jadi 2 method baru (`syncIpPool`/`removeIpPool`) ditulis
+mengikuti pola per-call `Client`/`Query` yang sama persis dengan method existing. Kredensial NAS
+`ro-hotspot.bajastu.id` (`api_username`/`api_password` real) dikonfirmasi VALID dan punya akses WRITE
+(`/user/group/print` menunjukkan user `boss-apps` di grup `full`, bukan grup restricted `boss-app-api` —
+kredensial admin lama, bukan dedicated API user, cukup untuk operasi tulis `/ip pool` sprint ini).
+
+**Kolom baru di `customer_ip_pools`**: `mikrotik_sync_status` (string, cast ke enum
+`App\Enums\MikrotikSyncStatus`: `pending`/`synced`/`failed`, default `pending`), `mikrotik_synced_at`
+(nullable timestamp), `mikrotik_sync_error` (nullable text).
+
+**Push async lewat Job, tidak pernah blocking** — `CustomerIpPoolService::create()`/`update()`/`delete()`
+mendispatch `App\Jobs\PushCustomerIpPoolToMikrotikJob`/`RemoveCustomerIpPoolFromMikrotikJob` (by id, di-fetch
+ulang fresh di `handle()` — pola sama dengan `SendWhatsappMessageJob`) SETELAH baris sudah commit ke DB.
+`update()`/`resync()` reset status ke `Pending` secara SYNCHRONOUS sebelum job jalan, supaya badge tidak
+menampilkan status basi. Retry: `tries=3`, backoff 30s/2min/5min (jadwal sama persis dengan
+`SendWhatsappMessageJob`, dipakai ulang bukan diciptakan baru).
+
+**Command RouterOS**: `/ip pool print/add/set/remove`, lookup lewat `comment` stabil
+(`CustomerIpPool::mikrotikComment()`, `"BOSS App - Customer IP Pool #{id}"`) — BUKAN lewat `name`, supaya
+rename pool di BOSS App meng-update object router yang sama, bukan bikin duplikat orphan. Hanya object pool
+itu sendiri yang di-push sub-versi ini — `gateway_ip`/`dns_primary`/`dns_secondary`/`network_address`
+tersimpan di `boss_db` untuk dipakai sub-versi selanjutnya (Grup Profil/Profil Hotspot/Profil PPP), tapi
+`/ip pool` RouterOS sendiri memang cuma pernah punya `name`+`ranges`.
+
+**Bug nyata ditemukan sebelum sempat dijalankan**: docblock awal `RemoveCustomerIpPoolFromMikrotikJob`
+menulis `range_*/mikrotikComment()` dalam prosa — `range_*/mikrotikComment` mengandung `*/` literal yang
+menutup komentar PHP secara prematur, `php -l` langsung menangkap parse error. Kelas bug yang sama persis
+dengan yang sudah didokumentasikan di CLAUDE.md bagian "Infra Tunnel IP Block" (soal komentar `.rsc`
+Mikrotik) — kali ini versi PHP docblock. Diperbaiki dengan reword menghindari pola `range_*`; semua file
+baru lain di-grep ulang untuk pola sama, bersih.
+
+**Test**: tidak pernah panggil router asli di test suite otomatis — `RouterOsGateway` di-bind ke fake
+implementation (pola sama seperti `NasServiceTest`/`OltDeviceServiceTest`/
+`NasApiUserProvisioningServiceTest` — ke-6 fake class di file-file itu perlu ditambah 2 method no-op baru
+begitu interface bertambah). Logic retry/release Job diuji lewat `withFakeQueueInteractions()`
+(`assertReleased(delay: ...)`/`assertNotReleased()`, `attempts` bisa di-set manual) — bukan lewat koneksi
+queue asli.
+
+**Verifikasi manual REAL, end-to-end, terhadap `ro-hotspot.bajastu.id` — SEMUA 4 langkah benar-benar
+dieksekusi, bukan didelegasikan ke Agung**:
+1. **Push**: resync pool "Parent-10Mbps" (id=12, pool nyata dari screenshot Agung) — dikonfirmasi absen di
+   `/ip pool print` sebelum, muncul sesudah dengan `name`/`ranges`/`comment` yang benar.
+2. **Edit**: ubah `range_end`, dikonfirmasi `.id` router yang SAMA ter-update (bukan entry baru).
+3. **Simulasi gagal + retry**: `nas.api_port` NAS ini (bukan router-nya) di-set sementara ke port tertutup
+   — sync gagal dengan error nyata ("Connection refused"), status tetap `Pending` (bukan langsung `Gagal`,
+   karena masih mid-retry). Port dikembalikan SEBELUM retry 30s berikutnya jalan — retry otomatis berhasil
+   sendiri (`Synced`, error terhapus) — bukti mekanisme retry bekerja nyata, bukan cuma di test.
+4. **Delete**: pakai pool throwaway terpisah (bukan "Parent-10Mbps" milik Agung, supaya tidak menghapus data
+   uji cobanya) — dikonfirmasi muncul di router setelah create, lalu genuinely hilang dari
+   `/ip pool print` setelah `CustomerIpPoolService::delete()`. Row throwaway di `boss_db` di-force-delete
+   setelahnya; "Parent-10Mbps" dibiarkan utuh, sekarang genuinely `Synced` di router asli.
+
+`test-x86-bajastu` **tidak disentuh sama sekali** selama sprint ini.
+
+**Regresi**: full suite 920/920 hijau (14 test baru: 11 di `CustomerIpPoolMikrotikSyncTest` + 2 di
+`CustomerIpPoolIndexLivewireTest` + 1 di `CustomerIpPoolApiTest`), Pint clean di semua file yang disentuh
+(4 isu style pre-existing di 4 file fake-gateway test ditemukan & diperbaiki otomatis:
+`class_attributes_separation`).
+
+**Belum di-merge/tag** — menunggu verifikasi manual Agung lewat browser (termasuk cek visual bahwa
+"Parent-10Mbps" benar-benar muncul di router lewat Winbox-nya sendiri) sebelum `git merge --no-ff` ke
+`develop`/`main`. Karena ini bagian dari branch `v0.14.2-customer-ip-pool` yang sama, kemungkinan akan
+digabung sebagai satu closure dengan v0.14.2 sendiri — tunggu instruksi eksplisit.
+
+## v0.14.2.2 — Auto-Refresh Status Sync Router (branch `v0.14.2-customer-ip-pool`, implementasi selesai, belum di-merge/tag)
+
+**Bug UX ditemukan Agung**: setelah push RouterOS live-push (v0.14.2.1, job async), badge "Sync Router" di
+`/customer-ip-pools` tetap tampil "Pending" sampai user reload manual browser, meski job sudah selesai di
+belakang layar dalam hitungan detik.
+
+**`wire:poll.5s="$refresh"` kondisional, bukan interval tetap** — `render()` menghitung `hasPendingSync`
+dari `$pools` (koleksi yang sudah di-fetch untuk halaman saat ini — bukan query terpisah) via `->contains()`
+mencari status `Pending`. Blade menaruh atribut `wire:poll.5s="$refresh"` di `<div>` root hanya kalau
+`$hasPendingSync` true — begitu semua baris di halaman yang sedang ditampilkan sudah `Synced`/`Gagal`,
+render berikutnya (dipicu oleh poll itu sendiri, atau interaksi lain apa pun) meniadakan atribut tersebut
+dari HTML, dan mekanisme polling Livewire (terikat ke KEBERADAAN atribut di DOM) berhenti sendiri — pola
+resmi yang didokumentasikan Livewire untuk "conditional polling", bukan `setInterval` custom.
+
+**Tombol "Muat Ulang"** — `wire:click="$refresh"` di sebelah kolom search/filter, AJAX Livewire biasa
+(action bawaan `$refresh`, tidak perlu method baru), tidak pernah memicu navigasi/reload halaman penuh.
+
+**Tidak ada `wire:loading` yang perlu dikecualikan** — dicek dulu via grep sebelum menulis kode apa pun:
+komponen ini memang belum punya indikator loading sama sekali di manapun, jadi tidak ada elemen yang akan
+"berkedip" akibat polling 5 detik.
+
+**Verifikasi nyata terhadap live HTTPS server, bukan cuma test suite** — job push yang sudah dibangun di
+v0.14.2.1 ternyata terlalu cepat (~1 detik) untuk ditangkap dalam status `Pending` lewat race timing HTTP
+biasa, jadi logic RENDER (bagian yang genuinely baru/berisiko di sub-versi ini) diverifikasi terpisah dari
+timing job: status dipaksa `Pending` lewat `tinker` (tanpa dispatch job baru), halaman asli di-reload lewat
+`curl` terautentikasi — `wire:poll.5s="$refresh"` genuinely muncul di HTML; status dikembalikan `Synced`,
+reload lagi — atribut genuinely hilang. Kedua arah dikonfirmasi terhadap render PHP asli, bukan cuma
+`Livewire::test()`.
+
+**Temuan tak terduga selama verifikasi, dilaporkan apa adanya**: pool nyata "Parent-10Mbps" milik Agung
+ditemukan sudah soft-delete di tengah sesi verifikasi ini — bukan dihapus oleh sesi ini sendiri (tidak ada
+satu pun tool call ke pool id=12 yang menghapusnya), sangat mungkin Agung sendiri menguji tombol "Hapus"
+di UI asli secara paralel. Entry-nya di router juga genuinely hilang — bukti tambahan pipeline
+`RemoveCustomerIpPoolFromMikrotikJob` (v0.14.2.1) bekerja benar di pemakaian nyata independen, bukan cuma
+saat dipicu sesi ini sendiri. Tidak dipulihkan sepihak (soft-delete, bisa dipulihkan Agung sendiri kalau
+tidak disengaja).
+
+**Regresi**: 5 test baru di `CustomerIpPoolIndexLivewireTest` (poll present saat ada baris pending, poll
+absent saat semua resolved, poll berhenti begitu baris terakhir resolve, tombol Muat Ulang ter-wire benar,
+refresh manual mengambil perubahan status dari luar komponen), Pint clean.
+
+**Belum di-merge/tag** — bagian dari branch `v0.14.2-customer-ip-pool` yang sama dengan v0.14.2/v0.14.2.1,
+menunggu instruksi eksplisit soal penggabungan closure.

@@ -206,4 +206,68 @@ class RouterOsApiGateway implements RouterOsGateway
             return null;
         }
     }
+
+    public function syncIpPool(Nas $nas, string $comment, string $name, string $ranges): array
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 10,
+            ]);
+
+            $find = new Query('/ip/pool/print');
+            $find->where('comment', $comment);
+            $existing = $client->query($find)->read();
+
+            if ($existing === []) {
+                $add = new Query('/ip/pool/add');
+                $add->equal('name', $name)->equal('ranges', $ranges)->equal('comment', $comment);
+                $client->query($add)->read();
+            } else {
+                $set = new Query('/ip/pool/set');
+                $set->equal('.id', $existing[0]['.id'])->equal('name', $name)->equal('ranges', $ranges);
+                $client->query($set)->read();
+            }
+
+            return ['success' => true, 'message' => null];
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal sync /ip pool (comment={$comment}) ke NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    public function removeIpPool(Nas $nas, string $comment): array
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 10,
+            ]);
+
+            $find = new Query('/ip/pool/print');
+            $find->where('comment', $comment);
+            $existing = $client->query($find)->read();
+
+            if ($existing === []) {
+                return ['success' => true, 'message' => null];
+            }
+
+            $remove = new Query('/ip/pool/remove');
+            $remove->equal('.id', $existing[0]['.id']);
+            $client->query($remove)->read();
+
+            return ['success' => true, 'message' => null];
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal hapus /ip pool (comment={$comment}) di NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
 }

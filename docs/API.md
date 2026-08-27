@@ -446,6 +446,14 @@ only (`superadmin`/`administrator`), same posture as `bandwidth_profiles.*`. Bus
 `App\Services\Network\CustomerIpPoolService`, shared by the endpoints below and Livewire
 `Network\CustomerIpPoolIndex` (`/customer-ip-pools`).
 
+**v0.14.2.1 — RouterOS live-push**: `POST`/`PUT`/`DELETE` below each queue a background Job that pushes the
+pool to the real Mikrotik router (`/ip pool add`/`set`/`remove`, looked up by a stable comment, never
+`name` — see `CLAUDE.md`'s "RouterOS Live-Push" section) — never synchronous, never blocks the request.
+`mikrotik_sync_status` is one of `"pending"` (just queued/mid-retry), `"synced"` (last push succeeded), or
+`"failed"` (all 3 retry attempts exhausted) — `mikrotik_synced_at`/`mikrotik_sync_error` reflect the last
+attempt. Started with this entity only; the same pattern is planned to generalize to Bandwidth Profile/Grup
+Profil/Profil Hotspot/Profil PPP in later sub-versions, not built generically yet.
+
 ### `GET /customer-ip-pools`
 
 List customer IP pools belonging to the logged-in tenant. Query optional: `?nas_id=` (filter to one NAS's
@@ -475,6 +483,14 @@ unique-name/overlap checks against the NEW NAS, not the old one.
 ### `DELETE /customer-ip-pools/{customer_ip_pool}`
 
 Soft delete — same "will be referenced by Grup Profil (v0.14.3+)" reasoning as Bandwidth Profile above.
+Also queues `RemoveCustomerIpPoolFromMikrotikJob` (v0.14.2.1, see below) to remove the pool from the real
+router.
+
+### `POST /customer-ip-pools/{customer_ip_pool}/resync` (v0.14.2.1)
+
+Manual retry for a pool whose last RouterOS live-push attempt is `Gagal` (`mikrotik_sync_status ===
+"failed"`) — re-queues the same push Job `create()`/`update()` already use. Returns the pool resource with
+`mikrotik_sync_status` reset to `"pending"` immediately (the actual push still happens asynchronously).
 
 ```json
 {
@@ -492,6 +508,9 @@ Soft delete — same "will be referenced by Grup Profil (v0.14.3+)" reasoning as
     "dns_primary": "8.8.8.8",
     "dns_secondary": "8.8.4.4",
     "is_active": true,
+    "mikrotik_sync_status": "pending",
+    "mikrotik_synced_at": null,
+    "mikrotik_sync_error": null,
     "created_at": "2026-08-27T12:00:00+00:00",
     "updated_at": "2026-08-27T12:00:00+00:00"
   },

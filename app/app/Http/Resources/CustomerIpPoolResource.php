@@ -24,6 +24,9 @@ class CustomerIpPoolResource extends JsonResource
             'dns_primary' => $this->dns_primary,
             'dns_secondary' => $this->dns_secondary,
             'is_active' => $this->is_active,
+            'mikrotik_sync_status' => $this->mikrotik_sync_status?->value,
+            'mikrotik_synced_at' => $this->mikrotik_synced_at?->toIso8601String(),
+            'mikrotik_sync_error' => $this->mikrotik_sync_error,
             'created_at' => $this->created_at->toIso8601String(),
             'updated_at' => $this->updated_at->toIso8601String(),
         ];

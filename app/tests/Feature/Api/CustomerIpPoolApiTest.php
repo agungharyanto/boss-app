@@ -2,12 +2,14 @@
 
 namespace Tests\Feature\Api;
 
+use App\Jobs\PushCustomerIpPoolToMikrotikJob;
 use App\Models\CustomerIpPool;
 use App\Models\Nas;
 use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Tests\TestCase;
 
 class CustomerIpPoolApiTest extends TestCase
@@ -368,5 +370,21 @@ class CustomerIpPoolApiTest extends TestCase
         $response->assertOk();
         $response->assertJsonCount(1, 'data');
         $response->assertJsonPath('data.0.name', 'Tenant A Pool');
+    }
+
+    public function test_admin_can_trigger_a_manual_resync_for_a_failed_pool(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $pool->markSyncFailed('router unreachable');
+
+        Bus::fake();
+
+        $response = $this->actingAs($this->admin($tenant))->postJson("/api/v1/customer-ip-pools/{$pool->id}/resync");
+
+        $response->assertOk();
+        $response->assertJsonPath('data.mikrotik_sync_status', 'pending');
+        Bus::assertDispatched(PushCustomerIpPoolToMikrotikJob::class, fn ($job) => $job->customerIpPoolId === $pool->id);
     }
 }

@@ -3,6 +3,32 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## Fix produksi — Konflik AllowedIPs WireGuard, OLT LibreNMS down 2 hari (branch `fix-wireguard-allowedips-olt-conflict`, implementasi + reconcile live selesai, belum di-merge/tag)
+
+**Bukan versi ber-nomor** — perbaikan insiden produksi mendesak, di luar alur sprint v0.14.x biasa (dari
+`main`, terpisah dari branch `v0.14.1-bandwidth-profile` yang di-stash sementara). Detail teknis lengkap
+ada di `CLAUDE.md` bagian "OLT AllowedIPs Conflict — Real Incident & Fix".
+
+Root cause: `services.vpn.olt_management_subnet` (`10.168.100.0/24`) di-assign unconditional ke SEMUA akun
+WireGuard NAS sejak v0.8.1 — WireGuard cuma izinkan 1 peer klaim 1 CIDR per interface, jadi NAS `ro-hotspot`
+(tanpa OLT sama sekali) yang di-regenerate 24 Agustus mencuri klaim subnet dari NAS `test-x86-bajastu`
+(yang benar-benar punya 3 OLT terdaftar) — ketiga OLT hilang dari monitoring LibreNMS selama ~2 hari
+(2026-08-24 s/d 2026-08-27) tanpa terdeteksi sebagai bug WireGuard (sempat diduga firewall MikroTik).
+
+- **Investigasi read-only dulu** — dikonfirmasi lewat log LibreNMS/dispatcher, SNMP manual, `wg show`
+  lintas-3-node, timestamp RRD, dan korelasi presisi ke `vpn_accounts.created_at` sebelum satu baris kode
+  pun diubah.
+- **Fix**: `Nas::oltDevices()` (relasi baru) + `VpnProvisioningService::issueWireGuardCredentials()` sekarang
+  cuma widen `AllowedIPs` untuk NAS yang benar-benar punya minimal 1 `OltDevice` terdaftar.
+- **Eksekusi ke tunnel live dilakukan bertahap dengan safety net**: snapshot `wg show wg0 dump` disimpan
+  sebagai rollback plan sebelum apa pun disentuh, fragment dikoreksi lewat mekanisme reconcile-loop
+  otomatis yang sudah ada (BUKAN `wg syncconf` manual), diverifikasi tidak ada gangguan ke kedua tunnel
+  (handshake tetap fresh, transfer counter tetap naik) sebelum dan sesudah.
+- **Hasil**: ketiga OLT kembali `status=1` (UP) di LibreNMS dengan `last_polled` real-time, SNMP manual
+  berhasil ke ketiganya, `librenms-dispatcher` berhenti melaporkan "Polling device unreachable".
+- **Regresi**: 848/848 test hijau (termasuk test baru untuk skenario insiden nyata: config OLT subnet
+  di-set global tapi NAS tanpa OLT harus tetap di-omit), Pint clean.
+
 ## v0.9.2 — CRUD Referrer, Portal Login & RBAC Two-Tier (implementasi selesai 2026-08-26, belum di-merge/tag)
 
 **Catatan status**: branch `v0.9.2-referrer-crud-portal-rbac` (dari `main` yang sudah include v0.9.1) —

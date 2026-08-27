@@ -5,6 +5,7 @@ namespace Tests\Feature\Network;
 use App\Enums\VpnAccountStatus;
 use App\Enums\VpnProtocol;
 use App\Models\Nas;
+use App\Models\OltDevice;
 use App\Models\Tenant;
 use App\Models\VpnServer;
 use App\Models\VpnWireguardNasBlock;
@@ -104,12 +105,19 @@ class VpnProvisioningMultiProtocolTest extends TestCase
      * AllowedIPs is WireGuard's own cryptokey-routing filter, checked
      * BEFORE the kernel even attempts to send a packet (confirmed for
      * real: `ping -I wg0 <olt-ip>` failed outright with "sendto: Required
-     * key not available" until this fix). No `nas.olt_management_subnet`
-     * column exists — same single-global-subnet limitation as everywhere
-     * else OLT_MANAGEMENT_SUBNET is read, so this widens every WireGuard
-     * account's AllowedIPs identically, not per-NAS.
+     * key not available" until this fix).
+     *
+     * v0.14.x incident fix: the widening used to be unconditional for
+     * every WireGuard NAS (no `nas.olt_management_subnet` column existed,
+     * so it was applied identically to every account) — this is exactly
+     * what caused a real ~2-day LibreNMS OLT monitoring outage (see
+     * CLAUDE.md's "OLT AllowedIPs Conflict" section): WireGuard only lets
+     * ONE peer on an interface claim a given AllowedIPs CIDR, so a SECOND
+     * NAS's WireGuard account unconditionally claiming the same subnet
+     * silently stole the crypto-routing claim from the NAS that actually
+     * has OLTs behind it. Now gated on Nas::oltDevices()->exists().
      */
-    public function test_provision_wireguard_widens_allowed_ips_to_the_olt_management_subnet_when_configured(): void
+    public function test_provision_wireguard_widens_allowed_ips_to_the_olt_management_subnet_when_the_nas_has_an_olt(): void
     {
         config(['services.vpn.olt_management_subnet' => '10.168.100.0/24']);
 
@@ -119,6 +127,7 @@ class VpnProvisioningMultiProtocolTest extends TestCase
         ]);
         $tenant = Tenant::factory()->create();
         $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        OltDevice::factory()->create(['nas_id' => $nas->id]);
         $this->serverFor(VpnProtocol::WireGuard);
 
         $account = app(VpnProvisioningService::class)->provision($nas, VpnProtocol::WireGuard);
@@ -140,6 +149,31 @@ class VpnProvisioningMultiProtocolTest extends TestCase
         ]);
         $tenant = Tenant::factory()->create();
         $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        OltDevice::factory()->create(['nas_id' => $nas->id]);
+        $this->serverFor(VpnProtocol::WireGuard);
+
+        $account = app(VpnProvisioningService::class)->provision($nas, VpnProtocol::WireGuard);
+
+        $contents = File::get($this->wgPeersDir.'/'.$account->username.'.conf');
+        $this->assertStringNotContainsString('10.168.100.0/24', $contents);
+    }
+
+    /**
+     * The actual real-world incident scenario: config IS set (globally,
+     * for whichever NAS in the fleet needs it), but THIS particular NAS
+     * has zero OltDevice rows (ro-hotspot's real situation) — the subnet
+     * must be omitted, not applied unconditionally.
+     */
+    public function test_provision_wireguard_omits_olt_management_subnet_when_configured_but_nas_has_no_olt(): void
+    {
+        config(['services.vpn.olt_management_subnet' => '10.168.100.0/24']);
+
+        Process::fake([
+            '*wg*genkey*' => Process::result(output: "client-private-key-value\n"),
+            '*wg*pubkey*' => Process::result(output: "client-public-key-value\n"),
+        ]);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
         $this->serverFor(VpnProtocol::WireGuard);
 
         $account = app(VpnProvisioningService::class)->provision($nas, VpnProtocol::WireGuard);
@@ -151,9 +185,10 @@ class VpnProvisioningMultiProtocolTest extends TestCase
     /**
      * Both widenings (tr069_management_subnet AND OLT_MANAGEMENT_SUBNET)
      * must be able to coexist on the SAME peer file — this is exactly
-     * test-x86-bajastu's real configuration (both subnets set at once).
+     * test-x86-bajastu's real configuration (both subnets set at once,
+     * and it genuinely has OltDevice rows).
      */
-    public function test_provision_wireguard_combines_tr069_and_olt_subnet_widening_when_both_are_set(): void
+    public function test_provision_wireguard_combines_tr069_and_olt_subnet_widening_when_both_apply(): void
     {
         config(['services.vpn.olt_management_subnet' => '10.168.100.0/24']);
 
@@ -163,6 +198,7 @@ class VpnProvisioningMultiProtocolTest extends TestCase
         ]);
         $tenant = Tenant::factory()->create();
         $nas = Nas::factory()->create(['tenant_id' => $tenant->id, 'tr069_management_subnet' => '10.1.0.0/20']);
+        OltDevice::factory()->create(['nas_id' => $nas->id]);
         $this->serverFor(VpnProtocol::WireGuard);
 
         $account = app(VpnProvisioningService::class)->provision($nas, VpnProtocol::WireGuard);

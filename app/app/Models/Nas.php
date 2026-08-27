@@ -61,4 +61,18 @@ class Nas extends Model
     {
         return $this->hasMany(VpnAccount::class);
     }
+
+    /**
+     * v0.14.x incident fix — used by VpnProvisioningService::
+     * issueWireGuardCredentials() to only widen AllowedIPs with the OLT
+     * management subnet for a NAS that actually has at least one OLT
+     * registered, instead of unconditionally widening every WireGuard
+     * NAS's AllowedIPs the same way (the v0.8.1 design that caused a real
+     * ~2-day LibreNMS OLT monitoring outage — see CLAUDE.md's own
+     * "OLT AllowedIPs Conflict" section for the full incident writeup).
+     */
+    public function oltDevices(): HasMany
+    {
+        return $this->hasMany(OltDevice::class);
+    }
 }

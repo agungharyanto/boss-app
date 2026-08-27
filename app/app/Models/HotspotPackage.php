@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\HotspotDurationUnit;
 use App\Enums\HotspotLimitType;
 use App\Enums\HotspotProfileType;
+use App\Enums\HotspotQuotaUnit;
 use App\Enums\MikrotikSyncStatus;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\HotspotPackageFactory;
@@ -40,6 +41,11 @@ class HotspotPackage extends Model
         'limit_type',
         'active_duration_value',
         'active_duration_unit',
+        // v0.14.4 amendment — see the quota migration's own docblock for
+        // why these are stored but never pushed to RouterOS this
+        // sub-version.
+        'quota_value',
+        'quota_unit',
         'shared_users',
         'priority',
         'login_days',
@@ -67,6 +73,8 @@ class HotspotPackage extends Model
             'profile_type' => HotspotProfileType::class,
             'limit_type' => HotspotLimitType::class,
             'active_duration_unit' => HotspotDurationUnit::class,
+            'quota_value' => 'decimal:2',
+            'quota_unit' => HotspotQuotaUnit::class,
             'login_days' => 'array',
             'is_active' => 'boolean',
             'mikrotik_sync_status' => MikrotikSyncStatus::class,

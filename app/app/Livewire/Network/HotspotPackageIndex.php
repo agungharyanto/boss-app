@@ -75,6 +75,16 @@ class HotspotPackageIndex extends Component
 
     public string $activeDurationUnit = 'day';
 
+    public string $quotaValue = '';
+
+    // Deliberately empty by default, NOT 'mb' — prohibited_unless() (used
+    // below) requires this field to be genuinely EMPTY whenever
+    // limitType isn't quota_base, so a non-empty default would fail its
+    // own validation the moment Batasan is anything else. updatedLimitType()
+    // fills in a sensible 'mb' default only once QuotaBase is actually
+    // selected.
+    public string $quotaUnit = '';
+
     public string $sharedUsers = '1';
 
     public string $priority = 'Default';
@@ -116,6 +126,11 @@ class HotspotPackageIndex extends Component
 
     public string $editActiveDurationUnit = 'day';
 
+    public string $editQuotaValue = '';
+
+    // Same "empty by default, not 'mb'" reasoning as $quotaUnit above.
+    public string $editQuotaUnit = '';
+
     public string $editSharedUsers = '1';
 
     public string $editPriority = 'Default';
@@ -151,6 +166,59 @@ class HotspotPackageIndex extends Component
         } else {
             $this->sortBy = $column;
             $this->sortDir = 'asc';
+        }
+    }
+
+    /**
+     * v0.14.4 amendment — switching Tipe Profil away from Limited hides the
+     * whole Batasan/Masa Aktif/Kuota block; clearing it here (not just
+     * relying on limitData()'s own submit-time nulling) avoids a stale,
+     * unverified value surviving a hide→re-show round trip, same
+     * "invalidate the field that depends on what changed" discipline as
+     * updatedNasId()/updatedType() elsewhere in this codebase.
+     */
+    public function updatedProfileType(): void
+    {
+        $this->limitType = '';
+        $this->activeDurationValue = '';
+        $this->quotaValue = '';
+        $this->quotaUnit = '';
+    }
+
+    public function updatedEditProfileType(): void
+    {
+        $this->editLimitType = '';
+        $this->editActiveDurationValue = '';
+        $this->editQuotaValue = '';
+        $this->editQuotaUnit = '';
+    }
+
+    /**
+     * Switching Batasan away from QuotaBase hides the Kuota/Satuan Data
+     * fields — clear BOTH values (not just quotaValue) so a stale figure
+     * never survives a TimeBase→QuotaBase→TimeBase round trip unnoticed,
+     * and so quotaUnit's own prohibited_unless rule (see its property
+     * docblock) never fails on a leftover non-empty value from an earlier
+     * QuotaBase selection. Switching INTO QuotaBase fills in a sensible
+     * 'mb' default so the dropdown is never shown genuinely empty.
+     */
+    public function updatedLimitType(): void
+    {
+        if ($this->limitType === 'quota_base') {
+            $this->quotaUnit = $this->quotaUnit ?: 'mb';
+        } else {
+            $this->quotaValue = '';
+            $this->quotaUnit = '';
+        }
+    }
+
+    public function updatedEditLimitType(): void
+    {
+        if ($this->editLimitType === 'quota_base') {
+            $this->editQuotaUnit = $this->editQuotaUnit ?: 'mb';
+        } else {
+            $this->editQuotaValue = '';
+            $this->editQuotaUnit = '';
         }
     }
 
@@ -196,19 +264,32 @@ class HotspotPackageIndex extends Component
     }
 
     /**
-     * @return array{profile_type: string, limit_type: ?string, active_duration_value: ?int, active_duration_unit: ?string}
+     * @return array{profile_type: string, limit_type: ?string, active_duration_value: ?int, active_duration_unit: ?string, quota_value: ?string, quota_unit: ?string}
      */
-    private function durationData(string $profileType, string $limitType, string $durationValue, string $durationUnit): array
+    private function limitData(string $profileType, string $limitType, string $durationValue, string $durationUnit, string $quotaValue, string $quotaUnit): array
     {
         if ($profileType !== 'limited') {
-            return ['profile_type' => $profileType, 'limit_type' => null, 'active_duration_value' => null, 'active_duration_unit' => null];
+            return [
+                'profile_type' => $profileType, 'limit_type' => null,
+                'active_duration_value' => null, 'active_duration_unit' => null,
+                'quota_value' => null, 'quota_unit' => null,
+            ];
         }
+
+        // Kuota/Satuan Data only ever apply to QuotaBase — even if the
+        // form somehow still carries a value for the other limit_type
+        // (shouldn't happen given updatedLimitType()'s own reset, but
+        // never trust client-controlled state alone for what gets
+        // persisted), null them out here too.
+        $isQuotaBase = $limitType === 'quota_base';
 
         return [
             'profile_type' => $profileType,
             'limit_type' => $limitType,
             'active_duration_value' => $durationValue !== '' ? (int) $durationValue : null,
             'active_duration_unit' => $durationUnit,
+            'quota_value' => $isQuotaBase && $quotaValue !== '' ? $quotaValue : null,
+            'quota_unit' => $isQuotaBase ? $quotaUnit : null,
         ];
     }
 
@@ -228,6 +309,8 @@ class HotspotPackageIndex extends Component
             'limitType' => ['required_if:profileType,limited', 'nullable', 'string', 'in:time_base,quota_base'],
             'activeDurationValue' => ['required_if:profileType,limited', 'nullable', 'integer', 'min:1'],
             'activeDurationUnit' => ['required_if:profileType,limited', 'nullable', 'string', 'in:minute,hour,day,month'],
+            'quotaValue' => ['required_if:limitType,quota_base', 'prohibited_unless:limitType,quota_base', 'nullable', 'numeric', 'min:0.01'],
+            'quotaUnit' => ['required_if:limitType,quota_base', 'prohibited_unless:limitType,quota_base', 'nullable', 'string', 'in:mb,gb'],
             'sharedUsers' => ['required', 'integer', 'min:1'],
             'priority' => ['nullable', 'string', 'max:50'],
             'loginDays' => ['nullable', 'array'],
@@ -256,12 +339,12 @@ class HotspotPackageIndex extends Component
             'login_start_time' => $this->loginStartTime ?: null,
             'login_end_time' => $this->loginEndTime ?: null,
             'is_active' => $this->isActive,
-        ], $this->durationData($this->profileType, $this->limitType, $this->activeDurationValue, $this->activeDurationUnit)));
+        ], $this->limitData($this->profileType, $this->limitType, $this->activeDurationValue, $this->activeDurationUnit, $this->quotaValue, $this->quotaUnit)));
 
         $this->reset([
             'networkProfileGroupId', 'bandwidthProfileId', 'name', 'visibleToReseller', 'showInVoucherForm',
             'costPrice', 'sellPrice', 'promoPrice', 'taxPercent', 'profileType', 'limitType',
-            'activeDurationValue', 'activeDurationUnit', 'sharedUsers', 'priority', 'loginDays',
+            'activeDurationValue', 'activeDurationUnit', 'quotaValue', 'quotaUnit', 'sharedUsers', 'priority', 'loginDays',
             'loginStartTime', 'loginEndTime', 'isActive', 'showCreateForm',
         ]);
         $this->costPrice = '0';
@@ -294,6 +377,13 @@ class HotspotPackageIndex extends Component
         $this->editLimitType = $package->limit_type?->value ?? '';
         $this->editActiveDurationValue = $package->active_duration_value !== null ? (string) $package->active_duration_value : '';
         $this->editActiveDurationUnit = $package->active_duration_unit?->value ?? 'day';
+        $this->editQuotaValue = $package->quota_value !== null ? (string) $package->quota_value : '';
+        // Empty fallback, NOT 'mb' — a package that genuinely isn't
+        // QuotaBase has a genuinely null quota_unit, and editQuotaUnit
+        // must stay empty for it (see its own property docblock on why a
+        // non-empty value fails prohibited_unless the moment
+        // editLimitType isn't quota_base).
+        $this->editQuotaUnit = $package->quota_unit?->value ?? '';
         $this->editSharedUsers = (string) $package->shared_users;
         $this->editPriority = $package->priority;
         $this->editLoginDays = $package->login_days ?? [];
@@ -308,8 +398,8 @@ class HotspotPackageIndex extends Component
             'editingPackageId', 'editNetworkProfileGroupId', 'editBandwidthProfileId', 'editName',
             'editVisibleToReseller', 'editShowInVoucherForm', 'editCostPrice', 'editSellPrice',
             'editPromoPrice', 'editTaxPercent', 'editProfileType', 'editLimitType', 'editActiveDurationValue',
-            'editActiveDurationUnit', 'editSharedUsers', 'editPriority', 'editLoginDays', 'editLoginStartTime',
-            'editLoginEndTime', 'editIsActive',
+            'editActiveDurationUnit', 'editQuotaValue', 'editQuotaUnit', 'editSharedUsers', 'editPriority',
+            'editLoginDays', 'editLoginStartTime', 'editLoginEndTime', 'editIsActive',
         ]);
         $this->editProfileType = 'unlimited';
         $this->editActiveDurationUnit = 'day';
@@ -334,6 +424,8 @@ class HotspotPackageIndex extends Component
             'editLimitType' => ['required_if:editProfileType,limited', 'nullable', 'string', 'in:time_base,quota_base'],
             'editActiveDurationValue' => ['required_if:editProfileType,limited', 'nullable', 'integer', 'min:1'],
             'editActiveDurationUnit' => ['required_if:editProfileType,limited', 'nullable', 'string', 'in:minute,hour,day,month'],
+            'editQuotaValue' => ['required_if:editLimitType,quota_base', 'prohibited_unless:editLimitType,quota_base', 'nullable', 'numeric', 'min:0.01'],
+            'editQuotaUnit' => ['required_if:editLimitType,quota_base', 'prohibited_unless:editLimitType,quota_base', 'nullable', 'string', 'in:mb,gb'],
             'editSharedUsers' => ['required', 'integer', 'min:1'],
             'editPriority' => ['nullable', 'string', 'max:50'],
             'editLoginDays' => ['nullable', 'array'],
@@ -362,7 +454,7 @@ class HotspotPackageIndex extends Component
             'login_start_time' => $this->editLoginStartTime ?: null,
             'login_end_time' => $this->editLoginEndTime ?: null,
             'is_active' => $this->editIsActive,
-        ], $this->durationData($this->editProfileType, $this->editLimitType, $this->editActiveDurationValue, $this->editActiveDurationUnit)));
+        ], $this->limitData($this->editProfileType, $this->editLimitType, $this->editActiveDurationValue, $this->editActiveDurationUnit, $this->editQuotaValue, $this->editQuotaUnit)));
 
         $this->cancelEdit();
     }

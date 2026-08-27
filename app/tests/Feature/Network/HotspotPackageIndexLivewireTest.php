@@ -149,6 +149,145 @@ class HotspotPackageIndexLivewireTest extends TestCase
     }
 
     /**
+     * v0.14.4 amendment — real gap confirmed by Agung via screenshot: the
+     * form was missing Kuota/Satuan Data for QuotaBase entirely. Selecting
+     * QuotaBase must reveal them, same show/hide pattern already
+     * established for Batasan/Masa Aktif.
+     */
+    public function test_selecting_quota_base_reveals_the_quota_fields(): void
+    {
+        $f = $this->fixtures();
+
+        $html = Livewire::actingAs($this->admin($f['tenant']))
+            ->test(HotspotPackageIndex::class)
+            ->set('showCreateForm', true)
+            ->set('profileType', 'limited')
+            ->set('limitType', 'quota_base')
+            ->html();
+
+        $this->assertStringContainsString('Kuota', $html);
+        $this->assertStringContainsString('Satuan Data', $html);
+    }
+
+    public function test_selecting_time_base_does_not_show_the_quota_fields(): void
+    {
+        $f = $this->fixtures();
+
+        $html = Livewire::actingAs($this->admin($f['tenant']))
+            ->test(HotspotPackageIndex::class)
+            ->set('showCreateForm', true)
+            ->set('profileType', 'limited')
+            ->set('limitType', 'time_base')
+            ->html();
+
+        $this->assertStringNotContainsString('Satuan Data', $html);
+    }
+
+    public function test_creating_a_quota_base_package_without_quota_fails_validation(): void
+    {
+        $f = $this->fixtures();
+
+        $component = Livewire::actingAs($this->admin($f['tenant']))
+            ->test(HotspotPackageIndex::class)
+            ->set('networkProfileGroupId', (string) $f['group']->id)
+            ->set('bandwidthProfileId', (string) $f['bandwidth']->id)
+            ->set('name', 'Paket Kuota')
+            ->set('profileType', 'limited')
+            ->set('limitType', 'quota_base')
+            ->set('activeDurationValue', '30')
+            ->call('createPackage');
+
+        // quotaUnit is NOT expected here — updatedLimitType() already
+        // filled it in with a sensible 'mb' default the moment QuotaBase
+        // was selected above; only quotaValue (genuinely never touched)
+        // fails.
+        $component->assertHasErrors(['quotaValue']);
+        $component->assertHasNoErrors(['quotaUnit']);
+    }
+
+    public function test_creating_a_quota_base_package_with_full_data_stores_correctly(): void
+    {
+        $f = $this->fixtures();
+
+        Livewire::actingAs($this->admin($f['tenant']))
+            ->test(HotspotPackageIndex::class)
+            ->set('networkProfileGroupId', (string) $f['group']->id)
+            ->set('bandwidthProfileId', (string) $f['bandwidth']->id)
+            ->set('name', 'Paket Kuota')
+            ->set('profileType', 'limited')
+            ->set('limitType', 'quota_base')
+            ->set('activeDurationValue', '30')
+            ->set('quotaValue', '2.5')
+            ->set('quotaUnit', 'gb')
+            ->call('createPackage')
+            ->assertHasNoErrors();
+
+        $package = HotspotPackage::where('name', 'Paket Kuota')->first();
+        $this->assertSame('quota_base', $package->limit_type->value);
+        $this->assertSame('2.50', (string) $package->quota_value);
+        $this->assertSame('gb', $package->quota_unit->value);
+    }
+
+    /**
+     * The whole reason quotaUnit's own property default is empty string,
+     * not 'mb' — switching Batasan back to TimeBase after having selected
+     * QuotaBase must genuinely clear both quota fields, not leave a stale
+     * value that would silently fail prohibited_unless on submit (or,
+     * worse, silently persist alongside a TimeBase package).
+     */
+    public function test_switching_from_quota_base_back_to_time_base_clears_quota_fields(): void
+    {
+        $f = $this->fixtures();
+
+        Livewire::actingAs($this->admin($f['tenant']))
+            ->test(HotspotPackageIndex::class)
+            ->set('showCreateForm', true)
+            ->set('profileType', 'limited')
+            ->set('limitType', 'quota_base')
+            ->set('quotaValue', '5')
+            ->assertSet('quotaUnit', 'mb')
+            ->set('limitType', 'time_base')
+            ->assertSet('quotaValue', '')
+            ->assertSet('quotaUnit', '');
+    }
+
+    /**
+     * Same as above, but switching Tipe Profil straight to Unlimited
+     * (which hides Batasan/Masa Aktif/Kuota all at once).
+     */
+    public function test_switching_profile_type_to_unlimited_clears_quota_fields(): void
+    {
+        $f = $this->fixtures();
+
+        Livewire::actingAs($this->admin($f['tenant']))
+            ->test(HotspotPackageIndex::class)
+            ->set('showCreateForm', true)
+            ->set('profileType', 'limited')
+            ->set('limitType', 'quota_base')
+            ->set('quotaValue', '5')
+            ->set('profileType', 'unlimited')
+            ->assertSet('quotaValue', '')
+            ->assertSet('quotaUnit', '');
+    }
+
+    public function test_editing_a_quota_base_package_prefills_quota_fields(): void
+    {
+        $f = $this->fixtures();
+        $package = HotspotPackage::factory()->quotaBase()->create([
+            'network_profile_group_id' => $f['group']->id, 'bandwidth_profile_id' => $f['bandwidth']->id,
+            'quota_value' => 1.5, 'quota_unit' => 'gb',
+        ]);
+
+        Livewire::actingAs($this->admin($f['tenant']))
+            ->test(HotspotPackageIndex::class)
+            ->call('edit', $package->id)
+            ->assertSet('editQuotaValue', '1.50')
+            ->assertSet('editQuotaUnit', 'gb')
+            ->call('updatePackage')
+            ->assertHasNoErrors();
+    }
+
+    /**
      * Server-side enforcement, not just the dropdown filter — forcing a
      * PPP-type group id directly (bypassing the dropdown's own query
      * scope) proves the backend cross-check itself works.

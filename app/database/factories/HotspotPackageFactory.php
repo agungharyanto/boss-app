@@ -5,6 +5,7 @@ namespace Database\Factories;
 use App\Enums\HotspotDurationUnit;
 use App\Enums\HotspotLimitType;
 use App\Enums\HotspotProfileType;
+use App\Enums\HotspotQuotaUnit;
 use App\Enums\NetworkProfileGroupType;
 use App\Models\BandwidthProfile;
 use App\Models\HotspotPackage;
@@ -40,6 +41,8 @@ class HotspotPackageFactory extends Factory
             'limit_type' => null,
             'active_duration_value' => null,
             'active_duration_unit' => null,
+            'quota_value' => null,
+            'quota_unit' => null,
             'shared_users' => 1,
             'priority' => 'Default',
             'login_days' => null,
@@ -56,6 +59,18 @@ class HotspotPackageFactory extends Factory
             'limit_type' => HotspotLimitType::TimeBase,
             'active_duration_value' => 1,
             'active_duration_unit' => HotspotDurationUnit::Day,
+        ]);
+    }
+
+    public function quotaBase(): static
+    {
+        return $this->state(fn () => [
+            'profile_type' => HotspotProfileType::Limited,
+            'limit_type' => HotspotLimitType::QuotaBase,
+            'active_duration_value' => 30,
+            'active_duration_unit' => HotspotDurationUnit::Day,
+            'quota_value' => 1,
+            'quota_unit' => HotspotQuotaUnit::Gb,
         ]);
     }
 }

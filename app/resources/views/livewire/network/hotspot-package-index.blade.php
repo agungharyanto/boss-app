@@ -81,7 +81,7 @@
                 @if ($profileType === 'limited')
                     <div>
                         <label class="block text-sm font-medium text-gray-700">{{ __('Batasan') }}</label>
-                        <select wire:model="limitType" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                        <select wire:model.live="limitType" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                             <option value="">{{ __('-- Pilih --') }}</option>
                             <option value="time_base">{{ __('Time Base') }}</option>
                             <option value="quota_base">{{ __('Quota Base') }}</option>
@@ -104,6 +104,24 @@
                     </div>
                 @endif
             </div>
+
+            @if ($profileType === 'limited' && $limitType === 'quota_base')
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">{{ __('Kuota') }}</label>
+                        <input type="number" step="0.01" min="0.01" wire:model="quotaValue" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                        @error('quotaValue') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">{{ __('Satuan Data') }}</label>
+                        <select wire:model="quotaUnit" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                            <option value="mb">{{ __('MB') }}</option>
+                            <option value="gb">{{ __('GB') }}</option>
+                        </select>
+                        @error('quotaUnit') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    </div>
+                </div>
+            @endif
 
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
@@ -236,7 +254,7 @@
                                             <option value="limited">{{ __('Limited') }}</option>
                                         </select>
                                         @if ($editProfileType === 'limited')
-                                            <select wire:model="editLimitType" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                            <select wire:model.live="editLimitType" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                                                 <option value="">{{ __('-- Pilih Batasan --') }}</option>
                                                 <option value="time_base">{{ __('Time Base') }}</option>
                                                 <option value="quota_base">{{ __('Quota Base') }}</option>
@@ -255,6 +273,18 @@
                                     @error('editLimitType') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                                     @error('editActiveDurationValue') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                                     @error('editActiveDurationUnit') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+
+                                    @if ($editProfileType === 'limited' && $editLimitType === 'quota_base')
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <input type="number" step="0.01" min="0.01" wire:model="editQuotaValue" placeholder="{{ __('Kuota') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                            <select wire:model="editQuotaUnit" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                                <option value="mb">{{ __('MB') }}</option>
+                                                <option value="gb">{{ __('GB') }}</option>
+                                            </select>
+                                        </div>
+                                        @error('editQuotaValue') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+                                        @error('editQuotaUnit') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+                                    @endif
 
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                                         <input type="number" min="1" wire:model="editSharedUsers" placeholder="{{ __('Shared Users') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">

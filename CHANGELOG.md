@@ -3,6 +3,27 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.4 amendment — Field Kuota untuk QuotaBase (implementasi selesai 2026-08-30, belum di-merge/tag)
+
+**Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian
+"Profil Hotspot — Field Kuota untuk QuotaBase (v0.14.4 amendment)".
+
+- **Gap yang sudah diflag sendiri kemarin** dikonfirmasi nyata lewat screenshot Agung: form Profil Hotspot
+  belum punya field "Kuota"/"Satuan Data" untuk paket QuotaBase.
+- **Langkah 0**: dikonfirmasi ulang secara empiris terhadap `ro-hotspot.bajastu.id` (bukan
+  `test-x86-bajastu`) bahwa kuota hanya bisa di-enforce per-USER (`/ip hotspot user`'s
+  `limit-bytes-total`), tidak pernah di level profil/template — sesuai kesimpulan Langkah 0 sprint
+  sebelumnya. Field DB + UI ditambahkan, push ke router **tidak** diimplementasikan (menunggu fitur
+  voucher generation nanti).
+- Kolom baru `quota_value`/`quota_unit`, validasi wajib-kalau-QuotaBase + terlarang-kalau-bukan
+  (`required_if`+`prohibited_unless`), konsisten di FormRequest dan Livewire.
+- **2 bug nyata ditemukan sendiri lewat test suite** (bukan verifikasi manual): default properti Livewire
+  yang salah membuat validasi `prohibited_unless` gagal sendiri saat field belum disentuh user — kelas bug
+  yang sama dengan `activeDurationUnit` kemarin, kali ini arah sebaliknya. Diperbaiki di source, bukan
+  di-workaround.
+- **Regresi**: 9 test Livewire baru (reaktivitas field, validasi, reset saat berpindah) + 6 test API baru
+  (create/update, wajib, terlarang), full suite dijalankan ulang, Pint clean.
+
 ## v0.14.4 — Profil Hotspot (implementasi selesai 2026-08-27, belum di-merge/tag)
 
 **Catatan status**: branch `v0.14.4-profil-hotspot` (dari `main`, sudah include v0.14.3). Detail teknis

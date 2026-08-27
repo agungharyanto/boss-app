@@ -30,6 +30,8 @@ class HotspotPackageResource extends JsonResource
             'limit_type' => $this->limit_type?->value,
             'active_duration_value' => $this->active_duration_value,
             'active_duration_unit' => $this->active_duration_unit?->value,
+            'quota_value' => $this->quota_value !== null ? (float) $this->quota_value : null,
+            'quota_unit' => $this->quota_unit?->value,
             'shared_users' => $this->shared_users,
             'priority' => $this->priority,
             'login_days' => $this->login_days,

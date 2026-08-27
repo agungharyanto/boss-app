@@ -6526,6 +6526,50 @@ this sprint.
 Full regression suite green (990 pre-existing + this sprint's own new tests, see the sprint's own commit for
 the exact final count), Pint clean on every touched file.
 
+## Profil Hotspot — Field Kuota untuk QuotaBase (v0.14.4 amendment)
+
+**Gap yang sudah diflag sendiri di sprint aslinya ("`limit_type=quota_base` belum punya kolom jumlah
+kuota") dikonfirmasi nyata lewat screenshot Agung** — form tidak punya field "Kuota"/"Satuan Data" sama
+sekali untuk paket QuotaBase, cuma "Masa Aktif" yang tampil (konsep berbeda: kapan paket expire vs berapa
+banyak data yang diizinkan).
+
+**Langkah 0 — investigasi mekanisme quota RouterOS, sebelum implementasi apa pun**: dikonfirmasi ULANG
+secara empiris (live add/read/remove terhadap `ro-hotspot.bajastu.id`, bukan `test-x86-bajastu`) bahwa
+`/ip hotspot user` (objek USER/VOUCHER individual, BUKAN `/ip hotspot user profile`) punya field nyata
+`limit-bytes-total`/`limit-uptime` yang benar-benar bisa di-set. Ini menegaskan ulang temuan sprint
+sebelumnya: kuota HANYA bisa di-enforce per-USER, tidak pernah di level profil/template. Dua mekanisme lain
+yang diminta untuk dicek (`Mikrotik-Total-Limit` RADIUS VSA, atau script/scheduler custom) sama-sama
+butuh objek per-sesi/per-user yang belum ada — bukan "kompleks butuh scripting tambahan" dalam arti
+pekerjaan ekstra sekarang, tapi secara struktural TIDAK ADA objek RouterOS di antara "template paket" dan
+"voucher individual" yang bisa menyimpan kuota. Kesimpulan: **field DB + UI ditambahkan (Langkah 1/2), push
+ke router TIDAK diimplementasikan** — `PushHotspotPackageToMikrotikJob` sengaja tidak disentuh sama
+sekali, `quota_value`/`quota_unit` murni data untuk fitur voucher generation nanti.
+
+**Migration**: `quota_value` (`decimal(10,2)`, nullable), `quota_unit` (string, nullable, enum baru
+`App\Enums\HotspotQuotaUnit`: Mb/Gb). Validasi wajib-kalau-QuotaBase DAN terlarang-kalau-bukan, pakai
+kombinasi `required_if`+`prohibited_unless` Laravel di kedua FormRequest DAN komponen Livewire (konsisten,
+bukan cuma andalkan filter frontend).
+
+**Real bug ditemukan sendiri lewat test suite, bukan lewat verifikasi manual — 2 kali beruntun, kelas bug
+yang sama**: properti Livewire `quotaUnit`/`editQuotaUnit` awalnya default `'mb'` (nilai non-kosong) —
+`prohibited_unless` mensyaratkan field GENUINELY KOSONG kapan pun `limitType` bukan `quota_base`, jadi
+default non-kosong ini GAGAL validasi sendiri begitu Batasan bukan QuotaBase, padahal user tidak pernah
+menyentuhnya. Ini kebalikan dari bug `activeDurationUnit` yang sudah ditemukan sprint sebelumnya (default
+non-kosong yang membuat `required_if` LOLOS secara tidak sengaja) — kali ini default non-kosong membuat
+`prohibited_unless` GAGAL secara tidak sengaja. Diperbaiki: default properti diubah jadi string kosong,
+`updatedLimitType()`/`updatedEditLimitType()` baru yang mengisi `'mb'` HANYA saat QuotaBase benar-benar
+dipilih (dan mengosongkan KEDUA field kuota, bukan cuma nilainya, saat beralih menjauh). Bug kedua:
+`edit()` punya fallback `?? 'mb'` yang sama untuk paket yang genuinely BUKAN QuotaBase (quota_unit
+null di DB) — diperbaiki jadi fallback `?? ''`.
+
+**Test**: field Kuota/Satuan Data muncul reaktif hanya saat Batasan=QuotaBase (create dan edit form), wajib
+diisi sebelum submit, hilang+dikosongkan otomatis saat Batasan diganti ke TimeBase atau Tipe Profil ke
+Unlimited (termasuk kasus bolak-balik QuotaBase→TimeBase→QuotaBase), validasi backend (Store+Update
+FormRequest) konsisten dengan Livewire — 9 test Livewire baru + 6 test API baru.
+
+Full regression suite dijalankan setelah amandemen ini, Pint clean di semua file yang disentuh. Belum
+di-merge/tag.
+
 ## OLT AllowedIPs Conflict — Real Incident & Fix (branch `fix-wireguard-allowedips-olt-conflict`, fully resolved — code fix + live reconcile both done and verified)
 
 **A real, confirmed ~2-day LibreNMS OLT monitoring outage (2026-08-24 ~18:35 WIB through at least

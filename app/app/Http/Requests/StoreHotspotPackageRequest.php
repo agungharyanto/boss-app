@@ -60,6 +60,14 @@ class StoreHotspotPackageRequest extends FormRequest
             'limit_type' => ['required_if:profile_type,limited', 'nullable', 'string', 'in:time_base,quota_base'],
             'active_duration_value' => ['required_if:profile_type,limited', 'nullable', 'integer', 'min:1'],
             'active_duration_unit' => ['required_if:profile_type,limited', 'nullable', 'string', 'in:minute,hour,day,month'],
+            // v0.14.4 amendment — "Kuota"/"Satuan Data", required ONLY when
+            // limit_type=quota_base, and explicitly PROHIBITED otherwise
+            // (never both required_if AND left as dead data when
+            // limit_type is time_base or profile_type is unlimited) — see
+            // the quota migration's own docblock for why these are never
+            // pushed to RouterOS this sub-version.
+            'quota_value' => ['required_if:limit_type,quota_base', 'prohibited_unless:limit_type,quota_base', 'nullable', 'numeric', 'min:0.01'],
+            'quota_unit' => ['required_if:limit_type,quota_base', 'prohibited_unless:limit_type,quota_base', 'nullable', 'string', 'in:mb,gb'],
             'shared_users' => ['required', 'integer', 'min:1'],
             'priority' => ['nullable', 'string', 'max:50'],
             'login_days' => ['nullable', 'array'],

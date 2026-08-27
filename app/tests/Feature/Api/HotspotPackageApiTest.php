@@ -188,6 +188,76 @@ class HotspotPackageApiTest extends TestCase
         $response->assertJsonPath('data.active_duration_value', 1);
     }
 
+    /**
+     * v0.14.4 amendment — real gap confirmed by Agung via screenshot:
+     * limit_type=quota_base packages need quota_value/quota_unit, missing
+     * from the original migration. Backend enforcement, mirroring the
+     * exact same required_if/prohibited_unless pair the Livewire form's
+     * own validate() call uses.
+     */
+    public function test_quota_base_requires_quota_value_and_unit(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+
+        $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/hotspot-packages', $this->payload($f['group']->id, $f['bandwidth']->id, [
+            'profile_type' => 'limited', 'limit_type' => 'quota_base',
+            'active_duration_value' => 30, 'active_duration_unit' => 'day',
+        ]));
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['quota_value', 'quota_unit']);
+    }
+
+    public function test_quota_base_with_full_quota_data_is_accepted(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+
+        $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/hotspot-packages', $this->payload($f['group']->id, $f['bandwidth']->id, [
+            'profile_type' => 'limited', 'limit_type' => 'quota_base',
+            'active_duration_value' => 30, 'active_duration_unit' => 'day',
+            'quota_value' => 2.5, 'quota_unit' => 'gb',
+        ]));
+
+        $response->assertCreated();
+        $response->assertJsonPath('data.quota_value', 2.5);
+        $response->assertJsonPath('data.quota_unit', 'gb');
+    }
+
+    /**
+     * quota_value/quota_unit are PROHIBITED (not just optional) once
+     * limit_type isn't quota_base — a direct API call carrying a leftover
+     * value must be rejected, not silently accepted and ignored.
+     */
+    public function test_quota_fields_are_prohibited_for_a_time_base_package(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+
+        $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/hotspot-packages', $this->payload($f['group']->id, $f['bandwidth']->id, [
+            'profile_type' => 'limited', 'limit_type' => 'time_base',
+            'active_duration_value' => 1, 'active_duration_unit' => 'day',
+            'quota_value' => 5, 'quota_unit' => 'gb',
+        ]));
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['quota_value', 'quota_unit']);
+    }
+
+    public function test_quota_fields_are_prohibited_for_an_unlimited_package(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+
+        $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/hotspot-packages', $this->payload($f['group']->id, $f['bandwidth']->id, [
+            'quota_value' => 5, 'quota_unit' => 'gb',
+        ]));
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['quota_value', 'quota_unit']);
+    }
+
     public function test_login_end_time_before_start_time_is_rejected(): void
     {
         Bus::fake();
@@ -268,6 +338,42 @@ class HotspotPackageApiTest extends TestCase
 
         $response->assertUnprocessable();
         $response->assertJsonValidationErrors(['network_profile_group_id']);
+    }
+
+    public function test_updating_an_unlimited_package_to_quota_base_requires_quota_fields(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+        $package = HotspotPackage::factory()->create(['network_profile_group_id' => $f['group']->id, 'bandwidth_profile_id' => $f['bandwidth']->id]);
+
+        $response = $this->actingAs($this->admin($f['tenant']))->putJson("/api/v1/hotspot-packages/{$package->id}", [
+            'profile_type' => 'limited', 'limit_type' => 'quota_base',
+            'active_duration_value' => 30, 'active_duration_unit' => 'day',
+        ]);
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['quota_value', 'quota_unit']);
+    }
+
+    public function test_updating_a_quota_base_package_with_full_quota_data_succeeds(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+        $package = HotspotPackage::factory()->create(['network_profile_group_id' => $f['group']->id, 'bandwidth_profile_id' => $f['bandwidth']->id]);
+
+        $response = $this->actingAs($this->admin($f['tenant']))->putJson("/api/v1/hotspot-packages/{$package->id}", [
+            'profile_type' => 'limited', 'limit_type' => 'quota_base',
+            'active_duration_value' => 30, 'active_duration_unit' => 'day',
+            'quota_value' => 1, 'quota_unit' => 'gb',
+        ]);
+
+        $response->assertOk();
+        // 1.0 as a whole-number float JSON-encodes as plain "1", not
+        // "1.0" — assertJsonPath's strict comparison needs the int form
+        // here, unlike test_quota_base_with_full_quota_data_is_accepted's
+        // own 2.5 (never whole, so it round-trips as a real float).
+        $response->assertJsonPath('data.quota_value', 1);
+        $response->assertJsonPath('data.quota_unit', 'gb');
     }
 
     public function test_admin_can_soft_delete_a_hotspot_package(): void

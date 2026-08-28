@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\MikrotikSyncStatus;
 use App\Enums\NasStatus;
 use App\Models\Concerns\BelongsToResellerScope;
 use App\Models\Concerns\BelongsToTenant;
@@ -10,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 class Nas extends Model
 {
@@ -35,6 +37,21 @@ class Nas extends Model
         'status',
         'last_ping_at',
         'timezone',
+        // Revisi Grup Profil — "Profile Pelanggan Expired" fallback per NAS.
+        // expired_profile_mikrotik_* ARE fillable (same convention as
+        // NetworkProfileGroup/CustomerIpPool's own mikrotik_sync_* fields)
+        // — they're just never part of any FormRequest/Livewire form's
+        // bound input, only ever written via update() inside
+        // markExpiredProfileSync*() below, called from the push/remove Job.
+        // A real bug caught here: an earlier version of this list omitted
+        // them entirely, which silently no-op'd every markExpiredProfileSync*()
+        // update() call (Eloquent mass-assignment protection drops any
+        // non-fillable key with zero error) — caught by
+        // ExpiredProfileMikrotikSyncTest, not by review.
+        'expired_ip_pool_id',
+        'expired_profile_mikrotik_sync_status',
+        'expired_profile_mikrotik_synced_at',
+        'expired_profile_mikrotik_sync_error',
     ];
 
     protected $hidden = [
@@ -49,6 +66,8 @@ class Nas extends Model
             'radius_secret' => 'encrypted',
             'status' => NasStatus::class,
             'last_ping_at' => 'datetime',
+            'expired_profile_mikrotik_sync_status' => MikrotikSyncStatus::class,
+            'expired_profile_mikrotik_synced_at' => 'datetime',
         ];
     }
 
@@ -92,5 +111,65 @@ class Nas extends Model
     public function networkProfileGroups(): HasMany
     {
         return $this->hasMany(NetworkProfileGroup::class);
+    }
+
+    /**
+     * Revisi Grup Profil — the IP Pool a NAS's own "Profile Pelanggan
+     * Expired" fallback `/ppp profile` gets its `local-address` from (see
+     * the migration's own docblock for the full Winbox-reference-pattern
+     * reasoning). Deliberately NOT constrained to only pools belonging to
+     * THIS same NAS at the Eloquent relation level — that's a real
+     * business rule enforced in the FormRequest/Livewire validation layer
+     * instead, same "relation stays simple, validation layer owns the
+     * cross-entity rule" split already established throughout this
+     * codebase (e.g. NetworkProfileGroup::customerIpPool()).
+     */
+    public function expiredIpPool(): BelongsTo
+    {
+        return $this->belongsTo(CustomerIpPool::class, 'expired_ip_pool_id');
+    }
+
+    /**
+     * Stable per-row identifier for this NAS's own "Profile Pelanggan
+     * Expired" `/ppp profile` object — same "lookup by comment" reasoning
+     * as every other `/ppp profile` push in this codebase (confirmed
+     * `/ppp profile` supports `comment`, unlike `/ip hotspot user
+     * profile`).
+     */
+    public function expiredProfileMikrotikComment(): string
+    {
+        return "BOSS App - Expired Profile NAS #{$this->id}";
+    }
+
+    /**
+     * RouterOS object name for this NAS's expired fallback profile — kept
+     * distinct per NAS (a NAS's own id embedded) since `/ppp profile` names
+     * are router-wide, not scoped to "which NAS pushed this".
+     */
+    public function expiredProfileMikrotikName(): string
+    {
+        return "expired-nas-{$this->id}";
+    }
+
+    public function markExpiredProfileSyncPending(): void
+    {
+        $this->update(['expired_profile_mikrotik_sync_status' => MikrotikSyncStatus::Pending, 'expired_profile_mikrotik_sync_error' => null]);
+    }
+
+    public function markExpiredProfileSynced(): void
+    {
+        $this->update([
+            'expired_profile_mikrotik_sync_status' => MikrotikSyncStatus::Synced,
+            'expired_profile_mikrotik_synced_at' => Carbon::now(),
+            'expired_profile_mikrotik_sync_error' => null,
+        ]);
+    }
+
+    public function markExpiredProfileSyncFailed(string $message): void
+    {
+        $this->update([
+            'expired_profile_mikrotik_sync_status' => MikrotikSyncStatus::Failed,
+            'expired_profile_mikrotik_sync_error' => $message,
+        ]);
     }
 }

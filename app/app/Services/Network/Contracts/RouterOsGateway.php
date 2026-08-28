@@ -119,9 +119,25 @@ interface RouterOsGateway
      * `parent-queue` is a real field on this RouterOS version via a live
      * add/remove round-trip against ro-hotspot.bajastu.id).
      *
+     * v0.14.x revisi (Grup Profil interface/VLAN + expired fallback) —
+     * $remoteAddress widened from required `string` to `?string`, and a new
+     * $localAddress param added, to support the "Profil Pelanggan Expired"
+     * fallback profile (`local-address` = a limited pool, `remote-address`
+     * genuinely omitted — Agung's own real Winbox reference pattern).
+     * BOTH fields are `/ip pool` NAME references, confirmed via a live test
+     * that `local-address` accepts a pool name exactly like `remote-address`
+     * does. **Real, load-bearing gotcha found via a live test**: unlike
+     * `dns-server`/`parent-queue` (which both genuinely accept an empty
+     * string as "clear this field" on `/ppp profile/set`), RouterOS
+     * REJECTS an empty string for BOTH `remote-address` and `local-address`
+     * ("invalid value for argument remote-address:"/"...local-address:") —
+     * the implementation must never unconditionally send an empty-string
+     * fallback for these two fields the way dns-server/parent-queue safely
+     * can; only include them in the query at all when genuinely non-null.
+     *
      * @return array{success: bool, message: ?string}
      */
-    public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array;
+    public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array;
 
     /**
      * Removes the `/ppp profile` entry matching $comment, if any — same
@@ -218,4 +234,53 @@ interface RouterOsGateway
      * @return array{success: bool, message: ?string}
      */
     public function removeHotspotUserProfile(Nas $nas, string $lookupName): array;
+
+    /**
+     * v0.14.x revisi — Grup Profil interface/VLAN binding. Read-only,
+     * on-demand listing of $nas's own real physical/VLAN interfaces (never
+     * cached/persisted in boss_db — always a live query, matching Agung's
+     * own explicit instruction that this is purely a dropdown-population
+     * helper, not a create/manage capability). Deliberately filtered
+     * server-side to `type=ether` and `type=vlan` only — a real NAS also
+     * has hundreds of dynamic `pppoe-in` interfaces (one per currently-
+     * connected PPPoE session) plus BOSS App's own `wg`-type WireGuard
+     * tunnel interface, none of which are ever a meaningful "bind a PPPoE
+     * Server to this" choice.
+     *
+     * @return array<int, array{name: string, type: string}>
+     */
+    public function listInterfaces(Nas $nas): array;
+
+    /**
+     * v0.14.x revisi — Grup Profil (type=ppp) interface/VLAN + PPPoE
+     * Server binding. Idempotent create/update of a single
+     * `/interface/pppoe-server/server` entry, found by $comment — same
+     * "lookup by comment, not name" reasoning as syncIpPool()/
+     * syncPppProfile() above (`/interface/pppoe-server/server` was
+     * confirmed via a live test to support `comment`, unlike `/ip hotspot
+     * user profile`). $defaultProfile is a `/ppp profile` NAME — Grup
+     * Profil's own PPP push always passes its OWN name here (see
+     * PushNetworkProfileGroupToMikrotikJob's own docblock for why: the
+     * bare, no-rate-limit `/ppp profile` Grup Profil already pushes since
+     * v0.14.3 IS meant to be this PPPoE Server's Default Profile).
+     *
+     * **Real, load-bearing gotcha found via a live test**: a freshly-added
+     * `/interface/pppoe-server/server` entry defaults to `disabled=true`
+     * unless explicitly told otherwise — confirmed by reading back a real
+     * add with no `disabled` parameter at all. The implementation always
+     * explicitly sends `disabled=no`, never relies on RouterOS's own
+     * default.
+     *
+     * @return array{success: bool, message: ?string}
+     */
+    public function syncPppoeServer(Nas $nas, string $comment, string $serviceName, string $interfaceName, string $defaultProfile): array;
+
+    /**
+     * Removes the `/interface/pppoe-server/server` entry matching
+     * $comment, if any — same no-op-on-missing semantics as
+     * removePppProfile()/removeIpPool().
+     *
+     * @return array{success: bool, message: ?string}
+     */
+    public function removePppoeServer(Nas $nas, string $comment): array;
 }

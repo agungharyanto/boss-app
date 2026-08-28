@@ -34,6 +34,11 @@ class NasResource extends JsonResource
             'status_label' => $this->status->label(),
             'last_ping_at' => $this->last_ping_at?->toIso8601String(),
             'timezone' => $this->timezone,
+            // Revisi Grup Profil (Langkah 3) — "Profile Pelanggan Expired".
+            'expired_ip_pool_id' => $this->expired_ip_pool_id,
+            'expired_profile_mikrotik_sync_status' => $this->expired_profile_mikrotik_sync_status?->value,
+            'expired_profile_mikrotik_synced_at' => $this->expired_profile_mikrotik_synced_at?->toIso8601String(),
+            'expired_profile_mikrotik_sync_error' => $this->expired_profile_mikrotik_sync_error,
             'created_at' => $this->created_at->toIso8601String(),
         ];
     }

@@ -36,11 +36,11 @@ class NetworkProfileGroupService
     /**
      * tenant_id is auto-filled by BelongsToTenant's creating() hook.
      *
-     * @param  array{nas_id: int, name: string, type: string, customer_ip_pool_id: int, dns_primary?: ?string, dns_secondary?: ?string, parent_queue?: ?string, is_active?: bool}  $data
+     * @param  array{nas_id: int, name: string, type: string, customer_ip_pool_id: int, dns_primary?: ?string, dns_secondary?: ?string, parent_queue?: ?string, interface_name?: ?string, service_name?: ?string, is_active?: bool}  $data
      */
     public function create(array $data): NetworkProfileGroup
     {
-        $group = NetworkProfileGroup::create($data);
+        $group = NetworkProfileGroup::create($this->normalizeInterfaceFields($data));
         $group->refresh();
 
         $this->writeRadiusGroupReply($group);
@@ -50,17 +50,55 @@ class NetworkProfileGroupService
     }
 
     /**
-     * @param  array{nas_id?: int, name?: string, type?: string, customer_ip_pool_id?: int, dns_primary?: ?string, dns_secondary?: ?string, parent_queue?: ?string, is_active?: bool}  $data
+     * @param  array{nas_id?: int, name?: string, type?: string, customer_ip_pool_id?: int, dns_primary?: ?string, dns_secondary?: ?string, parent_queue?: ?string, interface_name?: ?string, service_name?: ?string, is_active?: bool}  $data
      */
     public function update(NetworkProfileGroup $group, array $data): NetworkProfileGroup
     {
-        $group->update($data);
+        $group->update($this->normalizeInterfaceFields($data, $group));
         $group->markSyncPending();
 
         $this->writeRadiusGroupReply($group->fresh());
         PushNetworkProfileGroupToMikrotikJob::dispatch($group->id);
 
         return $group->refresh();
+    }
+
+    /**
+     * Revisi Grup Profil — interface_name/service_name (PPPoE Server
+     * binding) are only ever meaningful for type=ppp. The single
+     * authoritative place this rule is enforced, so both entry points
+     * (NetworkProfileGroupIndex Livewire, the REST API via
+     * Store/UpdateNetworkProfileGroupRequest) get the same guarantee — a
+     * caller sending both while type=hotspot never persists them, rather
+     * than each caller needing to remember to null them out itself.
+     *
+     * Also triggers on a bare `type` change alone (no interface_name/
+     * service_name in the same request) — an update() switching an
+     * existing Ppp-type group to Hotspot must clear whatever stale
+     * interface_name/service_name it already had stored, not just skip
+     * normalization because THIS particular request didn't happen to
+     * mention those two keys.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    private function normalizeInterfaceFields(array $data, ?NetworkProfileGroup $existing = null): array
+    {
+        $touchesInterfaceFields = array_key_exists('interface_name', $data) || array_key_exists('service_name', $data);
+        $touchesType = array_key_exists('type', $data);
+
+        if (! $touchesInterfaceFields && ! $touchesType) {
+            return $data;
+        }
+
+        $type = $data['type'] ?? $existing?->type->value;
+
+        if ($type !== NetworkProfileGroupType::Ppp->value) {
+            $data['interface_name'] = null;
+            $data['service_name'] = null;
+        }
+
+        return $data;
     }
 
     /**

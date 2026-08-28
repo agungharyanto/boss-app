@@ -39,11 +39,13 @@
 | v0.14.1 | Network         | Bandwidth Profile              | Fondasi cluster "Profil Paket" (terinspirasi MixRadius V3.2, 7 sub-versi). Tabel `bandwidth_profiles` — profil reusable upload/download min-max, disimpan internal dalam Kbps terlepas satuan input user. REST API + Livewire `/bandwidth-profiles` | Merged + tagged (`v0.14.1`) |
 | v0.14.2 | Network         | IP Pool Pelanggan              | Konsep IP pool BARU untuk alokasi IP end-device pelanggan hotspot/PPP — beda total dari `VpnIpPool` (v0.6.2, itu untuk tunnel VPN NAS↔BOSS App). Tabel `customer_ip_pools`, wajib terikat `nas_id`. REST API + Livewire `/customer-ip-pools` | Implementasi selesai — verifikasi akhir pending |
 | v0.14.2.1 | Network     | RouterOS Live-Push (mulai dari IP Pool) | **Dimajukan dari rencana semula v0.14.6** — kemampuan live-push RouterOS API PERTAMA di codebase ini, dimulai khusus untuk `CustomerIpPool` (`/ip pool add/set/remove`, lookup via comment stabil, bukan `name`). Job async (`PushCustomerIpPoolToMikrotikJob`/`RemoveCustomerIpPoolFromMikrotikJob`), retry 3x dengan backoff 30s/2min/5min, kolom `mikrotik_sync_status`/`mikrotik_synced_at`/`mikrotik_sync_error`, badge + tombol "Sync Ulang" di UI. **Sengaja TIDAK digeneralisasi ke entity lain di sub-versi ini** — pola ini jadi cetak biru untuk v0.14.6 nanti (Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP). Diverifikasi nyata end-to-end terhadap `ro-hotspot.bajastu.id` (push/edit/delete/simulasi-gagal-lalu-retry-otomatis-berhasil, semua dikonfirmasi lewat pembacaan `/ip pool print` router asli) | Implementasi selesai — verifikasi akhir pending |
-| v0.14.3 | Network         | Grup Profil                    | Konfigurasi RADIUS/Mikrotik group per-NAS (tipe Hotspot/PPP), link ke IP Pool (v0.14.2)/DNS server/parent queue. Tabel `network_profile_groups` + live-push RouterOS (`/ppp profile` untuk PPP; update `address-pool` server Hotspot existing untuk Hotspot) + tulis `radgroupreply` (keputusan eksplisit Agung) | Implementasi selesai — verifikasi akhir pending |
-| v0.14.4 | Network         | Profil Hotspot                 | Paket voucher/token: harga modal/jual/promo, PPN, skema Unlimited/Limited (TimeBase/QuotaBase), link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, periode login (hari+jam) | Backlog |
+| v0.14.3 | Network         | Grup Profil                    | Konfigurasi RADIUS/Mikrotik group per-NAS (tipe Hotspot/PPP), link ke IP Pool (v0.14.2)/DNS server/parent queue. Tabel `network_profile_groups` + live-push RouterOS (`/ppp profile` untuk PPP; update `address-pool` server Hotspot existing untuk Hotspot) + tulis `radgroupreply` (keputusan eksplisit Agung) | Selesai |
+| v0.14.4 | Network         | Profil Hotspot                 | Paket voucher/token: harga modal/jual/promo, PPN, skema Unlimited/Limited (TimeBase/QuotaBase), link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, periode login (hari+jam) | Selesai |
+| v0.14.4.1 | Network       | Revisi Grup Profil — Interface/VLAN, PPPoE Server, Expired Profile | Perluasan `network_profile_groups` (tipe PPP): binding `/interface pppoe-server server` (baca interface/VLAN NAS read-only, push service-name+default-profile), Grup Profil PPP jadi Default Profile PPPoE Server. Fitur baru "Profil Pelanggan Expired" per NAS (`nas.expired_ip_pool_id`, push `/ppp profile` fallback tanpa rate-limit). **Diberi nomor `v0.14.4.1` (bukan `v0.14.3.1`)** — dibuat dari `main` di titik tag `v0.14.4`, dan label `v0.14.3.1` sudah lebih dulu dipakai (folded ke tag `v0.14.3`) untuk fitur lain (Tipe Pemakaian IP Pool + Sidebar); pola patch-di-atas-tag-terakhir sama seperti `v0.9.2.1` | Selesai |
 | v0.14.5 | Network         | Profil PPP                     | Paket bulanan: harga modal/jual/promo, PPN, link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, shared users, prioritas — direncanakan jadi anchor entity untuk Commission (v0.9.3) yang di-pause di v0.9.2, menggantikan `reseller_package_pricing` yang selama ini kosong data untuk ISP direct | Backlog |
 | v0.14.6 | Network         | RouterOS Live-Push — Generalisasi | Fondasi live-push SUDAH ADA sejak v0.14.2.1 (khusus IP Pool) — sub-versi ini generalisasi pola yang sama (Job async, kolom sync status, komentar-stabil-sebagai-lookup-key, retry+backoff) ke Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP. **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Backlog |
 | v0.14.7 | Network         | Push ke NAS — UI & Rollout Produksi | Tombol "Push ke NAS" di UI Grup Profil/Profil Hotspot/Profil PPP, rollout ke NAS produksi setelah v0.14.6 diverifikasi aman di NAS uji coba | Backlog |
+| v0.15.0 | Operasional     | Management Ticketing          | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Sistem tiket untuk dukungan/komplain pelanggan. Decision-gate scope lengkap (alur, integrasi modul lain, siapa yang bisa buka/tutup tiket, dll) dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
 (lihat Definition of Done di RULES.md) sebelum lanjut ke versi berikutnya.
@@ -74,6 +76,34 @@ nomor baru **`v0.12.0`** (setelah `v0.11.0` Mobile Self-Service Portal) —
 sama pola dengan amandemen Mobile Portal di atas: cluster baru selalu
 ditambah di akhir daftar backlog, tidak pernah menyisip ke tengah nomor
 yang sudah dikunci.
+
+**Amendment 2026-08-28 (cek slot roadmap, dikonfirmasi lewat pencarian
+menyeluruh di seluruh file ini, bukan cuma grep frasa persis)**: dua hal
+dicatat sekaligus di sini.
+1. **"Core Network Infrastructure Management"** (inventaris topologi fiber
+   OTB→Closure→ODC→ODP, GPS+foto per node, port-mapping splice/splitter,
+   fault correlation, sales-facing capacity view port ODP kosong/penuh) —
+   dikonfirmasi **TIDAK PERNAH tercatat di roadmap ini sama sekali**, bukan
+   di tabel manapun ataupun di teks bebas manapun di file ini. Referensi
+   "ODP" yang ADA di file ini (`v0.5.0` Installation — `Odp`/`OdpPort`/
+   `OdpLocatorService`) adalah konsep yang jauh lebih sederhana (ODP
+   locator untuk penugasan port terdekat-tersedia saat instalasi
+   pelanggan) — bukan hierarki inventaris topologi fiber penuh yang
+   dimaksud di atas. Kalau fitur ini benar pernah dibahas, pembahasan itu
+   ada di sesi/percakapan lain yang tidak pernah dituliskan ke roadmap ini
+   — perlu di-scope dan dinomori dari nol kalau/ketika mau benar-benar
+   dikerjakan, jangan diasumsikan sudah pernah direncanakan.
+2. **`v0.15.0` dipakai untuk reservasi slot "Management Ticketing"** — slot
+   kosong pertama yang genuinely tersedia setelah cluster `v0.14.x`
+   (`v0.14.1`-`v0.14.7`, rentang terkunci untuk "Profil Paket", lihat
+   bagian di bawah). **`v0.9.3` ke atas SENGAJA TIDAK dipakai** meski belum
+   punya baris tabel sendiri — nomor itu sudah disebut berulang di file ini
+   (baris `v0.14.5`, bagian `v0.9.2` di bawah) sebagai kelanjutan Commission
+   yang di-pause di `v0.9.2` ("anchor entity untuk Commission (`v0.9.3`)"),
+   jadi secara efektif sudah direservasi meski belum ditulis sebagai baris
+   — mengisinya dengan fitur lain akan menabrak rencana Commission nanti.
+   Rentang `v0.15.0`-`v0.20.0` dikonfirmasi genuinely kosong total (nol
+   referensi di seluruh file) sebelum amandemen ini.
 
 **Keputusan arsitektur terkunci untuk seluruh cluster `v0.6.x`** (jangan
 dinegosiasi ulang tanpa konfirmasi eksplisit baru, BOSS-003):
@@ -1436,7 +1466,7 @@ refresh manual mengambil perubahan status dari luar komponen), Pint clean.
 **Belum di-merge/tag** — bagian dari branch `v0.14.2-customer-ip-pool` yang sama dengan v0.14.2/v0.14.2.1,
 menunggu instruksi eksplisit soal penggabungan closure.
 
-## v0.14.3 — Grup Profil (branch `v0.14.3-grup-profil`, implementasi selesai, belum di-merge/tag)
+## v0.14.3 — Grup Profil (branch `v0.14.3-grup-profil`, merged + tagged `v0.14.3`)
 
 Sub-versi ketiga cluster "Profil Paket". Tabel `network_profile_groups` — template profil RADIUS/Mikrotik
 per-NAS (tipe Hotspot/PPP), terikat ke `CustomerIpPool` (v0.14.2) dari NAS yang SAMA. Dipakai mulai
@@ -1529,4 +1559,44 @@ RouterOS sync — plus beberapa dari perbaikan bug soft-delete-pool), Pint clean
 (2 isu style pre-existing ditemukan & diperbaiki otomatis di `routes/api.php`/`routes/web.php`: urutan
 import, spasi operator).
 
-**Belum di-merge/tag** — menunggu verifikasi manual Agung lewat browser.
+**Merged + tagged `v0.14.3`** — diverifikasi manual Agung lewat browser, lolos.
+
+## v0.14.4 — Profil Hotspot (branch `v0.14.4-profil-hotspot`, merged + tagged `v0.14.4`)
+
+Sub-versi keempat cluster "Profil Paket" — paket voucher/token Hotspot (harga modal/jual/promo, PPN, skema
+Unlimited/Limited dengan TimeBase/QuotaBase, link Bandwidth Profile v0.14.1 + Grup Profil v0.14.3, masa
+aktif, periode login hari+jam). 3 amendment digabung ke branch yang sama sebelum tag (field Kuota untuk
+QuotaBase, fix Address Pool tidak ter-set + `session-timeout`, field NAS + tombol Simpan disabled di 3
+form) — lihat `CLAUDE.md` bagian "Profil Hotspot" dan turunannya untuk detail teknis penuh masing-masing
+amendment; tidak diulang di sini supaya tidak dobel dengan sumber kebenaran teknisnya.
+
+## v0.14.4.1 — Revisi Grup Profil: Interface/VLAN, PPPoE Server, Expired Profile (branch `revisi-grup-profil-interface-pppoe-server`, merged + tagged `v0.14.4.1`)
+
+Revisi/perluasan di atas `network_profile_groups` (v0.14.3) — bukan sub-versi cluster "Profil Paket" yang
+berdiri sendiri, makanya nomornya bukan `v0.14.8` — dibangun setelah `v0.14.4` sempat ditag, dari titik
+`main` di tag itu persis.
+
+**Kenapa `v0.14.4.1`, bukan `v0.14.3.1`**: label `v0.14.3.1` sudah lebih dulu dipakai (commit `2d94188`,
+folded ke tag `v0.14.3` itu sendiri, bukan tag terpisah) untuk fitur lain sama sekali ("Tipe Pemakaian IP
+Pool + Sidebar Profil Paket") — memakainya ulang untuk revisi ini akan menabrak riwayat commit yang sudah
+ada. Pola penomoran yang dipakai justru sama seperti `v0.9.2.1`: patch di atas tag TERAKHIR `main` saat
+sub-versi ini dimulai (`v0.14.4`), bukan berdasarkan tabel database mana yang paling banyak disentuh.
+Keputusan ini dikonfirmasi eksplisit oleh Agung sebelum tag dibuat, bukan diputuskan sepihak.
+
+**Isi**: `RouterOsGateway::listInterfaces()` (baca `/interface print` NAS, read-only, tanpa create VLAN
+baru) untuk dropdown Interface/VLAN di form Grup Profil (hanya Tipe=PPP); `syncPppoeServer()`/
+`removePppoeServer()` push/hapus `/interface/pppoe-server/server` dengan `default-profile` = nama
+`/ppp profile` Grup Profil itu sendiri — menjawab pertanyaan lama soal fungsi `/ppp profile` "bare" Grup
+Profil (itulah Default Profile PPPoE Server). Fitur baru "Profil Pelanggan Expired" per NAS
+(`nas.expired_ip_pool_id`, modal di `/nas`, push `/ppp profile` fallback tanpa rate-limit lewat
+`PushExpiredProfileToMikrotikJob`/`RemoveExpiredProfileFromMikrotikJob`). Detail teknis penuh — termasuk
+bug `Nas::$fillable` yang ketahuan dari test sendiri sebelum sempat dipakai nyata, dan investigasi UI
+lanjutan yang menemukan field-nya sengaja tersembunyi untuk Tipe=Hotspot (bukan bug) — ada di `CLAUDE.md`
+bagian "Revisi Grup Profil — Interface/VLAN, PPPoE Server, Expired Profile" dan "Verifikasi UI: Interface/
+VLAN & Expired Profile".
+
+Diverifikasi nyata end-to-end terhadap `ro-hotspot.bajastu.id` saja (`test-x86-bajastu` tidak disentuh),
+lalu diverifikasi manual UI oleh Agung lewat browser sungguhan — lolos penuh (dropdown Interface/VLAN,
+PPPoE Server binding, teks klarifikasi Hotspot, modal Profil Expired).
+
+**Merged + tagged `v0.14.4.1`**.

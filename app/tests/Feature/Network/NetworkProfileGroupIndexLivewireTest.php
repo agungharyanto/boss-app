@@ -10,6 +10,7 @@ use App\Models\Nas;
 use App\Models\NetworkProfileGroup;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\Network\Contracts\RouterOsGateway;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
@@ -51,6 +52,101 @@ class NetworkProfileGroupIndexLivewireTest extends TestCase
         $user->assignRole('superadmin');
 
         return $user;
+    }
+
+    /**
+     * Revisi Grup Profil — same anonymous-fake-RouterOsGateway pattern as
+     * NetworkProfileGroupMikrotikSyncTest (never a real raw-socket call in
+     * the automated suite). `$counter` is an object (not a primitive) so
+     * its mutation inside the anonymous class is visible to the test
+     * without needing a by-reference constructor param (PHP disallows
+     * combining constructor property promotion with by-reference
+     * parameters) — used to prove listInterfaces() is actually CACHED
+     * (called once, not once per render).
+     */
+    private function bindListInterfaces(array $interfaces, ?object $counter = null): void
+    {
+        $counter ??= new \stdClass;
+        $counter->calls = 0;
+
+        $this->app->bind(RouterOsGateway::class, function () use ($interfaces, $counter) {
+            return new class($interfaces, $counter) implements RouterOsGateway
+            {
+                public function __construct(private readonly array $interfaces, private readonly object $counter) {}
+
+                public function ping(Nas $nas): array
+                {
+                    return ['online' => true, 'message' => null];
+                }
+
+                public function pingHost(Nas $nas, string $targetIp, int $count = 2): bool
+                {
+                    return true;
+                }
+
+                public function provisionApiUser(Nas $nas, string $a, string $b, string $c, string $d): array
+                {
+                    return ['success' => true, 'message' => null];
+                }
+
+                public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int
+                {
+                    return null;
+                }
+
+                public function syncIpPool(Nas $nas, string $comment, string $name, string $ranges): array
+                {
+                    return ['success' => true, 'message' => null];
+                }
+
+                public function removeIpPool(Nas $nas, string $comment): array
+                {
+                    return ['success' => true, 'message' => null];
+                }
+
+                public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array
+                {
+                    return ['success' => true, 'message' => null];
+                }
+
+                public function removePppProfile(Nas $nas, string $comment): array
+                {
+                    return ['success' => true, 'message' => null];
+                }
+
+                public function syncHotspotServerPool(Nas $nas, string $poolName): array
+                {
+                    return ['success' => true, 'message' => null];
+                }
+
+                public function syncHotspotUserProfile(Nas $nas, string $lookupName, string $targetName, ?string $rateLimit, int $sharedUsers, ?string $sessionTimeout, ?string $addressPool = null): array
+                {
+                    return ['success' => true, 'message' => null];
+                }
+
+                public function removeHotspotUserProfile(Nas $nas, string $lookupName): array
+                {
+                    return ['success' => true, 'message' => null];
+                }
+
+                public function listInterfaces(Nas $nas): array
+                {
+                    $this->counter->calls++;
+
+                    return $this->interfaces;
+                }
+
+                public function syncPppoeServer(Nas $nas, string $comment, string $serviceName, string $interfaceName, string $defaultProfile): array
+                {
+                    return ['success' => true, 'message' => null];
+                }
+
+                public function removePppoeServer(Nas $nas, string $comment): array
+                {
+                    return ['success' => true, 'message' => null];
+                }
+            };
+        });
     }
 
     public function test_creating_a_group_via_the_form(): void
@@ -125,6 +221,165 @@ class NetworkProfileGroupIndexLivewireTest extends TestCase
             ->set('customerIpPoolId', (string) $poolA->id)
             ->set('nasId', (string) $nasB->id)
             ->assertSet('customerIpPoolId', '');
+    }
+
+    // --- Revisi Grup Profil: interface/VLAN + PPPoE Server ---------------
+
+    public function test_changing_nas_in_the_create_form_resets_the_selected_interface(): void
+    {
+        $this->bindListInterfaces([['name' => 'vlan110-PPPoE-10Mbps', 'type' => 'vlan']]);
+        $tenant = Tenant::factory()->create();
+        $nasA = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $nasB = Nas::factory()->create(['tenant_id' => $tenant->id]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('nasId', (string) $nasA->id)
+            ->set('interfaceName', 'vlan110-PPPoE-10Mbps')
+            ->set('nasId', (string) $nasB->id)
+            ->assertSet('interfaceName', '');
+    }
+
+    public function test_interface_dropdown_is_populated_from_the_selected_nas_and_cached(): void
+    {
+        $counter = new \stdClass;
+        $this->bindListInterfaces([
+            ['name' => 'vlan110-PPPoE-10Mbps', 'type' => 'vlan'],
+            ['name' => 'ether1', 'type' => 'ether'],
+        ], $counter);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+
+        $html = Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('showCreateForm', true)
+            ->set('nasId', (string) $nas->id)
+            // re-render twice more (search is unrelated, just forces a
+            // fresh render() call) — proves the 30s Cache::remember TTL
+            // actually prevents re-querying RouterOS on every render, not
+            // just on the first one.
+            ->set('search', 'a')
+            ->set('search', '')
+            ->html();
+
+        $this->assertStringContainsString('vlan110-PPPoE-10Mbps', $html);
+        $this->assertStringContainsString('ether1', $html);
+        $this->assertSame(1, $counter->calls);
+    }
+
+    public function test_creating_a_ppp_group_with_interface_and_service_name(): void
+    {
+        $this->bindListInterfaces([['name' => 'vlan110-PPPoE-10Mbps', 'type' => 'vlan']]);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('nasId', (string) $nas->id)
+            ->set('name', 'Grup PPPoE')
+            ->set('type', 'ppp')
+            ->set('customerIpPoolId', (string) $pool->id)
+            ->set('interfaceName', 'vlan110-PPPoE-10Mbps')
+            ->set('serviceName', 'PPPoE-Vlan110-10Mbps')
+            ->call('createGroup')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('network_profile_groups', [
+            'name' => 'Grup PPPoE',
+            'interface_name' => 'vlan110-PPPoE-10Mbps',
+            'service_name' => 'PPPoE-Vlan110-10Mbps',
+        ]);
+    }
+
+    /**
+     * interfaceName/serviceName are only meaningful for type=ppp (see
+     * NetworkProfileGroup's own docblock) — even if an admin typed
+     * something in while Tipe happened to be PPP, submitting as Hotspot
+     * must never persist it.
+     */
+    public function test_creating_a_hotspot_group_never_persists_interface_or_service_name(): void
+    {
+        $this->bindListInterfaces([]);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'hotspot']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('nasId', (string) $nas->id)
+            ->set('name', 'Grup Hotspot')
+            ->set('interfaceName', 'vlan110-PPPoE-10Mbps')
+            ->set('serviceName', 'some-service')
+            ->set('type', 'hotspot')
+            ->set('customerIpPoolId', (string) $pool->id)
+            ->call('createGroup')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('network_profile_groups', [
+            'name' => 'Grup Hotspot',
+            'interface_name' => null,
+            'service_name' => null,
+        ]);
+    }
+
+    public function test_editing_a_group_loads_its_stored_interface_and_service_name(): void
+    {
+        $this->bindListInterfaces([['name' => 'vlan110-PPPoE-10Mbps', 'type' => 'vlan']]);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $group = NetworkProfileGroup::factory()->create([
+            'nas_id' => $nas->id,
+            'customer_ip_pool_id' => $pool->id,
+            'type' => 'ppp',
+            'interface_name' => 'vlan110-PPPoE-10Mbps',
+            'service_name' => 'PPPoE-Vlan110-10Mbps',
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->call('edit', $group->id)
+            ->assertSet('editInterfaceName', 'vlan110-PPPoE-10Mbps')
+            ->assertSet('editServiceName', 'PPPoE-Vlan110-10Mbps');
+    }
+
+    /**
+     * Verifikasi UI (2026-08-28) — Agung tidak menemukan field Interface/VLAN
+     * saat mengedit sebuah Grup Profil; investigasi ulang membuktikan field-nya
+     * memang benar SENGAJA disembunyikan untuk Tipe=Hotspot (bukan bug), yang
+     * paling mungkin adalah root cause laporan itu (2 dari 3 Grup Profil
+     * existing di NAS produksi bertipe Hotspot). Hint text ini menutup celah
+     * UX-nya — absennya field sekarang menjelaskan dirinya sendiri.
+     */
+    public function test_create_form_shows_a_hint_instead_of_the_interface_fields_when_type_is_hotspot(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $html = Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->set('showCreateForm', true)
+            ->set('type', 'hotspot')
+            ->html();
+
+        $this->assertStringNotContainsString('wire:model="interfaceName"', $html);
+        $this->assertStringContainsString('hanya tersedia untuk Tipe = PPP', $html);
+    }
+
+    public function test_edit_form_shows_a_hint_instead_of_the_interface_fields_when_type_is_hotspot(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'hotspot']);
+        $group = NetworkProfileGroup::factory()->create(['nas_id' => $nas->id, 'customer_ip_pool_id' => $pool->id, 'type' => 'hotspot']);
+
+        $html = Livewire::actingAs($this->admin($tenant))
+            ->test(NetworkProfileGroupIndex::class)
+            ->call('edit', $group->id)
+            ->html();
+
+        $this->assertStringNotContainsString('wire:model="editInterfaceName"', $html);
+        $this->assertStringContainsString('hanya tersedia untuk Tipe = PPP', $html);
     }
 
     public function test_pool_dropdown_only_lists_pools_belonging_to_the_selected_nas(): void

@@ -149,6 +149,8 @@ Route::prefix('v1')->group(function () {
             Route::post('nas/{nas}/test-connection', [NasController::class, 'testConnection']);
             Route::post('nas/{nas}/disconnect', [NasController::class, 'disconnect']);
             Route::post('nas/{nas}/provision-api-user', [NasController::class, 'provisionApiUser']);
+            Route::patch('nas/{nas}/expired-profile', [NasController::class, 'updateExpiredProfile']);
+            Route::get('nas/{nas}/interfaces', [NasController::class, 'interfaces']);
 
             Route::post('nas/{nas}/vpn-account', [VpnAccountController::class, 'provision']);
             Route::post('vpn-accounts/{vpn_account}/revoke', [VpnAccountController::class, 'revoke']);

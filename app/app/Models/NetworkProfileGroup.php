@@ -29,6 +29,11 @@ class NetworkProfileGroup extends Model
         'nas_id',
         'name',
         'type',
+        // Revisi Grup Profil — interface/VLAN + PPPoE Server binding, hanya
+        // relevan untuk type=ppp (lihat PushNetworkProfileGroupToMikrotikJob's
+        // own docblock). Nullable — 3 baris existing perlu diedit manual.
+        'interface_name',
+        'service_name',
         'customer_ip_pool_id',
         'dns_primary',
         'dns_secondary',

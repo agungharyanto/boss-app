@@ -271,7 +271,7 @@ class RouterOsApiGateway implements RouterOsGateway
         }
     }
 
-    public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array
+    public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array
     {
         try {
             $client = new Client([
@@ -288,7 +288,15 @@ class RouterOsApiGateway implements RouterOsGateway
 
             if ($existing === []) {
                 $add = new Query('/ppp/profile/add');
-                $add->equal('name', $name)->equal('remote-address', $remoteAddress)->equal('comment', $comment);
+                $add->equal('name', $name)->equal('comment', $comment);
+
+                if ($remoteAddress !== null) {
+                    $add->equal('remote-address', $remoteAddress);
+                }
+
+                if ($localAddress !== null) {
+                    $add->equal('local-address', $localAddress);
+                }
 
                 if ($dnsServer !== null) {
                     $add->equal('dns-server', $dnsServer);
@@ -298,13 +306,44 @@ class RouterOsApiGateway implements RouterOsGateway
                     $add->equal('parent-queue', $parentQueue);
                 }
 
-                $client->query($add)->read();
+                $response = $client->query($add)->read();
             } else {
                 $set = new Query('/ppp/profile/set');
-                $set->equal('.id', $existing[0]['.id'])->equal('name', $name)->equal('remote-address', $remoteAddress);
+                $set->equal('.id', $existing[0]['.id'])->equal('name', $name);
+
+                // Real, load-bearing gotcha found via a live test against
+                // ro-hotspot.bajastu.id: unlike dns-server/parent-queue
+                // (both genuinely accept an empty string as "clear this
+                // field" on this object type), RouterOS REJECTS an empty
+                // string for BOTH remote-address and local-address
+                // ("invalid value for argument remote-address:"/
+                // "...local-address:") — never send an unconditional
+                // empty-string fallback for these two, only include them
+                // when genuinely non-null (same reasoning as the
+                // session-timeout fix on syncHotspotUserProfile()).
+                if ($remoteAddress !== null) {
+                    $set->equal('remote-address', $remoteAddress);
+                }
+
+                if ($localAddress !== null) {
+                    $set->equal('local-address', $localAddress);
+                }
+
                 $set->equal('dns-server', $dnsServer ?? '');
                 $set->equal('parent-queue', $parentQueue ?? 'none');
-                $client->query($set)->read();
+                $response = $client->query($set)->read();
+            }
+
+            // Same inline-error-detection gap already closed on
+            // syncHotspotUserProfile() (v0.14.4) — RouterOS returns a
+            // parameter rejection as ['after' => ['message' => ...]]
+            // WITHOUT throwing, confirmed empirically for THIS object type
+            // too via the remote-address/local-address live tests above.
+            // Closing it here now specifically because this method just
+            // gained two more optional fields that can genuinely trigger
+            // this exact failure mode (an invalid/nonexistent pool name).
+            if (isset($response['after']['message'])) {
+                throw new \RuntimeException((string) $response['after']['message']);
             }
 
             return ['success' => true, 'message' => null];
@@ -529,6 +568,118 @@ class RouterOsApiGateway implements RouterOsGateway
             return ['success' => true, 'message' => null];
         } catch (Throwable $e) {
             Log::warning("RouterOsApiGateway: gagal hapus /ip hotspot user profile (name={$lookupName}) di NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    public function listInterfaces(Nas $nas): array
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 10,
+            ]);
+
+            $interfaces = [];
+
+            foreach (['ether', 'vlan'] as $type) {
+                $query = new Query('/interface/print');
+                $query->where('type', $type);
+
+                foreach ($client->query($query)->read() as $row) {
+                    $interfaces[] = ['name' => $row['name'], 'type' => $type];
+                }
+            }
+
+            return $interfaces;
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal ambil daftar interface NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
+
+            return [];
+        }
+    }
+
+    public function syncPppoeServer(Nas $nas, string $comment, string $serviceName, string $interfaceName, string $defaultProfile): array
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 10,
+            ]);
+
+            $find = new Query('/interface/pppoe-server/server/print');
+            $find->where('comment', $comment);
+            $existing = $client->query($find)->read();
+
+            if ($existing === []) {
+                $add = new Query('/interface/pppoe-server/server/add');
+                // disabled=no sent explicitly — confirmed via a live test
+                // that a freshly-added entry defaults to disabled=true
+                // otherwise (RouterOS's own default, not something this
+                // codebase would want silently inherited).
+                $add->equal('service-name', $serviceName)
+                    ->equal('interface', $interfaceName)
+                    ->equal('default-profile', $defaultProfile)
+                    ->equal('disabled', 'no')
+                    ->equal('comment', $comment);
+
+                $response = $client->query($add)->read();
+            } else {
+                $set = new Query('/interface/pppoe-server/server/set');
+                $set->equal('.id', $existing[0]['.id'])
+                    ->equal('service-name', $serviceName)
+                    ->equal('interface', $interfaceName)
+                    ->equal('default-profile', $defaultProfile)
+                    ->equal('disabled', 'no');
+
+                $response = $client->query($set)->read();
+            }
+
+            if (isset($response['after']['message'])) {
+                throw new \RuntimeException((string) $response['after']['message']);
+            }
+
+            return ['success' => true, 'message' => null];
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal sync /interface/pppoe-server/server (comment={$comment}) ke NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
+
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    public function removePppoeServer(Nas $nas, string $comment): array
+    {
+        try {
+            $client = new Client([
+                'host' => $nas->mikrotik_ip,
+                'user' => $nas->api_username,
+                'pass' => $nas->api_password,
+                'port' => $nas->api_port,
+                'timeout' => 10,
+            ]);
+
+            $find = new Query('/interface/pppoe-server/server/print');
+            $find->where('comment', $comment);
+            $existing = $client->query($find)->read();
+
+            if ($existing === []) {
+                return ['success' => true, 'message' => null];
+            }
+
+            $remove = new Query('/interface/pppoe-server/server/remove');
+            $remove->equal('.id', $existing[0]['.id']);
+            $client->query($remove)->read();
+
+            return ['success' => true, 'message' => null];
+        } catch (Throwable $e) {
+            Log::warning("RouterOsApiGateway: gagal hapus /interface/pppoe-server/server (comment={$comment}) di NAS #{$nas->id} ({$nas->mikrotik_ip}:{$nas->api_port}): {$e->getMessage()}");
 
             return ['success' => false, 'message' => $e->getMessage()];
         }

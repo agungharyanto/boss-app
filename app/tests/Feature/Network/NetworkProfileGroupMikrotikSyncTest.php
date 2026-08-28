@@ -59,17 +59,19 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
     /**
      * @param  array{success: bool, message: ?string}  $pppResult
      * @param  array{success: bool, message: ?string}  $hotspotResult
+     * @param  array{success: bool, message: ?string}  $pppoeServerResult
      */
-    private function bindGateway(array $pppResult = ['success' => true, 'message' => null], array $hotspotResult = ['success' => true, 'message' => null]): void
+    private function bindGateway(array $pppResult = ['success' => true, 'message' => null], array $hotspotResult = ['success' => true, 'message' => null], array $pppoeServerResult = ['success' => true, 'message' => null]): void
     {
         $recorder = &$this->recordedCalls;
 
-        $this->app->bind(RouterOsGateway::class, function () use ($pppResult, $hotspotResult, &$recorder) {
-            return new class($pppResult, $hotspotResult, $recorder) implements RouterOsGateway
+        $this->app->bind(RouterOsGateway::class, function () use ($pppResult, $hotspotResult, $pppoeServerResult, &$recorder) {
+            return new class($pppResult, $hotspotResult, $pppoeServerResult, $recorder) implements RouterOsGateway
             {
                 public function __construct(
                     private readonly array $pppResult,
                     private readonly array $hotspotResult,
+                    private readonly array $pppoeServerResult,
                     private array &$recorder,
                 ) {}
 
@@ -103,9 +105,9 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
                     return ['success' => true, 'message' => null];
                 }
 
-                public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array
+                public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array
                 {
-                    $this->recorder[] = ['method' => 'syncPppProfile', 'args' => compact('comment', 'name', 'remoteAddress', 'dnsServer', 'parentQueue')];
+                    $this->recorder[] = ['method' => 'syncPppProfile', 'args' => compact('comment', 'name', 'remoteAddress', 'dnsServer', 'parentQueue', 'localAddress')];
 
                     return $this->pppResult;
                 }
@@ -135,6 +137,25 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
                 public function removeHotspotUserProfile(Nas $nas, string $lookupName): array
                 {
                     return ['success' => true, 'message' => null];
+                }
+
+                public function listInterfaces(Nas $nas): array
+                {
+                    return [];
+                }
+
+                public function syncPppoeServer(Nas $nas, string $comment, string $serviceName, string $interfaceName, string $defaultProfile): array
+                {
+                    $this->recorder[] = ['method' => 'syncPppoeServer', 'args' => compact('comment', 'serviceName', 'interfaceName', 'defaultProfile')];
+
+                    return $this->pppoeServerResult;
+                }
+
+                public function removePppoeServer(Nas $nas, string $comment): array
+                {
+                    $this->recorder[] = ['method' => 'removePppoeServer', 'args' => compact('comment')];
+
+                    return $this->pppoeServerResult;
                 }
             };
         });
@@ -209,6 +230,151 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
 
         $this->assertSame('removePppProfile', $this->recordedCalls[0]['method']);
         $this->assertSame($group->mikrotikComment(), $this->recordedCalls[0]['args']['comment']);
+    }
+
+    // --- Revisi Grup Profil: PPPoE Server push/remove --------------------
+
+    public function test_push_job_also_syncs_pppoe_server_when_interface_and_service_name_are_set(): void
+    {
+        $this->bindGateway();
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Pool-Sync']);
+        $group = NetworkProfileGroup::factory()->create([
+            'nas_id' => $nas->id,
+            'customer_ip_pool_id' => $pool->id,
+            'type' => NetworkProfileGroupType::Ppp,
+            'name' => 'HomeFixed-10Mbps-Test',
+            'interface_name' => 'vlan110-PPPoE-10Mbps',
+            'service_name' => 'PPPoE-Vlan110-10Mbps',
+        ]);
+
+        $job = new PushNetworkProfileGroupToMikrotikJob($group->id);
+        $job->withFakeQueueInteractions();
+        $job->handle(app(RouterOsGateway::class));
+
+        $group->refresh();
+        $this->assertSame(MikrotikSyncStatus::Synced, $group->mikrotik_sync_status);
+
+        $this->assertSame('syncPppProfile', $this->recordedCalls[0]['method']);
+        $this->assertSame('syncPppoeServer', $this->recordedCalls[1]['method']);
+        $call = $this->recordedCalls[1]['args'];
+        $this->assertSame($group->mikrotikComment(), $call['comment']);
+        $this->assertSame('PPPoE-Vlan110-10Mbps', $call['serviceName']);
+        $this->assertSame('vlan110-PPPoE-10Mbps', $call['interfaceName']);
+        $this->assertSame('HomeFixed-10Mbps-Test', $call['defaultProfile']);
+    }
+
+    public function test_push_job_skips_pppoe_server_sync_when_interface_name_is_null(): void
+    {
+        $this->bindGateway();
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $group = NetworkProfileGroup::factory()->create([
+            'nas_id' => $nas->id,
+            'customer_ip_pool_id' => $pool->id,
+            'type' => NetworkProfileGroupType::Ppp,
+            'interface_name' => null,
+            'service_name' => 'PPPoE-Vlan110-10Mbps',
+        ]);
+
+        $job = new PushNetworkProfileGroupToMikrotikJob($group->id);
+        $job->withFakeQueueInteractions();
+        $job->handle(app(RouterOsGateway::class));
+
+        $group->refresh();
+        $this->assertSame(MikrotikSyncStatus::Synced, $group->mikrotik_sync_status);
+        $this->assertCount(1, $this->recordedCalls);
+        $this->assertSame('syncPppProfile', $this->recordedCalls[0]['method']);
+    }
+
+    public function test_push_job_skips_pppoe_server_sync_when_service_name_is_null(): void
+    {
+        $this->bindGateway();
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $group = NetworkProfileGroup::factory()->create([
+            'nas_id' => $nas->id,
+            'customer_ip_pool_id' => $pool->id,
+            'type' => NetworkProfileGroupType::Ppp,
+            'interface_name' => 'vlan110-PPPoE-10Mbps',
+            'service_name' => null,
+        ]);
+
+        $job = new PushNetworkProfileGroupToMikrotikJob($group->id);
+        $job->withFakeQueueInteractions();
+        $job->handle(app(RouterOsGateway::class));
+
+        $group->refresh();
+        $this->assertSame(MikrotikSyncStatus::Synced, $group->mikrotik_sync_status);
+        $this->assertCount(1, $this->recordedCalls);
+        $this->assertSame('syncPppProfile', $this->recordedCalls[0]['method']);
+    }
+
+    public function test_push_job_marks_failed_with_combined_message_when_pppoe_server_sync_fails_on_final_attempt(): void
+    {
+        $this->bindGateway(pppoeServerResult: ['success' => false, 'message' => 'interface not found']);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $group = NetworkProfileGroup::factory()->create([
+            'nas_id' => $nas->id,
+            'customer_ip_pool_id' => $pool->id,
+            'type' => NetworkProfileGroupType::Ppp,
+            'interface_name' => 'vlan110-PPPoE-10Mbps',
+            'service_name' => 'PPPoE-Vlan110-10Mbps',
+        ]);
+
+        $job = new PushNetworkProfileGroupToMikrotikJob($group->id);
+        $job->withFakeQueueInteractions();
+        $job->job->attempts = 3;
+        $job->handle(app(RouterOsGateway::class));
+
+        $job->assertNotReleased();
+        $group->refresh();
+        $this->assertSame(MikrotikSyncStatus::Failed, $group->mikrotik_sync_status);
+        $this->assertStringContainsString('/ppp profile berhasil, tapi PPPoE Server gagal', $group->mikrotik_sync_error);
+        $this->assertStringContainsString('interface not found', $group->mikrotik_sync_error);
+    }
+
+    public function test_remove_job_also_removes_pppoe_server_when_interface_and_service_name_are_set(): void
+    {
+        $this->bindGateway();
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $group = NetworkProfileGroup::factory()->create([
+            'nas_id' => $nas->id,
+            'customer_ip_pool_id' => $pool->id,
+            'type' => NetworkProfileGroupType::Ppp,
+            'interface_name' => 'vlan110-PPPoE-10Mbps',
+            'service_name' => 'PPPoE-Vlan110-10Mbps',
+        ]);
+        $group->delete();
+
+        $job = new RemoveNetworkProfileGroupFromMikrotikJob($group->id);
+        $job->withFakeQueueInteractions();
+        $job->handle(app(RouterOsGateway::class));
+
+        $this->assertSame('removePppProfile', $this->recordedCalls[0]['method']);
+        $this->assertSame('removePppoeServer', $this->recordedCalls[1]['method']);
+        $this->assertSame($group->mikrotikComment(), $this->recordedCalls[1]['args']['comment']);
+    }
+
+    public function test_remove_job_skips_pppoe_server_removal_when_fields_were_never_set(): void
+    {
+        $this->bindGateway();
+        $group = $this->group(NetworkProfileGroupType::Ppp);
+        $group->delete();
+
+        $job = new RemoveNetworkProfileGroupFromMikrotikJob($group->id);
+        $job->withFakeQueueInteractions();
+        $job->handle(app(RouterOsGateway::class));
+
+        $this->assertCount(1, $this->recordedCalls);
+        $this->assertSame('removePppProfile', $this->recordedCalls[0]['method']);
     }
 
     // --- Hotspot type — the real architectural finding this sprint ------

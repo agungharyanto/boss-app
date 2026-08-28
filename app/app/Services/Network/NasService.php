@@ -4,8 +4,12 @@ namespace App\Services\Network;
 
 use App\Enums\NasStatus;
 use App\Exceptions\NasNotProvisionedException;
+use App\Jobs\PushExpiredProfileToMikrotikJob;
+use App\Jobs\RemoveExpiredProfileFromMikrotikJob;
+use App\Models\CustomerIpPool;
 use App\Models\Nas;
 use App\Services\Network\Contracts\RouterOsGateway;
+use InvalidArgumentException;
 
 class NasService
 {
@@ -96,6 +100,44 @@ class NasService
             'status' => $result['online'] ? NasStatus::Online : NasStatus::Offline,
             'last_ping_at' => now(),
         ]);
+
+        return $nas->fresh();
+    }
+
+    /**
+     * Revisi Grup Profil (Langkah 3) — sets/clears this NAS's own "Profile
+     * Pelanggan Expired" fallback pool, then dispatches the matching
+     * RouterOS live-push (Nas::expiredIpPool()'s own docblock explains why
+     * this validation lives here rather than at the Eloquent relation
+     * level). Same async-Job posture as CustomerIpPoolService/
+     * NetworkProfileGroupService — never a synchronous router call from
+     * this method itself.
+     */
+    public function updateExpiredIpPool(Nas $nas, ?int $expiredIpPoolId): Nas
+    {
+        if ($expiredIpPoolId !== null) {
+            $pool = CustomerIpPool::find($expiredIpPoolId);
+
+            if ($pool === null || $pool->nas_id !== $nas->id) {
+                throw new InvalidArgumentException('IP Pool yang dipilih harus milik NAS yang sama.');
+            }
+        }
+
+        $nas->update(['expired_ip_pool_id' => $expiredIpPoolId]);
+
+        if ($expiredIpPoolId === null) {
+            $nas->update([
+                'expired_profile_mikrotik_sync_status' => null,
+                'expired_profile_mikrotik_synced_at' => null,
+                'expired_profile_mikrotik_sync_error' => null,
+            ]);
+            RemoveExpiredProfileFromMikrotikJob::dispatch($nas->id);
+
+            return $nas->fresh();
+        }
+
+        $nas->markExpiredProfileSyncPending();
+        PushExpiredProfileToMikrotikJob::dispatch($nas->id);
 
         return $nas->fresh();
     }

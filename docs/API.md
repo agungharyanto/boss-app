@@ -540,6 +540,21 @@ immediately** (no retry — this is a permanent config problem, not transient) i
 Server configured at all yet. `mikrotik_sync_status`/`mikrotik_synced_at`/`mikrotik_sync_error` — same
 3-state contract as `customer_ip_pools`.
 
+**Revisi (interface/VLAN + PPPoE Server binding, PPP type only)**: `interface_name`/`service_name`
+(both optional) additionally push `/interface/pppoe-server/server` (found/updated by the same stable
+comment as the `/ppp profile` push, since this RouterOS object also supports `comment` — confirmed live).
+`default-profile` on that object is always this Grup Profil's OWN `/ppp profile` name — resolving what a
+bare, no-rate-limit Grup Profil `/ppp profile` is actually FOR: it's the PPPoE Server's Default Profile for
+any RADIUS-authenticated session that doesn't get a more specific profile. Both fields left `null` mean
+"push only `/ppp profile`, no PPPoE Server binding" (the pre-revision behavior, still fully valid). A
+PPPoE Server push failure after a successful `/ppp profile` push is still reported as an overall failure
+(`mikrotik_sync_status: "failed"`), not silently swallowed. `interface_name` should be one of the names
+`GET /nas/{nas}/interfaces` (below) returns for that NAS — the API does NOT validate this against the
+router itself, same "trust the admin, the push will just fail with a real router error if wrong" posture
+as every other RouterOS-bound field in this codebase. **Switching `type` away from `ppp` (via `PUT`) always
+clears any previously-stored `interface_name`/`service_name`, even if the request doesn't mention either
+field** — these two are only ever meaningful for `type=ppp`.
+
 Separately (synchronous, not queued — a local `radius_db` write, not a network call), `create()`/`update()`/
 `delete()` also rewrite `radgroupreply` rows for `GroupName = "boss-grup-profil-{id}"`: PPP type gets
 `Service-Type=Framed-User`/`Framed-Protocol=PPP`/`Framed-Pool=<pool_name>` (mirroring the same 3 attributes
@@ -553,12 +568,22 @@ to v0.14.4/v0.14.5).
 List Grup Profil belonging to the logged-in tenant. Query optional: `?nas_id=`, `?type=hotspot|ppp`,
 `?search=` (name), `?sort_by=`/`?sort_dir=` (default `name`/`asc`).
 
+### `GET /nas/{nas}/interfaces`
+
+READ-ONLY live listing of the NAS's existing physical + VLAN interfaces (`/interface print`, filtered to
+`ether`/`vlan` types) — **never creates a VLAN or any other interface**, only reads what's already
+configured on the router. Cached 30s server-side per NAS. Returns `data: [{"name": "vlan110-PPPoE-10Mbps",
+"type": "vlan"}, ...]`. An unreachable NAS returns an empty array, not an error — same graceful-degradation
+posture as every other RouterOS read in this codebase. Used to populate the Interface/VLAN dropdown for
+`POST`/`PUT /network-profile-groups` below.
+
 ### `POST /network-profile-groups`
 
 Body: `nas_id` (required), `name` (required, unique per NAS), `type` (required, `hotspot` or `ppp`),
 `customer_ip_pool_id` (required — **must belong to the same `nas_id`**, rejected otherwise, and must not
 be a soft-deleted pool), `dns_primary`/`dns_secondary` (optional, valid IPs), `parent_queue` (optional
-string), `is_active` (optional, default `true`).
+string), `interface_name`/`service_name` (optional, PPP type only — see above), `is_active` (optional,
+default `true`).
 
 ### `GET /network-profile-groups/{network_profile_group}` · `PUT /network-profile-groups/{network_profile_group}`
 
@@ -592,6 +617,8 @@ Manual retry for a `Gagal` group — same shape as `customer-ip-pools`' own resy
     "dns_primary": "8.8.8.8",
     "dns_secondary": "8.8.4.4",
     "parent_queue": null,
+    "interface_name": "vlan110-PPPoE-10Mbps",
+    "service_name": "PPPoE-Vlan110-10Mbps",
     "is_active": true,
     "mikrotik_sync_status": "pending",
     "mikrotik_synced_at": null,
@@ -888,6 +915,33 @@ endpoint ini adalah jalur yang direkomendasikan. **Ditolak** (422,
 `NasApiUserProvisioningException`) kalau router menolak kredensial admin
 atau perintah provisioning gagal — tidak ada perubahan ke `nas` row kalau
 gagal.
+
+### `GET /nas/{nas}/interfaces` (Revisi Grup Profil)
+
+READ-ONLY, live query `/interface print` ke NAS (difilter tipe `ether`/
+`vlan`) — **tidak pernah membuat VLAN/interface baru**, hanya membaca yang
+sudah ada di router. Response `data: [{"name": "vlan110-PPPoE-10Mbps",
+"type": "vlan"}, ...]`. Di-cache 30 detik per NAS (`Cache::remember`, key
+sama dengan yang dipakai `NetworkProfileGroupIndex` Livewire). NAS yang
+tidak terjangkau mengembalikan array kosong, bukan error. Permission:
+`nas.view` (lebih longgar dari `nas.manage` — sekadar membaca daftar
+interface, bukan mengubah apa pun). Dipakai untuk mengisi dropdown
+"Interface/VLAN" pada `POST`/`PUT /network-profile-groups`.
+
+### `PATCH /nas/{nas}/expired-profile` (Revisi Grup Profil, Langkah 3)
+
+Body: `customer_ip_pool_id` (nullable — harus milik NAS yang sama,
+ditolak 422 kalau tidak). Mengisi/mengosongkan "Profile Pelanggan
+Expired" NAS ini: sistem push `/ppp profile` khusus (nama
+`expired-nas-{id}`) memakai pool tsb sebagai `local-address`, TANPA
+rate-limit, `remote-address` kosong — dipakai sebagai fallback pelanggan
+yang belum/tidak bayar (`RouterOsGateway::syncPppProfile()`'s
+`remoteAddress`/`localAddress` split, lihat bagian Grup Profil di atas).
+Push/hapus berjalan ASYNC lewat `PushExpiredProfileToMikrotikJob`/
+`RemoveExpiredProfileFromMikrotikJob` (retry/backoff sama seperti setiap
+live-push lain di codebase ini) — `data.expired_profile_mikrotik_sync_status`
+di response langsung `"pending"` (set) atau `null` (cleared), bukan
+menunggu hasil push selesai. Permission: `nas.manage`.
 
 ## VPN Multi-Protokol (OpenVPN v0.6.2, WireGuard/L2TP-IPsec v0.6.3)
 

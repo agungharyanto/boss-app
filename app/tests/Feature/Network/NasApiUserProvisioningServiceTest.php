@@ -47,7 +47,7 @@ class NasApiUserProvisioningServiceTest extends TestCase
                 return ['success' => true, 'message' => null];
             }
 
-            public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array
+            public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array
             {
                 return ['success' => true, 'message' => null];
             }
@@ -68,6 +68,21 @@ class NasApiUserProvisioningServiceTest extends TestCase
             }
 
             public function removeHotspotUserProfile(Nas $nas, string $lookupName): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function listInterfaces(Nas $nas): array
+            {
+                return [];
+            }
+
+            public function syncPppoeServer(Nas $nas, string $comment, string $serviceName, string $interfaceName, string $defaultProfile): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function removePppoeServer(Nas $nas, string $comment): array
             {
                 return ['success' => true, 'message' => null];
             }

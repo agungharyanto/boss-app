@@ -80,7 +80,7 @@ class CustomerIpPoolMikrotikSyncTest extends TestCase
                 return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
             }
 
-            public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array
+            public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array
             {
                 return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
             }
@@ -101,6 +101,21 @@ class CustomerIpPoolMikrotikSyncTest extends TestCase
             }
 
             public function removeHotspotUserProfile(Nas $nas, string $lookupName): array
+            {
+                return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
+            }
+
+            public function listInterfaces(Nas $nas): array
+            {
+                return [];
+            }
+
+            public function syncPppoeServer(Nas $nas, string $comment, string $serviceName, string $interfaceName, string $defaultProfile): array
+            {
+                return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
+            }
+
+            public function removePppoeServer(Nas $nas, string $comment): array
             {
                 return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
             }

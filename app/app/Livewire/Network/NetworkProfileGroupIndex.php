@@ -8,8 +8,10 @@ use App\Enums\NetworkProfileGroupType;
 use App\Models\CustomerIpPool;
 use App\Models\Nas;
 use App\Models\NetworkProfileGroup;
+use App\Services\Network\Contracts\RouterOsGateway;
 use App\Services\Network\NetworkProfileGroupService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Validate;
 use Livewire\Component;
@@ -53,6 +55,15 @@ class NetworkProfileGroupIndex extends Component
 
     public string $parentQueue = '';
 
+    // Revisi Grup Profil — only relevant for type=ppp (see
+    // PushNetworkProfileGroupToMikrotikJob's own docblock). Both left
+    // optional (nullable at the DB level) — an admin can still create a
+    // plain `/ppp profile`-only group without a PPPoE Server binding,
+    // exactly like the 3 existing rows this migration doesn't backfill.
+    public string $interfaceName = '';
+
+    public string $serviceName = '';
+
     public bool $isActive = true;
 
     public ?int $editingGroupId = null;
@@ -70,6 +81,10 @@ class NetworkProfileGroupIndex extends Component
     public string $editDnsSecondary = '';
 
     public string $editParentQueue = '';
+
+    public string $editInterfaceName = '';
+
+    public string $editServiceName = '';
 
     public bool $editIsActive = true;
 
@@ -98,11 +113,16 @@ class NetworkProfileGroupIndex extends Component
     public function updatedNasId(): void
     {
         $this->customerIpPoolId = '';
+        // Revisi Grup Profil — a NAS's interface/VLAN list is naturally
+        // per-NAS too, same invalidate-on-dependency-change discipline as
+        // the IP Pool selection right above.
+        $this->interfaceName = '';
     }
 
     public function updatedEditNasId(): void
     {
         $this->editCustomerIpPoolId = '';
+        $this->editInterfaceName = '';
     }
 
     /**
@@ -190,6 +210,39 @@ class NetworkProfileGroupIndex extends Component
         return true;
     }
 
+    /**
+     * Revisi Grup Profil — live-queried interface/VLAN names for the given
+     * NAS, read-only (no create/write here at all, per the sprint's own
+     * hard constraint), cached briefly (30s, same short-cache posture as
+     * every other "don't hammer the router on every keystroke/re-render"
+     * spot in this codebase) so opening/re-rendering the form repeatedly
+     * doesn't re-query RouterOS every single time. Returns [] (not an
+     * error) when the NAS is unreachable — same graceful-empty posture
+     * RouterOsApiGateway::listInterfaces() itself already establishes.
+     *
+     * @return array<int, string>
+     */
+    private function interfaceOptionsForNas(string $nasId): array
+    {
+        if ($nasId === '') {
+            return [];
+        }
+
+        return Cache::remember("nas:{$nasId}:interfaces", 30, function () use ($nasId) {
+            $nas = Nas::find((int) $nasId);
+
+            if ($nas === null) {
+                return [];
+            }
+
+            return collect(app(RouterOsGateway::class)->listInterfaces($nas))
+                ->pluck('name')
+                ->sort()
+                ->values()
+                ->all();
+        });
+    }
+
     public function createGroup(NetworkProfileGroupService $service): void
     {
         $this->authorize('manage', NetworkProfileGroup::class);
@@ -202,6 +255,8 @@ class NetworkProfileGroupIndex extends Component
             'dnsPrimary' => ['nullable', 'ip'],
             'dnsSecondary' => ['nullable', 'ip'],
             'parentQueue' => ['nullable', 'string', 'max:255'],
+            'interfaceName' => ['nullable', 'string', 'max:255'],
+            'serviceName' => ['nullable', 'string', 'max:255'],
         ]));
 
         if (! $this->validatePoolBelongsToSameNas($this->nasId, $this->customerIpPoolId, $this->type, 'customerIpPoolId')) {
@@ -216,10 +271,16 @@ class NetworkProfileGroupIndex extends Component
             'dns_primary' => $this->dnsPrimary ?: null,
             'dns_secondary' => $this->dnsSecondary ?: null,
             'parent_queue' => $this->parentQueue ?: null,
+            // Hotspot-type binding is a genuinely different concept (see
+            // NetworkProfileGroup's own docblock) — never persist an
+            // interface/service name picked while Tipe happened to be PPP
+            // if the admin then switches to Hotspot before submitting.
+            'interface_name' => $this->type === 'ppp' ? ($this->interfaceName ?: null) : null,
+            'service_name' => $this->type === 'ppp' ? ($this->serviceName ?: null) : null,
             'is_active' => $this->isActive,
         ]);
 
-        $this->reset(['nasId', 'name', 'type', 'customerIpPoolId', 'dnsPrimary', 'dnsSecondary', 'parentQueue', 'isActive', 'showCreateForm']);
+        $this->reset(['nasId', 'name', 'type', 'customerIpPoolId', 'dnsPrimary', 'dnsSecondary', 'parentQueue', 'interfaceName', 'serviceName', 'isActive', 'showCreateForm']);
         $this->type = 'ppp';
         $this->isActive = true;
     }
@@ -237,12 +298,14 @@ class NetworkProfileGroupIndex extends Component
         $this->editDnsPrimary = (string) $group->dns_primary;
         $this->editDnsSecondary = (string) $group->dns_secondary;
         $this->editParentQueue = (string) $group->parent_queue;
+        $this->editInterfaceName = (string) $group->interface_name;
+        $this->editServiceName = (string) $group->service_name;
         $this->editIsActive = $group->is_active;
     }
 
     public function cancelEdit(): void
     {
-        $this->reset(['editingGroupId', 'editNasId', 'editName', 'editType', 'editCustomerIpPoolId', 'editDnsPrimary', 'editDnsSecondary', 'editParentQueue', 'editIsActive']);
+        $this->reset(['editingGroupId', 'editNasId', 'editName', 'editType', 'editCustomerIpPoolId', 'editDnsPrimary', 'editDnsSecondary', 'editParentQueue', 'editInterfaceName', 'editServiceName', 'editIsActive']);
     }
 
     public function updateGroup(NetworkProfileGroupService $service): void
@@ -258,6 +321,8 @@ class NetworkProfileGroupIndex extends Component
             'editDnsPrimary' => ['nullable', 'ip'],
             'editDnsSecondary' => ['nullable', 'ip'],
             'editParentQueue' => ['nullable', 'string', 'max:255'],
+            'editInterfaceName' => ['nullable', 'string', 'max:255'],
+            'editServiceName' => ['nullable', 'string', 'max:255'],
         ]));
 
         if (! $this->validatePoolBelongsToSameNas($this->editNasId, $this->editCustomerIpPoolId, $this->editType, 'editCustomerIpPoolId')) {
@@ -272,6 +337,8 @@ class NetworkProfileGroupIndex extends Component
             'dns_primary' => $this->editDnsPrimary ?: null,
             'dns_secondary' => $this->editDnsSecondary ?: null,
             'parent_queue' => $this->editParentQueue ?: null,
+            'interface_name' => $this->editType === 'ppp' ? ($this->editInterfaceName ?: null) : null,
+            'service_name' => $this->editType === 'ppp' ? ($this->editServiceName ?: null) : null,
             'is_active' => $this->editIsActive,
         ]);
 
@@ -320,6 +387,12 @@ class NetworkProfileGroupIndex extends Component
             'editPoolOptionsForNas' => $this->editNasId !== ''
                 ? CustomerIpPool::query()->where('nas_id', $this->editNasId)->whereIn('usage_type', [$this->editType, CustomerIpPoolUsageType::General->value])->orderBy('name')->get(['id', 'name'])
                 : collect(),
+            // Revisi Grup Profil — live RouterOS interface/VLAN names for
+            // the currently-selected NAS in each form, only meaningful
+            // while Tipe=ppp (see NetworkProfileGroup's own docblock on why
+            // Hotspot-type binding is a different concept entirely).
+            'interfaceOptionsForNas' => $this->type === 'ppp' ? $this->interfaceOptionsForNas($this->nasId) : [],
+            'editInterfaceOptionsForNas' => $this->editType === 'ppp' ? $this->interfaceOptionsForNas($this->editNasId) : [],
             'canManage' => auth()->user()->can('manage', NetworkProfileGroup::class),
         ]);
     }

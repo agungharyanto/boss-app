@@ -174,6 +174,43 @@
         </div>
     @endif
 
+    {{-- PROFIL PELANGGAN EXPIRED MODAL (Revisi Grup Profil, Langkah 3) —
+         satu IP Pool fallback per NAS, dipush sebagai `/ppp profile` tanpa
+         rate-limit (local-address terbatas, remote-address kosong) —
+         lihat NasService::updateExpiredIpPool()/PushExpiredProfileToMikrotikJob. --}}
+    @if ($showExpiredProfileModal)
+        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeExpiredProfileModal">
+            <div class="bg-white rounded-md p-6 w-full max-w-md space-y-4">
+                <h2 class="font-medium">Profil Pelanggan Expired</h2>
+                <p class="text-xs text-gray-500">
+                    Pilih IP Pool untuk fallback pelanggan yang belum/tidak bayar. Sistem akan push
+                    <code>/ppp profile</code> khusus (tanpa rate-limit) memakai pool ini. Kosongkan
+                    untuk menghapus profil expired dari router ini.
+                </p>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">IP Pool</label>
+                    <select wire:model="expiredProfileIpPoolId" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                        <option value="">-- Tidak ada (nonaktif) --</option>
+                        @foreach ($expiredProfilePoolOptions as $poolOption)
+                            <option value="{{ $poolOption->id }}">{{ $poolOption->name }}</option>
+                        @endforeach
+                    </select>
+                    @error('expiredProfileIpPoolId') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+                </div>
+
+                <div class="flex items-center gap-3 pt-2">
+                    <button wire:click="saveExpiredProfile" wire:loading.attr="disabled" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">
+                        Simpan
+                    </button>
+                    <button wire:click="closeExpiredProfileModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
+                        Tutup
+                    </button>
+                </div>
+            </div>
+        </div>
+    @endif
+
     {{-- LIST --}}
     <div class="border border-gray-200 rounded-md overflow-x-auto">
         <table class="w-full text-sm">
@@ -208,6 +245,9 @@
                         <td class="px-4 py-2 text-right space-x-2">
                             <button wire:click="edit({{ $nas->id }})" class="text-primary hover:underline">Edit</button>
                             <button wire:click="openProvisionApiModal({{ $nas->id }})" class="text-primary hover:underline">User API</button>
+                            <button wire:click="openExpiredProfileModal({{ $nas->id }})" class="text-primary hover:underline" title="Profil Pelanggan Expired{{ $nas->expiredIpPool ? ' — '.$nas->expiredIpPool->name.' ('.$nas->expired_profile_mikrotik_sync_status?->label().')' : '' }}">
+                                Profil Expired
+                            </button>
                             <button wire:click="delete({{ $nas->id }})" wire:confirm="Hapus NAS ini?" class="text-red-500 hover:underline">Hapus</button>
                         </td>
                     </tr>

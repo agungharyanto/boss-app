@@ -7,15 +7,18 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\CoaDisconnectRequest;
 use App\Http\Requests\ProvisionNasApiUserRequest;
 use App\Http\Requests\StoreNasRequest;
+use App\Http\Requests\UpdateExpiredProfileRequest;
 use App\Http\Requests\UpdateNasRequest;
 use App\Http\Resources\NasResource;
 use App\Models\Nas;
 use App\Services\Network\CoaService;
+use App\Services\Network\Contracts\RouterOsGateway;
 use App\Services\Network\NasApiUserProvisioningService;
 use App\Services\Network\NasService;
 use App\Support\ResellerContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class NasController extends Controller
 {
@@ -120,5 +123,40 @@ class NasController extends Controller
         );
 
         return $this->success(new NasResource($nas), 'User API berhasil dibuat/diperbarui');
+    }
+
+    /**
+     * Revisi Grup Profil (Langkah 3) — sets/clears this NAS's own "Profile
+     * Pelanggan Expired" fallback pool; async RouterOS live-push dispatch
+     * happens inside NasService::updateExpiredIpPool() itself, same
+     * fire-and-forget posture as every other live-push endpoint in this
+     * codebase.
+     */
+    public function updateExpiredProfile(UpdateExpiredProfileRequest $request, Nas $nas, NasService $service): JsonResponse
+    {
+        $nas = $service->updateExpiredIpPool($nas, $request->validated('customer_ip_pool_id'));
+
+        return $this->success(new NasResource($nas), 'Profil Pelanggan Expired berhasil diperbarui');
+    }
+
+    /**
+     * Revisi Grup Profil (Langkah 1) — READ-ONLY live listing of this
+     * NAS's existing physical + VLAN interfaces, for the Grup Profil
+     * "Interface/VLAN" dropdown. Never creates anything on the router —
+     * see RouterOsGateway::listInterfaces()'s own docblock.
+     */
+    public function interfaces(Nas $nas, RouterOsGateway $gateway): JsonResponse
+    {
+        $this->authorize('view', $nas);
+
+        // Same 30s-per-NAS cache as NetworkProfileGroupIndex's own
+        // interfaceOptionsForNas() — a single source of truth for "don't
+        // hammer the router on every dropdown open" would need a shared
+        // service, judged unnecessary complexity for one cached call; both
+        // sides use the identical cache key shape/TTL so a request through
+        // either path benefits from whichever the other already primed.
+        $interfaces = Cache::remember("nas:{$nas->id}:interfaces", 30, fn () => $gateway->listInterfaces($nas));
+
+        return $this->success($interfaces, 'Daftar interface NAS');
     }
 }

@@ -519,4 +519,73 @@ class NetworkProfileGroupApiTest extends TestCase
 
         $this->assertSame(0, DB::connection('radius')->table('radgroupreply')->where('groupname', $groupName)->count());
     }
+
+    // --- Revisi Grup Profil: interface_name/service_name -----------------
+
+    public function test_creating_a_ppp_group_with_interface_and_service_name_persists_them(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/network-profile-groups', $this->payload($nas->id, $pool->id, [
+            'interface_name' => 'vlan110-PPPoE-10Mbps',
+            'service_name' => 'PPPoE-Vlan110-10Mbps',
+        ]));
+
+        $response->assertCreated();
+        $response->assertJsonPath('data.interface_name', 'vlan110-PPPoE-10Mbps');
+        $response->assertJsonPath('data.service_name', 'PPPoE-Vlan110-10Mbps');
+        $this->assertDatabaseHas('network_profile_groups', [
+            'name' => 'Grup Utama',
+            'interface_name' => 'vlan110-PPPoE-10Mbps',
+            'service_name' => 'PPPoE-Vlan110-10Mbps',
+        ]);
+    }
+
+    public function test_creating_a_hotspot_group_never_persists_interface_or_service_name_via_api(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'hotspot']);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/network-profile-groups', $this->payload($nas->id, $pool->id, [
+            'type' => 'hotspot',
+            'interface_name' => 'vlan110-PPPoE-10Mbps',
+            'service_name' => 'some-service',
+        ]));
+
+        $response->assertCreated();
+        $response->assertJsonPath('data.interface_name', null);
+        $response->assertJsonPath('data.service_name', null);
+    }
+
+    /**
+     * The real gap normalizeInterfaceFields() closes — an update() that
+     * switches type to hotspot WITHOUT mentioning interface_name/
+     * service_name in the same request must still clear whatever was
+     * already stored, not leave it stale.
+     */
+    public function test_switching_type_to_hotspot_clears_previously_stored_interface_and_service_name(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'usage_type' => 'general']);
+        $group = NetworkProfileGroup::factory()->create([
+            'nas_id' => $nas->id,
+            'customer_ip_pool_id' => $pool->id,
+            'type' => 'ppp',
+            'interface_name' => 'vlan110-PPPoE-10Mbps',
+            'service_name' => 'PPPoE-Vlan110-10Mbps',
+        ]);
+
+        $response = $this->actingAs($this->admin($tenant))->putJson("/api/v1/network-profile-groups/{$group->id}", ['type' => 'hotspot']);
+
+        $response->assertOk();
+        $this->assertDatabaseHas('network_profile_groups', [
+            'id' => $group->id,
+            'interface_name' => null,
+            'service_name' => null,
+        ]);
+    }
 }

@@ -2,9 +2,13 @@
 
 namespace Tests\Feature\Network;
 
+use App\Enums\MikrotikSyncStatus;
 use App\Enums\NasStatus;
 use App\Enums\VpnAccountStatus;
+use App\Jobs\PushExpiredProfileToMikrotikJob;
+use App\Jobs\RemoveExpiredProfileFromMikrotikJob;
 use App\Livewire\Network\NasIndex;
+use App\Models\CustomerIpPool;
 use App\Models\Nas;
 use App\Models\Reseller;
 use App\Models\Tenant;
@@ -14,6 +18,7 @@ use App\Services\Network\Contracts\RouterOsGateway;
 use App\Support\ResellerContext;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -63,7 +68,7 @@ class NasIndexLivewireTest extends TestCase
                 return ['success' => true, 'message' => null];
             }
 
-            public function syncPppProfile(Nas $nas, string $comment, string $name, string $remoteAddress, ?string $dnsServer, ?string $parentQueue): array
+            public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array
             {
                 return ['success' => true, 'message' => null];
             }
@@ -84,6 +89,21 @@ class NasIndexLivewireTest extends TestCase
             }
 
             public function removeHotspotUserProfile(Nas $nas, string $lookupName): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function listInterfaces(Nas $nas): array
+            {
+                return [];
+            }
+
+            public function syncPppoeServer(Nas $nas, string $comment, string $serviceName, string $interfaceName, string $defaultProfile): array
+            {
+                return ['success' => true, 'message' => null];
+            }
+
+            public function removePppoeServer(Nas $nas, string $comment): array
             {
                 return ['success' => true, 'message' => null];
             }
@@ -451,6 +471,89 @@ class NasIndexLivewireTest extends TestCase
         Livewire::actingAs($ownerA)
             ->test(NasIndex::class)
             ->call('openProvisionApiModal', $nasB->id)
+            ->assertForbidden();
+    }
+
+    // --- Revisi Grup Profil (Langkah 3): Profil Pelanggan Expired --------
+
+    public function test_setting_expired_ip_pool_marks_pending_and_dispatches_push_job(): void
+    {
+        Bus::fake();
+        $this->bindGateway(online: true);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Expired-Pool']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NasIndex::class)
+            ->call('openExpiredProfileModal', $nas->id)
+            ->set('expiredProfileIpPoolId', (string) $pool->id)
+            ->call('saveExpiredProfile')
+            ->assertHasNoErrors();
+
+        $nas->refresh();
+        $this->assertSame($pool->id, $nas->expired_ip_pool_id);
+        $this->assertSame(MikrotikSyncStatus::Pending, $nas->expired_profile_mikrotik_sync_status);
+
+        Bus::assertDispatched(PushExpiredProfileToMikrotikJob::class, fn ($job) => $job->nasId === $nas->id);
+    }
+
+    public function test_clearing_expired_ip_pool_dispatches_remove_job_and_resets_sync_status(): void
+    {
+        Bus::fake();
+        $this->bindGateway(online: true);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $nas->update(['expired_ip_pool_id' => $pool->id]);
+        $nas->markExpiredProfileSynced();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NasIndex::class)
+            ->call('openExpiredProfileModal', $nas->id)
+            ->assertSet('expiredProfileIpPoolId', (string) $pool->id)
+            ->set('expiredProfileIpPoolId', '')
+            ->call('saveExpiredProfile')
+            ->assertHasNoErrors();
+
+        $nas->refresh();
+        $this->assertNull($nas->expired_ip_pool_id);
+        $this->assertNull($nas->expired_profile_mikrotik_sync_status);
+
+        Bus::assertDispatched(RemoveExpiredProfileFromMikrotikJob::class, fn ($job) => $job->nasId === $nas->id);
+    }
+
+    public function test_expired_ip_pool_from_a_different_nas_is_rejected(): void
+    {
+        $this->bindGateway(online: true);
+        $tenant = Tenant::factory()->create();
+        $nasA = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $nasB = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $poolB = CustomerIpPool::factory()->create(['nas_id' => $nasB->id]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NasIndex::class)
+            ->call('openExpiredProfileModal', $nasA->id)
+            ->set('expiredProfileIpPoolId', (string) $poolB->id)
+            ->call('saveExpiredProfile')
+            ->assertHasErrors('expiredProfileIpPoolId');
+
+        $this->assertNull($nasA->fresh()->expired_ip_pool_id);
+    }
+
+    public function test_reseller_a_cannot_open_expired_profile_modal_for_reseller_bs_nas(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $resellerA = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $resellerB = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $nasB = Nas::factory()->forReseller($resellerB)->create();
+
+        $ownerA = User::factory()->create(['tenant_id' => $tenant->id]);
+        $resellerA->users()->attach($ownerA->id, ['role' => 'owner', 'status' => 'active']);
+
+        Livewire::actingAs($ownerA)
+            ->test(NasIndex::class)
+            ->call('openExpiredProfileModal', $nasB->id)
             ->assertForbidden();
     }
 }

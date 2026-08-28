@@ -23,6 +23,8 @@ class NetworkProfileGroupResource extends JsonResource
             'dns_primary' => $this->dns_primary,
             'dns_secondary' => $this->dns_secondary,
             'parent_queue' => $this->parent_queue,
+            'interface_name' => $this->interface_name,
+            'service_name' => $this->service_name,
             'is_active' => $this->is_active,
             'mikrotik_sync_status' => $this->mikrotik_sync_status?->value,
             'mikrotik_synced_at' => $this->mikrotik_synced_at?->toIso8601String(),

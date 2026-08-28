@@ -6786,6 +6786,206 @@ A full pre-reconcile snapshot (`wg show wg0 dump` from all 3 nodes, plus human-r
 was captured and preserved before this change as a rollback baseline — never needed, since the reconcile
 completed cleanly with no disruption to either NAS's live session.
 
+## Revisi Grup Profil — Interface/VLAN, PPPoE Server, Expired Profile (branch `revisi-grup-profil-interface-pppoe-server`)
+
+**Status**: implementasi selesai, diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id` (NAS id=3)
+SAJA — `test-x86-bajastu` (production, 295+ PPPoE real) tidak disentuh sama sekali sepanjang sprint ini.
+Branch dibuat dari `main` pada tag `v0.14.4` (dikonfirmasi lewat `git log`/`git tag`, bukan diasumsikan).
+**Belum di-merge/tag** — menunggu verifikasi manual Agung.
+
+**Resolusi pertanyaan ambigu dari investigasi v0.14.5 Langkah 0**: sesi sebelumnya menyimpulkan Profil PPP
+(v0.14.5) harus push `/ppp profile`-nya SENDIRI, terpisah dari `/ppp profile` "bare" yang Grup Profil
+(v0.14.3) sudah push sejak awal — tapi fungsi konkret `/ppp profile` bare itu sendiri sempat tidak
+terjawab. Screenshot Winbox real dari Agung menjawabnya: Mikrotik PPPoE Server (`/interface pppoe-server
+server`) punya field "Default Profile" — profile yang dipakai untuk sesi yang TIDAK dapat profile spesifik
+dari RADIUS. `/ppp profile` bare Grup Profil (cuma pool/dns/parent-queue, sengaja tanpa rate-limit) itulah
+Default Profile-nya. Pola nyata Agung: tiap tingkat bandwidth dapat VLAN + PPPoE Server + Default Profile
+sendiri (VLAN110→10Mbps, dst) — profile RATE-LIMIT sesungguhnya datang dari RADIUS per-user/per-grup
+(`Mikrotik-Rate-Limit` di `radreply`, scope Profil PPP v0.14.5, belum dibangun), Default Profile hanya
+fallback pool/DNS/routing dasar.
+
+**`RouterOsGateway::listInterfaces(Nas $nas): array`** — baca `/interface print` (difilter `type=ether`
+dan `type=vlan` lewat 2 query terpisah, RouterOS tidak mendukung `type` sebagai OR-list dalam satu query)
+dari NAS, return `[{name, type}, ...]`. **READ-ONLY MURNI** — tidak ada satupun operasi create/set/remove
+VLAN di method ini atau di mana pun dalam revisi ini, sesuai konstrain eksplisit sprint. Gagal terhubung
+→ log warning + return `[]` (bukan exception), sama posture graceful-degradation seperti method
+`RouterOsGateway` lain di codebase ini. Dipakai `NetworkProfileGroupIndex::interfaceOptionsForNas()`
+(Livewire, `Cache::remember` 30 detik per NAS) DAN `NasController::interfaces()` (REST,
+`GET /nas/{nas}/interfaces`, cache key sama persis — dua entry point berbagi satu cache).
+
+**`RouterOsGateway::syncPppoeServer()`/`removePppoeServer()`** — push/hapus `/interface/pppoe-server/
+server`, lookup by `comment` (dikonfirmasi live: object ini MENDUKUNG `comment`, sama seperti `/ppp
+profile`/`/ip pool`, TIDAK seperti `/ip hotspot user profile` v0.14.4 yang menolaknya). ADD selalu
+mengirim `disabled=no` eksplisit — ditemukan lewat live test: entry baru default `disabled=true` kalau
+tidak disebutkan.
+
+**`network_profile_groups` kolom baru** (migration `2026_08_31_090000_...`): `interface_name`/
+`service_name`, nullable, hanya relevan `type=ppp` (Hotspot binding beda konsep, lihat v0.14.3's own
+docblock — tidak disentuh sprint ini). 3 baris Grup Profil existing (id 11/12/13 di NAS 3) perlu diedit
+manual oleh Agung untuk diisi kalau mau PPPoE Server binding — tidak dibackfill otomatis.
+`PushNetworkProfileGroupToMikrotikJob::syncPpp()` push `/ppp profile` DULU, baru — kalau kedua field
+terisi — push `/interface/pppoe-server/server` dengan `default-profile` = nama Grup Profil itu sendiri.
+Kegagalan PPPoE Server setelah `/ppp profile` sukses tetap `mikrotik_sync_status: failed` dengan pesan
+gabungan (`"/ppp profile berhasil, tapi PPPoE Server gagal: ..."`), bukan sukses parsial yang
+disembunyikan. `RemoveNetworkProfileGroupFromMikrotikJob` menghapus kedua object konsisten (independen —
+satu gagal tidak menghalangi percobaan hapus yang lain).
+
+**`NetworkProfileGroupService::normalizeInterfaceFields()`** — satu-satunya tempat aturan "interface_name/
+service_name cuma untuk type=ppp" ditegakkan, dipanggil dari `create()`/`update()` sehingga BERLAKU SAMA
+untuk kedua entry point (Livewire `NetworkProfileGroupIndex` maupun REST API lewat Store/
+UpdateNetworkProfileGroupRequest) — bukan masing-masing entry point menduplikasi logika null-out sendiri.
+Trigger juga saat `type` berubah SENDIRIAN tanpa `interface_name`/`service_name` ikut dikirim di request
+yang sama — kalau tidak, sebuah update() yang mengganti type dari ppp ke hotspot akan meninggalkan
+interface_name/service_name lama yang sudah stale di database (celah nyata yang ditemukan & ditutup lewat
+test `test_switching_type_to_hotspot_clears_previously_stored_interface_and_service_name`, bukan lewat
+review kode).
+
+**`RouterOsGateway::syncPppProfile()` diperluas** — `remoteAddress` jadi `?string` (nullable),
+parameter baru `?string $localAddress = null`. **Gotcha nyata dikonfirmasi via live test SEBELUM ship,
+bukan setelah insiden produksi** (beda dari pola beberapa gotcha RouterOS lain di file ini yang baru
+ketahuan lewat laporan Agung): `remote-address`/`local-address` MENOLAK string kosong ("invalid value for
+argument remote-address:"/"...local-address:"), TIDAK SEPERTI `dns-server`/`parent-queue` yang menerima
+string kosong/`'none'` sebagai nilai valid "kosongkan field ini" (dikonfirmasi juga via live test, kedua
+arah). Diperbaiki dengan conditional-include (`if ($remoteAddress !== null) { ... }`) di cabang ADD MAUPUN
+SET — beda perlakuan dari `dns-server ?? ''`/`parent-queue ?? 'none'` yang tetap unconditional (sudah
+terbukti benar). Mirror bug class yang sama seperti fix `session-timeout` di v0.14.4, kali ini ditemukan
+proaktif lewat testing empiris sebelum kode di-ship, bukan lewat laporan produksi.
+
+**Fitur baru: "Profil Pelanggan Expired" per NAS** — `nas.expired_ip_pool_id` (FK nullable ke
+`customer_ip_pools`, `restrictOnDelete()`) + kolom sync-status sendiri (`expired_profile_mikrotik_sync_status`/
+`_synced_at`/`_sync_error`, migration terpisah karena migration sebelumnya sudah jalan — disiplin "jangan
+edit migration yang sudah applied" tetap dipegang, 2 migration baru bukan 1 gabungan). `Nas::expiredIpPool()`
+sengaja TIDAK dibatasi ke pool milik NAS yang sama di level relasi Eloquent — aturan itu ditegakkan di
+`NasService::updateExpiredIpPool()` (dan, untuk REST, juga di `UpdateExpiredProfileRequest::withValidator()`
+supaya 422 bersih, bukan exception mentah 500) — sama pola "relasi tetap sederhana, validasi cross-entity
+di layer lain" yang sudah mapan di codebase ini (`NetworkProfileGroup::customerIpPool()`).
+
+`PushExpiredProfileToMikrotikJob`/`RemoveExpiredProfileFromMikrotikJob` — pola async/retry/backoff
+identik `PushNetworkProfileGroupToMikrotikJob` (30s/2menit/5menit), reuse `syncPppProfile()` yang sama
+dengan `remoteAddress=null`, `localAddress=<nama CustomerIpPool>`, `dnsServer=null`, `parentQueue=null` —
+persis pola nyata Agung: `local-address` terbatas, `remote-address` kosong, tanpa rate-limit sama sekali.
+Nama object di router: `expired-nas-{id}` (unik per NAS, karena nama `/ppp profile` bersifat router-wide,
+bukan NAS-scoped). `NasService::updateExpiredIpPool()` — set pool baru → `markExpiredProfileSyncPending()`
++ dispatch push job; clear ke `null` → reset ketiga kolom sync-status jadi `null` + dispatch remove job.
+
+**Bug nyata ditemukan lewat test sendiri, ditutup SEBELUM sempat dipakai nyata — bukan review kode**:
+`Nas::$fillable` awalnya TIDAK menyertakan `expired_profile_mikrotik_sync_status`/`_synced_at`/`_sync_error`
+sama sekali — komentar draft pertama salah menafsirkan konvensi `NetworkProfileGroup` (di sana,
+`mikrotik_sync_*` justru ADA di `$fillable`, cuma tidak pernah jadi bagian output `validated()` FormRequest
+manapun — bukan berarti dikecualikan dari `$fillable`). Konsekuensinya: `update()` di dalam
+`markExpiredProfileSynced()`/dst diam-diam no-op (Eloquent mass-assignment protection men-drop key
+non-fillable tanpa error sama sekali) — `ExpiredProfileMikrotikSyncTest`'s test pertama gagal dengan pesan
+"Failed asserting that null is identical to..." alih-alih lulus, langsung ketahuan sebelum push job ini
+pernah benar-benar dipakai. Diperbaiki dengan menambahkan ketiga kolom ke `$fillable`, komentar yang salah
+diperbaiki juga.
+
+**UI (Livewire)**: `NetworkProfileGroupIndex` — dropdown "Interface/VLAN (PPPoE Server)" + input "Service
+Name", muncul hanya saat Tipe=PPP (create maupun edit form), reset otomatis saat NAS/Tipe berubah (pola
+sama seperti reset `customerIpPoolId`). `NasIndex` — tombol "Profil Expired" baru per baris NAS, membuka
+modal kecil (pola sama seperti modal "Provision User API" v0.6.5) berisi satu dropdown IP Pool (difilter
+ke pool milik NAS itu saja) — kosongkan untuk menonaktifkan.
+
+**REST API — parity penuh dengan Livewire, per disiplin BOSS-006**: `GET /nas/{nas}/interfaces`
+(`nas.view`), `PATCH /nas/{nas}/expired-profile` (`nas.manage`, Form Request terpisah dari Store/
+UpdateNasRequest — sengaja, supaya `PUT /nas/{nas}` biasa tidak bisa diam-diam menyentuh field ini tanpa
+lewat `NasService::updateExpiredIpPool()`'s sendiri validasi+dispatch job), `interface_name`/`service_name`
+ditambahkan ke Store/UpdateNetworkProfileGroupRequest + `NetworkProfileGroupResource`. Lihat `docs/API.md`
+untuk detail lengkap tiap endpoint.
+
+**Diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id`, semua lewat query RouterOS API langsung
+(bukan cuma asersi test), router dikembalikan ke state pristine setiap kali**:
+- `listInterfaces()`: mengembalikan 8 interface asli (5 `ether`, 3 `vlan` — `vlan10-PPPoE`,
+  `vlan69-MNG`, `vlan110-PPPoE-10Mbps`).
+- PPPoE Server push: `NetworkProfileGroup` test dibuat dengan `interface_name=vlan69-MNG` (VLAN AMAN,
+  bukan salah satu dari 2 interface produksi asli) + `service_name=BOSS-TEST-SERVICE-DELETE-ME` → query
+  langsung `/interface/pppoe-server/server/print` mengonfirmasi entry baru genuinely muncul dengan
+  `interface`/`default-profile`/`disabled=false` yang benar. **Kedua entry PPPoE Server produksi asli
+  (`PPPoE-Vlan110-10Mbps`→`HomeFixed-10Mbps`, `PPPoE-REMOTE`→`PPPOE-REMOTE`) dikonfirmasi TIDAK tersentuh**
+  sepanjang proses (query ulang seluruh isi tabel, bandingkan sebelum/sesudah). Dihapus lagi lewat
+  `RemoveNetworkProfileGroupFromMikrotikJob`, dikonfirmasi bersih dari `/ppp profile`/`/interface/pppoe-
+  server/server` — router kembali ke 5 `/ppp profile` awal.
+- Expired Profile: `NasService::updateExpiredIpPool(nas, pool_id=16)` → push job → query langsung
+  `/ppp/profile/print` mengonfirmasi `local-address=Hotspot-10Mbps`, `remote-address`/`rate-limit`/
+  `dns-server` semuanya kosong — persis pola Agung. Dikosongkan lagi (`updateExpiredIpPool(nas, null)`) →
+  remove job → dikonfirmasi hilang dari router, kembali ke 5 `/ppp profile` awal.
+
+**Regresi**: 9 test baru PPPoE Server push/skip/gagal/remove
+(`NetworkProfileGroupMikrotikSyncTest`), 6 test baru interface dropdown/cache/create/edit
+(`NetworkProfileGroupIndexLivewireTest`), 3 test API baru interface_name/service_name/switching-type
+(`NetworkProfileGroupApiTest`), `ExpiredProfileMikrotikSyncTest` (file baru, 5 test push/skip/retry/gagal/
+remove), 4 test Livewire modal Profil Expired (`NasIndexLivewireTest`), `NasExpiredProfileApiTest` (file
+baru, 4 test), `NasInterfacesApiTest` (file baru, 3 test) — full regression suite dijalankan ulang, Pint
+clean di semua file yang disentuh.
+
+## Verifikasi UI: Interface/VLAN & Expired Profile (branch `revisi-grup-profil-interface-pppoe-server`, sama sesi)
+
+**Laporan Agung**: "tidak menemukan field Interface/VLAN di form Grup Profil" — perlu dipastikan apakah
+genuinely belum ter-wire ke frontend, atau ada sebab lain. Diinvestigasi END-TO-END, bukan cuma baca kode
+— tidak ada browser/screenshot tool di environment ini (limitasi sudah tercatat berkali-kali di file ini),
+jadi verifikasi dilakukan lewat request HTTP nyata: login session sungguhan via `boss-nginx` (bukan
+tinker/`Livewire::test()`), lalu memanggil endpoint AJAX Livewire (`POST livewire-{hash}/update`) secara
+manual dengan payload PERSIS seperti yang dikirim JS browser (header `X-Livewire`/`Content-Type: application/
+json`/`X-XSRF-TOKEN`, body `{components: [{snapshot, updates, calls}]}`) — dikonfirmasi lebih kuat dari
+`Livewire::test()` (yang memanggil method Livewire langsung tanpa melalui middleware/routing/CSRF/opcache
+sungguhan) sekaligus lebih dekat ke pengalaman browser nyata daripada environment ini pernah capai
+sebelumnya untuk kelas masalah ini.
+
+**Kesimpulan: field GENUINELY sudah ter-wire dan berfungsi, tidak ada gap backend/frontend** — dikonfirmasi
+4 kali secara terpisah, semua lewat response HTML real dari request live:
+1. **Create form**: membuka "+ Grup Profil Baru" (`showCreateForm: true`) menghasilkan HTML yang genuinely
+   berisi label "Interface/VLAN (PPPoE Server)", `<select wire:model="interfaceName">`, dan label+input
+   "Service Name (PPPoE Server)" — semua untuk Tipe=PPP (default Tipe form).
+2. **Dropdown disabled-lalu-populated sesuai NAS**: sebelum NAS dipilih, dropdown genuinely `disabled` dan
+   cuma berisi placeholder — persis pola yang sudah ada untuk dropdown IP Pool (v0.14.3), bukan perilaku
+   baru yang aneh. Setelah `nasId` di-set ke `3` (`ro-hotspot.bajastu.id`) lewat update AJAX nyata, dropdown
+   langsung ter-render TANPA `disabled` dan terisi 8 opsi interface REAL dari router (5 `ether`, 3 `vlan`)
+   — bukti mekanisme `listInterfaces()` → `Cache::remember` → render benar-benar bekerja di jalur HTTP asli,
+   bukan cuma di test harness.
+3. **Edit form**: memanggil `edit(11)` (Grup Profil PPP real, `test-10Mbps-HomeFixed`) lewat AJAX nyata
+   menghasilkan HTML dengan dropdown `editInterfaceName` yang SUDAH terisi 8 interface real yang sama.
+4. **Modal "Profil Expired" di `/nas`**: tombol `wire:click="openExpiredProfileModal(3)"` dikonfirmasi ADA
+   di HTML halaman `/nas` yang sungguhan (untuk kedua NAS, id 1 dan 3); memanggilnya lewat AJAX nyata
+   menghasilkan modal dengan dropdown IP Pool yang genuinely terisi 3 pool real milik NAS 3 (`Hotspot-
+   10Mbps`/`Hotspot-1Hp`/`Hotspot-2Hp`).
+
+**Root cause paling mungkin dari laporan Agung, ditemukan lewat pengujian ke-5**: field Interface/VLAN
+SENGAJA disembunyikan sepenuhnya (bukan cuma disabled) saat Tipe=Hotspot — desain awal revisi ini (lihat
+bagian "Revisi Grup Profil" di atas), karena PPPoE Server binding cuma relevan untuk PPP. Dikonfirmasi
+langsung: memanggil `edit(12)` (Grup Profil `#12`, "test-1Hp-Token", Hotspot type, salah satu dari 3 Grup
+Profil existing di `ro-hotspot.bajastu.id`) menghasilkan HTML yang genuinely TIDAK mengandung field
+`editInterfaceName` sama sekali. **2 dari 3 Grup Profil existing di NAS produksi bertipe Hotspot** (`#12`
+"test-1Hp-Token", `#13` "TOKEN-2Hp") — kalau Agung menguji salah satu dari kedua baris ini (bukan `#11`
+yang PPP), field ini memang benar-benar tidak akan pernah muncul, sesuai desain, bukan bug — tapi tanpa
+penjelasan apa pun di layar, ini terasa persis seperti "belum ter-wire".
+
+**Perbaikan yang genuinely dilakukan** (bukan sekadar "sudah dari awal, tidak ada yang diubah") — teks
+klarifikasi kecil ditambahkan menggantikan posisi field Interface/VLAN persis saat Tipe=Hotspot, di KEDUA
+form (create dan edit): *"Field Interface/VLAN & PPPoE Server hanya tersedia untuk Tipe = PPP."* — supaya
+absennya field menjelaskan dirinya sendiri di layar, bukan diam-diam kosong tanpa keterangan. Diverifikasi
+ulang lewat AJAX nyata setelah perubahan: teks ini genuinely muncul untuk `editType=hotspot`, dan genuinely
+TIDAK muncul untuk `type=ppp` (dropdown asli yang tampil, bukan teks klarifikasi).
+
+**Dicek juga, tidak ditemukan gap (poin 4 instruksi — pola insiden berulang dari sprint-sprint
+sebelumnya)**:
+- **Staleness bundle frontend** — `public/build/assets/app-*.js` sempat terlihat bermtime LEBIH LAMA
+  (22 Agustus) dari `resources/js/app.js` sumbernya (24 Agustus), pola yang PERSIS sama dengan insiden
+  nyata v0.8.2-monitoring-fixes yang sudah didokumentasikan di file ini. Dicek langsung lewat
+  `FrontendBuildTest` (regression guard yang dibangun khusus untuk kelas bug ini) — LULUS, membuktikan
+  bundle yang ter-deploy genuinely sudah berisi semua factory Alpine yang direferensikan Blade. Selisih
+  mtime murni efek `git checkout` (yang me-reset mtime tanpa mengubah isi), bukan bundle basi sungguhan —
+  tidak disentuh, karena fitur Interface/VLAN sendiri murni Blade+Livewire tanpa dependensi JS custom sama
+  sekali (beda dari Chart.js-based pages seperti Monitoring/RX Power History).
+- **Sidebar/navigasi**: link "NAS" (`web.nas.index`) dan "Profil Paket → Grup Profil"
+  (`web.network-profile-groups.index`) dikonfirmasi genuinely ada di HTML `/dashboard` real.
+- **Permission**: revisi ini TIDAK menambah permission Spatie baru sama sekali — cuma reuse `nas.view`/
+  `nas.manage`/`network_profile_groups.manage` yang sudah ada dan sudah ter-seed sejak sprint sebelumnya
+  — jadi tidak ada risiko kelas bug "permission belum di-seed ulang di database real" yang sudah berulang
+  kali terjadi di cluster v0.14.x ini (Bandwidth Profile, IP Pool Pelanggan).
+
+**Regresi**: 2 test baru (`test_create_form_shows_a_hint_instead_of_the_interface_fields_when_type_is_hotspot`,
+`test_edit_form_shows_a_hint_instead_of_the_interface_fields_when_type_is_hotspot`), full regression suite
+dijalankan ulang, Pint clean.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

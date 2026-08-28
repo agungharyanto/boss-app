@@ -5,6 +5,7 @@ namespace App\Livewire\Network;
 use App\Enums\NasStatus;
 use App\Enums\VpnAccountStatus;
 use App\Exceptions\NasApiUserProvisioningException;
+use App\Models\CustomerIpPool;
 use App\Models\Nas;
 use App\Models\Reseller;
 use App\Services\Network\Contracts\RouterOsGateway;
@@ -12,6 +13,7 @@ use App\Services\Network\NasApiUserProvisioningService;
 use App\Services\Network\NasService;
 use App\Support\ResellerContext;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use InvalidArgumentException;
 use Livewire\Component;
 use Livewire\WithPagination;
 
@@ -68,6 +70,15 @@ class NasIndex extends Component
 
     /** @var array{status: string, message: string}|null */
     public ?array $provisionApiResult = null;
+
+    // Revisi Grup Profil (Langkah 3) — "Profil Pelanggan Expired" modal
+    // state, same separate-modal-state pattern as showProvisionApiModal
+    // above rather than folding into the main NAS form.
+    public bool $showExpiredProfileModal = false;
+
+    public ?int $expiredProfileNasId = null;
+
+    public string $expiredProfileIpPoolId = '';
 
     public function mount(): void
     {
@@ -207,6 +218,48 @@ class NasIndex extends Component
             $this->provisionAdminUsername = '';
             $this->provisionAdminPassword = '';
         }
+    }
+
+    /**
+     * Revisi Grup Profil (Langkah 3) — opens the small "Profil Pelanggan
+     * Expired" modal, pre-filled with whatever is already set (unlike the
+     * Provision API modal above, this value is safe to show back — it's
+     * just an IP Pool reference, not a secret).
+     */
+    public function openExpiredProfileModal(int $nasId): void
+    {
+        $nas = Nas::findOrFail($nasId);
+        $this->authorize('manage', $nas);
+
+        $this->expiredProfileNasId = $nasId;
+        $this->expiredProfileIpPoolId = (string) $nas->expired_ip_pool_id;
+        $this->showExpiredProfileModal = true;
+    }
+
+    public function closeExpiredProfileModal(): void
+    {
+        $this->expiredProfileNasId = null;
+        $this->expiredProfileIpPoolId = '';
+        $this->showExpiredProfileModal = false;
+    }
+
+    public function saveExpiredProfile(NasService $service): void
+    {
+        $nas = Nas::findOrFail($this->expiredProfileNasId);
+        $this->authorize('manage', $nas);
+
+        $this->validate(['expiredProfileIpPoolId' => ['nullable', 'integer']]);
+
+        try {
+            $service->updateExpiredIpPool($nas, $this->expiredProfileIpPoolId !== '' ? (int) $this->expiredProfileIpPoolId : null);
+            session()->flash('status', 'Profil Pelanggan Expired berhasil diperbarui.');
+        } catch (InvalidArgumentException $e) {
+            $this->addError('expiredProfileIpPoolId', $e->getMessage());
+
+            return;
+        }
+
+        $this->closeExpiredProfileModal();
     }
 
     public function save(NasService $service): void
@@ -367,10 +420,16 @@ class NasIndex extends Component
 
         return view('livewire.network.nas-index', [
             'isAdmin' => $isAdmin,
-            'nasList' => Nas::query()->with('reseller')->orderBy('name')->paginate(15),
+            'nasList' => Nas::query()->with(['reseller', 'expiredIpPool:id,name'])->orderBy('name')->paginate(15),
             'resellers' => $isAdmin ? Reseller::orderBy('name')->get() : collect(),
             'currentResellerName' => $context->hasReseller() ? $context->reseller()->name : null,
             'mikrotikIpLocked' => $this->isMikrotikIpLocked(),
+            // Revisi Grup Profil (Langkah 3) — only this NAS's own pools,
+            // same "belongs to the same NAS" rule NasService::
+            // updateExpiredIpPool() enforces server-side too.
+            'expiredProfilePoolOptions' => $this->expiredProfileNasId !== null
+                ? CustomerIpPool::query()->where('nas_id', $this->expiredProfileNasId)->orderBy('name')->get(['id', 'name'])
+                : collect(),
         ]);
     }
 

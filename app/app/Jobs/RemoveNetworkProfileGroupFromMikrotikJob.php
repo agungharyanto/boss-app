@@ -55,11 +55,31 @@ class RemoveNetworkProfileGroupFromMikrotikJob implements ShouldQueue
 
         $result = $gateway->removePppProfile($group->nas, $group->mikrotikComment());
 
-        if ($result['success']) {
+        // Revisi Grup Profil — the PPPoE Server object (if this group ever
+        // had interface_name/service_name set) is fully BOSS-App-owned
+        // (unlike Grup Profil's Hotspot-type /ip hotspot SERVER, which
+        // stays untouched above), safe to actually remove. Attempted
+        // regardless of removePppProfile()'s own outcome — independent
+        // objects, one failing shouldn't block the other's cleanup
+        // attempt. Only attempted at all when both fields were ever set —
+        // removePppoeServer() is safe/no-op-on-missing either way, but
+        // skipping the call entirely for a group that never pushed one
+        // avoids a wasted network round trip.
+        $pppoeResult = ['success' => true, 'message' => null];
+
+        if ($group->interface_name !== null && $group->service_name !== null) {
+            $pppoeResult = $gateway->removePppoeServer($group->nas, $group->mikrotikComment());
+        }
+
+        if ($result['success'] && $pppoeResult['success']) {
             return;
         }
 
-        $this->recordFailure($group, $result['message'] ?? 'Unknown failure');
+        $reason = ! $result['success']
+            ? ($result['message'] ?? 'Unknown failure')
+            : '/ppp profile berhasil dihapus, tapi PPPoE Server gagal: '.($pppoeResult['message'] ?? 'Unknown failure');
+
+        $this->recordFailure($group, $reason);
     }
 
     public function failed(?Throwable $exception): void

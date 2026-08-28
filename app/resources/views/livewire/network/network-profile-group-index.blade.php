@@ -76,6 +76,39 @@
                 </div>
             </div>
 
+            {{-- Revisi Grup Profil — hanya relevan untuk Tipe=PPP (lihat
+                 docblock NetworkProfileGroup). Keduanya opsional — grup PPP
+                 tanpa PPPoE Server binding tetap valid (cuma push
+                 /ppp profile saja, seperti sebelum revisi ini). --}}
+            @if ($type === 'ppp')
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">{{ __('Interface/VLAN (PPPoE Server)') }}</label>
+                        <select wire:model="interfaceName" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" @if (! $nasId) disabled @endif>
+                            <option value="">{{ __('-- (Opsional) Tidak push PPPoE Server --') }}</option>
+                            @foreach ($interfaceOptionsForNas as $ifaceName)
+                                <option value="{{ $ifaceName }}">{{ $ifaceName }}</option>
+                            @endforeach
+                        </select>
+                        @error('interfaceName') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                        @if ($nasId && empty($interfaceOptionsForNas))
+                            <p class="text-xs text-amber-600 mt-1">{{ __('Tidak ada interface terbaca dari NAS ini (router tidak terjangkau, atau belum ada interface).') }}</p>
+                        @endif
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">{{ __('Service Name (PPPoE Server)') }}</label>
+                        <input type="text" wire:model="serviceName" placeholder="{{ __('(opsional)') }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                        @error('serviceName') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    </div>
+                </div>
+            @else
+                {{-- Klarifikasi ketiadaan field ini saat Tipe=Hotspot — bukan bug,
+                     PPPoE Server binding cuma relevan untuk PPP (lihat docblock
+                     NetworkProfileGroup). Tanpa baris ini, absennya field terasa
+                     seperti "belum ter-wire" padahal memang sengaja disembunyikan. --}}
+                <p class="text-xs text-gray-400">{{ __('Field Interface/VLAN & PPPoE Server hanya tersedia untuk Tipe = PPP.') }}</p>
+            @endif
+
             <label class="flex items-center gap-2 text-sm text-gray-700">
                 <input type="checkbox" wire:model="isActive"> {{ __('Aktif') }}
             </label>
@@ -165,6 +198,22 @@
                                         <input type="text" wire:model="editParentQueue" placeholder="{{ __('Parent Queue') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                                     </div>
 
+                                    @if ($editType === 'ppp')
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <select wire:model="editInterfaceName" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                                <option value="">{{ __('-- (Opsional) Tidak push PPPoE Server --') }}</option>
+                                                @foreach ($editInterfaceOptionsForNas as $ifaceName)
+                                                    <option value="{{ $ifaceName }}">{{ $ifaceName }}</option>
+                                                @endforeach
+                                            </select>
+                                            <input type="text" wire:model="editServiceName" placeholder="{{ __('Service Name (PPPoE Server)') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                        </div>
+                                        @error('editInterfaceName') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+                                        @error('editServiceName') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+                                    @else
+                                        <p class="text-xs text-gray-400">{{ __('Field Interface/VLAN & PPPoE Server hanya tersedia untuk Tipe = PPP.') }}</p>
+                                    @endif
+
                                     <label class="flex items-center gap-2 text-sm text-gray-700">
                                         <input type="checkbox" wire:model="editIsActive"> {{ __('Aktif') }}
                                     </label>
@@ -179,7 +228,12 @@
                             <td class="px-4 py-2 text-sm text-gray-800">{{ $group->name }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $group->nas->name ?? '-' }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $group->type->label() }}</td>
-                            <td class="px-4 py-2 text-sm text-gray-600">{{ $group->customerIpPool->name ?? '-' }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-600">
+                                {{ $group->customerIpPool->name ?? '-' }}
+                                @if ($group->interface_name && $group->service_name)
+                                    <p class="text-xs text-gray-400 mt-0.5">{{ __('PPPoE Server: :iface (:service)', ['iface' => $group->interface_name, 'service' => $group->service_name]) }}</p>
+                                @endif
+                            </td>
                             <td class="px-4 py-2 text-sm">
                                 <span class="px-2 py-0.5 rounded-full text-xs {{ $group->is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' }}">
                                     {{ $group->is_active ? __('Aktif') : __('Nonaktif') }}

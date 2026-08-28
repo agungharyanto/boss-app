@@ -10,7 +10,13 @@ use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
-class NasProvisionApiUserApiTest extends TestCase
+/**
+ * Revisi Grup Profil (Langkah 1) — GET /nas/{nas}/interfaces, the REST
+ * twin of NetworkProfileGroupIndex's own interfaceOptionsForNas(). Real
+ * router verification (never a raw-socket call in this suite) was done
+ * manually against ro-hotspot.bajastu.id — see CHANGELOG.md/CLAUDE.md.
+ */
+class NasInterfacesApiTest extends TestCase
 {
     use RefreshDatabase;
 
@@ -21,11 +27,11 @@ class NasProvisionApiUserApiTest extends TestCase
         $this->seed(RolesAndPermissionsSeeder::class);
     }
 
-    private function bindGateway(bool $success): void
+    private function bindGateway(array $interfaces): void
     {
-        $this->app->bind(RouterOsGateway::class, fn () => new class($success) implements RouterOsGateway
+        $this->app->bind(RouterOsGateway::class, fn () => new class($interfaces) implements RouterOsGateway
         {
-            public function __construct(private readonly bool $success) {}
+            public function __construct(private readonly array $interfaces) {}
 
             public function ping(Nas $nas): array
             {
@@ -35,6 +41,11 @@ class NasProvisionApiUserApiTest extends TestCase
             public function pingHost(Nas $nas, string $targetIp, int $count = 2): bool
             {
                 return true;
+            }
+
+            public function provisionApiUser(Nas $nas, string $a, string $b, string $c, string $d): array
+            {
+                return ['success' => true, 'message' => null];
             }
 
             public function currentWireguardEndpointPort(Nas $nas, string $peerCommentNeedle): ?int
@@ -79,7 +90,7 @@ class NasProvisionApiUserApiTest extends TestCase
 
             public function listInterfaces(Nas $nas): array
             {
-                return [];
+                return $this->interfaces;
             }
 
             public function syncPppoeServer(Nas $nas, string $comment, string $serviceName, string $interfaceName, string $defaultProfile): array
@@ -91,60 +102,51 @@ class NasProvisionApiUserApiTest extends TestCase
             {
                 return ['success' => true, 'message' => null];
             }
-
-            public function provisionApiUser(Nas $nas, string $connectAsUsername, string $connectAsPassword, string $newApiUsername, string $newApiPassword): array
-            {
-                return ['success' => $this->success, 'message' => $this->success ? null : 'bad admin credential'];
-            }
         });
     }
 
-    public function test_admin_can_provision_api_user_for_their_own_nas(): void
+    public function test_admin_can_list_a_nas_own_interfaces(): void
     {
-        $this->bindGateway(success: true);
-
+        $this->bindGateway([
+            ['name' => 'ether1', 'type' => 'ether'],
+            ['name' => 'vlan110-PPPoE-10Mbps', 'type' => 'vlan'],
+        ]);
         $tenant = Tenant::factory()->create();
         $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->givePermissionTo('nas.manage');
+        $admin->givePermissionTo('nas.view');
 
-        $response = $this->actingAs($admin)->postJson("/api/v1/nas/{$nas->id}/provision-api-user", [
-            'admin_username' => 'router-admin',
-            'admin_password' => 'router-admin-password',
-        ]);
+        $response = $this->actingAs($admin)->getJson("/api/v1/nas/{$nas->id}/interfaces");
 
         $response->assertOk();
-        $this->assertSame("boss-app-api-{$nas->id}", $nas->fresh()->api_username);
+        $response->assertJsonPath('data.1.name', 'vlan110-PPPoE-10Mbps');
+        $response->assertJsonCount(2, 'data');
     }
 
-    public function test_admin_username_and_password_are_required(): void
+    public function test_a_role_without_nas_view_cannot_list_interfaces(): void
     {
+        $this->bindGateway([]);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $user = User::factory()->create(['tenant_id' => $tenant->id]);
+        $user->assignRole('customer_service');
+
+        $response = $this->actingAs($user)->getJson("/api/v1/nas/{$nas->id}/interfaces");
+
+        $response->assertForbidden();
+    }
+
+    public function test_an_unreachable_nas_returns_an_empty_list_not_an_error(): void
+    {
+        $this->bindGateway([]);
         $tenant = Tenant::factory()->create();
         $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->givePermissionTo('nas.manage');
+        $admin->givePermissionTo('nas.view');
 
-        $response = $this->actingAs($admin)->postJson("/api/v1/nas/{$nas->id}/provision-api-user", []);
+        $response = $this->actingAs($admin)->getJson("/api/v1/nas/{$nas->id}/interfaces");
 
-        $response->assertUnprocessable();
-    }
-
-    public function test_returns_422_when_router_rejects_the_admin_credential(): void
-    {
-        $this->bindGateway(success: false);
-
-        $tenant = Tenant::factory()->create();
-        $nas = Nas::factory()->create(['tenant_id' => $tenant->id, 'api_username' => 'old', 'api_password' => 'old-pass']);
-        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->givePermissionTo('nas.manage');
-
-        $response = $this->actingAs($admin)->postJson("/api/v1/nas/{$nas->id}/provision-api-user", [
-            'admin_username' => 'router-admin',
-            'admin_password' => 'wrong',
-        ]);
-
-        $response->assertUnprocessable();
-        $response->assertJsonPath('success', false);
-        $this->assertSame('old', $nas->fresh()->api_username);
+        $response->assertOk();
+        $response->assertJsonCount(0, 'data');
     }
 }

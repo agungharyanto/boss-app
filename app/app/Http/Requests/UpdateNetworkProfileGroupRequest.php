@@ -56,6 +56,8 @@ class UpdateNetworkProfileGroupRequest extends FormRequest
             'dns_primary' => ['nullable', 'ip'],
             'dns_secondary' => ['nullable', 'ip'],
             'parent_queue' => ['nullable', 'string', 'max:255'],
+            'interface_name' => ['nullable', 'string', 'max:255'],
+            'service_name' => ['nullable', 'string', 'max:255'],
             'is_active' => ['sometimes', 'boolean'],
         ];
     }

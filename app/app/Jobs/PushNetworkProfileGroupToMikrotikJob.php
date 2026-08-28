@@ -76,6 +76,19 @@ class PushNetworkProfileGroupToMikrotikJob implements ShouldQueue
     }
 
     /**
+     * Revisi Grup Profil — after the `/ppp profile` push succeeds, ALSO
+     * pushes `/interface/pppoe-server/server` when BOTH interface_name AND
+     * service_name are set (a PPPoE Server object needs both to be
+     * meaningful — neither alone is a valid RouterOS config). Its own
+     * `default-profile` is the Grup Profil's OWN name — Agung's own real
+     * Winbox pattern resolved what this bare, no-rate-limit `/ppp profile`
+     * is FOR (see CLAUDE.md's own resolution note): it's the PPPoE
+     * Server's Default Profile, referenced for any session RADIUS doesn't
+     * hand a more specific profile to. Both objects must succeed for
+     * syncPpp() to report success — a partial success (profile pushed,
+     * PPPoE Server failed) is still a real, actionable failure state, not
+     * silently reported as synced.
+     *
      * @return array{success: bool, message: ?string}
      */
     private function syncPpp(RouterOsGateway $gateway, NetworkProfileGroup $group): array
@@ -83,7 +96,7 @@ class PushNetworkProfileGroupToMikrotikJob implements ShouldQueue
         $dnsServers = array_values(array_filter([$group->dns_primary, $group->dns_secondary]));
         $dnsServer = $dnsServers === [] ? null : implode(',', $dnsServers);
 
-        return $gateway->syncPppProfile(
+        $profileResult = $gateway->syncPppProfile(
             $group->nas,
             $group->mikrotikComment(),
             $group->name,
@@ -91,6 +104,31 @@ class PushNetworkProfileGroupToMikrotikJob implements ShouldQueue
             $dnsServer,
             $group->parent_queue,
         );
+
+        if (! $profileResult['success']) {
+            return $profileResult;
+        }
+
+        if ($group->interface_name === null || $group->service_name === null) {
+            return $profileResult;
+        }
+
+        $pppoeResult = $gateway->syncPppoeServer(
+            $group->nas,
+            $group->mikrotikComment(),
+            $group->service_name,
+            $group->interface_name,
+            $group->name,
+        );
+
+        if (! $pppoeResult['success']) {
+            return [
+                'success' => false,
+                'message' => '/ppp profile berhasil, tapi PPPoE Server gagal: '.($pppoeResult['message'] ?? 'Unknown failure'),
+            ];
+        }
+
+        return $pppoeResult;
     }
 
     public function failed(?Throwable $exception): void

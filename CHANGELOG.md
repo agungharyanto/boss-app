@@ -3,7 +3,95 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## v0.14.4 amendment ketiga — Field NAS + Tombol Simpan, 3 Form (implementasi selesai 2026-08-27, belum di-merge/tag)
+## Verifikasi UI: Interface/VLAN & Expired Profile (2026-08-28, merged + tagged `v0.14.4.1`)
+
+**Catatan status**: sama branch `revisi-grup-profil-interface-pppoe-server`. Detail teknis lengkap ada di
+`CLAUDE.md` bagian "Verifikasi UI: Interface/VLAN & Expired Profile".
+
+- **Laporan Agung**: field "Interface/VLAN" tidak ditemukan di form Grup Profil. Diinvestigasi end-to-end
+  lewat request HTTP nyata (login session real via `boss-nginx`, lalu panggilan Livewire AJAX asli —
+  protokol persis yang dipakai JS browser — bukan cuma baca kode) — **field-nya genuinely SUDAH ter-wire
+  dan berfungsi**, dikonfirmasi lewat: create form (dropdown Interface/VLAN + input Service Name muncul
+  saat Tipe=PPP, disabled+kosong sebelum NAS dipilih, aktif+terisi 8 interface real begitu NAS ro-hotspot
+  dipilih), edit form (dropdown terisi data real yang sama untuk Grup Profil `#11`), dan modal "Profil
+  Expired" di `/nas` (tombol + dropdown IP Pool real, keduanya genuinely ter-render).
+- **Root cause paling mungkin, ditemukan lewat pengujian langsung**: field Interface/VLAN SENGAJA
+  disembunyikan saat Tipe=Hotspot (desain awal — binding ini cuma relevan untuk PPP) — dikonfirmasi lewat
+  edit form Grup Profil `#12` ("test-1Hp-Token", Hotspot type) yang benar-benar TIDAK menampilkan field
+  ini. 2 dari 3 Grup Profil existing di NAS produksi (`ro-hotspot.bajastu.id`) bertipe Hotspot — kalau
+  Agung menguji salah satu dari keduanya, absennya field ini terlihat seperti bug padahal desain yang
+  benar.
+- **Perbaikan genuinely dilakukan** (bukan cuma "sudah dari awal"): ditambahkan teks klarifikasi kecil
+  ("Field Interface/VLAN & PPPoE Server hanya tersedia untuk Tipe = PPP.") di posisi field itu SAAT
+  Tipe=Hotspot, di kedua form (create dan edit) — supaya absennya field menjelaskan dirinya sendiri,
+  bukan terlihat seperti sesuatu yang belum ter-wire.
+- **Dicek juga (tidak ditemukan gap)**: bundle frontend (`resources/js/app.js` vs `public/build/assets/
+  *.js`) sempat terlihat berbeda mtime — dicek via `FrontendBuildTest` (regression guard yang sudah ada
+  persis untuk kelas bug ini) dan TERBUKTI tidak stale, cuma efek mtime dari checkout git, bukan bug
+  nyata. Sidebar/navigasi ("NAS", "Profil Paket → Grup Profil") dan permission (`nas.view`/`nas.manage`/
+  `network_profile_groups.manage`) dikonfirmasi sudah lengkap — revisi ini tidak menambah permission baru
+  sama sekali, jadi tidak ada risiko celah "permission belum di-seed ulang" seperti insiden-insiden
+  sebelumnya di cluster ini.
+- **Regresi**: 2 test baru (hint klarifikasi muncul untuk Tipe=Hotspot, di create dan edit form), full
+  regression suite dijalankan ulang, Pint clean.
+
+## Revisi Grup Profil — Interface/VLAN + PPPoE Server + Expired Profile (2026-08-27, merged + tagged `v0.14.4.1`)
+
+**Catatan status**: branch `revisi-grup-profil-interface-pppoe-server`, dibuat dari `main` pada tag
+`v0.14.4` (v0.14.4 sudah dikonfirmasi merged/tagged sebelum branch ini dibuat, dicek langsung lewat
+`git log`/`git tag`, bukan diasumsikan). **Diberi nomor `v0.14.4.1`, bukan `v0.14.3.1`** — label
+`v0.14.3.1` sudah lebih dulu dipakai (folded ke tag `v0.14.3`) untuk fitur lain ("Tipe Pemakaian IP Pool +
+Sidebar Profil Paket"); pola patch-di-atas-tag-terakhir sama seperti `v0.9.2.1`, dikonfirmasi eksplisit
+oleh Agung. Detail teknis lengkap ada di `CLAUDE.md` bagian "Revisi Grup Profil — Interface/VLAN, PPPoE
+Server, Expired Profile" dan `docs/ROADMAP.md` bagian "v0.14.4.1".
+
+- **Resolusi pertanyaan ambigu dari investigasi v0.14.5 Langkah 0**: `/ppp profile` "bare" (cuma pool/dns/
+  parent-queue, tanpa rate-limit) yang sudah dipush Grup Profil sejak v0.14.3 SEKARANG dikonfirmasi
+  fungsinya — itu adalah "Default Profile" yang dirujuk PPPoE Server untuk sesi RADIUS yang belum dapat
+  profile spesifik. Pola nyata dari Winbox Agung: tiap tingkat bandwidth punya VLAN sendiri, PPPoE Server
+  terikat ke satu interface/VLAN dan satu Default Profile.
+- **`RouterOsGateway::listInterfaces(Nas $nas)`** — baca (READ-ONLY, tidak ada create/write VLAN baru)
+  daftar interface fisik + VLAN dari NAS lewat `/interface print` (difilter type=ether/vlan). Dipakai
+  Grup Profil untuk dropdown "Interface/VLAN", di-cache 30 detik per NAS (`Cache::remember`) supaya tidak
+  query RouterOS berulang setiap render.
+- **`RouterOsGateway::syncPppoeServer()`/`removePppoeServer()`** — push/hapus `/interface/pppoe-server/
+  server`, lookup by comment (idempotent, sama pola seperti `/ppp profile`/`/ip pool` — dikonfirmasi
+  `/interface/pppoe-server/server` MENDUKUNG `comment`, tidak seperti `/ip hotspot user profile`).
+- **`network_profile_groups` kolom baru**: `interface_name`/`service_name` (nullable, hanya relevan untuk
+  type=ppp — 3 baris existing perlu diedit manual oleh Agung). `PushNetworkProfileGroupToMikrotikJob`
+  sekarang push `/ppp profile` DULU, baru (kalau kedua field terisi) push `/interface/pppoe-server/server`
+  dengan `default-profile` = nama Grup Profil itu sendiri. Kegagalan PPPoE Server setelah `/ppp profile`
+  berhasil tetap dilaporkan gagal (pesan gabungan), bukan disembunyikan sebagai sukses parsial.
+  `RemoveNetworkProfileGroupFromMikrotikJob` menghapus kedua object secara konsisten.
+- **`RouterOsGateway::syncPppProfile()` diperluas** — `remoteAddress` jadi nullable, tambah parameter
+  `localAddress` opsional. Gotcha nyata dikonfirmasi via live test SEBELUM ship: `remote-address`/
+  `local-address` MENOLAK string kosong (beda dari `dns-server`/`parent-queue` yang menerima kosong/
+  'none') — diperbaiki dengan conditional-include hanya saat non-null, di cabang ADD maupun SET.
+- **Fitur baru: "Profil Pelanggan Expired" per NAS** (`nas.expired_ip_pool_id` + kolom sync status
+  sendiri) — modal kecil di halaman `/nas` ("Profil Expired"), pilih IP Pool NAS tsb, sistem push
+  `/ppp profile` khusus (nama `expired-nas-{id}`) memakai pool itu sebagai `local-address`, TANPA
+  rate-limit, `remote-address` kosong — persis pola Agung. `NasService::updateExpiredIpPool()` +
+  `PushExpiredProfileToMikrotikJob`/`RemoveExpiredProfileFromMikrotikJob` (async, retry/backoff sama
+  seperti push Grup Profil lainnya).
+- **Bug nyata ditemukan tes sendiri, bukan review**: kolom `expired_profile_mikrotik_*` sempat TIDAK ada
+  di `Nas::$fillable` (komentar awal salah menafsirkan konvensi `NetworkProfileGroup`) — `update()` di
+  dalam `markExpiredProfileSync*()` diam-diam no-op tanpa error. Ketahuan langsung dari
+  `ExpiredProfileMikrotikSyncTest`, diperbaiki sebelum sempat dipakai nyata.
+- **Diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id` SAJA** (`test-x86-bajastu` tidak
+  disentuh sama sekali): `listInterfaces()` mengembalikan 8 interface asli (5 ether + 3 VLAN); PPPoE
+  Server test (`interface=vlan69-MNG`, VLAN aman non-produksi) genuinely muncul di `/interface/pppoe-
+  server/server` dengan `default-profile` benar, lalu bersih terhapus; kedua entry PPPoE Server produksi
+  asli (`PPPoE-Vlan110-10Mbps`/`PPPoE-REMOTE`) dikonfirmasi tidak tersentuh sepanjang proses; Profil
+  Expired genuinely muncul di `/ppp profile` (`local-address=Hotspot-10Mbps`, `remote-address`/
+  `rate-limit` kosong), lalu bersih terhapus setelah `expired_ip_pool_id` di-clear — router kembali ke
+  state pristine (5 `/ppp profile`) di akhir setiap pengujian.
+- **Regresi**: test baru ditambahkan di `NetworkProfileGroupMikrotikSyncTest` (9 kasus PPPoE Server push/
+  skip/gagal/remove), `NetworkProfileGroupIndexLivewireTest` (6 kasus interface dropdown/cache/create/
+  edit), `ExpiredProfileMikrotikSyncTest` (file baru, 5 kasus), `NasIndexLivewireTest` (4 kasus modal
+  Profil Expired) — full suite dijalankan ulang, Pint clean di semua file yang disentuh. **BELUM
+  di-merge/tag** — menunggu verifikasi manual Agung.
+
+## v0.14.4 amendment ketiga — Field NAS + Tombol Simpan, 3 Form (2026-08-27, merged + tagged `v0.14.4`)
 
 **Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian
 "Field NAS + Tombol Simpan — Investigasi 3 Form (v0.14.4 amendment ketiga)".
@@ -22,7 +110,7 @@ tag dibuat (RULE BOSS-013).
 - **Regresi**: 9 test baru (3×disabled-button, 3×reject-via-Livewire, 3×reject-via-API), full suite
   dijalankan ulang, Pint clean.
 
-## v0.14.4 amendment kedua — Fix Address Pool + session-timeout (implementasi selesai 2026-08-27, belum di-merge/tag)
+## v0.14.4 amendment kedua — Fix Address Pool + session-timeout (2026-08-27, merged + tagged `v0.14.4`)
 
 **Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian
 "Profil Hotspot — Address Pool Tidak Ter-set + Fix session-timeout (v0.14.4 amendment kedua)".
@@ -48,7 +136,7 @@ tag dibuat (RULE BOSS-013).
 - **Regresi**: 66 test HotspotPackage-related dijalankan ulang (semua hijau), full suite dijalankan ulang,
   Pint clean.
 
-## v0.14.4 amendment — Field Kuota untuk QuotaBase (implementasi selesai 2026-08-30, belum di-merge/tag)
+## v0.14.4 amendment — Field Kuota untuk QuotaBase (2026-08-30, merged + tagged `v0.14.4`)
 
 **Catatan status**: sama branch `v0.14.4-profil-hotspot`. Detail teknis lengkap ada di `CLAUDE.md` bagian
 "Profil Hotspot — Field Kuota untuk QuotaBase (v0.14.4 amendment)".
@@ -69,7 +157,7 @@ tag dibuat (RULE BOSS-013).
 - **Regresi**: 9 test Livewire baru (reaktivitas field, validasi, reset saat berpindah) + 6 test API baru
   (create/update, wajib, terlarang), full suite dijalankan ulang, Pint clean.
 
-## v0.14.4 — Profil Hotspot (implementasi selesai 2026-08-27, belum di-merge/tag)
+## v0.14.4 — Profil Hotspot (2026-08-27, merged + tagged `v0.14.4`)
 
 **Catatan status**: branch `v0.14.4-profil-hotspot` (dari `main`, sudah include v0.14.3). Detail teknis
 lengkap ada di `CLAUDE.md` bagian "Profil Hotspot (v0.14.4)".
@@ -125,7 +213,7 @@ Paket' (v0.14.3.1)".
 - **Belum di-merge/tag** — menunggu verifikasi manual Agung (screenshot sidebar baru + konfirmasi filter
   IP Pool bekerja di browser sungguhan).
 
-## v0.14.3 — Grup Profil (implementasi selesai 2026-08-28, belum di-merge/tag)
+## v0.14.3 — Grup Profil (2026-08-28, merged + tagged `v0.14.3`)
 
 **Catatan status**: branch `v0.14.3-grup-profil` (dari `main` yang sudah include v0.14.2) — kelanjutan
 cluster "Profil Paket" — implementasi dan regresi selesai, menunggu verifikasi manual Agung lewat browser.

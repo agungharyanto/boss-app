@@ -59,6 +59,13 @@ class StoreNetworkProfileGroupRequest extends FormRequest
             'dns_primary' => ['nullable', 'ip'],
             'dns_secondary' => ['nullable', 'ip'],
             'parent_queue' => ['nullable', 'string', 'max:255'],
+            // Revisi Grup Profil — only pushed when type=ppp (see
+            // PushNetworkProfileGroupToMikrotikJob's own docblock); left
+            // unvalidated against type here on purpose, same as the
+            // Livewire form — a caller sending both while type=hotspot
+            // simply gets them ignored at push time, not rejected.
+            'interface_name' => ['nullable', 'string', 'max:255'],
+            'service_name' => ['nullable', 'string', 'max:255'],
             'is_active' => ['sometimes', 'boolean'],
         ];
     }

@@ -6986,6 +6986,127 @@ sebelumnya)**:
 `test_edit_form_shows_a_hint_instead_of_the_interface_fields_when_type_is_hotspot`), full regression suite
 dijalankan ulang, Pint clean.
 
+## Profil PPP (branch `v0.14.5-profil-ppp`)
+
+**Status**: implementasi selesai, diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id` (NAS id=3)
+SAJA — `test-x86-bajastu` tidak disentuh sama sekali. Branch dibuat dari `main` di titik tag `v0.14.4.1`
+(dikonfirmasi lewat `git log`/`git tag`, bukan diasumsikan — branch lama bernama sama, yang cuma pernah
+dipakai untuk investigasi Langkah 0 tanpa commit apa pun di luar `main` waktu itu, dihapus dan dibuat ulang
+karena sudah 3 commit basi di belakang `main` terkini). **Belum di-merge/tag** — menunggu verifikasi
+manual Agung.
+
+**Arsitektur, dikonfirmasi eksplisit sebelum kode ditulis (Langkah 0)**: setiap Profil PPP push `/ppp
+profile` BARU/TERPISAH ke router — genuinely bukan objek yang sama dengan `/ppp profile` bare milik Grup
+Profil induknya (yang sejak Revisi Grup Profil, v0.14.4.1, sudah dikonfirmasi berfungsi sebagai Default
+Profile PPPoE Server). `local-address`/`dns-server`/`parent-queue` DIWARISI dari Grup Profil dan
+di-RESOLVE LIVE setiap push (dibaca dari relasi `networkProfileGroup` di dalam Job itu sendiri, bukan
+disalin/di-cache ke kolom `ppp_packages` sama sekali) — pola identik dengan bagaimana `PushHotspotPackageToMikrotikJob`
+(v0.14.4) mewarisi `address-pool` dari Grup Profil-nya. `rate-limit` dari Bandwidth Profile milik Profil
+PPP sendiri, `session-timeout` dari Masa Aktif milik Profil PPP sendiri — SELALU ada (beda dari Profil
+Hotspot yang opsional lewat toggle Unlimited/Limited: Profil PPP tidak punya konsep itu sama sekali, paket
+bulanan PPP selalu punya durasi nyata, `active_duration_value`/`unit` NOT NULL di migration).
+
+**`/ppp profile` MENDUKUNG `comment` — dikonfirmasi live sebelum kode ditulis, bukan diasumsikan dari
+Grup Profil**: `PppPackage::mikrotikComment()` (`"BOSS App - PPP Package #{id}"`) memakai pola
+lookup-by-comment yang sama persis dengan `CustomerIpPool`/`NetworkProfileGroup` — **TIDAK PERLU** workaround
+`mikrotik_profile_name`/`mikrotikLookupName()` yang terpaksa dipakai `HotspotPackage` (v0.14.4), karena itu
+cuma perlu untuk `/ip hotspot user profile` yang menolak `comment` sebagai parameter — keterbatasan
+spesifik objek itu, tidak berlaku untuk `/ppp profile`.
+
+**Risiko collision nama — inti alasan sub-versi ini butuh lapisan validasi ekstra yang tidak dimiliki
+Profil Hotspot**: nama `/ppp profile` yang di-generate Profil PPP dan `/ppp profile` bare milik SETIAP
+Grup Profil (tipe PPP) sama-sama hidup di namespace `/ppp profile` yang SAMA di router, di-scope per-NAS
+(bukan per-Grup-Profil) — beda dari Profil Hotspot yang pushnya ke `/ip hotspot user profile`, namespace
+yang sepenuhnya terpisah dari apa pun yang dipush Grup Profil. `PppPackage::collidesWithExistingName(int
+$nasId, string $name, ?int $ignorePackageId)` — method statis pada model (pola sama seperti
+`CustomerIpPool::overlapsRange()`), query lintas `network_profile_groups.name` DAN `ppp_packages.name`
+(lewat relasi `networkProfileGroup`), keduanya di-scope `nas_id` yang sama — dipanggil IDENTIK dari
+`Store`/`UpdatePppPackageRequest::withValidator()` DAN `PppPackageIndex` (Livewire), sama pola "validasi
+cross-entity di layer validasi, Service tetap asumsikan data sudah valid" yang sudah mapan di seluruh
+codebase ini (mis. `NetworkProfileGroup`'s own pool-same-NAS check). Index unique DB-level
+`(network_profile_group_id, name)` di migration cuma baseline per-parent (pola sama `HotspotPackage`) —
+BUKAN penjaga collision sesungguhnya, itu murni tugas `collidesWithExistingName()`.
+
+**`RouterOsGateway::syncPppProfile()` diperluas LAGI** — 2 parameter trailing baru, `?string $rateLimit =
+null, ?string $sessionTimeout = null` (signature ini sudah diperluas sekali sebelumnya di Revisi Grup
+Profil, v0.14.4.1, untuk `$localAddress`). Dikonfirmasi live terhadap `ro-hotspot.bajastu.id` SEBELUM kode
+ditulis: `rate-limit` menerima format `"{kbps}k/{kbps}k"` yang identik dengan yang sudah dikonfirmasi untuk
+`/ip hotspot user profile` (v0.14.4); `session-timeout` menerima suffix waktu m/h/d yang identik juga
+(RouterOS menormalisasi tampilan readback — `"30d"` yang dikirim terbaca kembali `"4w2d"`, `"90m"` terbaca
+`"1h30m"` — durasi sebenarnya tidak berubah, cuma representasi tampilan). Kedua parameter memakai pola
+conditional-include-hanya-saat-non-null yang sama dengan `$remoteAddress`/`$localAddress` (BUKAN pola
+unconditional-fallback `dns-server ?? ''`/`parent-queue ?? 'none'`) — tidak pernah diverifikasi apakah
+string kosong diterima sebagai nilai "kosongkan" untuk kedua field baru ini, karena tidak perlu: satu-satunya
+pemanggil, `PushPppPackageToMikrotikJob`, selalu me-resolve nilai non-null untuk keduanya (bandwidth_profile_id/
+active_duration_* wajib diisi, tidak pernah opsional seperti toggle Unlimited/Limited Profil Hotspot).
+
+**`HotspotDurationUnit` (enum yang sudah ada sejak v0.14.4) DIPAKAI ULANG untuk `active_duration_unit`
+Profil PPP** — bukan `PppDurationUnit` baru. Logika konversinya (suffix m/h/d, RouterOS tidak punya unit
+bulan native, aproksimasi 30 hari/bulan) identik dan sudah diverifikasi empiris sekali untuk `/ip hotspot
+user profile`; dikonfirmasi ULANG lewat live test segar terhadap `/ppp profile` sub-versi ini (bukan
+diasumsikan sama cuma karena namanya sama-sama "session-timeout") sebelum diputuskan aman dipakai ulang.
+
+**Perluasan signature `syncPppProfile()` mengharuskan pembaruan mekanis di 13 file fake `RouterOsGateway`
+di test suite** (interface PHP mewajibkan signature method implementasi cocok persis, termasuk parameter
+opsional baru) — dilakukan lewat replace terprogram (Python script per-file, bukan satu per satu manual)
+karena isi baris signature-nya identik di semua 13 file, diverifikasi lewat `php -l` di semua file plus
+full suite Network module (654/654 hijau) sebelum lanjut menulis kode baru — memastikan perluasan signature
+ini sendiri tidak merusak apa pun yang sudah ada, terpisah dari fitur baru yang dibangun di atasnya.
+
+**Tabel `ppp_packages`** — dengan sengaja TIDAK ada kolom `profile_type`/`limit_type`/`quota_*`/
+`show_in_voucher_form` (semua murni konsep Hotspot voucher/token, tidak relevan untuk paket bulanan PPP).
+`active_duration_value`/`active_duration_unit` NOT NULL (beda dari `HotspotPackage`'s own nullable — Masa
+Aktif Profil PPP SELALU wajib, tidak ada state "Unlimited" untuk paket bulanan biasa). Tidak ada kolom
+`mikrotik_profile_name` (lihat penjelasan comment-based lookup di atas — tidak perlu untuk `/ppp profile`).
+
+**Verifikasi manual REAL, end-to-end, terhadap `ro-hotspot.bajastu.id` saja, semua dieksekusi langsung lewat
+`tinker`, bukan mocked test**:
+- **Push**: Profil PPP nyata (`BOSS-TEST-PPPPKG-DELETE-ME`) mereferensikan Grup Profil `#11`
+  ("test-10Mbps-HomeFixed", PPP type) + Bandwidth Profile "10Mbps" (upload/download 15000 Kbps) + Masa Aktif
+  1 bulan — dikonfirmasi muncul sebagai `/ppp profile` BARU dengan `comment="BOSS App - PPP Package #1"`,
+  genuinely TERPISAH dan hidup berdampingan dengan `/ppp profile` Grup Profil induknya sendiri
+  (`test-10Mbps-HomeFixed`, `comment="BOSS App - Network Profile Group #11"` — dikonfirmasi lewat query
+  penuh `/ppp profile print`, keduanya benar-benar 2 baris terpisah, bukan salah satu menimpa yang lain).
+  Field lengkap dikonfirmasi benar: `remote-address=Hotspot-10Mbps` (pool warisan Grup Profil #11 — pool
+  yang SAMA dipakai Grup Profil-nya sendiri), `dns-server=1.1.1.1` (warisan Grup Profil), `parent-queue`
+  kosong (Grup Profil #11 memang tidak punya parent_queue), `rate-limit=15000k/15000k` (dari Bandwidth
+  Profile), `session-timeout=4w2d` (30 hari, dari Masa Aktif 1 bulan).
+- **Edit**: ubah Masa Aktif ke 2 bulan lalu push ulang — dikonfirmasi `.id` router yang SAMA ter-update di
+  tempat (query ulang by comment cuma menemukan 1 baris, bukan 2 — bukti lookup-by-comment benar-benar
+  idempotent, tidak membuat duplikat), `session-timeout` berubah jadi `8w4d` (60 hari).
+- **Perubahan live pada Grup Profil ikut ter-refleksikan, bukan snapshot basi**: mengganti IP Pool Grup
+  Profil `#11` ke pool baru lalu push ulang Profil PPP-nya — `remote-address` pada `/ppp profile` Profil PPP
+  ikut berubah ke pool baru itu, dikonfirmasi lewat test job (`test_push_job_reflects_a_live_update_to_the_parent_groups_pool_not_a_stale_snapshot`)
+  — bukan cuma diasumsikan dari cara kodenya ditulis.
+- **Delete**: dikonfirmasi genuinely hilang dari `/ppp profile print` — router kembali ke 5 entry aslinya
+  (`default`, `HomeFixed-10Mbps`, `PPPOE-REMOTE`, `test-10Mbps-HomeFixed`, `default-encryption`).
+- **Validasi tipe Grup Profil**: Grup Profil bertipe Hotspot ditolak untuk Profil PPP, dikonfirmasi lewat
+  test Livewire dan API (bukan cuma dibaca dari kode validasi).
+- **Validasi collision**: nama yang sama dengan nama Grup Profil `#11` sendiri ditolak; nama yang sama
+  dengan Profil PPP lain di Grup Profil BERBEDA tapi NAS SAMA ditolak; nama yang sama tapi di NAS BERBEDA
+  tetap diizinkan (test eksplisit `test_a_name_matching_a_grup_profil_on_a_different_nas_is_allowed` —
+  bukan diasumsikan aman, benar-benar dites positif).
+- Sidebar "Profil PPP" (anak ke-3 di bawah "Profil Paket", setelah "Grup Profil"/"Profil Hotspot") dan
+  halaman `/ppp-packages` dikonfirmasi ter-render nyata lewat request HTTP sungguhan (login session +
+  panggilan `curl` langsung ke `boss-nginx`), persis pola verifikasi yang dipakai sesi "Verifikasi UI:
+  Interface/VLAN & Expired Profile" sebelumnya — bukan cuma dibaca dari kode Blade/route.
+
+`test-x86-bajastu` tidak disentuh sama sekali sepanjang sub-versi ini. Semua artifact test (`PppPackage`
+beserta objek router-nya) dibersihkan lewat jalur delete asli setelahnya (bukan manipulasi DB langsung) —
+router kembali ke state pristine (5 `/ppp profile`, identik dengan sebelum sub-versi ini dimulai).
+
+**Permission**: `ppp_packages.view`/`ppp_packages.manage`, tier-admin-only, pola sama persis dengan
+`hotspot_packages.*`/`network_profile_groups.*` — di-seed ulang ke database dev real segera setelah
+ditambahkan ke `RolesAndPermissionsSeeder` (disiplin yang sudah berulang kali dicatat di file ini —
+migration/kode saja tidak cukup, seeder harus benar-benar dijalankan ulang terhadap database yang sudah
+ada).
+
+**Regresi**: `PppPackageMikrotikSyncTest` (9 test Job/RouterOS sync), `PppPackageIndexLivewireTest` (9 test
+Livewire), `PppPackageApiTest` (11 test REST API), `PppPackageTest` (8 test unit model, termasuk
+`collidesWithExistingName()`) — 37 test baru total. Full regression suite dijalankan ulang, Pint clean di
+semua file yang disentuh (3 isu style pre-existing di file yang tidak disentuh, tidak diperbaiki sesuai
+disiplin codebase ini).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

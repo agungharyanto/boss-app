@@ -14,6 +14,13 @@ namespace App\Enums;
  * toDays() documents the Bulan->hari approximation (30 days/month) used
  * when converting to a RouterOS session-timeout string — see
  * HotspotPackage::routerOsSessionTimeout().
+ *
+ * Reused verbatim by v0.14.5 (Profil PPP, PppPackage::routerOsSessionTimeout())
+ * — deliberately NOT duplicated into a separate PppDurationUnit, since the
+ * conversion logic itself (m/h/d suffixes, no native month, 30-day
+ * approximation) is identical and was already empirically verified once
+ * here; re-confirmed via a fresh live test that `/ppp profile`'s own
+ * session-timeout field accepts the exact same suffixes.
  */
 enum HotspotDurationUnit: string
 {

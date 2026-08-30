@@ -3,7 +3,7 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## v0.14.5 — Profil PPP (implementasi selesai 2026-08-28, belum di-merge/tag)
+## v0.14.5 — Profil PPP (2026-08-31, merged + tagged `v0.14.5`)
 
 **Catatan status**: branch `v0.14.5-profil-ppp`, dibuat dari `main` pada tag `v0.14.4.1` (dikonfirmasi
 langsung lewat `git log`/`git tag`, bukan diasumsikan — branch lama dengan nama sama yang cuma pernah

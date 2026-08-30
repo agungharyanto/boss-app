@@ -271,7 +271,7 @@ class RouterOsApiGateway implements RouterOsGateway
         }
     }
 
-    public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array
+    public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null, ?string $rateLimit = null, ?string $sessionTimeout = null): array
     {
         try {
             $client = new Client([
@@ -306,6 +306,14 @@ class RouterOsApiGateway implements RouterOsGateway
                     $add->equal('parent-queue', $parentQueue);
                 }
 
+                if ($rateLimit !== null) {
+                    $add->equal('rate-limit', $rateLimit);
+                }
+
+                if ($sessionTimeout !== null) {
+                    $add->equal('session-timeout', $sessionTimeout);
+                }
+
                 $response = $client->query($add)->read();
             } else {
                 $set = new Query('/ppp/profile/set');
@@ -327,6 +335,20 @@ class RouterOsApiGateway implements RouterOsGateway
 
                 if ($localAddress !== null) {
                     $set->equal('local-address', $localAddress);
+                }
+
+                // v0.14.5 (Profil PPP) — same conditional-only-when-non-null
+                // treatment as remote-address/local-address above, rather
+                // than the dns-server/parent-queue unconditional-fallback
+                // style — never verified whether these two specifically
+                // accept an empty-string clear (not needed, see this
+                // method's own interface docblock).
+                if ($rateLimit !== null) {
+                    $set->equal('rate-limit', $rateLimit);
+                }
+
+                if ($sessionTimeout !== null) {
+                    $set->equal('session-timeout', $sessionTimeout);
                 }
 
                 $set->equal('dns-server', $dnsServer ?? '');

@@ -63,6 +63,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedCustomerIpPoolPermissions();
         $this->seedNetworkProfileGroupPermissions();
         $this->seedHotspotPackagePermissions();
+        $this->seedPppPackagePermissions();
     }
 
     /**
@@ -446,6 +447,21 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedHotspotPackagePermissions(): void
     {
         $permissions = ['hotspot_packages.view', 'hotspot_packages.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
+    }
+
+    /**
+     * v0.14.5 CRUD Profil PPP — same "Profil Paket" cluster, same
+     * tier-admin-only posture and reasoning as hotspot_packages.*.
+     */
+    private function seedPppPackagePermissions(): void
+    {
+        $permissions = ['ppp_packages.view', 'ppp_packages.manage'];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

@@ -25,6 +25,7 @@ use App\Livewire\Network\MonitoringIndex;
 use App\Livewire\Network\NasIndex;
 use App\Livewire\Network\NetworkProfileGroupIndex;
 use App\Livewire\Network\OltDeviceIndex;
+use App\Livewire\Network\PppPackageIndex;
 use App\Livewire\Network\VpnScriptGenerator;
 use App\Livewire\Referrers\ReferrerIndex;
 use App\Livewire\Resellers\PackagePricingIndex;
@@ -180,6 +181,10 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // v0.14.4 — same cluster "Profil Paket", same posture as
     // /network-profile-groups above.
     Route::get('/hotspot-packages', HotspotPackageIndex::class)->name('hotspot-packages.index');
+
+    // v0.14.5 — same cluster "Profil Paket", same posture as
+    // /hotspot-packages above.
+    Route::get('/ppp-packages', PppPackageIndex::class)->name('ppp-packages.index');
 
     Route::get('/tax-components', TaxComponentIndex::class)->name('tax-components.index');
 

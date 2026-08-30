@@ -64,7 +64,7 @@ class NasExpiredProfileApiTest extends TestCase
                 return ['success' => true, 'message' => null];
             }
 
-            public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array
+            public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null, ?string $rateLimit = null, ?string $sessionTimeout = null): array
             {
                 return ['success' => true, 'message' => null];
             }

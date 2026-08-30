@@ -66,7 +66,7 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*') || request()->routeIs('web.customer-ip-pools.*') || request()->routeIs('web.network-profile-groups.*') || request()->routeIs('web.hotspot-packages.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*') || request()->routeIs('web.customer-ip-pools.*') || request()->routeIs('web.network-profile-groups.*') || request()->routeIs('web.hotspot-packages.*') || request()->routeIs('web.ppp-packages.*'),
             // v0.8.1 — nested one level deeper than a plain link: an item
             // with a 'children' key renders as its own expand/collapse
             // sub-group (own localStorage key, same pattern as the
@@ -121,6 +121,12 @@
                             // above (see seedHotspotPackagePermissions()).
                             auth()->user()->can('viewAny', \App\Models\HotspotPackage::class)
                                 ? ['route' => 'web.hotspot-packages.index', 'label' => __('Profil Hotspot')]
+                                : null,
+                            // v0.14.5 — same cluster "Profil Paket", same
+                            // giveToAdminTier() posture as its siblings
+                            // above (see seedPppPackagePermissions()).
+                            auth()->user()->can('viewAny', \App\Models\PppPackage::class)
+                                ? ['route' => 'web.ppp-packages.index', 'label' => __('Profil PPP')]
                                 : null,
                         ]),
                     ]

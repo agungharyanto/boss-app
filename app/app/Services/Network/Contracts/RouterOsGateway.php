@@ -135,9 +135,29 @@ interface RouterOsGateway
      * fallback for these two fields the way dns-server/parent-queue safely
      * can; only include them in the query at all when genuinely non-null.
      *
+     * v0.14.5 (Profil PPP) — two more trailing optional params,
+     * $rateLimit/$sessionTimeout, for a Profil PPP's OWN `/ppp profile`
+     * (a genuinely separate object from its parent Grup Profil's own bare
+     * `/ppp profile` — see PushPppPackageToMikrotikJob's own docblock).
+     * Confirmed via a live add/set round trip against
+     * ro-hotspot.bajastu.id: `rate-limit` accepts the exact same
+     * "{kbps}k/{kbps}k" syntax already established for `/ip hotspot user
+     * profile` (RouterOsGateway::syncHotspotUserProfile()'s own docblock);
+     * `session-timeout` accepts the exact same m/h/d time-interval suffixes
+     * (RouterOS normalizes the displayed value on readback — e.g. a pushed
+     * "30d" reads back as "4w2d" — the underlying duration is unaffected).
+     * Both fields conditionally included only when non-null, same
+     * discipline as $remoteAddress/$localAddress above — never verified
+     * whether an empty string is accepted as a "clear" value for either
+     * (not needed: this method's only caller for these two params,
+     * PushPppPackageToMikrotikJob, always resolves a real, non-null value
+     * for both, since bandwidth_profile_id/active_duration_* are required
+     * fields on PppPackage, never optional the way HotspotPackage's own
+     * Unlimited/Limited toggle makes rate-limit/session-timeout optional).
+     *
      * @return array{success: bool, message: ?string}
      */
-    public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array;
+    public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null, ?string $rateLimit = null, ?string $sessionTimeout = null): array;
 
     /**
      * Removes the `/ppp profile` entry matching $comment, if any — same

@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\V1\NasController;
 use App\Http\Controllers\Api\V1\NetworkProfileGroupController;
 use App\Http\Controllers\Api\V1\OdpController;
 use App\Http\Controllers\Api\V1\PaymentController;
+use App\Http\Controllers\Api\V1\PppPackageController;
 use App\Http\Controllers\Api\V1\ReferrerController;
 use App\Http\Controllers\Api\V1\RegistrationController;
 use App\Http\Controllers\Api\V1\RemittanceSummaryController;
@@ -281,6 +282,18 @@ Route::prefix('v1')->group(function () {
         Route::put('hotspot-packages/{hotspot_package}', [HotspotPackageController::class, 'update']);
         Route::delete('hotspot-packages/{hotspot_package}', [HotspotPackageController::class, 'destroy']);
         Route::post('hotspot-packages/{hotspot_package}/resync', [HotspotPackageController::class, 'resync']);
+
+        // v0.14.5 — same cluster "Profil Paket", same tier-admin-only
+        // posture (see PppPackagePolicy). network_profile_group_id must be
+        // type=ppp (enforced in the FormRequest), and name must not
+        // collide with any Grup Profil/PppPackage name on the same NAS
+        // (both share the same router-side /ppp profile namespace).
+        Route::get('ppp-packages', [PppPackageController::class, 'index']);
+        Route::post('ppp-packages', [PppPackageController::class, 'store']);
+        Route::get('ppp-packages/{ppp_package}', [PppPackageController::class, 'show']);
+        Route::put('ppp-packages/{ppp_package}', [PppPackageController::class, 'update']);
+        Route::delete('ppp-packages/{ppp_package}', [PppPackageController::class, 'destroy']);
+        Route::post('ppp-packages/{ppp_package}/resync', [PppPackageController::class, 'resync']);
 
         // v0.8.4 — read-only Dashboard Monitoring API, WhatsApp-bot
         // integration foothold (see App\Http\Controllers\Api\V1\

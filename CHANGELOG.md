@@ -3,6 +3,41 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.14.5 — Profil PPP (implementasi selesai 2026-08-28, belum di-merge/tag)
+
+**Catatan status**: branch `v0.14.5-profil-ppp`, dibuat dari `main` pada tag `v0.14.4.1` (dikonfirmasi
+langsung lewat `git log`/`git tag`, bukan diasumsikan — branch lama dengan nama sama yang cuma pernah
+dipakai investigasi Langkah 0 dihapus dan dibuat ulang karena sudah 3 commit basi di belakang `main`).
+Detail teknis lengkap ada di `docs/ROADMAP.md` bagian "v0.14.5" dan `CLAUDE.md`.
+
+- Paket bulanan PPPoE, setara Profil Hotspot (v0.14.4) tapi untuk pelanggan PPP — link Grup Profil
+  (v0.14.3, wajib tipe `ppp`) + Bandwidth Profile (v0.14.1). Tabel `ppp_packages` — TIDAK ada konsep
+  Unlimited/Limited/TimeBase/QuotaBase (murni milik Hotspot); `active_duration_value`/`active_duration_unit`
+  (Masa Aktif) SELALU wajib diisi.
+- **Setiap Profil PPP push `/ppp profile` BARU/TERPISAH ke router** — bukan numpuk ke `/ppp profile` milik
+  Grup Profil induknya. `local-address`/`dns-server`/`parent-queue` diwarisi dari Grup Profil dan
+  di-resolve LIVE setiap push (bukan disalin sekali); `rate-limit` dari Bandwidth Profile sendiri,
+  `session-timeout` dari Masa Aktif sendiri. Lookup pakai `comment` (bukan workaround
+  `mikrotik_profile_name` yang terpaksa dipakai HotspotPackage) — `/ppp profile` genuinely mendukung
+  `comment`, dikonfirmasi live.
+- **`RouterOsGateway::syncPppProfile()` diperluas lagi** — 2 parameter trailing baru `$rateLimit`/
+  `$sessionTimeout`, dikonfirmasi live: format sama persis dengan `/ip hotspot user profile` (v0.14.4).
+  `HotspotDurationUnit` (enum yang sudah ada) dipakai ulang untuk Masa Aktif Profil PPP, bukan enum baru.
+  Perluasan signature ini mengharuskan pembaruan mekanis di 13 file fake `RouterOsGateway` di test suite.
+- **Validasi collision nama lintas-tabel — inti risiko sub-versi ini**: nama `/ppp profile` yang
+  di-generate Profil PPP wajib tidak bentrok dengan nama `/ppp profile` milik Grup Profil MANAPUN di NAS
+  yang sama (keduanya berbagi namespace `/ppp profile` yang sama di router, di-scope per-NAS).
+  `PppPackage::collidesWithExistingName()` — dipanggil identik dari FormRequest dan Livewire.
+- **Diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id` SAJA** (`test-x86-bajastu` tidak
+  disentuh): push genuinely membuat objek `/ppp profile` terpisah dari Grup Profil induknya, field lengkap
+  benar (pool+dns+rate-limit+session-timeout); edit meng-update objek yang sama di tempat (bukan
+  duplikat); delete genuinely menghapus dari router; validasi tipe Grup Profil dan validasi collision nama
+  (termasuk kasus nama sama tapi NAS berbeda tetap diizinkan) dikonfirmasi via Livewire dan API; sidebar +
+  halaman `/ppp-packages` dikonfirmasi ter-render lewat request HTTP sungguhan.
+- **Regresi**: 36 test baru (Job/RouterOS sync, Livewire, REST API, unit model), full regression suite
+  dijalankan ulang, Pint clean. Permission `ppp_packages.view`/`.manage` di-seed ulang ke database dev
+  real. **Belum di-merge/tag** — menunggu verifikasi manual Agung.
+
 ## Verifikasi UI: Interface/VLAN & Expired Profile (2026-08-28, merged + tagged `v0.14.4.1`)
 
 **Catatan status**: sama branch `revisi-grup-profil-interface-pppoe-server`. Detail teknis lengkap ada di

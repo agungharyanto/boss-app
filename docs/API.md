@@ -632,6 +632,102 @@ Manual retry for a `Gagal` group — same shape as `customer-ip-pools`' own resy
 
 ---
 
+## Profil PPP (v0.14.5)
+
+Fifth sub-version of "Profil Paket" — a sellable MONTHLY PPPoE subscription package (equivalent to Profil
+Hotspot, v0.14.4, but for PPPoE customers), referencing a Grup Profil (v0.14.3, **must be type `ppp`**,
+rejected otherwise) and a Bandwidth Profile (v0.14.1). Permission: `ppp_packages.view`/`ppp_packages.manage`,
+tier admin only, same posture as `hotspot_packages.*`/`network_profile_groups.*`. Business logic in
+`App\Services\Network\PppPackageService`.
+
+**RouterOS live-push — a brand-new, SEPARATE `/ppp profile`, not the parent Grup Profil's own object**:
+`POST`/`PUT`/`DELETE` below each queue a background Job that pushes/removes this Profil PPP's OWN `/ppp
+profile` (found/updated by a stable comment, `"BOSS App - PPP Package #{id}"` — `/ppp profile` genuinely
+supports `comment`, confirmed via a live test, so — unlike Profil Hotspot's own `mikrotik_profile_name`
+workaround — a rename just works). `local-address`/`dns-server`/`parent-queue` are **inherited from the
+parent Grup Profil and resolved LIVE on every single push** (never copied/cached onto the package itself —
+so changing the Grup Profil's own pool/DNS/parent-queue later automatically flows through on the Profil
+PPP's next push). `rate-limit` comes from this package's own Bandwidth Profile (`"{upload_max}k/
+{download_max}k"`, same format as Profil Hotspot); `session-timeout` from this package's own Masa Aktif
+(`active_duration_value`/`active_duration_unit` — always required, unlike Profil Hotspot's optional
+Unlimited/Limited toggle, since a monthly subscription always has a real duration). `mikrotik_sync_status`/
+`mikrotik_synced_at`/`mikrotik_sync_error` — same 3-state contract as every other live-pushed entity in
+this cluster.
+
+**Real collision risk this sub-version is built around**: a Profil PPP's own `/ppp profile` push shares the
+SAME RouterOS `/ppp profile` name namespace, scoped per-NAS, as every Grup Profil's own bare `/ppp profile`
+AND every other Profil PPP under a DIFFERENT Grup Profil on that same NAS. `POST`/`PUT` below reject a
+`name` that collides with either source on the resolved NAS — see `PppPackage::collidesWithExistingName()`.
+
+### `GET /ppp-packages`
+
+List Profil PPP belonging to the logged-in tenant. Query optional: `?network_profile_group_id=`,
+`?search=` (name), `?sort_by=`/`?sort_dir=` (default `name`/`asc`).
+
+### `POST /ppp-packages`
+
+Body: `network_profile_group_id` (required, **must be type `ppp`**), `bandwidth_profile_id` (required),
+`name` (required — unique per Grup Profil AND must not collide with any Grup Profil/Profil PPP name on the
+same resolved NAS), `visible_to_reseller` (optional, default `false`), `cost_price`/`sell_price` (required,
+`sell_price >= cost_price`), `promo_price` (optional), `tax_percent` (required), `active_duration_value`
+(required integer), `active_duration_unit` (required, `minute`/`hour`/`day`/`month`), `shared_users`
+(required, default `1`), `priority` (optional, default `"Default"`), `login_days` (optional array of
+English day names), `login_start_time`/`login_end_time` (optional, `H:i`), `is_active` (optional, default
+`true`).
+
+### `GET /ppp-packages/{ppp_package}` · `PUT /ppp-packages/{ppp_package}`
+
+`PUT` body: all fields optional (`sometimes`). Changing `network_profile_group_id` (or leaving it
+unchanged) always re-checks the name-collision rule against the CURRENT (possibly newly-resolved) NAS.
+
+### `DELETE /ppp-packages/{ppp_package}`
+
+Soft delete. Queues `RemovePppPackageFromMikrotikJob` — removes this Profil PPP's own `/ppp profile`
+object (fully BOSS-App-owned, safe to actually delete — unlike Grup Profil's Hotspot-type push, which
+never touches its shared `/ip hotspot` server).
+
+### `POST /ppp-packages/{ppp_package}/resync`
+
+Manual retry for a `Gagal` package — same shape as `hotspot-packages`'/`network-profile-groups`' own
+resync endpoints.
+
+```json
+{
+  "success": true,
+  "message": "Profil PPP berhasil dibuat",
+  "data": {
+    "id": 1,
+    "network_profile_group_id": 11,
+    "network_profile_group_name": "test-10Mbps-HomeFixed",
+    "nas_name": "ro-hotspot.bajastu.id",
+    "bandwidth_profile_id": 4,
+    "bandwidth_profile_name": "10Mbps",
+    "name": "Paket PPP Bulanan",
+    "visible_to_reseller": false,
+    "cost_price": 50000,
+    "sell_price": 100000,
+    "promo_price": null,
+    "tax_percent": 0,
+    "active_duration_value": 1,
+    "active_duration_unit": "month",
+    "shared_users": 1,
+    "priority": "Default",
+    "login_days": null,
+    "login_start_time": null,
+    "login_end_time": null,
+    "is_active": true,
+    "mikrotik_sync_status": "pending",
+    "mikrotik_synced_at": null,
+    "mikrotik_sync_error": null,
+    "created_at": "2026-08-28T09:00:00+00:00",
+    "updated_at": "2026-08-28T09:00:00+00:00"
+  },
+  "meta": []
+}
+```
+
+---
+
 ## Payment Gateway (Xendit, v0.3.5)
 
 > Catatan: endpoint `invoices` (CRUD, generate, transisi status) dari v0.3.4

@@ -80,7 +80,7 @@ class CustomerIpPoolMikrotikSyncTest extends TestCase
                 return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
             }
 
-            public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null): array
+            public function syncPppProfile(Nas $nas, string $comment, string $name, ?string $remoteAddress, ?string $dnsServer, ?string $parentQueue, ?string $localAddress = null, ?string $rateLimit = null, ?string $sessionTimeout = null): array
             {
                 return ['success' => $this->success, 'message' => $this->success ? null : $this->message];
             }

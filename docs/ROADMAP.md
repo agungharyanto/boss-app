@@ -46,7 +46,7 @@
 | v0.14.6 | Network         | RouterOS Live-Push — Generalisasi | Fondasi live-push SUDAH ADA sejak v0.14.2.1 (khusus IP Pool) — sub-versi ini generalisasi pola yang sama (Job async, kolom sync status, komentar-stabil-sebagai-lookup-key, retry+backoff) ke Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP. **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Backlog |
 | v0.14.7 | Network         | Push ke NAS — UI & Rollout Produksi | Tombol "Push ke NAS" di UI Grup Profil/Profil Hotspot/Profil PPP, rollout ke NAS produksi setelah v0.14.6 diverifikasi aman di NAS uji coba | Backlog |
 | v0.15.0 | Operasional     | Management Ticketing          | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Sistem tiket untuk dukungan/komplain pelanggan. Decision-gate scope lengkap (alur, integrasi modul lain, siapa yang bisa buka/tutup tiket, dll) dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
-| v0.16.0 | Network         | Core Network Infrastructure Management | Inventaris topologi fiber fleksibel (OTB/Closure/ODC self-referencing parent via `fiber_nodes`, ODP tetap di tabel `odps` v0.5.0 existing + kolom parent link tambahan) — GPS+foto per titik, kabel/tube/core (jumlah genap saja, warna TIA/EIA-598-C auto+override), splitter rasio bebas + redaman (in/out) dengan referensi non-blocking, aksesori (pin adaptor/connector/splice) dengan redaman terukur, visual splice-diagram (bukan tabel polos), klik koordinat→Google Maps direction, notifikasi fault-correlation ODP penuh ke OdpLocatorService, draft offline localStorage. Langkah 0 (investigasi) selesai, migration skeleton (schema-only) sudah jalan — Model/Service/Livewire/API adalah Langkah 2+ terpisah | Backlog |
+| v0.16.0 | Network         | Core Network Infrastructure Management | Inventaris topologi fiber fleksibel (OTB/Closure/ODC self-referencing parent via `fiber_nodes`, ODP tetap di tabel `odps` v0.5.0 existing + kolom parent link tambahan) — GPS+foto per titik, kabel/tube/core (jumlah genap saja, warna TIA/EIA-598-C auto+override), splitter rasio bebas + redaman (in/out) dengan referensi non-blocking, aksesori (pin adaptor/connector/splice) dengan redaman terukur, visual splice-diagram (bukan tabel polos), klik koordinat→Google Maps direction, notifikasi fault-correlation ODP penuh ke OdpLocatorService, draft offline localStorage. Langkah 0-3 selesai (investigasi, migration, Model/Service/Enum/FormRequest, API + Livewire CRUD dasar + GPS/foto + menu sidebar) — visual splice-diagram/Google Maps link/capacity report (Langkah 4, pakai `ui-ux-pro-max`) belum dimulai | Backlog |
 | v0.17.0 | Operasional     | UI/UX Polish — Profesionalisasi Tampilan BOSS App | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Perbaikan visual menyeluruh (warna, tipografi, spacing, komponen) memakai skill `ui-ux-pro-max` (terinstal `2026-08-31`, lihat catatan instalasi di bawah), target stack Laravel Blade/Livewire yang dipakai BOSS App. Halaman/area prioritas mana yang dipoles duluan akan di-decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
@@ -1829,3 +1829,76 @@ UI/route)**:
 
 **Tidak ada Livewire/route/view ditulis** — Langkah 3 (termasuk visual splice-diagram pakai
 `ui-ux-pro-max`) menunggu prompt terpisah.
+
+**Langkah 3 — API route + Livewire CRUD dasar + GPS/foto browser + menu sidebar (belum visual
+splice-diagram, itu Langkah 4)**:
+
+- **API** (Sanctum, tier-admin-only): `GET/POST/GET-show/PUT/DELETE /api/v1/fiber-nodes`,
+  `GET/POST /api/v1/fiber-cables`, `GET/POST /api/v1/splitters`, `GET/POST /api/v1/fiber-accessories` —
+  lihat `docs/API.md`'s bagian "Core Network Infrastructure Management" untuk detail lengkap. Controller
+  tipis (BOSS-006) — semua logic ke `FiberTopologyService`, diperluas dengan `createNode()`/`updateNode()`/
+  `deleteNode()`/`createSplitter()`/`createAccessory()`/`updateCoordinates()`/`addPhoto()`/`deletePhoto()`/
+  `listTopologyPoints()` (union query `fiber_nodes`+`odps`, di Service bukan Livewire, sesuai instruksi).
+  `FiberNodePolicy` (viewAny/view/manage, pola sama `BandwidthProfilePolicy`) menjaga `/fiber-nodes/*` —
+  `fiber-cables`/`splitters`/`fiber-accessories` TIDAK punya Policy per-model sendiri (tidak diminta),
+  memakai pengecekan permission mentah (`network_infrastructure.view`/`.manage`) langsung di Controller,
+  sama posture `MonitoringController`.
+- **Bug nyata ditangkap sebelum sempat jalan**: `listTopologyPoints()` versi pertama memakai `union()`
+  langsung di atas Eloquent Builder — baris hasil `odps` akan di-hydrate sebagai model `FiberNode` (karena
+  union dipanggil dari Builder `FiberNode`), lalu `casts()` `FiberNode` mencoba cast string literal `'odp'`
+  ke enum `FiberNodeType` yang tidak punya case itu → crash. Diperbaiki dengan `->toBase()` di kedua sisi
+  sebelum `union()`/`get()` — scope global (tenant/reseller) sudah ter-bake ke WHERE clause di titik itu,
+  hasilnya `stdClass` polos tanpa casting Eloquent sama sekali. Diverifikasi ulang lewat `tinker` ke DB dev
+  real sebelum lanjut.
+- **Livewire (Blade+Alpine, tanpa React/Vue)**: `FiberNodeIndex` (list gabungan, filter `node_type`
+  termasuk pseudo-value `odp`, search) — `FiberNodeForm` (create/edit OTB/Closure/ODC) — sengaja
+  `component Livewire TERPISAH` dari Index (beda dari pola "satu mega-komponen" cluster Profil Paket)
+  supaya bisa dipakai ulang. `GpsPhotoCapture` (reusable, embed di `FiberNodeForm` mode edit DAN halaman
+  baru `OdpEdit`) — desain final: SELALU butuh owner yang sudah tersimpan (tidak pernah `null`), karena
+  Livewire tidak bisa oper `TemporaryUploadedFile` antar komponen lewat network round-trip — mode CREATE
+  `FiberNodeForm` pakai input lat/long polos sendiri, redirect ke mode edit (komponen sama, id baru) begitu
+  tersimpan, baru `GpsPhotoCapture` muncul. Tombol "Ambil lokasi saya" (Alpine `navigator.geolocation`)
+  cuma isi input, TIDAK auto-submit — user tetap bisa geser manual. Foto: `type=file capture="environment"`
+  multiple, preview thumbnail via `TemporaryUploadedFile->temporaryUrl()` SEBELUM tombol "Unggah Foto"
+  ditekan (bukan auto-upload saat file dipilih).
+- **Temuan nyata, bukan diasumsikan**: dikonfirmasi lewat grep sebelum membangun apa pun — **tidak ada
+  halaman web edit Odp sama sekali** di codebase ini (Odp API-only sejak v0.5.0, `OdpController`,
+  kemungkinan dikonsumsi app lapangan/teknisi terpisah). Instruksi "reuse ke halaman edit Odp yang sudah
+  ada" TIDAK bisa dipenuhi harfiah karena halaman itu tidak eksis — dibuat halaman BARU minimal,
+  `App\Livewire\Installation\OdpEdit` (`/odps/{odp}/edit`), yang **TIDAK menyentuh** `StoreOdpRequest`/
+  `UpdateOdpRequest`/`OdpController` v0.5.0 sama sekali — `code`/`name`/`total_ports` ditampilkan READ-ONLY,
+  cuma field baru v0.16.0 (parent link, `loss_in_db`/`loss_out_db` — WAJIB untuk Odp, tidak pernah nullable
+  di UI ini, sesuai `isLossRequired()`) + GPS/foto (lewat `GpsPhotoCapture`) yang bisa diedit, lewat method
+  Service baru `FiberTopologyService::updateOdpTopologyFields()` yang terpisah total dari alur registrasi
+  lama. Diuji eksplisit (`OdpEditLivewireTest::test_saving_never_touches_odps_own_core_registration_fields`)
+  bahwa `code`/`name`/`total_ports` genuinely tidak berubah lewat halaman ini.
+- **`App\Http\Controllers\FiberNodePhotoController`** (baru) — tidak ada preseden serving foto private-disk
+  ke Blade di codebase ini sebelumnya (`WorkOrderPhoto`, sepupu terdekat, upload-only lewat API, tidak
+  pernah ditampilkan balik di UI manapun) — endpoint kecil auth-gated (`network_infrastructure.view`/
+  `.manage`) supaya `<img>` di `GpsPhotoCapture` bisa menampilkan foto yang sudah tersimpan.
+- **Draft offline** (`FiberNodeForm` saja, sesuai scope) — localStorage key `fiber_node_draft_new`/
+  `fiber_node_draft_{id}`, ditulis via listener `input` ter-debounce di root form (bukan `x-model` per-field
+  terpisah — lebih sederhana untuk 9 field `wire:model`), ditawarkan "Lanjutkan draft tersimpan?" saat form
+  dibuka dan draft ada (tidak pernah auto-overwrite), dihapus dari localStorage lewat event
+  `fiber-node-saved` yang di-dispatch `FiberNodeForm::save()` setelah sukses.
+- **Menu sidebar**: "Topologi Fiber" ditambahkan ke cluster "Network" yang sudah ada (bukan cluster baru —
+  dikonfirmasi cluster ini sudah eksis sejak v0.3.1), pola `viewAny` guard yang sama dengan link lain di
+  cluster itu.
+- **Gotcha test nyata**: `UploadedFile::fake()->image(...)` butuh ekstensi GD PHP, yang TIDAK terpasang di
+  environment ini — diperbaiki pakai `UploadedFile::fake()->create($name, $kb, $mimeType)` (fake file
+  dengan MIME eksplisit, tidak butuh GD sama sekali) — tidak memengaruhi kode produksi, `addPhoto()` cuma
+  menyimpan file mentah, tidak pernah memproses gambar.
+- **Test**: 20 Feature API (`FiberNodeApiTest`/`FiberCableApiTest`/`SplitterAndFiberAccessoryApiTest` —
+  401/403/201/200, tolak core ganjil, tolak endpoint sama di kedua sisi kabel, tolak aksesori
+  dua-pemilik/tanpa-pemilik) + 20 Livewire (`FiberNodeIndexLivewireTest`/`FiberNodeFormLivewireTest`/
+  `GpsPhotoCaptureLivewireTest`/`OdpEditLivewireTest` — render, submit sukses, validasi loss ODC/ODP). 40
+  test baru, semua hijau.
+- **Diverifikasi nyata lewat request HTTP sungguhan** (login session real + `curl` ke `boss-nginx`, bukan
+  cuma `Livewire::test()`): `GET /fiber-nodes` dan `GET /fiber-nodes/create` mengembalikan 200 dengan
+  konten yang benar; `GET /api/v1/fiber-nodes` lewat token Sanctum real mengembalikan envelope JSON yang
+  benar; link sidebar "Topologi Fiber" genuinely ada di HTML halaman real. Token test dihapus setelahnya.
+- Full regression suite: 1203/1203 hijau (1163 + 40 baru), Pint clean di semua file yang disentuh/dibuat.
+  `docs/API.md` diupdate dengan bagian baru untuk endpoint-endpoint ini.
+
+**Tidak dimulai: visual splice-diagram, link Google Maps direction, capacity report** — Langkah 4, akan
+pakai plugin `ui-ux-pro-max`, prompt terpisah menyusul.

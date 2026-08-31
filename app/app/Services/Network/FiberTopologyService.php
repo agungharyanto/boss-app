@@ -3,10 +3,17 @@
 namespace App\Services\Network;
 
 use App\Enums\FiberNodeType;
+use App\Models\FiberAccessory;
 use App\Models\FiberCable;
 use App\Models\FiberCore;
 use App\Models\FiberNode;
+use App\Models\FiberNodePhoto;
 use App\Models\Odp;
+use App\Models\Splitter;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 
 /**
@@ -97,5 +104,170 @@ class FiberTopologyService
         }
 
         return $target->node_type === FiberNodeType::Odc;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function createNode(array $data): FiberNode
+    {
+        return FiberNode::create($data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function updateNode(FiberNode $node, array $data): FiberNode
+    {
+        $node->update($data);
+
+        return $node->fresh();
+    }
+
+    /**
+     * Odp's own v0.16.0-only fields (parent link + loss) — deliberately
+     * separate from StoreOdpRequest/UpdateOdpRequest (v0.5.0's own
+     * registration flow, which this Langkah does NOT touch at all). Used
+     * by the new App\Livewire\Installation\OdpEdit page.
+     *
+     * @param  array{parent_type?: ?string, parent_id?: ?int, loss_in_db?: ?float, loss_out_db?: ?float}  $data
+     */
+    public function updateOdpTopologyFields(Odp $odp, array $data): Odp
+    {
+        $odp->update($data);
+
+        return $odp->fresh();
+    }
+
+    public function deleteNode(FiberNode $node): void
+    {
+        $node->delete();
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function createSplitter(array $data): Splitter
+    {
+        return Splitter::create($data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function createAccessory(array $data): FiberAccessory
+    {
+        return FiberAccessory::create($data);
+    }
+
+    /**
+     * Writes lat/long directly onto an already-persisted FiberNode/Odp —
+     * used by the reusable GPS+Photo Livewire widget (Langkah 3), which
+     * always operates against a real, already-saved owner (see that
+     * component's own docblock for why "brand new, unsaved node" never
+     * reaches this method).
+     */
+    public function updateCoordinates(FiberNode|Odp $target, ?float $latitude, ?float $longitude): void
+    {
+        $target->update(['latitude' => $latitude, 'longitude' => $longitude]);
+    }
+
+    /**
+     * Stored on the 'local' disk (private, never publicly served) — same
+     * posture as WorkOrderPhotoService (v0.5.0). Unlike WorkOrderPhoto,
+     * FiberNodePhoto has no per-type uniqueness — every call adds a new
+     * row, never replaces an existing one (a topology point can have any
+     * number of photos).
+     */
+    public function addPhoto(FiberNode|Odp $owner, UploadedFile $file, ?string $caption = null): FiberNodePhoto
+    {
+        $extension = $file->getClientOriginalExtension() ?: $file->extension();
+        $storedPath = Storage::disk('local')->putFile(
+            'fiber-node-photos/'.get_class($owner).'/'.$owner->id,
+            $file
+        );
+
+        return FiberNodePhoto::create([
+            'owner_type' => get_class($owner),
+            'owner_id' => $owner->id,
+            'photo_path' => $storedPath,
+            'caption' => $caption,
+            'taken_at' => now(),
+        ]);
+    }
+
+    public function deletePhoto(FiberNodePhoto $photo): void
+    {
+        Storage::disk('local')->delete($photo->photo_path);
+        $photo->delete();
+    }
+
+    /**
+     * A single, normalized list combining fiber_nodes (OTB/Closure/ODC)
+     * and odps (ODP) — the union query lives here, not in
+     * App\Livewire\Network\FiberNodeIndex, per BOSS-006. Both source
+     * tables' own global scopes (BelongsToTenant/BelongsToResellerScope)
+     * apply normally since this still goes through each model's own
+     * Eloquent query builder before the union.
+     *
+     * $nodeTypeFilter accepts 'otb'/'closure'/'odc'/'odp' (the fourth
+     * value isn't a real FiberNodeType case — it's the pseudo-type this
+     * method uses to mean "only odps"), or null for no filter.
+     *
+     * No pagination — a plain ordered Collection. This fleet is expected
+     * to stay small enough (hundreds, not tens of thousands, of topology
+     * points) for Langkah 3's "CRUD dasar" scope; revisit if that stops
+     * being true.
+     *
+     * @return Collection<int, object>
+     */
+    public function listTopologyPoints(?string $nodeTypeFilter = null, ?string $search = null): Collection
+    {
+        $nodesQuery = FiberNode::query()
+            ->select([
+                'id',
+                DB::raw("'fiber_node' as source"),
+                'node_type',
+                DB::raw('COALESCE(local_label, node_type) as label'),
+                'latitude',
+                'longitude',
+                'created_at',
+            ]);
+
+        $odpsQuery = Odp::query()
+            ->select([
+                'id',
+                DB::raw("'odp' as source"),
+                DB::raw("'odp' as node_type"),
+                DB::raw('name as label'),
+                'latitude',
+                'longitude',
+                'created_at',
+            ]);
+
+        if ($search !== null && $search !== '') {
+            $nodesQuery->where('local_label', 'like', "%{$search}%");
+            $odpsQuery->where(function ($query) use ($search) {
+                $query->where('code', 'like', "%{$search}%")->orWhere('name', 'like', "%{$search}%");
+            });
+        }
+
+        if ($nodeTypeFilter === 'odp') {
+            $nodesQuery->whereRaw('1 = 0');
+        } elseif ($nodeTypeFilter !== null) {
+            $nodesQuery->where('node_type', $nodeTypeFilter);
+            $odpsQuery->whereRaw('1 = 0');
+        }
+
+        // toBase() BEFORE union()/get() is load-bearing, not cosmetic —
+        // without it, Eloquent hydrates every unioned row as a FiberNode
+        // model (since the union was invoked on FiberNode's own Builder)
+        // and then FiberNode's own casts() tries to cast an ODP row's
+        // literal 'odp' string into the FiberNodeType enum, which isn't a
+        // valid case and throws. toBase() converts both sides to plain
+        // query builders first (global scopes are already baked into the
+        // WHERE clauses by this point), so get() returns plain stdClass
+        // rows with zero Eloquent casting involved.
+        return $nodesQuery->toBase()->union($odpsQuery->toBase())->orderByDesc('created_at')->get();
     }
 }

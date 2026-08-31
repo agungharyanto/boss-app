@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\Internal\CpeDeviceDatatableController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDetailController;
 use App\Http\Controllers\Api\Internal\OltDeviceDatatableController;
 use App\Http\Controllers\Auth\ReferrerLoginController;
+use App\Http\Controllers\FiberNodePhotoController;
 use App\Http\Controllers\VpnScriptDownloadController;
 use App\Http\Middleware\EnsureAdminPanelAccess;
 use App\Livewire\Billing\InvoiceIndex;
@@ -14,12 +15,15 @@ use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
+use App\Livewire\Installation\OdpEdit;
 use App\Livewire\Installation\WorkOrderShow;
 use App\Livewire\Network\BandwidthProfileIndex;
 use App\Livewire\Network\CpeDeviceIndex;
 use App\Livewire\Network\CpeDeviceStatusCheck;
 use App\Livewire\Network\CpeParameterMapIndex;
 use App\Livewire\Network\CustomerIpPoolIndex;
+use App\Livewire\Network\FiberNodeForm;
+use App\Livewire\Network\FiberNodeIndex;
 use App\Livewire\Network\HotspotPackageIndex;
 use App\Livewire\Network\MonitoringIndex;
 use App\Livewire\Network\NasIndex;
@@ -185,6 +189,28 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // v0.14.5 — same cluster "Profil Paket", same posture as
     // /hotspot-packages above.
     Route::get('/ppp-packages', PppPackageIndex::class)->name('ppp-packages.index');
+
+    // v0.16.0 Core Network Infrastructure Management, Langkah 3 —
+    // FiberNodeForm is a genuinely separate Livewire component from
+    // FiberNodeIndex (unlike every other module in this cluster, which
+    // bakes create/edit into one mega-component) so it can be reused
+    // as-is for editing an existing Odp too (see /odps/{odp}/edit below)
+    // — needs its own routes for both create and edit entry points.
+    Route::get('/fiber-nodes', FiberNodeIndex::class)->name('fiber-nodes.index');
+    Route::get('/fiber-nodes/create', FiberNodeForm::class)->name('fiber-nodes.create');
+    Route::get('/fiber-nodes/{fiber_node}/edit', FiberNodeForm::class)->name('fiber-nodes.edit');
+
+    // v0.16.0 Langkah 3 — no Odp web edit page existed anywhere in this
+    // codebase before this (confirmed by grep before building — Odp has
+    // only ever been API-only, v0.5.0's OdpController, presumably
+    // consumed by a field/technician app). This is a genuinely NEW,
+    // minimal page — it does NOT touch StoreOdpRequest/UpdateOdpRequest
+    // or OdpController at all (those stay exactly as the v0.5.0
+    // registration flow left them); it only lets an admin manage the
+    // NEW v0.16.0 fields (loss_in_db/loss_out_db, parent link, photos)
+    // via the same reusable GpsPhotoCapture component FiberNodeForm uses.
+    Route::get('/odps/{odp}/edit', OdpEdit::class)->name('odps.edit');
+    Route::get('/fiber-node-photos/{fiber_node_photo}', [FiberNodePhotoController::class, 'show'])->name('fiber-node-photos.show');
 
     Route::get('/tax-components', TaxComponentIndex::class)->name('tax-components.index');
 

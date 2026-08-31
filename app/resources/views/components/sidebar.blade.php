@@ -66,7 +66,7 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*') || request()->routeIs('web.customer-ip-pools.*') || request()->routeIs('web.network-profile-groups.*') || request()->routeIs('web.hotspot-packages.*') || request()->routeIs('web.ppp-packages.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*') || request()->routeIs('web.customer-ip-pools.*') || request()->routeIs('web.network-profile-groups.*') || request()->routeIs('web.hotspot-packages.*') || request()->routeIs('web.ppp-packages.*') || request()->routeIs('web.fiber-nodes.*') || request()->routeIs('web.odps.*'),
             // v0.8.1 — nested one level deeper than a plain link: an item
             // with a 'children' key renders as its own expand/collapse
             // sub-group (own localStorage key, same pattern as the
@@ -87,6 +87,15 @@
                     : null,
                 auth()->user()->can('viewAny', \App\Models\OltDevice::class)
                     ? ['route' => 'web.olt-devices.index', 'label' => __('OLT')]
+                    : null,
+                // v0.16.0 Core Network Infrastructure Management, Langkah
+                // 3 — lists fiber_nodes (OTB/Closure/ODC) AND odps (ODP)
+                // in one combined table (see
+                // FiberTopologyService::listTopologyPoints()), gated on
+                // FiberNodePolicy::viewAny() same as every other guarded
+                // link in this cluster.
+                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
+                    ? ['route' => 'web.fiber-nodes.index', 'label' => __('Topologi Fiber')]
                     : null,
                 // v0.14.3.1 — was 3 separate flat items (Bandwidth Profile,
                 // IP Pool Pelanggan, Grup Profil), grouped into one

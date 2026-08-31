@@ -46,6 +46,7 @@
 | v0.14.6 | Network         | RouterOS Live-Push — Generalisasi | Fondasi live-push SUDAH ADA sejak v0.14.2.1 (khusus IP Pool) — sub-versi ini generalisasi pola yang sama (Job async, kolom sync status, komentar-stabil-sebagai-lookup-key, retry+backoff) ke Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP. **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Backlog |
 | v0.14.7 | Network         | Push ke NAS — UI & Rollout Produksi | Tombol "Push ke NAS" di UI Grup Profil/Profil Hotspot/Profil PPP, rollout ke NAS produksi setelah v0.14.6 diverifikasi aman di NAS uji coba | Backlog |
 | v0.15.0 | Operasional     | Management Ticketing          | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Sistem tiket untuk dukungan/komplain pelanggan. Decision-gate scope lengkap (alur, integrasi modul lain, siapa yang bisa buka/tutup tiket, dll) dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
+| v0.17.0 | Operasional     | UI/UX Polish — Profesionalisasi Tampilan BOSS App | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Perbaikan visual menyeluruh (warna, tipografi, spacing, komponen) memakai skill `ui-ux-pro-max` (terinstal `2026-08-31`, lihat catatan instalasi di bawah), target stack Laravel Blade/Livewire yang dipakai BOSS App. Halaman/area prioritas mana yang dipoles duluan akan di-decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
 (lihat Definition of Done di RULES.md) sebelum lanjut ke versi berikutnya.
@@ -1679,3 +1680,24 @@ semua file yang disentuh. Permission `ppp_packages.view`/`.manage` di-seed ulang
 cukup).
 
 **Merged + tagged `v0.14.5`** — diverifikasi manual Agung lewat browser, lolos.
+
+## v0.17.0 — Slot didaftarkan, skill `ui-ux-pro-max` terinstal (2026-08-31)
+
+Task ringan, tanpa perubahan kode BOSS App: mendaftarkan slot roadmap `v0.17.0` (UI/UX Polish) dan menginstal
+skill `ui-ux-pro-max` yang akan dipakai saat sprint itu benar-benar dimulai.
+
+**Instalasi skill** — lewat `claude plugin` (bukan slash command interaktif `/plugin`, tidak tersedia di
+lingkungan eksekusi non-interaktif ini, tapi CLI `claude` sendiri punya subcommand `plugin` yang setara):
+`claude plugin marketplace add nextlevelbuilder/ui-ux-pro-max-skill` lalu
+`claude plugin install ui-ux-pro-max@ui-ux-pro-max-skill`. Berhasil, dikonfirmasi lewat `claude plugin list`
+(`ui-ux-pro-max@ui-ux-pro-max-skill`, versi `2.13.0`, scope `user`, status `enabled`) dan keberadaan file
+nyata di `~/.claude/plugins/cache/ui-ux-pro-max-skill/`. **Bukan** di path literal
+`.claude/skills/ui-ux-pro-max` yang disebutkan di instruksi asli — versi Claude Code CLI di lingkungan ini
+(`2.1.251`) memasang plugin marketplace di bawah `~/.claude/plugins/`, bukan direktori skill per-proyek;
+fungsinya setara (skill aktif dan siap dipakai), cuma lokasi filesystem-nya berbeda dari yang diasumsikan
+instruksi. Fallback npm CLI (`ui-ux-pro-max-cli`) tidak diperlukan karena jalur `claude plugin` di atas
+berhasil di percobaan pertama.
+
+**Scope v0.17.0 sendiri sengaja belum ditentukan** — baris tabel di atas cuma reservasi nomor+nama+skill,
+sama seperti pola `v0.15.0` (Ticketing). Decision-gate halaman/area prioritas dilakukan terpisah saat sprint
+ini dimulai, bukan sekarang.

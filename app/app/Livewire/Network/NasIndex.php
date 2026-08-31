@@ -10,6 +10,7 @@ use App\Models\Nas;
 use App\Models\Reseller;
 use App\Services\Network\Contracts\RouterOsGateway;
 use App\Services\Network\NasApiUserProvisioningService;
+use App\Services\Network\NasRadiusDiagnosticService;
 use App\Services\Network\NasService;
 use App\Support\ResellerContext;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
@@ -79,6 +80,17 @@ class NasIndex extends Component
     public ?int $expiredProfileNasId = null;
 
     public string $expiredProfileIpPoolId = '';
+
+    // v0.16 — "Cek Koneksi RADIUS" diagnostic modal state.
+    public bool $showRadiusDiagnosticModal = false;
+
+    public ?int $diagnosticNasId = null;
+
+    /** @var array<string, mixed>|null */
+    public ?array $diagnosticResult = null;
+
+    /** @var array<string, mixed>|null */
+    public ?array $selfSolveResult = null;
 
     public function mount(): void
     {
@@ -260,6 +272,51 @@ class NasIndex extends Component
         }
 
         $this->closeExpiredProfileModal();
+    }
+
+    // v0.16 — "Cek Koneksi RADIUS": a per-NAS 3-hop diagnostic (menu NAS).
+    // Read the incident writeup / NasRadiusDiagnosticService docblock for
+    // why each hop is checked the way it is.
+    public function openRadiusDiagnosticModal(int $nasId): void
+    {
+        $nas = Nas::findOrFail($nasId);
+        $this->authorize('manage', $nas);
+
+        $this->diagnosticNasId = $nasId;
+        $this->diagnosticResult = null;
+        $this->selfSolveResult = null;
+        $this->showRadiusDiagnosticModal = true;
+    }
+
+    public function closeRadiusDiagnosticModal(): void
+    {
+        $this->diagnosticNasId = null;
+        $this->diagnosticResult = null;
+        $this->selfSolveResult = null;
+        $this->showRadiusDiagnosticModal = false;
+    }
+
+    public function runRadiusDiagnostic(NasRadiusDiagnosticService $service): void
+    {
+        $nas = Nas::findOrFail($this->diagnosticNasId);
+        $this->authorize('manage', $nas);
+
+        $this->selfSolveResult = null;
+        $this->diagnosticResult = $service->run($nas);
+    }
+
+    /**
+     * Safe self-solve ONLY — retrigger this NAS's own peer handshake +
+     * re-sync its route fragment. Anything that could affect another NAS
+     * (recreating a WireGuard node container) is surfaced as a suggestion,
+     * never run from here.
+     */
+    public function applyRadiusSelfSolve(NasRadiusDiagnosticService $service): void
+    {
+        $nas = Nas::findOrFail($this->diagnosticNasId);
+        $this->authorize('manage', $nas);
+
+        $this->selfSolveResult = $service->selfSolve($nas);
     }
 
     public function save(NasService $service): void

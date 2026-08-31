@@ -14,6 +14,7 @@ use App\Models\Reseller;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Models\VpnAccount;
+use App\Services\Network\Contracts\NasWireguardInspector;
 use App\Services\Network\Contracts\RouterOsGateway;
 use App\Support\ResellerContext;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -554,6 +555,59 @@ class NasIndexLivewireTest extends TestCase
         Livewire::actingAs($ownerA)
             ->test(NasIndex::class)
             ->call('openExpiredProfileModal', $nasB->id)
+            ->assertForbidden();
+    }
+
+    public function test_radius_diagnostic_modal_runs_and_renders_per_step_results(): void
+    {
+        // fake the router-side inspector so no real API call happens
+        $this->app->bind(NasWireguardInspector::class, fn () => new class implements NasWireguardInspector
+        {
+            public function peerStatus(Nas $nas): ?array
+            {
+                return ['interface_running' => true, 'peer_found' => true, 'last_handshake' => '9s', 'rx' => 100, 'tx' => 200, 'endpoint' => '1.2.3.4:5'];
+            }
+
+            public function pingFromRouter(Nas $nas, string $targetIp, int $count = 3): ?bool
+            {
+                return true;
+            }
+
+            public function retriggerPeerHandshake(Nas $nas): bool
+            {
+                return true;
+            }
+        });
+
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id, 'name' => 'DIAG-NAS']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(NasIndex::class)
+            ->call('openRadiusDiagnosticModal', $nas->id)
+            ->assertSet('showRadiusDiagnosticModal', true)
+            ->assertSet('diagnosticResult', null)
+            ->call('runRadiusDiagnostic')
+            ->assertSee('Tunnel WireGuard (sisi server)')
+            ->assertSee('Router → FreeRADIUS lewat tunnel')
+            ->assertSee('Interface WireGuard (sisi router)')
+            // no active WG account for this NAS -> step 1 fails, suggestion shown
+            ->assertSee('belum punya akun WireGuard aktif');
+    }
+
+    public function test_reseller_a_cannot_open_radius_diagnostic_for_reseller_bs_nas(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $resellerA = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $resellerB = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $nasB = Nas::factory()->forReseller($resellerB)->create();
+
+        $ownerA = User::factory()->create(['tenant_id' => $tenant->id]);
+        $resellerA->users()->attach($ownerA->id, ['role' => 'owner', 'status' => 'active']);
+
+        Livewire::actingAs($ownerA)
+            ->test(NasIndex::class)
+            ->call('openRadiusDiagnosticModal', $nasB->id)
             ->assertForbidden();
     }
 }

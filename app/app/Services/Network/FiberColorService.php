@@ -50,4 +50,28 @@ class FiberColorService
 
         return self::COLOR_CYCLE[$index];
     }
+
+    /**
+     * Reverse lookup for rendering a swatch from a stored tube_color/
+     * core_color NAME (v0.16.0 Langkah 4, FiberNodeDetail's splice
+     * diagram) — a stored name can be a manual override that isn't one of
+     * the 12 known cycle colors (see FiberCore's own "auto+override"
+     * docblock), so this returns null rather than guessing; the Blade
+     * view falls back to a neutral swatch + the text name itself in that
+     * case, never hiding the name behind a missing color alone.
+     */
+    public function hexForName(?string $name): ?string
+    {
+        if ($name === null) {
+            return null;
+        }
+
+        foreach (self::COLOR_CYCLE as $color) {
+            if ($color['name'] === $name) {
+                return $color['hex'];
+            }
+        }
+
+        return null;
+    }
 }

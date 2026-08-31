@@ -46,7 +46,7 @@
 | v0.14.6 | Network         | RouterOS Live-Push — Generalisasi | Fondasi live-push SUDAH ADA sejak v0.14.2.1 (khusus IP Pool) — sub-versi ini generalisasi pola yang sama (Job async, kolom sync status, komentar-stabil-sebagai-lookup-key, retry+backoff) ke Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP. **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Backlog |
 | v0.14.7 | Network         | Push ke NAS — UI & Rollout Produksi | Tombol "Push ke NAS" di UI Grup Profil/Profil Hotspot/Profil PPP, rollout ke NAS produksi setelah v0.14.6 diverifikasi aman di NAS uji coba | Backlog |
 | v0.15.0 | Operasional     | Management Ticketing          | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Sistem tiket untuk dukungan/komplain pelanggan. Decision-gate scope lengkap (alur, integrasi modul lain, siapa yang bisa buka/tutup tiket, dll) dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
-| v0.16.0 | Network         | Core Network Infrastructure Management | Inventaris topologi fiber fleksibel (OTB/Closure/ODC self-referencing parent via `fiber_nodes`, ODP tetap di tabel `odps` v0.5.0 existing + kolom parent link tambahan) — GPS+foto per titik, kabel/tube/core (jumlah genap saja, warna TIA/EIA-598-C auto+override), splitter rasio bebas + redaman (in/out) dengan referensi non-blocking, aksesori (pin adaptor/connector/splice) dengan redaman terukur, visual splice-diagram (bukan tabel polos), klik koordinat→Google Maps direction, notifikasi fault-correlation ODP penuh ke OdpLocatorService, draft offline localStorage. Langkah 0-3 selesai (investigasi, migration, Model/Service/Enum/FormRequest, API + Livewire CRUD dasar + GPS/foto + menu sidebar) — visual splice-diagram/Google Maps link/capacity report (Langkah 4, pakai `ui-ux-pro-max`) belum dimulai | Backlog |
+| v0.16.0 | Network         | Core Network Infrastructure Management | Inventaris topologi fiber fleksibel (OTB/Closure/ODC self-referencing parent via `fiber_nodes`, ODP tetap di tabel `odps` v0.5.0 existing + kolom parent link tambahan) — GPS+foto per titik, kabel/tube/core (jumlah genap saja, warna TIA/EIA-598-C auto+override), splitter rasio bebas + redaman (in/out) dengan referensi non-blocking, aksesori (pin adaptor/connector/splice) dengan redaman terukur, visual splice-diagram (bukan tabel polos), klik koordinat→Google Maps direction, notifikasi fault-correlation ODP penuh ke OdpLocatorService, draft offline localStorage. Langkah 0-4 selesai penuh (investigasi, migration, Model/Service/Enum/FormRequest, API + Livewire CRUD dasar + GPS/foto + menu sidebar, visual splice-diagram + Google Maps + Capacity Report + notifikasi ODP-penuh) — menunggu verifikasi manual Agung sebelum merge/tag | Backlog |
 | v0.17.0 | Operasional     | UI/UX Polish — Profesionalisasi Tampilan BOSS App | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Perbaikan visual menyeluruh (warna, tipografi, spacing, komponen) memakai skill `ui-ux-pro-max` (terinstal `2026-08-31`, lihat catatan instalasi di bawah), target stack Laravel Blade/Livewire yang dipakai BOSS App. Halaman/area prioritas mana yang dipoles duluan akan di-decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
@@ -1902,3 +1902,82 @@ splice-diagram, itu Langkah 4)**:
 
 **Tidak dimulai: visual splice-diagram, link Google Maps direction, capacity report** — Langkah 4, akan
 pakai plugin `ui-ux-pro-max`, prompt terpisah menyusul.
+
+**Langkah 4 — Visual splice-diagram + Google Maps + Capacity Report + notifikasi ODP-penuh (v0.16.0 selesai
+penuh, Langkah 0-4)**:
+
+- **`ui-ux-pro-max` genuinely dipakai, tapi lewat CLI-nya langsung, bukan tool `Skill`** — plugin yang
+  di-install lewat `claude plugin install` di sesi sebelumnya (v0.17.0) belum terdaftar di tool `Skill`
+  sesi INI (butuh restart sesi Claude Code untuk plugin baru terdaftar — keterbatasan siklus-hidup sesi,
+  bukan sesuatu yang bisa diperbaiki dari dalam sesi). Dipanggil langsung lewat `scripts/search.py`
+  plugin itu sendiri (persis cara dokumentasinya sendiri bilang harus dipanggil) — query ke domain
+  `chart`/`color`/`ux`/`style` menghasilkan panduan konkret yang genuinely dipakai: warna status traffic-
+  light (hijau <60%/amber 60-80%/merah >80%, dari pola "bullet chart"), density "data-dense dashboard"
+  (padding minimal, tabel compact) untuk Capacity Report, dan disiplin aksesibilitas "warna tidak pernah
+  jadi satu-satunya sinyal" (setiap swatch/badge selalu disertai teks) diterapkan di core-map dan progress
+  bar. **Dipakai HANYA untuk 3 komponen baru** (`FiberNodeDetail`/`CapacityReport` + partial pendukungnya)
+  — `FiberNodeIndex`/`FiberNodeForm`/`GpsPhotoCapture` dari Langkah 3 TIDAK dipoles ulang, cuma ditambah
+  link fungsional (Detail, Maps) memakai gaya visual yang SUDAH ada di file itu.
+- **`FiberNodeDetail`** (`/fiber-nodes/{id}/detail`, `/odps/{id}/detail` — satu komponen, dua route, karena
+  ODP juga titik splice yang sah) — diagram splice server-rendered (Blade+SVG inline, bukan library chart
+  baru): kabel masuk (kiri) | node/splitter di tengah (rasio+redaman) | kabel keluar/anak (kanan, grid
+  kartu — TIDAK pernah satu diagram raksasa untuk banyak percabangan, sesuai instruksi). Core map per
+  kabel: dot berwarna per core (grouped per tube), warna dari `FiberColorService::hexForName()`
+  (reverse-lookup baru) dengan fallback abu-abu + label teks untuk warna override yang bukan dari siklus
+  12 warna. List aksesori dengan badge warning (amber, bukan blocking) kalau selisih redaman terukur vs
+  referensi >2dB.
+- **`App\Services\Network\FiberTopologyService::spliceDiagramData()`** — union kabel masuk (`cablesAsTo`)/
+  keluar (`cablesAsFrom`, sumber "anak" untuk diagram — bukan `parent_type`/`parent_id`, sesuai instruksi
+  eksplisit yang minta pakai graf kabel) + splitter + aksesori, semua relasi Langkah 2 dipakai langsung
+  tanpa perubahan.
+- **`CapacityReport`** (`/capacity-report`, menu baru "Kapasitas Jaringan" di cluster Network) — 3 kategori
+  (ODP: port terpakai dari `odp_ports` langsung, tidak duplikasi data; Splitter: **lihat catatan
+  reinterpretasi di bawah**; Kabel: core terpakai dari `fiber_cores.status`), progress bar traffic-light,
+  filter cari + filter ">80% penuh".
+- **Reinterpretasi eksplisit, bukan penyimpangan diam-diam**: instruksi asli minta hitung kapasitas
+  splitter dari "`fiber_cables` yang `from_type`/`from_id` mengarah ke splitter" — tapi skema Langkah 2/3
+  yang sudah dibangun (`StoreFiberCableRequest`) memvalidasi `from_type`/`to_type` HANYA boleh `FiberNode`
+  atau `Odp`, tidak pernah `Splitter`. Daripada membuka ulang validasi Langkah 3 (di luar scope "jangan
+  sentuh halaman lain"), kapasitas splitter dihitung dari jumlah `FiberAccessory` yang `splitter_id`-nya
+  mengarah ke splitter itu (tiap aksesori = satu output leg splitter yang sudah diterminasi) dibanding
+  jumlah output dari string rasio (`"1:8"` → 8) — interpretasi yang setia ke skema nyata yang sudah ada,
+  dicatat di sini dan di `docs/API.md` supaya tidak diasumsikan sebagai bug.
+- **Bug keamanan nyata ditemukan & ditutup, bukan bagian dari scope asli Langkah 4**: `Splitter`/
+  `FiberAccessory` tidak punya kolom `tenant_id` sendiri (di-scope implisit lewat owner polimorfik,
+  sesuai desain Langkah 2) — tapi `SplitterController::index()`/`FiberAccessoryController::index()`
+  (Langkah 3) SAMA SEKALI tidak memfilter tenant, jadi setiap tenant bisa melihat splitter/aksesori
+  tenant lain lewat API. Ditemukan saat mendesain query Capacity Report (yang butuh query `Splitter`
+  langsung, bukan lewat relasi owner). Ditutup dengan `scopeTenantScoped()` baru di kedua model + dipakai
+  di kedua Controller Langkah 3 + 2 test regresi baru — diverifikasi nyata lewat `tinker` ke DB dev real
+  (query tanpa scope genuinely bocor 2 tenant, query dengan scope genuinely cuma 1) sebelum dipakai di
+  Controller.
+- **Google Maps direction** — link `https://www.google.com/maps/dir/?api=1&destination={lat},{lng}` (tab
+  baru) ditambahkan di `FiberNodeDetail` (header), `OdpEdit` (field baru `latitude`/`longitude` read-only
+  di `render()`, catatan: bisa sedikit basi sampai render berikutnya karena `GpsPhotoCapture` adalah child
+  Livewire terpisah — batasan kecil yang diterima, tidak diminta reaktif), dan `FiberNodeIndex` (icon SVG
+  kecil per baris yang punya GPS — penambahan fungsional saja, gaya visual tidak diubah).
+- **Notifikasi ODP-penuh** — infrastruktur GENUINELY BARU di codebase ini (dikonfirmasi lewat grep sebelum
+  membangun apa pun: tidak ada `App\Notifications`, `App\Events`, `App\Listeners`, atau tabel
+  `notifications` sama sekali, meski `User` sudah pakai trait `Notifiable` sejak scaffold awal, tidak
+  pernah dipakai). Dibangun jalur Laravel-native minimal: migration `notifications` (skema standar),
+  `App\Events\OdpCapacityExhausted`, `App\Notifications\OdpCapacityExhaustedNotification` (channel
+  `database` saja — bukan WhatsApp, karena ini alert internal staff, bukan pesan pelanggan, beda model
+  sesi/template sama sekali dari modul WhatsApp Gateway), `App\Listeners\NotifyOdpCapacityExhausted`
+  (`ShouldQueue`, auto-discovered Laravel, tidak perlu registrasi manual). `OdpLocatorService::
+  findNearestAvailable()` — signature/return type genuinely TIDAK berubah, cuma menyisipkan
+  `event(new OdpCapacityExhausted($customer))` tepat sebelum `return null` saat query benar-benar nol hasil
+  (bukan saat null karena pelanggan belum punya koordinat). `tests/Unit/Services/Installation/
+  OdpLocatorServiceTest.php` (v0.5.0) **zero diff**, dikonfirmasi lewat `git diff --stat`, 6 test lama tetap
+  hijau tanpa perubahan assertion — test event/notifikasi baru ada di file TERPISAH.
+- **Test**: 19 baru (7 `FiberNodeDetailLivewireTest` + 6 `CapacityReportLivewireTest` + 4
+  `OdpCapacityExhaustedEventTest` + 2 regresi cross-tenant leak di `SplitterAndFiberAccessoryApiTest`),
+  semua hijau. Full regression suite: 1222/1222 (1203 + 19 baru), Pint clean.
+- **Diverifikasi nyata lewat request HTTP sungguhan** (login session real + `curl`, bukan cuma
+  `Livewire::test()`): `GET /capacity-report`, `GET /fiber-nodes/{id}/detail` (termasuk link Maps genuinely
+  ada di HTML), dan sidebar "Kapasitas Jaringan" — semua dikonfirmasi 200 dengan konten benar. Data test
+  dibersihkan setelahnya.
+- `docs/API.md` diupdate (catatan fix tenant-scoping di `/splitters`/`/fiber-accessories`).
+
+**v0.16.0 Core Network Infrastructure Management — Langkah 0 sampai 4 selesai penuh.** Menunggu verifikasi
+manual Agung lewat browser (sesuai instruksi eksplisit: dilakukan di akhir, bukan per-langkah) sebelum
+merge/tag.

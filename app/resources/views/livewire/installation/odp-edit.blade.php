@@ -4,7 +4,19 @@
     existing v0.5.0 API (OdpController), never wired into this page.
 --}}
 <div class="p-6 max-w-3xl mx-auto">
-    <h1 class="text-2xl font-semibold text-gray-800 mb-6">{{ __('Edit Data Topologi ODP') }}: {{ $code }}</h1>
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-semibold text-gray-800">{{ __('Edit Data Topologi ODP') }}: {{ $code }}</h1>
+        <a href="{{ route('web.odps.detail', $odpId) }}" class="text-sm text-primary hover:underline">{{ __('Lihat Detail Topologi') }}</a>
+    </div>
+
+    {{-- v0.16.0 Langkah 4 — Google Maps direction link, functional addition only. --}}
+    @if ($latitude !== null && $longitude !== null)
+        <p class="text-sm text-gray-500 mb-4">
+            <a href="https://www.google.com/maps/dir/?api=1&destination={{ $latitude }},{{ $longitude }}" target="_blank" rel="noopener" class="text-primary hover:underline">
+                {{ __('Buka arah di Google Maps') }} ({{ $latitude }}, {{ $longitude }})
+            </a>
+        </p>
+    @endif
 
     @if (session('status'))
         <div class="mb-4 p-3 bg-green-50 border border-green-200 text-green-800 text-sm rounded-md">

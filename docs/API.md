@@ -1626,13 +1626,17 @@ dengan `total_cores`, juga harus genap). Sukses langsung auto-generate baris `Fi
 ### `GET /splitters` · `POST /splitters`
 
 Body `POST`: `owner_type`/`owner_id` (morph ke `FiberNode`/`Odp`), `ratio` (string bebas, mis. `"1:8"`),
-`model` (optional).
+`model` (optional). **v0.16.0 Langkah 4**: `GET` sekarang di-scope per tenant lewat
+`Splitter::scopeTenantScoped()` — sebelumnya (Langkah 3) `index()` genuinely tidak difilter tenant sama
+sekali (Splitter tidak punya kolom `tenant_id` sendiri, diturunkan implisit dari owner-nya), bug cross-
+tenant nyata yang ditemukan & ditutup di Langkah 4, bukan perilaku yang disengaja sebelumnya.
 
 ### `GET /fiber-accessories` · `POST /fiber-accessories`
 
 Body `POST`: **salah satu wajib** `fiber_cable_id` ATAU `splitter_id` (tidak boleh dua-duanya),
 `accessory_type` (`pin_adaptor`/`connector`/`splice_fusion`/`splice_mechanical`), `expected_loss_db`/
-`measured_loss_db` (optional), `location_note` (optional).
+`measured_loss_db` (optional), `location_note` (optional). `GET` juga di-scope per tenant sejak Langkah 4
+(`FiberAccessory::scopeTenantScoped()`), bug yang sama seperti `/splitters` di atas.
 
 ```json
 {

@@ -18,10 +18,12 @@ use App\Livewire\Dashboard;
 use App\Livewire\Installation\OdpEdit;
 use App\Livewire\Installation\WorkOrderShow;
 use App\Livewire\Network\BandwidthProfileIndex;
+use App\Livewire\Network\CapacityReport;
 use App\Livewire\Network\CpeDeviceIndex;
 use App\Livewire\Network\CpeDeviceStatusCheck;
 use App\Livewire\Network\CpeParameterMapIndex;
 use App\Livewire\Network\CustomerIpPoolIndex;
+use App\Livewire\Network\FiberNodeDetail;
 use App\Livewire\Network\FiberNodeForm;
 use App\Livewire\Network\FiberNodeIndex;
 use App\Livewire\Network\HotspotPackageIndex;
@@ -199,6 +201,12 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     Route::get('/fiber-nodes', FiberNodeIndex::class)->name('fiber-nodes.index');
     Route::get('/fiber-nodes/create', FiberNodeForm::class)->name('fiber-nodes.create');
     Route::get('/fiber-nodes/{fiber_node}/edit', FiberNodeForm::class)->name('fiber-nodes.edit');
+    // v0.16.0 Langkah 4 — splice-diagram detail view, one component shared
+    // by both FiberNode and Odp targets (see FiberNodeDetail's own
+    // docblock) via two separate routes.
+    Route::get('/fiber-nodes/{fiber_node}/detail', FiberNodeDetail::class)->name('fiber-nodes.detail');
+    Route::get('/odps/{odp}/detail', FiberNodeDetail::class)->name('odps.detail');
+    Route::get('/capacity-report', CapacityReport::class)->name('capacity-report.index');
 
     // v0.16.0 Langkah 3 — no Odp web edit page existed anywhere in this
     // codebase before this (confirmed by grep before building — Odp has

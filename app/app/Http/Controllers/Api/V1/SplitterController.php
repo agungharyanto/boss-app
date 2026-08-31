@@ -14,6 +14,15 @@ use Illuminate\Http\Request;
 /**
  * See FiberCableController's own docblock for why this uses a raw
  * permission-string check instead of a per-model Policy.
+ *
+ * v0.16.0 Langkah 4 — index() now scopes via Splitter::tenantScoped(). A
+ * real cross-tenant leak was found here while building the Langkah 4
+ * capacity report: Splitter has no tenant_id of its own (scoped
+ * implicitly through its polymorphic owner, see that model's own
+ * docblock), and this query never filtered by it at all — every tenant's
+ * splitters were returned to every caller holding
+ * network_infrastructure.view/.manage, regardless of which tenant they
+ * belonged to.
  */
 class SplitterController extends Controller
 {
@@ -24,6 +33,7 @@ class SplitterController extends Controller
         abort_unless($request->user()->can('network_infrastructure.view') || $request->user()->can('network_infrastructure.manage'), 403);
 
         $splitters = Splitter::query()
+            ->tenantScoped()
             ->latest()
             ->paginate($request->integer('per_page', 15));
 

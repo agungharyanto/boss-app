@@ -2,7 +2,9 @@
 
 namespace App\Services\Network;
 
+use App\Enums\FiberCoreStatus;
 use App\Enums\FiberNodeType;
+use App\Enums\OdpPortStatus;
 use App\Models\FiberAccessory;
 use App\Models\FiberCable;
 use App\Models\FiberCore;
@@ -269,5 +271,148 @@ class FiberTopologyService
         // WHERE clauses by this point), so get() returns plain stdClass
         // rows with zero Eloquent casting involved.
         return $nodesQuery->toBase()->union($odpsQuery->toBase())->orderByDesc('created_at')->get();
+    }
+
+    /**
+     * v0.16.0 Langkah 4 — everything App\Livewire\Network\FiberNodeDetail
+     * needs to render one splice diagram: cables terminating AT this node
+     * ("incoming"), cables originating FROM this node toward children
+     * ("outgoing" — the diagram's own notion of "child" is the cable
+     * graph's `to` endpoint, per the sprint brief, NOT the separate
+     * parent_type/parent_id administrative link), splitters mounted at
+     * this node, and every accessory reachable from any of those cables/
+     * splitters (for the expected-vs-measured loss comparison list).
+     *
+     * @return array{
+     *     target: FiberNode|Odp,
+     *     incoming_cables: Collection<int, FiberCable>,
+     *     outgoing_cables: Collection<int, FiberCable>,
+     *     splitters: Collection<int, Splitter>,
+     *     children: list<array{type: class-string, id: int, label: string, cable_id: int}>,
+     *     accessories: Collection<int, FiberAccessory>,
+     * }
+     */
+    public function spliceDiagramData(FiberNode|Odp $node): array
+    {
+        $incoming = $node->cablesAsTo()->with('cores')->get();
+        $outgoing = $node->cablesAsFrom()->with('cores')->get();
+        $splitters = $node->splitters()->with('accessories')->get();
+
+        $children = $outgoing->map(fn (FiberCable $cable) => [
+            'type' => $cable->to_type,
+            'id' => $cable->to_id,
+            'label' => $this->labelForMorph($cable->to_type, $cable->to_id),
+            'cable_id' => $cable->id,
+        ])->values()->all();
+
+        $cableIds = $incoming->pluck('id')->merge($outgoing->pluck('id'))->unique();
+        $accessories = FiberAccessory::query()
+            ->whereIn('fiber_cable_id', $cableIds)
+            ->orWhereIn('splitter_id', $splitters->pluck('id'))
+            ->get();
+
+        return [
+            'target' => $node,
+            'incoming_cables' => $incoming,
+            'outgoing_cables' => $outgoing,
+            'splitters' => $splitters,
+            'children' => $children,
+            'accessories' => $accessories,
+        ];
+    }
+
+    private function labelForMorph(string $type, int $id): string
+    {
+        if ($type === FiberNode::class) {
+            $node = FiberNode::find($id);
+
+            return $node?->local_label ?? $node?->node_type?->label() ?? "Titik #{$id}";
+        }
+
+        $odp = Odp::find($id);
+
+        return $odp !== null ? "{$odp->code} - {$odp->name}" : "ODP #{$id}";
+    }
+
+    /**
+     * v0.16.0 Langkah 4 — capacity per category for
+     * App\Livewire\Network\CapacityReport, filtered in PHP (not 3
+     * different heterogeneous SQL search queries) since this fleet is the
+     * same "hundreds, not tens of thousands" scale already assumed by
+     * listTopologyPoints() (Langkah 3).
+     *
+     * Splitter "used" is counted via FiberAccessory rows attached to it
+     * (each represents one terminated splitter output leg) — NOT via
+     * fiber_cables pointing at the splitter, because fiber_cables.from_type/
+     * to_type is validated (StoreFiberCableRequest, Langkah 3) to only
+     * ever be FiberNode or Odp, never Splitter; this is the schema-
+     * faithful equivalent of "splitter output ports in use".
+     *
+     * @return array{odps: Collection<int, object>, splitters: Collection<int, object>, cables: Collection<int, object>}
+     */
+    public function capacityReport(?string $search = null): array
+    {
+        $odps = Odp::query()
+            ->withCount(['ports as used_ports_count' => fn ($query) => $query->where('status', OdpPortStatus::Used->value)])
+            ->get()
+            ->map(fn (Odp $odp) => (object) [
+                'id' => $odp->id,
+                'category' => 'odp',
+                'label' => "{$odp->code} - {$odp->name}",
+                'used' => $odp->used_ports_count,
+                'total' => $odp->total_ports,
+                'percent' => $odp->total_ports > 0 ? (int) round($odp->used_ports_count / $odp->total_ports * 100) : 0,
+            ]);
+
+        $splitters = Splitter::query()
+            ->tenantScoped()
+            ->withCount('accessories')
+            ->get()
+            ->map(function (Splitter $splitter) {
+                $total = $this->parseRatioOutputs($splitter->ratio);
+                $used = $splitter->accessories_count;
+
+                return (object) [
+                    'id' => $splitter->id,
+                    'category' => 'splitter',
+                    'label' => 'Splitter '.$splitter->ratio.($splitter->model !== null ? " ({$splitter->model})" : ''),
+                    'used' => $used,
+                    'total' => $total,
+                    'percent' => $total !== null && $total > 0 ? (int) round(min($used, $total) / $total * 100) : null,
+                ];
+            });
+
+        $cables = FiberCable::query()
+            ->withCount(['cores as used_cores_count' => fn ($query) => $query->where('status', FiberCoreStatus::Used->value)])
+            ->get()
+            ->map(fn (FiberCable $cable) => (object) [
+                'id' => $cable->id,
+                'category' => 'cable',
+                'label' => "Kabel #{$cable->id} ({$cable->total_cores} core)",
+                'used' => $cable->used_cores_count,
+                'total' => $cable->total_cores,
+                'percent' => $cable->total_cores > 0 ? (int) round($cable->used_cores_count / $cable->total_cores * 100) : 0,
+            ]);
+
+        if ($search !== null && $search !== '') {
+            $needle = mb_strtolower($search);
+            $filter = fn (object $row): bool => str_contains(mb_strtolower($row->label), $needle);
+            $odps = $odps->filter($filter)->values();
+            $splitters = $splitters->filter($filter)->values();
+            $cables = $cables->filter($filter)->values();
+        }
+
+        return ['odps' => $odps, 'splitters' => $splitters, 'cables' => $cables];
+    }
+
+    private function parseRatioOutputs(string $ratio): ?int
+    {
+        $parts = explode(':', $ratio);
+
+        if (count($parts) !== 2 || ! ctype_digit($parts[1])) {
+            return null;
+        }
+
+        return (int) $parts[1];
     }
 }

@@ -89,8 +89,23 @@ class OdpEdit extends Component
         session()->flash('status', 'Data topologi ODP berhasil diperbarui.');
     }
 
+    /**
+     * v0.16.0 Langkah 4 — lat/long re-fetched fresh on every render purely
+     * for the Google Maps direction link (GpsPhotoCapture, a separate
+     * nested Livewire component, owns the actual GPS editing — see that
+     * component's own docblock). Known minor limitation: since Livewire
+     * doesn't automatically re-render a parent when a nested child's own
+     * state changes, this link can show a stale coordinate until the next
+     * full page load/parent-level action after a GPS update — acceptable
+     * for this Langkah, not asked to be made reactive.
+     */
     public function render()
     {
-        return view('livewire.installation.odp-edit');
+        $odp = Odp::findOrFail($this->odpId);
+
+        return view('livewire.installation.odp-edit', [
+            'latitude' => $odp->latitude,
+            'longitude' => $odp->longitude,
+        ]);
     }
 }

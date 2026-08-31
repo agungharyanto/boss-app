@@ -3,6 +3,7 @@
 namespace App\Services\Installation;
 
 use App\Enums\OdpPortStatus;
+use App\Events\OdpCapacityExhausted;
 use App\Models\Customer;
 use App\Models\OdpPort;
 
@@ -15,6 +16,14 @@ class OdpLocatorService
      * the customer's own reseller (or the direct/no-reseller ODPs when the
      * customer has none), same tenant, with at least one available port —
      * reserved/used/damaged ports are never candidates.
+     *
+     * v0.16.0 Langkah 4 — signature/return type deliberately UNCHANGED
+     * (every existing caller, WorkOrderService and the registration flow,
+     * still gets exactly the same null/OdpPort back). The only addition:
+     * OdpCapacityExhausted is dispatched when the query itself finds zero
+     * available ports (every ODP in scope is genuinely full) — NOT when
+     * null comes from the earlier "customer has no coordinates" guard
+     * clause above, which isn't a capacity problem at all.
      */
     public function findNearestAvailable(Customer $customer): ?OdpPort
     {
@@ -27,7 +36,7 @@ class OdpLocatorService
 
         $distanceExpr = '6371 * acos(cos(radians(?)) * cos(radians(odps.latitude)) * cos(radians(odps.longitude) - radians(?)) + sin(radians(?)) * sin(radians(odps.latitude)))';
 
-        return OdpPort::query()
+        $port = OdpPort::query()
             ->join('odps', 'odps.id', '=', 'odp_ports.odp_id')
             ->where('odps.tenant_id', $customer->tenant_id)
             ->when(
@@ -40,5 +49,11 @@ class OdpLocatorService
             ->selectRaw("{$distanceExpr} as distance_km", [$lat, $lng, $lat])
             ->orderBy('distance_km')
             ->first();
+
+        if ($port === null) {
+            event(new OdpCapacityExhausted($customer));
+        }
+
+        return $port;
     }
 }

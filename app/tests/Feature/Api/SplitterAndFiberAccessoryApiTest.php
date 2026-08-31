@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Api;
 
+use App\Models\FiberAccessory;
 use App\Models\FiberCable;
 use App\Models\FiberNode;
 use App\Models\Splitter;
@@ -111,5 +112,51 @@ class SplitterAndFiberAccessoryApiTest extends TestCase
         ]);
 
         $response->assertUnprocessable();
+    }
+
+    /**
+     * v0.16.0 Langkah 4 — regression test for a real cross-tenant leak
+     * found while building the capacity report: Splitter has no tenant_id
+     * of its own (scoped implicitly via its polymorphic owner), and
+     * index() never filtered by it at all — every tenant's splitters were
+     * visible to every other tenant's own network_infrastructure.view
+     * users. Fixed via Splitter::scopeTenantScoped().
+     */
+    public function test_splitter_index_never_returns_another_tenants_splitters(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $nodeA = FiberNode::factory()->create(['tenant_id' => $tenantA->id]);
+        $nodeB = FiberNode::factory()->create(['tenant_id' => $tenantB->id]);
+        Splitter::factory()->create(['owner_type' => FiberNode::class, 'owner_id' => $nodeA->id, 'ratio' => '1:4']);
+        Splitter::factory()->create(['owner_type' => FiberNode::class, 'owner_id' => $nodeB->id, 'ratio' => '1:16']);
+
+        $response = $this->actingAs($this->admin($tenantA))->getJson('/api/v1/splitters');
+
+        $response->assertOk();
+        $response->assertJsonCount(1, 'data');
+        $response->assertJsonPath('data.0.ratio', '1:4');
+    }
+
+    /**
+     * Same real leak, FiberAccessory half — reachable via a splitter (no
+     * tenant_id of its own either).
+     */
+    public function test_fiber_accessory_index_never_returns_another_tenants_accessories(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $nodeA = FiberNode::factory()->create(['tenant_id' => $tenantA->id]);
+        $nodeB = FiberNode::factory()->create(['tenant_id' => $tenantB->id]);
+        $splitterA = Splitter::factory()->create(['owner_type' => FiberNode::class, 'owner_id' => $nodeA->id]);
+        $splitterB = Splitter::factory()->create(['owner_type' => FiberNode::class, 'owner_id' => $nodeB->id]);
+        FiberAccessory::factory()->create(['fiber_cable_id' => null, 'splitter_id' => $splitterA->id, 'accessory_type' => 'connector']);
+        FiberAccessory::factory()->create(['fiber_cable_id' => null, 'splitter_id' => $splitterB->id, 'accessory_type' => 'pin_adaptor']);
+
+        $response = $this->actingAs($this->admin($tenantA))->getJson('/api/v1/fiber-accessories');
+
+        $response->assertOk();
+        $response->assertJsonCount(1, 'data');
+        $response->assertJsonPath('data.0.accessory_type', 'connector');
     }
 }

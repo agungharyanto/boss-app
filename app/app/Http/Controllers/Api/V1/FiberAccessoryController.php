@@ -14,6 +14,10 @@ use Illuminate\Http\Request;
 /**
  * See FiberCableController's own docblock for why this uses a raw
  * permission-string check instead of a per-model Policy.
+ *
+ * v0.16.0 Langkah 4 — index() now scopes via
+ * FiberAccessory::tenantScoped(), same real cross-tenant leak fix as
+ * SplitterController::index() (see that class's own docblock).
  */
 class FiberAccessoryController extends Controller
 {
@@ -24,6 +28,7 @@ class FiberAccessoryController extends Controller
         abort_unless($request->user()->can('network_infrastructure.view') || $request->user()->can('network_infrastructure.manage'), 403);
 
         $accessories = FiberAccessory::query()
+            ->tenantScoped()
             ->latest()
             ->paginate($request->integer('per_page', 15));
 

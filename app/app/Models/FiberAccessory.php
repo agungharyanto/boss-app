@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\FiberAccessoryType;
 use Database\Factories\FiberAccessoryFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -16,6 +17,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * App\Services\Network\FiberTopologyService, not a DB constraint (a
  * portable XOR CHECK constraint isn't trivial across SQLite/Postgres,
  * same reasoning as fiber_cables.total_cores' even-only rule).
+ *
+ * No tenant_id of its own — same "scoped implicitly through its parent,
+ * not a real column" reasoning as Splitter (see that model's own
+ * docblock for the real cross-tenant leak scopeTenantScoped() closes,
+ * found while building Langkah 4's capacity report).
  */
 class FiberAccessory extends Model
 {
@@ -48,5 +54,17 @@ class FiberAccessory extends Model
     public function splitter(): BelongsTo
     {
         return $this->belongsTo(Splitter::class);
+    }
+
+    /**
+     * Restricts to accessories reachable from a tenant-owned FiberCable OR
+     * a tenant-owned Splitter (via that model's own scopeTenantScoped()).
+     */
+    public function scopeTenantScoped(Builder $query): Builder
+    {
+        return $query->where(function (Builder $outer) {
+            $outer->where(fn (Builder $q) => $q->whereNotNull('fiber_cable_id')->whereIn('fiber_cable_id', FiberCable::query()->select('id')))
+                ->orWhere(fn (Builder $q) => $q->whereNotNull('splitter_id')->whereIn('splitter_id', Splitter::query()->tenantScoped()->select('id')));
+        });
     }
 }

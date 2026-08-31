@@ -34,7 +34,7 @@ class PppPackageFactory extends Factory
             'active_duration_value' => 1,
             'active_duration_unit' => HotspotDurationUnit::Month,
             'shared_users' => 1,
-            'priority' => 'Default',
+            'priority' => 8,
             'login_days' => null,
             'login_start_time' => null,
             'login_end_time' => null,

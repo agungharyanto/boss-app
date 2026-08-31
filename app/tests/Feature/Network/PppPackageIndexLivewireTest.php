@@ -205,4 +205,57 @@ class PppPackageIndexLivewireTest extends TestCase
             ->test(PppPackageIndex::class)
             ->assertForbidden();
     }
+
+    // --- Revisi Prioritas Dropdown ----------------------------------------
+
+    public function test_priority_dropdown_only_offers_values_1_through_8(): void
+    {
+        $f = $this->fixtures();
+
+        $html = Livewire::actingAs($this->admin($f['tenant']))
+            ->test(PppPackageIndex::class)
+            ->set('showCreateForm', true)
+            ->html();
+
+        preg_match('/wire:model="priority".*?<\/select>/s', $html, $matches);
+        $this->assertNotEmpty($matches, 'Priority dropdown not found in rendered HTML');
+        preg_match_all('/<option value="(\d+)"/', $matches[0], $optionValues);
+        $this->assertSame(['1', '2', '3', '4', '5', '6', '7', '8'], $optionValues[1]);
+    }
+
+    public function test_priority_outside_1_to_8_is_rejected(): void
+    {
+        $f = $this->fixtures();
+
+        $component = Livewire::actingAs($this->admin($f['tenant']))
+            ->test(PppPackageIndex::class)
+            ->set('networkProfileGroupId', (string) $f['group']->id)
+            ->set('bandwidthProfileId', (string) $f['bandwidth']->id)
+            ->set('name', 'Paket Prioritas Salah')
+            ->set('costPrice', '50000')
+            ->set('sellPrice', '100000')
+            ->set('priority', '0')
+            ->call('createPackage');
+
+        $component->assertHasErrors('priority');
+        $this->assertDatabaseMissing('ppp_packages', ['name' => 'Paket Prioritas Salah']);
+    }
+
+    public function test_creating_a_package_with_a_valid_priority_stores_it_as_integer(): void
+    {
+        $f = $this->fixtures();
+
+        Livewire::actingAs($this->admin($f['tenant']))
+            ->test(PppPackageIndex::class)
+            ->set('networkProfileGroupId', (string) $f['group']->id)
+            ->set('bandwidthProfileId', (string) $f['bandwidth']->id)
+            ->set('name', 'Paket Prioritas 3')
+            ->set('costPrice', '50000')
+            ->set('sellPrice', '100000')
+            ->set('priority', '3')
+            ->call('createPackage')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('ppp_packages', ['name' => 'Paket Prioritas 3', 'priority' => 3]);
+    }
 }

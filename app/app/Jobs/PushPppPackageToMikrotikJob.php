@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\PppPackage;
 use App\Services\Network\Contracts\RouterOsGateway;
+use App\Support\RouterOsQueuePriority;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -65,7 +66,12 @@ class PushPppPackageToMikrotikJob implements ShouldQueue
         $dnsServers = array_values(array_filter([$group->dns_primary, $group->dns_secondary]));
         $dnsServer = $dnsServers === [] ? null : implode(',', $dnsServers);
 
-        $rateLimit = "{$bandwidth->upload_max}k/{$bandwidth->download_max}k";
+        // Revisi Prioritas Dropdown — `/ppp profile` has no standalone
+        // `priority` parameter (confirmed live, "unknown parameter
+        // priority"); pushed via the extended rate-limit syntax's 5th
+        // slot instead — see App\Support\RouterOsQueuePriority's own
+        // docblock for the full live-verified reasoning.
+        $rateLimit = RouterOsQueuePriority::toRateLimitString($bandwidth->upload_max, $bandwidth->download_max, $package->priority);
 
         $result = $gateway->syncPppProfile(
             $nas,

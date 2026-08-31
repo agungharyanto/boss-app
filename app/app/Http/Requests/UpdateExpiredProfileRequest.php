@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Models\CustomerIpPool;
+use App\Support\ProfilPaketAttributeLabels;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -50,5 +51,16 @@ class UpdateExpiredProfileRequest extends FormRequest
                 $validator->errors()->add('customer_ip_pool_id', 'IP Pool yang dipilih harus milik NAS yang sama.');
             }
         });
+    }
+
+    /**
+     * Revisi Pesan Error Bahasa Indonesia — nama field di pesan validasi
+     * (mis. "Harga Jual wajib diisi." bukan "The sell price field is
+     * required.") lewat satu sumber tunggal dipakai lintas seluruh cluster
+     * "Profil Paket" — lihat ProfilPaketAttributeLabels sendiri.
+     */
+    public function attributes(): array
+    {
+        return ProfilPaketAttributeLabels::forFormRequest();
     }
 }

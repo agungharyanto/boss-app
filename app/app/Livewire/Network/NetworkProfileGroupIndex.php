@@ -10,6 +10,7 @@ use App\Models\Nas;
 use App\Models\NetworkProfileGroup;
 use App\Services\Network\Contracts\RouterOsGateway;
 use App\Services\Network\NetworkProfileGroupService;
+use App\Support\ProfilPaketAttributeLabels;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
@@ -395,5 +396,17 @@ class NetworkProfileGroupIndex extends Component
             'editInterfaceOptionsForNas' => $this->editType === 'ppp' ? $this->interfaceOptionsForNas($this->editNasId) : [],
             'canManage' => auth()->user()->can('manage', NetworkProfileGroup::class),
         ]);
+    }
+
+    /**
+     * Revisi Pesan Error Bahasa Indonesia — nama field di pesan validasi
+     * (mis. "Harga Jual wajib diisi." bukan "The sell price field is
+     * required.") lewat satu sumber tunggal dipakai lintas seluruh cluster
+     * "Profil Paket" — lihat ProfilPaketAttributeLabels sendiri. Mencakup
+     * juga varian `edit`-prefixed (mis. editSellPrice) secara otomatis.
+     */
+    public function validationAttributes(): array
+    {
+        return ProfilPaketAttributeLabels::forLivewire();
     }
 }

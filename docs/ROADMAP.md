@@ -46,6 +46,7 @@
 | v0.14.6 | Network         | RouterOS Live-Push — Generalisasi | Fondasi live-push SUDAH ADA sejak v0.14.2.1 (khusus IP Pool) — sub-versi ini generalisasi pola yang sama (Job async, kolom sync status, komentar-stabil-sebagai-lookup-key, retry+backoff) ke Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP. **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Backlog |
 | v0.14.7 | Network         | Push ke NAS — UI & Rollout Produksi | Tombol "Push ke NAS" di UI Grup Profil/Profil Hotspot/Profil PPP, rollout ke NAS produksi setelah v0.14.6 diverifikasi aman di NAS uji coba | Backlog |
 | v0.15.0 | Operasional     | Management Ticketing          | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Sistem tiket untuk dukungan/komplain pelanggan. Decision-gate scope lengkap (alur, integrasi modul lain, siapa yang bisa buka/tutup tiket, dll) dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
+| v0.16.0 | Network         | Core Network Infrastructure Management | Inventaris topologi fiber fleksibel (OTB/Closure/ODC self-referencing parent via `fiber_nodes`, ODP tetap di tabel `odps` v0.5.0 existing + kolom parent link tambahan) — GPS+foto per titik, kabel/tube/core (jumlah genap saja, warna TIA/EIA-598-C auto+override), splitter rasio bebas + redaman (in/out) dengan referensi non-blocking, aksesori (pin adaptor/connector/splice) dengan redaman terukur, visual splice-diagram (bukan tabel polos), klik koordinat→Google Maps direction, notifikasi fault-correlation ODP penuh ke OdpLocatorService, draft offline localStorage. Langkah 0 (investigasi) selesai, migration skeleton (schema-only) sudah jalan — Model/Service/Livewire/API adalah Langkah 2+ terpisah | Backlog |
 | v0.17.0 | Operasional     | UI/UX Polish — Profesionalisasi Tampilan BOSS App | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Perbaikan visual menyeluruh (warna, tipografi, spacing, komponen) memakai skill `ui-ux-pro-max` (terinstal `2026-08-31`, lihat catatan instalasi di bawah), target stack Laravel Blade/Livewire yang dipakai BOSS App. Halaman/area prioritas mana yang dipoles duluan akan di-decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
@@ -1701,3 +1702,74 @@ berhasil di percobaan pertama.
 **Scope v0.17.0 sendiri sengaja belum ditentukan** — baris tabel di atas cuma reservasi nomor+nama+skill,
 sama seperti pola `v0.15.0` (Ticketing). Decision-gate halaman/area prioritas dilakukan terpisah saat sprint
 ini dimulai, bukan sekarang.
+
+## v0.16.0 — Core Network Infrastructure Management (branch `v0.16.0-core-network-infrastructure`, Langkah 0-1: investigasi + migration skeleton, implementasi Model/Service/UI belum dimulai)
+
+Modul inventaris topologi fiber (OTB/Closure/ODC/kabel/tube/core/splitter/aksesori) — melengkapi `odps`
+(v0.5.0, cuma titik ODP) dengan seluruh titik/segmen topologi fiber lain yang selama ini tidak tercatat sama
+sekali di BOSS App. Branch dibuat dari `main` di titik tag `v0.14.5` (plus commit dokumentasi murni
+`v0.17.0`, tanpa kode) — dikonfirmasi via `git log`/`git tag` sebelum mulai, bukan diasumsikan.
+
+**Langkah 0 (investigasi read-only) — 4 poin, semua dikonfirmasi lewat pembacaan file asli, bukan histori
+chat**:
+
+1. **Cek collision nama** (`FiberNode`/`fiber_nodes`/`FiberCable`/`fiber_cables`/`FiberCore`/`fiber_cores`/
+   `Splitter`/`splitters`/`FiberAccessory`/`fiber_accessories`/`FiberNodePhoto`/`fiber_node_photos`) — bersih,
+   nol collision nyata. Satu-satunya hit ("Splitter", 2x) murni prose comment di docblock
+   `cpe-devices/show.blade.php` (istilah topologi GenieACS/TR-069), bukan class/table/route nyata.
+2. **Struktur `odps`/`odp_ports` dibaca ulang langsung dari migration/model/factory asli** — persis cocok
+   dengan yang didokumentasikan di CLAUDE.md (kolom, `OdpLocatorService::findNearestAvailable()`'s Haversine
+   SQL + scoping tenant/reseller). Tidak ada migration ALTER apa pun terhadap kedua tabel ini sejak v0.5.0.
+   **Satu diskrepansi ditemukan dan dikoreksi** (lihat "Koreksi Langkah 0 poin 2" di bawah) — `odps` genuinely
+   tidak punya kolom `status`/`node_type`/`deleted_at` sama sekali, desain awal yang mengasumsikan gate
+   validasi "status bukan draft" pada `odps` salah dan sudah dibatalkan.
+3. **Morph relation existing** — ada SATU (`App\Models\ResellerTaxLedger::reference(): MorphTo`, v0.3.3),
+   tapi satu arah saja (tanpa `morphMany` pasangan, tanpa FK constraint DB, satu konsumer nyata `Invoice`).
+   Pola v0.16.0 (morph dua arah ke beberapa tipe parent — `FiberNode`/`Odp` sekaligus, dengan navigasi
+   `hasMany`-style dari sisi parent) genuinely pola baru di codebase ini — dicatat eksplisit sesuai instruksi.
+4. **Skill `ui-ux-pro-max`** — dikonfirmasi aktif (`claude plugin list`: versi `2.13.0`, scope `user`, status
+   `enabled`).
+
+**Koreksi Langkah 0 poin 2 (dari Agung, sebelum Langkah 1 dimulai)**: instruksi awal ("`loss_in_db`/
+`loss_out_db` WAJIB NOT NULL di Service layer khusus untuk `node_type` odc/odp saat status bukan draft")
+adalah kesalahan desain di sisi planning, bukan temuan yang perlu diakomodasi kolom baru. Desain yang benar,
+dikonfirmasi eksplisit:
+- `loss_in_db`/`loss_out_db` di `fiber_nodes` DAN `odps` **tetap nullable, tanpa constraint apa pun** di
+  level DB maupun Model/Eloquent — sengaja, karena banyak baris `odps` lama (v0.5.0) belum pernah disurvei
+  datanya, dan alur existing (registrasi pelanggan, `OdpLocatorService`, assignment port `WorkOrder`) tidak
+  boleh terganggu sama sekali oleh requirement baru ini.
+- "Wajib diisi" hanya akan berlaku sebagai validasi FormRequest di form input/edit data splice (Langkah 2,
+  belum dibangun) — scope form itu: `fiber_nodes` bertipe `node_type=odc` + SEMUA baris `odps` (satu baris
+  `odps` = satu ODP, tidak butuh `node_type`). OTB/Closure tidak wajib redaman (bukan titik splitting).
+- **Tidak ada kolom `status`/draft yang ditambahkan ke tabel manapun di sprint ini** — kalau Langkah 2 nanti
+  ternyata butuh state seperti itu, didiskusikan terpisah saat itu, bukan diasumsikan sekarang.
+
+**Langkah 1 — migration skeleton (schema-only, TANPA Model/Service/Livewire/API)**, dijalankan sesuai desain
+Langkah 0 di atas (tidak ada perubahan dari draft semula selain koreksi di atas):
+
+- `fiber_nodes`: `id`, `tenant_id` (FK), `reseller_id` (nullable FK, pola sama `odps`), `node_type` (enum:
+  `otb`/`closure`/`odc`), `local_label` (nullable), `parent_type`/`parent_id` (nullable morph,
+  self-referencing ke `fiber_nodes` lain), `latitude`/`longitude` (`decimal:10,7`, nullable — beda dari
+  `odps` yang NOT NULL, karena sebuah `fiber_node` baru bisa saja belum dipetakan GPS-nya saat baris pertama
+  dibuat), `loss_in_db`/`loss_out_db` (nullable, tanpa constraint — lihat koreksi di atas), `notes`
+  (nullable), timestamps, `deleted_at` (soft delete).
+- Alter `odps`: tambah `parent_type`/`parent_id` (nullable morph) + `loss_in_db`/`loss_out_db` (nullable,
+  tanpa constraint) — kolom lain yang sudah ada TIDAK disentuh, `odp_ports` TIDAK disentuh sama sekali.
+- `fiber_node_photos`: `id`, `owner_type`/`owner_id` (morph ke `fiber_nodes` ATAU `odps`), `photo_path`,
+  `caption` (nullable), `taken_at` (nullable), timestamps.
+- `fiber_cables`: `id`, `tenant_id` (FK), `from_type`/`from_id` (morph), `to_type`/`to_id` (morph),
+  `total_cores` (unsignedInteger — validasi genap di Service/FormRequest Langkah 2, bukan DB constraint),
+  `tube_count`, `cores_per_tube`, timestamps.
+- `fiber_cores`: `id`, `fiber_cable_id` (FK `cascadeOnDelete`), `tube_number`, `core_number_in_tube`,
+  `tube_color`/`core_color` (nullable override), `status` (enum: `used`/`spare`), timestamps. Unique
+  `(fiber_cable_id, tube_number, core_number_in_tube)`.
+- `splitters`: `id`, `owner_type`/`owner_id` (morph ke `fiber_nodes`/`odps`), `ratio` (string bebas, mis.
+  `"1:8"`), `model` (nullable), timestamps.
+- `fiber_accessories`: `id`, `fiber_cable_id` (nullable FK) ATAU `splitter_id` (nullable FK) — salah satu
+  wajib diisi (validasi Service layer Langkah 2, bukan DB constraint), `accessory_type` (enum:
+  `pin_adaptor`/`connector`/`splice_fusion`/`splice_mechanical`), `expected_loss_db`/`measured_loss_db`
+  (decimal), `location_note` (nullable), timestamps.
+
+**Tidak ada Model/Service/Livewire/API ditulis di sesi ini** — murni migration + dokumentasi roadmap, sesuai
+instruksi eksplisit. Langkah 2 (Model + Service + validasi + seed referensi redaman splitter) menunggu
+prompt terpisah.

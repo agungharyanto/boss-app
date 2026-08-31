@@ -1773,3 +1773,59 @@ Langkah 0 di atas (tidak ada perubahan dari draft semula selain koreksi di atas)
 **Tidak ada Model/Service/Livewire/API ditulis di sesi ini** — murni migration + dokumentasi roadmap, sesuai
 instruksi eksplisit. Langkah 2 (Model + Service + validasi + seed referensi redaman splitter) menunggu
 prompt terpisah.
+
+**Langkah 2 — Model, Enum, Service layer, validasi, referensi redaman (backend saja, belum ada Livewire/
+UI/route)**:
+
+- 3 enum baru: `FiberNodeType` (otb/closure/odc), `FiberCoreStatus` (used/spare), `FiberAccessoryType`
+  (pin_adaptor/connector/splice_fusion/splice_mechanical) — pola sama enum existing (backed string + label()).
+- 6 Model baru (`FiberNode`, `FiberNodePhoto`, `FiberCable`, `FiberCore`, `Splitter`, `FiberAccessory`) +
+  6 factory pasangannya. **Morph dua arah genuinely dibangun** (bukan cuma `morphTo()` satu arah seperti
+  `ResellerTaxLedger::reference()`) — `FiberNode`/`Odp` sama-sama dapat `parent()`/`photos()`/`splitters()`/
+  `cablesAsFrom()`/`cablesAsTo()`/`fiberCablesAsEndpoint()`; `FiberNode` juga dapat `childNodes()`/
+  `childOdps()`. `Odp.php` (v0.5.0, existing) diperluas dengan relasi-relasi ini plus `parent_type`/
+  `parent_id`/`loss_in_db`/`loss_out_db` ditambahkan ke `$fillable`/`casts()` — kolom-kolom ini sudah ada di
+  DB sejak migration Langkah 1 tapi belum pernah dipakai model sampai sekarang. Diverifikasi langsung lewat
+  `tinker` ke database dev real: `parent()`, `childOdps()`, `photos()`, `splitters()`,
+  `fiberCablesAsEndpoint()` semuanya genuinely bekerja end-to-end (data test dibersihkan setelahnya).
+- `App\Services\Network\FiberColorService` — siklus 12 warna TIA/EIA-598-C, `resolveColor(int $position)`,
+  posisi 1/13/25 dan 12/24 dikonfirmasi menghasilkan warna yang sama (test).
+- `App\Services\Network\SplitterLossReferenceService` — referensi redaman non-blocking per rasio splitter
+  (`expectedLossFor()`, `null` untuk rasio custom di luar tabel — bukan error) + default redaman per
+  `FiberAccessoryType`.
+- `App\Services\Network\FiberTopologyService` — `createCable()` (validasi core genap + tube×core-per-tube
+  genap + sama dengan total core, lalu auto-generate baris `FiberCore` dengan warna dari
+  `FiberColorService`) dan `isLossRequired(FiberNode|Odp $target): bool` (true untuk `FiberNode` tipe Odc
+  atau untuk `Odp` apa pun, false untuk OTB/Closure) — dipanggil dari FormRequest, bukan lifecycle
+  event/observer, sesuai koreksi desain Langkah 0/1 di atas.
+- 5 FormRequest baru (`StoreFiberNodeRequest`, `UpdateFiberNodeRequest`, `StoreFiberCableRequest`,
+  `StoreSplitterRequest`, `StoreFiberAccessoryRequest`) — pesan error kustom Bahasa Indonesia. **Catatan
+  cakupan penting**: `StoreOdpRequest`/`UpdateOdpRequest` (v0.5.0, existing, dipakai alur registrasi ODP
+  yang tidak boleh terganggu) SENGAJA TIDAK disentuh — validasi "loss wajib untuk ODP" untuk form registrasi
+  ODP existing bukan scope Langkah 2 ini; sisi "ODP" dari `isLossRequired()` diuji langsung terhadap Service
+  (bukan lewat FormRequest HTTP, karena belum ada FormRequest Odp yang menegakkannya) — lihat komentar di
+  `FiberTopologyServiceTest` untuk penjelasan lengkap. Form "data splice" v0.16 yang sesungguhnya menegakkan
+  ini untuk ODP adalah pekerjaan Langkah 3+.
+- Permission baru `network_infrastructure.view`/`.manage` (tier-admin-only, satu pasang untuk seluruh
+  modul) — ditambahkan ke `RolesAndPermissionsSeeder` DAN langsung di-re-seed ke database dev real
+  (disiplin yang sama dari insiden berulang di cluster v0.14.x — jangan asumsikan kode saja cukup).
+  **Catatan drift ditemukan, TIDAK diperbaiki di sesi ini (di luar scope)**: `stubs/laravel-app/database/
+  seeders/RolesAndPermissionsSeeder.php` sudah basi sejak sebelum sesi ini (hilang `seedHotspotPackagePermissions()`
+  dan seluruh permission Profil PPP) — bukan drift yang diperkenalkan sesi ini, dicatat di sini supaya
+  tidak terlupakan untuk sesi pembersihan terpisah.
+- **Bug nyata ditemukan dan diperbaiki sebelum sempat merusak apa pun**: docblock baru di
+  `RolesAndPermissionsSeeder.php` sempat mengandung `bandwidth_profiles.*/customer_ip_pools.*` — urutan
+  karakter `*/` menutup komentar PHP secara prematur, persis kelas bug yang sudah didokumentasikan
+  berulang kali di CLAUDE.md ("Infra Tunnel IP Block" — variabel/teks yang membentuk `*/` di dalam
+  komentar). Ditangkap langsung oleh `php -l`/Pint sebelum commit, diperbaiki dengan menghindari `.*/` di
+  prosa.
+- Test: 3 file Unit (`FiberColorServiceTest`, `SplitterLossReferenceServiceTest`,
+  `FiberTopologyServiceTest` — yang terakhir menyentuh DB nyata, pola penempatan sama seperti
+  `Tests\Unit\Services\Installation\OdpLocatorServiceTest`) + 1 file Feature
+  (`FiberNodeLossValidationTest`, menguji `StoreFiberNodeRequest`/`UpdateFiberNodeRequest` langsung tanpa
+  HTTP/route karena belum ada Controller — teknik standar Laravel: `Request::create()` + `Validator::make()`
+  + `$request->withValidator()` manual). 29 test baru, semua hijau.
+- Full regression suite: 1163/1163 hijau (1134 + 29 baru), Pint clean di semua file yang disentuh/dibuat.
+
+**Tidak ada Livewire/route/view ditulis** — Langkah 3 (termasuk visual splice-diagram pakai
+`ui-ux-pro-max`) menunggu prompt terpisah.

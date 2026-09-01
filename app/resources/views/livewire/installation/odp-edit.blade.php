@@ -63,9 +63,47 @@
             </div>
         </div>
 
-        <button wire:click="save" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90">
-            {{ __('Simpan') }}
+        <button wire:click="save" wire:loading.attr="disabled" wire:target="save" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 disabled:opacity-50">
+            <span wire:loading.remove wire:target="save">{{ __('Simpan') }}</span>
+            <span wire:loading wire:target="save">{{ __('Menyimpan…') }}</span>
         </button>
+    </div>
+
+    {{-- v0.16.0 Langkah 5 — Splitter (ODP selalu titik splitting). --}}
+    <div class="p-4 border border-gray-200 rounded-md bg-gray-50 space-y-4 mb-6">
+        <h2 class="text-sm font-semibold text-gray-700">{{ __('Splitter') }}</h2>
+        <p class="text-xs text-gray-500">
+            {{ __('Opsional. Isi rasio untuk memasang splitter pada ODP ini. Rasio bebas diketik — daftar hanya saran umum.') }}
+        </p>
+
+        @if ($splitters->isNotEmpty())
+            <ul class="divide-y divide-gray-200 border border-gray-200 rounded-md bg-white text-sm">
+                @foreach ($splitters as $splitter)
+                    <li class="flex items-center justify-between px-3 py-2">
+                        <span>{{ __('Splitter') }} {{ $splitter->ratio }}@if ($splitter->model) <span class="text-gray-500">— {{ $splitter->model }}</span>@endif</span>
+                        <button type="button" wire:click="deleteSplitter({{ $splitter->id }})" wire:confirm="{{ __('Hapus splitter ini?') }}" class="text-red-600 hover:underline">{{ __('Hapus') }}</button>
+                    </li>
+                @endforeach
+            </ul>
+        @endif
+
+        <div class="grid grid-cols-2 gap-3">
+            <div>
+                <label for="odp-splitter-ratio" class="block text-sm font-medium text-gray-700">{{ __('Rasio') }}</label>
+                <input id="odp-splitter-ratio" type="text" list="odp-splitter-ratio-suggestions" wire:model="splitterRatio" placeholder="1:8" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                <datalist id="odp-splitter-ratio-suggestions">
+                    @foreach ($ratioSuggestions as $ratio)
+                        <option value="{{ $ratio }}"></option>
+                    @endforeach
+                </datalist>
+                @error('splitterRatio') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+            </div>
+            <div>
+                <label for="odp-splitter-model" class="block text-sm font-medium text-gray-700">{{ __('Model') }}</label>
+                <input id="odp-splitter-model" type="text" wire:model="splitterModel" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                @error('splitterModel') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+            </div>
+        </div>
     </div>
 
     @livewire('network.gps-photo-capture', ['ownerType' => \App\Models\Odp::class, 'ownerId' => $odpId])

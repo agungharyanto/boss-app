@@ -92,6 +92,41 @@ class SidebarNavigationTest extends TestCase
         $response->assertSee(route('web.hotspot-packages.index'), false);
     }
 
+    /**
+     * v0.16.0 Langkah 8 — the fiber-topology module moved out of the
+     * "Network" cluster into its own top-level "Topology Fiber" cluster,
+     * and "Topologi Fiber" (the FiberNodeIndex link/page) was renamed
+     * "Daftar Perangkat Passive". A new "Peta Topologi" link joins it.
+     */
+    public function test_admin_tier_user_sees_the_topology_fiber_cluster(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $response = $this->actingAs($user)->get('/fiber-nodes');
+
+        $response->assertSee('Topology Fiber');
+        $response->assertSee('Daftar Perangkat Passive');
+        $response->assertSee('Peta Topologi');
+        $response->assertSee('Kapasitas Jaringan');
+        $response->assertSee(route('web.fiber-topology-map.index'), false);
+        // old label is gone everywhere it was rendered
+        $response->assertDontSee('Topologi Fiber');
+    }
+
+    public function test_non_admin_tier_user_does_not_see_the_topology_fiber_links(): void
+    {
+        // The cluster header renders for every user (same as "Network"),
+        // but its permission-gated links must not — mirrors the Profil
+        // Paket test below.
+        $user = $this->userWithRole('customer_service');
+
+        $response = $this->actingAs($user)->get('/customers');
+
+        $response->assertDontSee('Daftar Perangkat Passive');
+        $response->assertDontSee('Peta Topologi');
+        $response->assertDontSee(route('web.fiber-topology-map.index'), false);
+    }
+
     public function test_non_admin_tier_user_does_not_see_the_profil_paket_menu(): void
     {
         $user = $this->userWithRole('customer_service');

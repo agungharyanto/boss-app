@@ -210,4 +210,16 @@ return [
         'proxy_url' => env('DOCKER_STATS_PROXY_URL', 'http://docker-stats-proxy:2375'),
     ],
 
+    // v0.16.0 Langkah 11 — self-hosted OSRM (docker-compose.yml `osrm`
+    // service). App\Services\Network\RoutingService's only dependency;
+    // container-to-container URL, no host port. When unreachable/slow,
+    // RoutingService falls back to a straight-line estimate — never a
+    // silent failure. timeout is short on purpose: this is a synchronous
+    // call inside a Livewire request, and a routed answer for two points
+    // ~a few km apart returns in well under a second when OSRM is up.
+    'osrm' => [
+        'url' => env('OSRM_URL', 'http://osrm:5000'),
+        'timeout' => (int) env('OSRM_TIMEOUT', 5),
+    ],
+
 ];

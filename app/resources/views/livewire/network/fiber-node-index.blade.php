@@ -1,6 +1,6 @@
 <div class="p-6 max-w-6xl mx-auto">
     <div class="flex items-center justify-between mb-6">
-        <h1 class="text-2xl font-semibold text-gray-800">{{ __('Topologi Fiber') }}</h1>
+        <h1 class="text-2xl font-semibold text-gray-800">{{ __('Daftar Perangkat Passive') }}</h1>
 
         @if ($canManage)
             <a href="{{ route('web.fiber-nodes.create') }}" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90">
@@ -44,11 +44,15 @@
                             @if ($point->latitude !== null && $point->longitude !== null)
                                 {{ $point->latitude }}, {{ $point->longitude }}
                                 {{-- v0.16.0 Langkah 4 — Google Maps direction icon, functional
-                                     addition only (no visual re-polish of this pre-existing page). --}}
+                                     addition only (no visual re-polish of this pre-existing page).
+                                     Re-polish pass: icon-only link now carries an aria-label
+                                     (ui-ux-pro-max "ARIA Labels", High) — title alone is not a
+                                     reliable accessible name for keyboard/SR users. --}}
                                 <a
                                     href="https://www.google.com/maps/dir/?api=1&destination={{ $point->latitude }},{{ $point->longitude }}"
                                     target="_blank" rel="noopener"
                                     title="{{ __('Buka arah di Google Maps') }}"
+                                    aria-label="{{ __('Buka arah di Google Maps') }}"
                                     class="inline-block align-text-bottom text-primary hover:opacity-75"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 inline" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">

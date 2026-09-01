@@ -9,6 +9,8 @@
     <div class="p-4 border border-gray-200 rounded-md space-y-3">
         <h3 class="text-sm font-semibold text-gray-800">{{ __('Lokasi GPS') }}</h3>
 
+        @include('livewire.network.partials.location-map')
+
         <button
             type="button"
             x-on:click="
@@ -50,25 +52,12 @@
     <div class="p-4 border border-gray-200 rounded-md space-y-3">
         <h3 class="text-sm font-semibold text-gray-800">{{ __('Foto') }}</h3>
 
-        <input type="file" wire:model="newPhotos" multiple accept="image/*" capture="environment" class="block w-full text-sm">
-        @error('newPhotos.*') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+        @include('livewire.network.partials.photo-picker')
 
         @if (count($newPhotos) > 0)
-            <div class="grid grid-cols-3 sm:grid-cols-4 gap-3">
-                @foreach ($newPhotos as $index => $file)
-                    <div class="relative">
-                        <img src="{{ $file->temporaryUrl() }}" class="w-full h-24 object-cover rounded-md border border-gray-200">
-                        <button
-                            type="button"
-                            wire:click="removeNewPhoto({{ $index }})"
-                            class="absolute top-1 right-1 bg-white/80 rounded-full w-5 h-5 text-xs text-red-600 hover:bg-white"
-                        >&times;</button>
-                    </div>
-                @endforeach
-            </div>
-
-            <button wire:click="uploadPhotos" wire:loading.attr="disabled" class="px-4 py-2 bg-primary text-white text-sm rounded-md hover:opacity-90 disabled:opacity-50">
-                {{ __('Unggah Foto') }}
+            <button wire:click="uploadPhotos" wire:loading.attr="disabled" wire:target="uploadPhotos" class="px-4 py-2 bg-primary text-white text-sm rounded-md hover:opacity-90 disabled:opacity-50">
+                <span wire:loading.remove wire:target="uploadPhotos">{{ __('Unggah Foto') }}</span>
+                <span wire:loading wire:target="uploadPhotos">{{ __('Mengunggah…') }}</span>
             </button>
         @endif
 

@@ -71,8 +71,8 @@ class CapacityReportLivewireTest extends TestCase
     public function test_cable_capacity_matches_used_vs_total_cores_fixture(): void
     {
         $tenant = Tenant::factory()->create();
-        $from = FiberNode::factory()->create(['tenant_id' => $tenant->id]);
-        $to = FiberNode::factory()->create(['tenant_id' => $tenant->id]);
+        $from = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'local_label' => 'OTB-Cap-A']);
+        $to = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'local_label' => 'CLO-Cap-B']);
         $cable = app(FiberTopologyService::class)->createCable([
             'tenant_id' => $tenant->id,
             'from_type' => FiberNode::class, 'from_id' => $from->id,
@@ -86,9 +86,47 @@ class CapacityReportLivewireTest extends TestCase
             ->assertOk()
             ->html();
 
-        $this->assertStringContainsString("Kabel #{$cable->id}", $html);
+        // v0.16.0 Langkah 13 — descriptive, ID-free cable label
+        $this->assertStringContainsString('Kabel 4 Core OTB-Cap-A ↔ CLO-Cap-B', $html);
+        $this->assertStringNotContainsString("Kabel #{$cable->id}", $html);
         $this->assertStringContainsString('1 / 4', $html);
         $this->assertStringContainsString('25%', $html);
+    }
+
+    public function test_cable_with_a_soft_deleted_endpoint_is_excluded(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->actingAs($this->admin($tenant));
+
+        $from = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'local_label' => 'OTB-Live']);
+        $to = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'local_label' => 'CLO-Gone']);
+        app(FiberTopologyService::class)->createCable([
+            'tenant_id' => $tenant->id,
+            'from_type' => FiberNode::class, 'from_id' => $from->id,
+            'to_type' => FiberNode::class, 'to_id' => $to->id,
+            'total_cores' => 4, 'tube_count' => 1, 'cores_per_tube' => 4,
+        ]);
+
+        $this->assertCount(1, app(FiberTopologyService::class)->capacityReport()['cables']);
+
+        $to->delete(); // soft-delete one endpoint
+
+        $this->assertCount(0, app(FiberTopologyService::class)->capacityReport()['cables']);
+    }
+
+    public function test_splitter_whose_owner_node_was_soft_deleted_is_excluded(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->actingAs($this->admin($tenant));
+
+        $owner = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'odc']);
+        app(FiberTopologyService::class)->attachSplitter($owner, ['ratio' => '1:8', 'model' => 'X']);
+
+        $this->assertCount(1, app(FiberTopologyService::class)->capacityReport()['splitters']);
+
+        $owner->delete();
+
+        $this->assertCount(0, app(FiberTopologyService::class)->capacityReport()['splitters']);
     }
 
     public function test_search_filters_by_label(): void

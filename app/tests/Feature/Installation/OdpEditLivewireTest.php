@@ -81,6 +81,28 @@ class OdpEditLivewireTest extends TestCase
         $this->assertEquals(1.1, (float) $odp->loss_out_db);
     }
 
+    public function test_saving_with_a_splitter_ratio_persists_the_splitter(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $odp = Odp::factory()->create(['tenant_id' => $tenant->id]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(OdpEdit::class, ['odp' => $odp])
+            ->set('lossInDb', '0.5')
+            ->set('lossOutDb', '0.5')
+            ->set('splitterRatio', '1:16')
+            ->set('splitterModel', 'PLC-16')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('splitters', [
+            'owner_type' => Odp::class,
+            'owner_id' => $odp->id,
+            'ratio' => '1:16',
+            'model' => 'PLC-16',
+        ]);
+    }
+
     public function test_saving_never_touches_odps_own_core_registration_fields(): void
     {
         $tenant = Tenant::factory()->create();
@@ -96,5 +118,25 @@ class OdpEditLivewireTest extends TestCase
         $this->assertSame('ODP-KEEP', $odp->code);
         $this->assertSame('Nama Asli', $odp->name);
         $this->assertSame(8, $odp->total_ports);
+    }
+
+    public function test_a_successful_save_redirects_to_the_topology_list_a_failed_one_stays_put(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $odp = Odp::factory()->create(['tenant_id' => $tenant->id]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(OdpEdit::class, ['odp' => $odp])
+            ->set('lossInDb', '0.5')
+            ->set('lossOutDb', '0.5')
+            ->call('save')
+            ->assertHasNoErrors()
+            ->assertRedirect(route('web.fiber-nodes.index'));
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(OdpEdit::class, ['odp' => $odp])
+            ->call('save')
+            ->assertHasErrors(['lossInDb', 'lossOutDb'])
+            ->assertNoRedirect();
     }
 }

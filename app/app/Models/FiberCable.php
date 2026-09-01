@@ -56,6 +56,16 @@ class FiberCable extends Model
         return $this->hasMany(FiberCore::class);
     }
 
+    /**
+     * v0.16.0 Langkah 8 — ordered bend points for this cable's drawn
+     * route on the "Peta Topologi" page. Always returned in `sequence`
+     * order; an empty relation means "draw a straight line end to end".
+     */
+    public function waypoints(): HasMany
+    {
+        return $this->hasMany(FiberCableWaypoint::class)->orderBy('sequence');
+    }
+
     public function accessories(): HasMany
     {
         return $this->hasMany(FiberAccessory::class);

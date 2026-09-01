@@ -4,7 +4,9 @@ namespace App\Livewire\Installation;
 
 use App\Models\FiberNode;
 use App\Models\Odp;
+use App\Models\Splitter;
 use App\Services\Network\FiberTopologyService;
+use App\Services\Network\SplitterLossReferenceService;
 use Livewire\Component;
 
 /**
@@ -31,6 +33,10 @@ class OdpEdit extends Component
     public string $lossInDb = '';
 
     public string $lossOutDb = '';
+
+    public string $splitterRatio = '';
+
+    public string $splitterModel = '';
 
     /** @var array<int, array{id: int, label: string}> */
     public array $parentOptions = [];
@@ -62,6 +68,8 @@ class OdpEdit extends Component
             'parentId' => ['nullable', 'integer'],
             'lossInDb' => ['required', 'numeric'],
             'lossOutDb' => ['required', 'numeric'],
+            'splitterRatio' => ['nullable', 'string', 'max:20'],
+            'splitterModel' => ['nullable', 'string', 'max:100'],
         ];
     }
 
@@ -70,7 +78,22 @@ class OdpEdit extends Component
         return [
             'lossInDb' => 'Redaman Masuk',
             'lossOutDb' => 'Redaman Keluar',
+            'splitterRatio' => 'Rasio Splitter',
+            'splitterModel' => 'Model Splitter',
         ];
+    }
+
+    public function deleteSplitter(int $splitterId, FiberTopologyService $service): void
+    {
+        abort_unless(auth()->user()->can('network_infrastructure.manage'), 403);
+
+        $splitter = Splitter::query()
+            ->tenantScoped()
+            ->where('owner_type', Odp::class)
+            ->where('owner_id', $this->odpId)
+            ->findOrFail($splitterId);
+
+        $service->deleteSplitter($splitter);
     }
 
     public function save(FiberTopologyService $service): void
@@ -79,14 +102,26 @@ class OdpEdit extends Component
 
         $this->validate();
 
-        $service->updateOdpTopologyFields(Odp::findOrFail($this->odpId), [
+        $odp = $service->updateOdpTopologyFields(Odp::findOrFail($this->odpId), [
             'parent_type' => $this->parentId !== '' ? FiberNode::class : null,
             'parent_id' => $this->parentId !== '' ? (int) $this->parentId : null,
             'loss_in_db' => (float) $this->lossInDb,
             'loss_out_db' => (float) $this->lossOutDb,
         ]);
 
+        if ($this->splitterRatio !== '') {
+            $service->attachSplitter($odp, ['ratio' => $this->splitterRatio, 'model' => $this->splitterModel]);
+            $this->splitterRatio = '';
+            $this->splitterModel = '';
+        }
+
         session()->flash('status', 'Data topologi ODP berhasil diperbarui.');
+        // Langkah 7 fix — back to the topology list on success. No
+        // dedicated Odp web list exists (Odp is API-only in v0.5.0, see
+        // routes/api.php) — the combined "Topologi Fiber" page
+        // (FiberNodeIndex) is where ODP rows are listed and where the
+        // "Edit" link that opens this page lives.
+        $this->redirectRoute('web.fiber-nodes.index', navigate: true);
     }
 
     /**
@@ -99,13 +134,20 @@ class OdpEdit extends Component
      * full page load/parent-level action after a GPS update — acceptable
      * for this Langkah, not asked to be made reactive.
      */
-    public function render()
+    public function render(SplitterLossReferenceService $lossReference)
     {
         $odp = Odp::findOrFail($this->odpId);
 
         return view('livewire.installation.odp-edit', [
             'latitude' => $odp->latitude,
             'longitude' => $odp->longitude,
+            'splitters' => Splitter::query()
+                ->tenantScoped()
+                ->where('owner_type', Odp::class)
+                ->where('owner_id', $this->odpId)
+                ->latest()
+                ->get(),
+            'ratioSuggestions' => $lossReference->suggestedRatios(),
         ]);
     }
 }

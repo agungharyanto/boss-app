@@ -11,6 +11,7 @@ use App\Http\Middleware\EnsureAdminPanelAccess;
 use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
 use App\Livewire\Billing\SubscriptionIndex;
+use App\Livewire\Customers\CustomerCoordinateFill;
 use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
@@ -23,13 +24,16 @@ use App\Livewire\Network\CpeDeviceIndex;
 use App\Livewire\Network\CpeDeviceStatusCheck;
 use App\Livewire\Network\CpeParameterMapIndex;
 use App\Livewire\Network\CustomerIpPoolIndex;
+use App\Livewire\Network\FiberCableForm;
 use App\Livewire\Network\FiberNodeDetail;
 use App\Livewire\Network\FiberNodeForm;
 use App\Livewire\Network\FiberNodeIndex;
+use App\Livewire\Network\FiberTopologyMap;
 use App\Livewire\Network\HotspotPackageIndex;
 use App\Livewire\Network\MonitoringIndex;
 use App\Livewire\Network\NasIndex;
 use App\Livewire\Network\NetworkProfileGroupIndex;
+use App\Livewire\Network\OdpRouteCheck;
 use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\PppPackageIndex;
 use App\Livewire\Network\VpnScriptGenerator;
@@ -116,6 +120,9 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     Route::middleware('reseller.context')->group(function () {
         Route::get('/customers', CustomerIndex::class)->name('customers.index');
         Route::get('/customers/register', RegisterCustomer::class)->name('customers.register');
+        // v0.16.0 Langkah 12 — manual coordinate bind. BEFORE the
+        // /customers/{customer} wildcard so the literal segment isn't swallowed.
+        Route::get('/customers/lengkapi-koordinat', CustomerCoordinateFill::class)->name('customers.coordinates');
         Route::get('/customers/{customer}', CustomerShow::class)->name('customers.show');
 
         Route::get('/reseller-package-pricing', PackagePricingIndex::class)->name('reseller-package-pricing.index');
@@ -207,6 +214,20 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     Route::get('/fiber-nodes/{fiber_node}/detail', FiberNodeDetail::class)->name('fiber-nodes.detail');
     Route::get('/odps/{odp}/detail', FiberNodeDetail::class)->name('odps.detail');
     Route::get('/capacity-report', CapacityReport::class)->name('capacity-report.index');
+    // v0.16.0 Langkah 8 — "Peta Topologi": Leaflet map of all topology
+    // points, cable lines drawn on-demand per selected core (?core=<id>
+    // deep-link from FiberNodeDetail's "Koneksi Core" table), with
+    // editable per-cable waypoints.
+    Route::get('/fiber-topology-map', FiberTopologyMap::class)->name('fiber-topology-map.index');
+    // v0.16.0 Langkah 11 — "Cek Jalur ke ODP": prospect point → nearest
+    // ODP candidates → real road route(s) via self-hosted OSRM
+    // (RoutingService). Reference-only, saved to sales_route_notes.
+    Route::get('/cek-jalur', OdpRouteCheck::class)->name('odp-route-check.index');
+    // v0.16.0 Langkah 5 — add an outgoing cable from a topology point,
+    // one component shared by both FiberNode and Odp sources (same
+    // two-routes-one-component pattern as the detail view above).
+    Route::get('/fiber-nodes/{fiber_node}/cables/create', FiberCableForm::class)->name('fiber-nodes.cables.create');
+    Route::get('/odps/{odp}/cables/create', FiberCableForm::class)->name('odps.cables.create');
 
     // v0.16.0 Langkah 3 — no Odp web edit page existed anywhere in this
     // codebase before this (confirmed by grep before building — Odp has

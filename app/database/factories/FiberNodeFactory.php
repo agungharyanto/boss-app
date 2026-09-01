@@ -29,6 +29,10 @@ class FiberNodeFactory extends Factory
             'longitude' => $this->faker->longitude(106.6, 107.0),
             'loss_in_db' => null,
             'loss_out_db' => null,
+            // v0.16.0 Langkah 6 — the default node_type is Otb, and an OTB
+            // needs a port_count (required in FiberNodeForm); give it one
+            // so a bare FiberNode::factory()->create() is a valid OTB.
+            'port_count' => $this->faker->randomElement([8, 16, 24]),
             'notes' => null,
         ];
     }

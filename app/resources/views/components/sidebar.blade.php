@@ -9,6 +9,15 @@
                 auth()->user()->can('register-customer')
                     ? ['route' => 'web.customers.register', 'label' => __('Registrasi Pelanggan')]
                     : null,
+                // v0.16.0 Langkah 12 — manual coordinate bind (feeds the
+                // Peta Topologi "Pelanggan" layer). Same gate as "Daftar
+                // Pelanggan"'s own page (CustomerPolicy::viewAny — admits
+                // internal staff + reseller staffers); the per-row "Set
+                // Lokasi" action is separately gated on customers.manage /
+                // CustomerPolicy::update inside the component.
+                auth()->user()->can('viewAny', \App\Models\Customer::class)
+                    ? ['route' => 'web.customers.coordinates', 'label' => __('Lengkapi Koordinat')]
+                    : null,
             ]),
         ],
         [
@@ -66,7 +75,7 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*') || request()->routeIs('web.customer-ip-pools.*') || request()->routeIs('web.network-profile-groups.*') || request()->routeIs('web.hotspot-packages.*') || request()->routeIs('web.ppp-packages.*') || request()->routeIs('web.fiber-nodes.*') || request()->routeIs('web.odps.*') || request()->routeIs('web.capacity-report.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*') || request()->routeIs('web.customer-ip-pools.*') || request()->routeIs('web.network-profile-groups.*') || request()->routeIs('web.hotspot-packages.*') || request()->routeIs('web.ppp-packages.*'),
             // v0.8.1 — nested one level deeper than a plain link: an item
             // with a 'children' key renders as its own expand/collapse
             // sub-group (own localStorage key, same pattern as the
@@ -87,20 +96,6 @@
                     : null,
                 auth()->user()->can('viewAny', \App\Models\OltDevice::class)
                     ? ['route' => 'web.olt-devices.index', 'label' => __('OLT')]
-                    : null,
-                // v0.16.0 Core Network Infrastructure Management, Langkah
-                // 3 — lists fiber_nodes (OTB/Closure/ODC) AND odps (ODP)
-                // in one combined table (see
-                // FiberTopologyService::listTopologyPoints()), gated on
-                // FiberNodePolicy::viewAny() same as every other guarded
-                // link in this cluster.
-                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
-                    ? ['route' => 'web.fiber-nodes.index', 'label' => __('Topologi Fiber')]
-                    : null,
-                // v0.16.0 Langkah 4 — same permission gate as Topologi
-                // Fiber above (one module, one permission pair).
-                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
-                    ? ['route' => 'web.capacity-report.index', 'label' => __('Kapasitas Jaringan')]
                     : null,
                 // v0.14.3.1 — was 3 separate flat items (Bandwidth Profile,
                 // IP Pool Pelanggan, Grup Profil), grouped into one
@@ -165,6 +160,36 @@
                             ? [['route' => 'web.cpe-devices.status-check', 'label' => __('Cek Status Device')]]
                             : [],
                     ]
+                    : null,
+            ]),
+        ],
+        [
+            // v0.16.0 Langkah 8 — the fiber-topology module (Daftar
+            // Perangkat Passive / Peta Topologi / Kapasitas Jaringan) was
+            // 2 flat items inside the "Network" cluster; promoted to its
+            // own top-level cluster, parallel to "Network", since it's a
+            // distinct passive-plant concern from the active-network
+            // (NAS/OLT/CPE/monitoring) items. All 3 links share the one
+            // network_infrastructure.view/.manage permission pair, gated
+            // via FiberNodePolicy::viewAny() same as before the move.
+            'id' => 'topology-fiber',
+            'label' => __('Topology Fiber'),
+            'active' => request()->routeIs('web.fiber-nodes.*') || request()->routeIs('web.odps.*') || request()->routeIs('web.capacity-report.*') || request()->routeIs('web.fiber-topology-map.*') || request()->routeIs('web.odp-route-check.*'),
+            'links' => array_filter([
+                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
+                    ? ['route' => 'web.fiber-nodes.index', 'label' => __('Daftar Perangkat Passive')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
+                    ? ['route' => 'web.fiber-topology-map.index', 'label' => __('Peta Topologi')]
+                    : null,
+                // v0.16.0 Langkah 11 — same permission gate (fiber module),
+                // reachable by sales in practice pending a separate RBAC
+                // decision to grant sales roles network_infrastructure.view.
+                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
+                    ? ['route' => 'web.odp-route-check.index', 'label' => __('Cek Jalur ke ODP')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
+                    ? ['route' => 'web.capacity-report.index', 'label' => __('Kapasitas Jaringan')]
                     : null,
             ]),
         ],

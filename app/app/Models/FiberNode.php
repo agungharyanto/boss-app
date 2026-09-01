@@ -46,6 +46,7 @@ class FiberNode extends Model
         'longitude',
         'loss_in_db',
         'loss_out_db',
+        'port_count',
         'notes',
     ];
 
@@ -57,6 +58,7 @@ class FiberNode extends Model
             'longitude' => 'decimal:7',
             'loss_in_db' => 'decimal:2',
             'loss_out_db' => 'decimal:2',
+            'port_count' => 'integer',
         ];
     }
 

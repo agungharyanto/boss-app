@@ -7,6 +7,7 @@ use App\Models\Odp;
 use App\Models\OdpPort;
 use App\Models\Reseller;
 use App\Models\Tenant;
+use App\Models\User;
 use App\Services\Installation\OdpLocatorService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -134,5 +135,37 @@ class OdpLocatorServiceTest extends TestCase
         $result = (new OdpLocatorService)->findNearestAvailable($customer);
 
         $this->assertSame($directPort->id, $result->id);
+    }
+
+    public function test_nearest_candidates_returns_several_ordered_by_distance_with_capacity(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->actingAs(User::factory()->create(['tenant_id' => $tenant->id]));
+
+        $near = Odp::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null, 'code' => 'ODP-NEAR', 'latitude' => -6.2001, 'longitude' => 106.8001, 'total_ports' => 8]);
+        $mid = Odp::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null, 'code' => 'ODP-MID', 'latitude' => -6.2100, 'longitude' => 106.8100, 'total_ports' => 8]);
+        $far = Odp::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null, 'code' => 'ODP-FAR', 'latitude' => -6.9000, 'longitude' => 107.6000, 'total_ports' => 8]);
+
+        // near ODP is FULL — must still be listed (not filtered out)
+        OdpPort::factory()->forOdp($near)->used()->count(8)->create();
+        OdpPort::factory()->forOdp($mid)->used()->count(2)->create();
+
+        $candidates = (new OdpLocatorService)->nearestCandidates(-6.2000, 106.8000, 5);
+
+        $this->assertSame(['ODP-NEAR', 'ODP-MID', 'ODP-FAR'], array_column($candidates, 'code'));
+        $this->assertSame(8, $candidates[0]['used_ports']);
+        $this->assertSame(8, $candidates[0]['total_ports']);
+        $this->assertSame(2, $candidates[1]['used_ports']);
+        $this->assertLessThan($candidates[1]['distance_km'], $candidates[0]['distance_km']);
+    }
+
+    public function test_nearest_candidates_respects_the_limit(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->actingAs(User::factory()->create(['tenant_id' => $tenant->id]));
+
+        Odp::factory()->count(6)->create(['tenant_id' => $tenant->id, 'reseller_id' => null, 'latitude' => -6.20, 'longitude' => 106.80]);
+
+        $this->assertCount(3, (new OdpLocatorService)->nearestCandidates(-6.20, 106.80, 3));
     }
 }

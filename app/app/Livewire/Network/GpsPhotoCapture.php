@@ -2,13 +2,12 @@
 
 namespace App\Livewire\Network;
 
+use App\Livewire\Concerns\StagesPhotoUploads;
 use App\Models\FiberNode;
 use App\Models\FiberNodePhoto;
 use App\Models\Odp;
 use App\Services\Network\FiberTopologyService;
 use Livewire\Component;
-use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
-use Livewire\WithFileUploads;
 
 /**
  * v0.16.0 Core Network Infrastructure Management, Langkah 3. The
@@ -18,17 +17,20 @@ use Livewire\WithFileUploads;
  * component's own docblock for why no Odp edit page existed before this).
  *
  * Deliberately always operates against an ALREADY-PERSISTED owner
- * (ownerType/ownerId are required, non-null) — a brand-new FiberNode
- * being created has no id yet to attach photos to, so FiberNodeForm's own
- * create-mode view uses its own plain lat/long inputs instead and only
- * embeds this component once the node exists (immediately after create,
- * or when editing). This sidesteps Livewire's real constraint that a
- * TemporaryUploadedFile can't be handed off between two independent
- * component instances across a network round trip.
+ * (ownerType/ownerId are required, non-null). A brand-new FiberNode has no
+ * id yet to attach photos to — since Langkah 5 FiberNodeForm's own create
+ * mode handles GPS + photos + splitter itself (in one transaction, see
+ * FiberTopologyService::createNodeWithAttachments) rather than embedding
+ * this component. This still sidesteps Livewire's real constraint that a
+ * TemporaryUploadedFile can't be handed off between two component
+ * instances across a network round trip.
+ *
+ * Langkah 6: the photo picker (here and in FiberNodeForm) is now two
+ * buttons — camera vs gallery — via App\Livewire\Concerns\StagesPhotoUploads.
  */
 class GpsPhotoCapture extends Component
 {
-    use WithFileUploads;
+    use StagesPhotoUploads;
 
     public string $ownerType;
 
@@ -38,15 +40,12 @@ class GpsPhotoCapture extends Component
 
     public string $longitude = '';
 
-    /** @var array<int, TemporaryUploadedFile> */
-    public array $newPhotos = [];
-
     protected function rules(): array
     {
         return [
             'latitude' => ['nullable', 'numeric', 'between:-90,90'],
             'longitude' => ['nullable', 'numeric', 'between:-180,180'],
-            'newPhotos.*' => ['image', 'max:10240'],
+            'newPhotos.*' => ['image', 'max:20480'],
         ];
     }
 
@@ -117,12 +116,6 @@ class GpsPhotoCapture extends Component
         session()->flash('gps-photo-status', 'Foto berhasil diunggah.');
     }
 
-    public function removeNewPhoto(int $index): void
-    {
-        unset($this->newPhotos[$index]);
-        $this->newPhotos = array_values($this->newPhotos);
-    }
-
     public function deletePhoto(int $photoId, FiberTopologyService $service): void
     {
         abort_unless(auth()->user()->can('network_infrastructure.manage'), 403);
@@ -134,13 +127,16 @@ class GpsPhotoCapture extends Component
         $service->deletePhoto($photo);
     }
 
-    public function render()
+    public function render(FiberTopologyService $service)
     {
         $photos = FiberNodePhoto::where('owner_type', $this->ownerType)
             ->where('owner_id', $this->ownerId)
             ->latest()
             ->get();
 
-        return view('livewire.network.gps-photo-capture', ['photos' => $photos]);
+        return view('livewire.network.gps-photo-capture', [
+            'photos' => $photos,
+            'mapPoints' => $service->mapReferencePoints($this->resolveOwner()),
+        ]);
     }
 }

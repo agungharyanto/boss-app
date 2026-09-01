@@ -3,6 +3,78 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## Revisi Pesan Error Bahasa Indonesia + Prioritas Dropdown (implementasi selesai 2026-09-01, belum di-merge/tag)
+
+**Catatan status**: branch baru `revisi-pesan-error-dan-prioritas`, dibuat dari `main` (sudah termasuk
+`v0.14.5`). 2 revisi terpisah, berlaku lintas seluruh cluster "Profil Paket" (Bandwidth Profile, IP Pool
+Pelanggan, Grup Profil, Profil Hotspot, Profil PPP), bukan cuma satu form.
+
+### Revisi 1 — Pesan Validasi Bahasa Indonesia
+
+- **Akar masalah**: `lang/id/validation.php` (translation resmi Laravel untuk pesan validasi) TIDAK
+  PERNAH ada di codebase ini — hanya `lang/id.json` (translation string bebas untuk label widget) yang
+  ada. Locale aplikasi sendiri sudah benar `id` (`APP_LOCALE=id` di root `.env`, dikonfirmasi live via
+  `config('app.locale')`/`app()->getLocale()`), dan `App\Http\Middleware\SetLocale` sudah benar
+  menyinkronkan locale dropdown UI ke `App::setLocale()` di seluruh request `web` — jadi bukan masalah
+  resolusi locale, murni file translation validasi yang tidak pernah dibuat.
+- **Sumber translation**: `laravel-lang/lang` (proyek open-source translation resmi Laravel, dipakai
+  luas untuk 126+ bahasa termasuk Indonesia) di-require sementara sebagai `--dev`, dipakai untuk generate
+  `lang/id/validation.php`/`auth.php`/`pagination.php`/`passwords.php` via `php artisan lang:add id`, lalu
+  **package-nya dihapus lagi** — sudah tidak diperlukan di runtime, cuma alat generate satu kali (pola sama
+  seperti `payment-gateway:import-env`, sebuah helper transisi sekali pakai). `composer.json`/`composer.lock`
+  dikonfirmasi tidak ada diff sama sekali setelah dihapus. `lang/id.json` yang sudah ada juga ikut
+  diperkaya proses ini (bertambah ~60 string framework-level seperti pesan halaman error/pagination/auth
+  notification — tidak ada string existing yang hilang, dikonfirmasi lewat diff langsung).
+- **Nama field ("attribute") juga diterjemahkan** — `lang/id/validation.php` sendiri cuma menerjemahkan
+  STRUKTUR pesan, bukan nama field domain (`sell_price` tetap `sell_price` tanpa translation tambahan).
+  `App\Support\ProfilPaketAttributeLabels` — satu sumber tunggal nama field bahasa Indonesia
+  (`sell_price` → "Harga Jual", dst), dipakai dari 2 sisi: `forFormRequest()` (snake_case, dipanggil dari
+  `attributes()` di 11 FormRequest — Store/Update × 5 modul + `UpdateExpiredProfileRequest`) dan
+  `forLivewire()` (camelCase + varian `edit`-prefixed otomatis, dipanggil dari `validationAttributes()` —
+  hook resmi Livewire yang berlaku untuk SEMUA `validate()` di komponen itu, termasuk `#[Validate]`
+  attribute-based rules — di 5 Livewire component + `NasIndex` khusus untuk field modal Profil Expired
+  yang relevan cluster ini).
+- **Diverifikasi REAL end-to-end**, bukan cuma manual cek: request API sungguhan (`curl` dengan Sanctum
+  token nyata) ke `POST /api/v1/ppp-packages` dengan `sell_price < cost_price` menghasilkan persis "Harga
+  Jual harus bernilai lebih besar dari atau sama dengan 200." — bukan "The sell price field..."; dikonfirmasi
+  juga lewat panggilan Livewire AJAX nyata (protokol yang sama persis dipakai browser) di form Profil PPP.
+- **Regresi**: `ValidationMessagesInIndonesianTest` (file baru, 10 test — API + Livewire, lintas 5 modul).
+
+### Revisi 2 — Prioritas Jadi Dropdown Queue
+
+- **Verifikasi range dilakukan SEBELUM implementasi, langsung ke `ro-hotspot.bajastu.id` (RouterOS
+  7.12.1)** — perkiraan Agung (1-7) TIDAK dipakai mentah-mentah. Temuan nyata:
+  1. Range genuinely **1-8**, bukan 1-7 — dikonfirmasi dari pesan error RouterOS sendiri di
+     `/queue simple`: "value of upload-priority out of range (1..8)".
+  2. `/ppp profile` DAN `/ip hotspot user profile` TIDAK punya parameter `priority` berdiri sendiri
+     ("unknown parameter priority", dikonfirmasi live di keduanya).
+  3. Satu-satunya jalur push priority per-profil: slot ke-5 syntax `rate-limit` extended RouterOS
+     (`rx-rate/tx-rate rx-burst-rate/tx-burst-rate rx-burst-threshold/tx-burst-threshold
+     rx-burst-time/tx-burst-time priority`) — dikonfirmasi live genuinely diterima & tersimpan.
+  4. Slot embedded ini TIDAK divalidasi RouterOS sendiri (menerima 9, di luar 1-8) — dropdown BOSS App
+     jadi satu-satunya penjaga range yang nyata.
+  5. Default RouterOS SENDIRI (saat priority genuinely tidak pernah di-set) adalah **8** (prioritas
+     terendah) — dikonfirmasi dari readback `/queue simple` baru tanpa `priority=` sama sekali.
+  6. Format burst-rate=burst-threshold=rate (menghilangkan headroom burst) dikonfirmasi live membuat hasil
+     akhir fungsional identik dengan format lama yang polos — bukan perubahan perilaku berisiko, cuma
+     penulisan eksplisit dari default yang sudah ada.
+- **Migration**: `priority` di `hotspot_packages`/`ppp_packages` diubah dari string ke
+  `unsignedTinyInteger`, default 8. 2 baris data existing (test row Agung, keduanya 'Default') dibackfill
+  ke 8 — dicek langsung sebelum menulis backfill (bukan diasumsikan kosong).
+- **`App\Support\RouterOsQueuePriority`** — satu sumber tunggal `MIN`/`MAX`/`DEFAULT` + `options()`
+  (dropdown 1-8 dengan label "Tertinggi"/"Terendah — Default") + `toRateLimitString()` (builder syntax
+  extended), dipakai bersama oleh `PushHotspotPackageToMikrotikJob`/`PushPppPackageToMikrotikJob` — field
+  ini sebelumnya TIDAK PERNAH benar-benar di-push ke router sama sekali (dikonfirmasi dengan cek langsung
+  kode sebelum implementasi, sesuai instruksi task).
+- **Diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id` SAJA**: Profil PPP nyata dengan
+  `priority=2` genuinely menghasilkan `rate-limit=15000k/15000k 15000k/15000k 15000k/15000k 1s/1s 2` di
+  router — dibersihkan setelahnya, router kembali pristine.
+- **Regresi**: dropdown-range test (1-8 saja, di luar range ditolak) + rate-limit-embedding test, di kedua
+  modul (Livewire + Job), full regression suite dijalankan ulang.
+
+**JANGAN merge/tag** — menunggu verifikasi manual Agung, termasuk konfirmasi visual dropdown Prioritas dan
+pesan error Bahasa Indonesia lewat browser sungguhan.
+
 ## v0.14.5 — Profil PPP (2026-08-31, merged + tagged `v0.14.5`)
 
 **Catatan status**: branch `v0.14.5-profil-ppp`, dibuat dari `main` pada tag `v0.14.4.1` (dikonfirmasi

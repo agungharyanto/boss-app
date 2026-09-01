@@ -75,6 +75,11 @@ class HotspotPackage extends Model
             'active_duration_unit' => HotspotDurationUnit::class,
             'quota_value' => 'decimal:2',
             'quota_unit' => HotspotQuotaUnit::class,
+            // Revisi Prioritas Dropdown — dulu string bebas ('Default'),
+            // sekarang integer 1-8 (RouterOS Queue Priority) — lihat
+            // App\Support\RouterOsQueuePriority untuk verifikasi range/
+            // default dan mekanisme push-nya.
+            'priority' => 'integer',
             'login_days' => 'array',
             'is_active' => 'boolean',
             'mikrotik_sync_status' => MikrotikSyncStatus::class,

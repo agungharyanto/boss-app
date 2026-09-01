@@ -44,7 +44,7 @@ class HotspotPackageFactory extends Factory
             'quota_value' => null,
             'quota_unit' => null,
             'shared_users' => 1,
-            'priority' => 'Default',
+            'priority' => 8,
             'login_days' => null,
             'login_start_time' => null,
             'login_end_time' => null,

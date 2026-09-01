@@ -6,6 +6,7 @@ use App\Enums\MikrotikSyncStatus;
 use App\Models\CustomerIpPool;
 use App\Models\Nas;
 use App\Services\Network\CustomerIpPoolService;
+use App\Support\ProfilPaketAttributeLabels;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Validate;
@@ -304,5 +305,17 @@ class CustomerIpPoolIndex extends Component
             'nasOptions' => Nas::query()->orderBy('name')->get(['id', 'name']),
             'canManage' => auth()->user()->can('manage', CustomerIpPool::class),
         ]);
+    }
+
+    /**
+     * Revisi Pesan Error Bahasa Indonesia — nama field di pesan validasi
+     * (mis. "Harga Jual wajib diisi." bukan "The sell price field is
+     * required.") lewat satu sumber tunggal dipakai lintas seluruh cluster
+     * "Profil Paket" — lihat ProfilPaketAttributeLabels sendiri. Mencakup
+     * juga varian `edit`-prefixed (mis. editSellPrice) secara otomatis.
+     */
+    public function validationAttributes(): array
+    {
+        return ProfilPaketAttributeLabels::forLivewire();
     }
 }

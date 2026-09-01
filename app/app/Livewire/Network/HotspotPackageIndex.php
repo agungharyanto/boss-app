@@ -7,6 +7,8 @@ use App\Models\BandwidthProfile;
 use App\Models\HotspotPackage;
 use App\Models\NetworkProfileGroup;
 use App\Services\Network\HotspotPackageService;
+use App\Support\ProfilPaketAttributeLabels;
+use App\Support\RouterOsQueuePriority;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Validate;
@@ -87,7 +89,13 @@ class HotspotPackageIndex extends Component
 
     public string $sharedUsers = '1';
 
-    public string $priority = 'Default';
+    // Revisi Prioritas Dropdown — dulu text bebas ('Default'), sekarang
+    // dropdown RouterOS Queue Priority 1-8, default 8 (default RouterOS
+    // sendiri, lihat App\Support\RouterOsQueuePriority). Property tetap
+    // string (nilai HTML <select>), sama konvensi field numerik lain di
+    // form ini (sharedUsers, activeDurationValue, dll) — di-cast (int)
+    // saat submit.
+    public string $priority = '8';
 
     /** @var array<int, string> */
     public array $loginDays = [];
@@ -133,7 +141,7 @@ class HotspotPackageIndex extends Component
 
     public string $editSharedUsers = '1';
 
-    public string $editPriority = 'Default';
+    public string $editPriority = '8';
 
     /** @var array<int, string> */
     public array $editLoginDays = [];
@@ -312,7 +320,7 @@ class HotspotPackageIndex extends Component
             'quotaValue' => ['required_if:limitType,quota_base', 'prohibited_unless:limitType,quota_base', 'nullable', 'numeric', 'min:0.01'],
             'quotaUnit' => ['required_if:limitType,quota_base', 'prohibited_unless:limitType,quota_base', 'nullable', 'string', 'in:mb,gb'],
             'sharedUsers' => ['required', 'integer', 'min:1'],
-            'priority' => ['nullable', 'string', 'max:50'],
+            'priority' => ['nullable', 'integer', 'between:1,8'],
             'loginDays' => ['nullable', 'array'],
             'loginDays.*' => ['string', 'in:'.implode(',', self::DAY_OPTIONS)],
             'loginStartTime' => ['nullable', 'date_format:H:i'],
@@ -334,7 +342,7 @@ class HotspotPackageIndex extends Component
             'promo_price' => $this->promoPrice !== '' ? $this->promoPrice : null,
             'tax_percent' => $this->taxPercent,
             'shared_users' => (int) $this->sharedUsers,
-            'priority' => $this->priority ?: 'Default',
+            'priority' => (int) $this->priority,
             'login_days' => $this->loginDays === [] ? null : $this->loginDays,
             'login_start_time' => $this->loginStartTime ?: null,
             'login_end_time' => $this->loginEndTime ?: null,
@@ -353,7 +361,7 @@ class HotspotPackageIndex extends Component
         $this->profileType = 'unlimited';
         $this->activeDurationUnit = 'day';
         $this->sharedUsers = '1';
-        $this->priority = 'Default';
+        $this->priority = '8';
         $this->showInVoucherForm = true;
         $this->isActive = true;
     }
@@ -385,7 +393,7 @@ class HotspotPackageIndex extends Component
         // editLimitType isn't quota_base).
         $this->editQuotaUnit = $package->quota_unit?->value ?? '';
         $this->editSharedUsers = (string) $package->shared_users;
-        $this->editPriority = $package->priority;
+        $this->editPriority = (string) $package->priority;
         $this->editLoginDays = $package->login_days ?? [];
         $this->editLoginStartTime = $package->login_start_time !== null ? substr($package->login_start_time, 0, 5) : '';
         $this->editLoginEndTime = $package->login_end_time !== null ? substr($package->login_end_time, 0, 5) : '';
@@ -404,7 +412,7 @@ class HotspotPackageIndex extends Component
         $this->editProfileType = 'unlimited';
         $this->editActiveDurationUnit = 'day';
         $this->editSharedUsers = '1';
-        $this->editPriority = 'Default';
+        $this->editPriority = '8';
     }
 
     public function updatePackage(HotspotPackageService $service): void
@@ -427,7 +435,7 @@ class HotspotPackageIndex extends Component
             'editQuotaValue' => ['required_if:editLimitType,quota_base', 'prohibited_unless:editLimitType,quota_base', 'nullable', 'numeric', 'min:0.01'],
             'editQuotaUnit' => ['required_if:editLimitType,quota_base', 'prohibited_unless:editLimitType,quota_base', 'nullable', 'string', 'in:mb,gb'],
             'editSharedUsers' => ['required', 'integer', 'min:1'],
-            'editPriority' => ['nullable', 'string', 'max:50'],
+            'editPriority' => ['nullable', 'integer', 'between:1,8'],
             'editLoginDays' => ['nullable', 'array'],
             'editLoginDays.*' => ['string', 'in:'.implode(',', self::DAY_OPTIONS)],
             'editLoginStartTime' => ['nullable', 'date_format:H:i'],
@@ -449,7 +457,7 @@ class HotspotPackageIndex extends Component
             'promo_price' => $this->editPromoPrice !== '' ? $this->editPromoPrice : null,
             'tax_percent' => $this->editTaxPercent,
             'shared_users' => (int) $this->editSharedUsers,
-            'priority' => $this->editPriority ?: 'Default',
+            'priority' => (int) $this->editPriority,
             'login_days' => $this->editLoginDays === [] ? null : $this->editLoginDays,
             'login_start_time' => $this->editLoginStartTime ?: null,
             'login_end_time' => $this->editLoginEndTime ?: null,
@@ -491,7 +499,20 @@ class HotspotPackageIndex extends Component
             'bandwidthProfileOptions' => BandwidthProfile::query()->where('is_active', true)->orderBy('name')->get(['id', 'name']),
             'dayOptions' => self::DAY_OPTIONS,
             'dayLabels' => self::DAY_LABELS,
+            'priorityOptions' => RouterOsQueuePriority::options(),
             'canManage' => auth()->user()->can('manage', HotspotPackage::class),
         ]);
+    }
+
+    /**
+     * Revisi Pesan Error Bahasa Indonesia — nama field di pesan validasi
+     * (mis. "Harga Jual wajib diisi." bukan "The sell price field is
+     * required.") lewat satu sumber tunggal dipakai lintas seluruh cluster
+     * "Profil Paket" — lihat ProfilPaketAttributeLabels sendiri. Mencakup
+     * juga varian `edit`-prefixed (mis. editSellPrice) secara otomatis.
+     */
+    public function validationAttributes(): array
+    {
+        return ProfilPaketAttributeLabels::forLivewire();
     }
 }

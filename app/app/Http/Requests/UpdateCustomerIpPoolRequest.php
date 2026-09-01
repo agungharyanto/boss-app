@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Models\CustomerIpPool;
 use App\Services\Network\CustomerIpPoolService;
+use App\Support\ProfilPaketAttributeLabels;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -113,5 +114,16 @@ class UpdateCustomerIpPoolRequest extends FormRequest
         if (app(CustomerIpPoolService::class)->overlapsExistingRange($nasId, $start, $end, $this->pool->id)) {
             $validator->errors()->add('range_start', 'Range ini tumpang tindih dengan pool lain yang sudah ada di NAS ini.');
         }
+    }
+
+    /**
+     * Revisi Pesan Error Bahasa Indonesia — nama field di pesan validasi
+     * (mis. "Harga Jual wajib diisi." bukan "The sell price field is
+     * required.") lewat satu sumber tunggal dipakai lintas seluruh cluster
+     * "Profil Paket" — lihat ProfilPaketAttributeLabels sendiri.
+     */
+    public function attributes(): array
+    {
+        return ProfilPaketAttributeLabels::forFormRequest();
     }
 }

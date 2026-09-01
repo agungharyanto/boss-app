@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Models\HotspotPackage;
 use App\Models\NetworkProfileGroup;
+use App\Support\ProfilPaketAttributeLabels;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -69,7 +70,7 @@ class StoreHotspotPackageRequest extends FormRequest
             'quota_value' => ['required_if:limit_type,quota_base', 'prohibited_unless:limit_type,quota_base', 'nullable', 'numeric', 'min:0.01'],
             'quota_unit' => ['required_if:limit_type,quota_base', 'prohibited_unless:limit_type,quota_base', 'nullable', 'string', 'in:mb,gb'],
             'shared_users' => ['required', 'integer', 'min:1'],
-            'priority' => ['nullable', 'string', 'max:50'],
+            'priority' => ['nullable', 'integer', 'between:1,8'],
             'login_days' => ['nullable', 'array'],
             'login_days.*' => ['string', 'in:monday,tuesday,wednesday,thursday,friday,saturday,sunday'],
             'login_start_time' => ['nullable', 'date_format:H:i'],
@@ -107,5 +108,16 @@ class StoreHotspotPackageRequest extends FormRequest
         if ($group->type->value !== 'hotspot') {
             $validator->errors()->add('network_profile_group_id', 'Grup Profil yang dipilih harus bertipe Hotspot.');
         }
+    }
+
+    /**
+     * Revisi Pesan Error Bahasa Indonesia — nama field di pesan validasi
+     * (mis. "Harga Jual wajib diisi." bukan "The sell price field is
+     * required.") lewat satu sumber tunggal dipakai lintas seluruh cluster
+     * "Profil Paket" — lihat ProfilPaketAttributeLabels sendiri.
+     */
+    public function attributes(): array
+    {
+        return ProfilPaketAttributeLabels::forFormRequest();
     }
 }

@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Models\NetworkProfileGroup;
 use App\Models\PppPackage;
+use App\Support\ProfilPaketAttributeLabels;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -57,7 +58,7 @@ class StorePppPackageRequest extends FormRequest
             'active_duration_value' => ['required', 'integer', 'min:1'],
             'active_duration_unit' => ['required', 'string', 'in:minute,hour,day,month'],
             'shared_users' => ['required', 'integer', 'min:1'],
-            'priority' => ['nullable', 'string', 'max:50'],
+            'priority' => ['nullable', 'integer', 'between:1,8'],
             'login_days' => ['nullable', 'array'],
             'login_days.*' => ['string', 'in:monday,tuesday,wednesday,thursday,friday,saturday,sunday'],
             'login_start_time' => ['nullable', 'date_format:H:i'],
@@ -123,5 +124,16 @@ class StorePppPackageRequest extends FormRequest
         if (PppPackage::collidesWithExistingName($group->nas_id, (string) $this->input('name'), $ignorePackageId)) {
             $validator->errors()->add('name', 'Nama ini sudah dipakai Grup Profil atau Profil PPP lain di NAS yang sama — nama /ppp profile harus unik per NAS di router.');
         }
+    }
+
+    /**
+     * Revisi Pesan Error Bahasa Indonesia — nama field di pesan validasi
+     * (mis. "Harga Jual wajib diisi." bukan "The sell price field is
+     * required.") lewat satu sumber tunggal dipakai lintas seluruh cluster
+     * "Profil Paket" — lihat ProfilPaketAttributeLabels sendiri.
+     */
+    public function attributes(): array
+    {
+        return ProfilPaketAttributeLabels::forFormRequest();
     }
 }

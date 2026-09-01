@@ -3,10 +3,23 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## Restrukturisasi Sidebar (branch `restrukturisasi-sidebar`, implementasi selesai 2026-09-01, belum di-merge/tag)
+## Restrukturisasi Sidebar (branch `restrukturisasi-sidebar` + v0.9.3, digabung ke `develop`/`main` 2026-09-01)
 
 **Catatan status**: branch `restrukturisasi-sidebar` dari `main` (`1a07b2e`). Murni UI — nol perubahan
-backend/route kecuali **menghapus 1 link menu**. Belum di-merge/tag, menunggu verifikasi manual Agung.
+backend/route kecuali **menghapus 1 link menu**. **Digabung**: `v0.9.3-commission-rate-settings` +
+`restrukturisasi-sidebar` di-merge (`--no-ff`) ke `develop` lalu `main` (`d56be0b`), konflik
+`sidebar.blade.php` (baris `active` cluster Operasional) + `CHANGELOG.md` diselesaikan manual
+mempertahankan kedua sisi. Full suite 1382 hijau pasca-merge.
+
+**Perubahan lanjutan pasca-merge (commit `74cb16a` di `develop`, BELUM di `main`, menunggu verifikasi
+Agung)**: link **"Referrer"** + **"Rate Komisi"** dipindah dari cluster **"Operasional"** ke **"Billing &
+Finance"** (di bawah grup "Profil Paket") — keduanya konsep komisi/keuangan. `active` kedua cluster
+diupdate. **Cluster "Operasional" sekarang tinggal 1 item ("Reseller")** — SENGAJA dibiarkan 1-item;
+keputusan membubarkan cluster / memindah "Reseller" ke tempat lain **menunggu konfirmasi Agung**, tidak
+diputuskan sepihak. `SidebarNavigationTest` +2 test (15/15 hijau). Diverifikasi HTTP nyata: Billing &
+Finance kini berisi Tax Components / Reseller Tax Policy / Subscriptions / Invoices / Payment
+Reconciliation / Profil Paket (+5 child) / Referrer / Rate Komisi — semua 1 section; Operasional cuma
+Reseller.
 
 ### Investigasi komponen sidebar (Langkah 2) — dijawab sebelum ubah perilaku
 

@@ -1865,6 +1865,89 @@ also no "look up WorkOrder by device serial number" endpoint —
 `index()` only filters by `status`. Both are real gaps to close as part of
 `v0.12.0`, not something to design/build yet.
 
+## GenieACS PPPoE Parameter + `too_many_commits` Incident (v0.9.5, branch `fix-genieacs-pppoe-provision` — code staged, NOT applied live)
+
+**Pemicu**: Agung refresh parameter tree device di GenieACS UI, parameter PPPoE tidak muncul. Investigasi
+menemukan gambaran yang **lebih besar dari laporan awal** (dan CLAUDE.md v0.7.2 sudah usang di bagian ini):
+
+**1. `presets`/`provisions` GenieACS SUDAH terisi** (bukan kosong seperti kata v0.7.2) — di-manage lewat
+`docker/genieacs/presets/default.js` + `default-optical.js` + `apply.sh` (ditambahkan ~2026-08-16). `default.js`
+sudah declare container-discovery `WANDevice.*.WANConnectionDevice.*.WANPPPConnection {path: minutes}` +
+`WANPPPConnection.1/2.MACAddress` (indeks di-hardcode). **Yang TIDAK di-declare**: leaf data PPPoE
+sesungguhnya — `Username`, `ConnectionStatus`, `ExternalIPAddress`, `Uptime`, `Name`. Jadi tree hanya berisi
+apa yang device sukarela kirim di Inform-nya sendiri; nilai PPPoE membeku / tidak pernah terisi untuk
+banyak device.
+
+**2. `cpe_parameter_maps` TIDAK dipakai untuk PPPoE — dan tidak perlu.** `CpeParameterResolverService::
+resolvePppoeConnection()` / `::resolveWanConnectionsSummary()` sudah menelusuri pohon TR-069 secara generik
+(instance WANPPPConnection ber-`Username` non-kosong pertama menang) — halaman Detail Perangkat CPE sudah
+menampilkan **PPPoE username + name + connection status** dari sana, indeks berapa pun. Menambah baris
+`cpe_parameter_maps` per-model untuk PPPoE = data mati/tak ter-wire (resolver tidak membacanya untuk key
+ini). **Keputusan: TIDAK menambah baris `cpe_parameter_maps` PPPoE.** Kalau nanti ingin pendekatan
+map-driven, itu refactor resolver = keputusan arsitektur tersendiri (lihat rekomendasi Virtual Parameters
+di bawah).
+
+**3. Root cause `too_many_commits` yang sesungguhnya = provision `default`/`default-optical` terlalu berat,
+LIVE & berulang** — bukan "root refresh mechanism" (yang tidak ada di kode BOSS App; `CpeActionService::
+syncNow()` sudah scoped ke `WANDevice`/`LANDevice`, bukan root). Saat investigasi: **44 fault**, ~41
+`too_many_commits` channel `default` dengan `provisions: [["default"],["default-optical"]]`, tersebar di
+~30 device pohon-besar (M63X XPON, H3-2S XPON, M12X5G, GM220-S). `retries` naik terus (4-12). **Menghapus
+fault via NBI berhasil (HTTP 200 semua) TAPI langsung regenerasi dalam hitungan detik** — device Inform
+sekarang, provision mentok `MAX_COMMIT_ITERATIONS` (GenieACS 1.2.16 default 32, efektif ×2=64) SETIAP
+sesi karena `{path: minutes}` memaksa penemuan-ulang wildcard besar (`Hosts.Host.*`, `AssociatedDevice.*`,
+`WANConnectionDevice.*.WANPPPConnection`, `WLANConfiguration.*`) tiap Inform.
+
+**Backlog task GenieACS**: juga ditemukan ~6737 task antri, di antaranya **1996+ `getParameterValues
+DeviceInfo.SerialNumber`** untuk 6 device yang offline sejak ~19-25 Agu (probe `CpeDeviceStatusSyncService`
+menumpuk) + 4 root `refreshObject` nyangkut sejak 9-11 Agu di 2 device. Belum dibersihkan (butuh keputusan
+— hapus task untuk device offline aman, tapi di luar scope "clear faults").
+
+**Fix yang DI-STAGE sebagai kode (branch `fix-genieacs-pppoe-provision`, BELUM diterapkan ke GenieACS live
+— `genieacs-cwmp` TIDAK di-recreate, mongo provision TIDAK di-update; sengaja, menunggu Agung, sejalan
+dengan catatan v0.8.1 "recreating genieacs-cwmp/nbi off-limits without asking first" + "verifikasi
+manual")**:
+1. **`docker/genieacs/presets/default-pppoe.js`** (provision baru, terisolasi seperti `default-optical`):
+   `declare()` `{value: hourly}` untuk `WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.{Username,
+   ConnectionStatus,ExternalIPAddress,Uptime,Name}` — **wildcard** (bukan indeks hardcode; dikonfirmasi
+   terhadap F86CE1-F663NV3a nyata: koneksi internet pelanggan asli ada di `WANConnectionDevice.6`, bukan
+   1/2). `{value: hourly}` SAJA (bukan `{path}`) — penemuan instance tetap tugas `default`, ini cuma
+   refresh nilai leaf yang sudah diketahui, menambah ~beberapa commit iteration, bukan penelusuran pohon.
+   **Scoped ke objek WANPPPConnection — BUKAN root refresh.**
+2. **`GENIEACS_MAX_COMMIT_ITERATIONS: "64"`** di `docker-compose.yml` service `genieacs-cwmp` (config key
+   `cwmp.maxCommitIterations`, dikonfirmasi dari binary GenieACS 1.2.16). Menaikkan 32→64 (efektif 128) —
+   **tidak mengubah data yang dikumpulkan**, hanya membiarkan pohon besar selesai tanpa fault. Ini lever
+   paling aman & langsung untuk insiden fault berulang.
+3. `apply.sh` diperbarui untuk 3 provision + runbook lengkap (`docker compose cp` + `sh /tmp/apply.sh` +
+   `docker compose restart genieacs-cwmp`).
+
+**Yang BELUM dilakukan & direkomendasikan tapi butuh observasi multi-Inform (keputusan Agung)**: menurunkan
+cadence `{path: minutes}` pada `Hosts.Host.*` / `AssociatedDevice.*` di `default.js` (mis. ke `{path:
+5min}`) — mengurangi tekanan commit tapi berisiko ke kesegaran "Terakhir Terlihat" yang fix sebelumnya
+justru targetkan; jangan diubah tanpa memantau efeknya beberapa siklus Inform. Membersihkan 6737 task
+backlog. Menampilkan `ExternalIPAddress`/`Uptime` PPPoE di halaman Detail CPE (resolver tinggal
+di-extend — `resolvePppoeConnection()` sudah menelusuri objek yang sama).
+
+**Rekomendasi arsitektur — Virtual Parameters (dari `exportgenieacsanten.xlsx`, config GenieACS rekan
+Agung)**: instance itu memakai **`VirtualParameters.*`** (`pppoeUsername`, `pppoeUsername2`, `pppoePassword`,
+`pppoeIP`, `pppoeMac`, `getpppuptime`, `IPTR069`, `getponmode`, `RXPower`, `gettemp`, `getdeviceuptime`,
+`activedevices`, `PonMac`, `getSerialNumber`, `userAdmin`/`superAdmin`, dst) — script JS provisioning
+server-side yang menormalisasi path beda-beda vendor jadi SATU nama parameter konsisten, lalu UI + NBI
+tinggal baca `VirtualParameters.pppoeUsername` alih-alih menebak path TR-069 mentah per device. **Layak
+diadopsi BOSS App**: jauh lebih tahan terhadap device/vendor baru dibanding memelihara `cpe_parameter_maps`
+manual per (OUI, model) — satu VirtualParameter menangani semua vendor sekaligus, dan
+`CpeParameterResolverService` menyusut jadi "baca `VirtualParameters.X`" tanpa logika walk per-vendor.
+Trade-off: script VP hidup di GenieACS (`db.virtualParameters`), jadi perlu masuk `docker/genieacs/` +
+`apply.sh` (BOSS-001), dan file xlsx yang diberikan **hanya berisi config `ui.*`** — script VP-nya sendiri
+(logika resolusi path per vendor) tidak ada di export itu, perlu ditulis / diminta dari rekan Agung.
+**Keputusan terpisah, TIDAK diimplementasikan sekarang.**
+
+**Device yang perlu Agung konfirmasi**: tidak bisa dipastikan device persis yang Agung refresh (task
+refresh-root manual sudah auto-clear). Kandidat = model pohon-besar yang jadi offender fault: **ZTE F663NV3a**
+(punya data PPPoE lengkap tapi bisa basi berhari-hari), **ZTE M63X XPON** / **GM220-S** (node
+WANPPPConnection ada, leaf tidak pernah terisi), **C-Data H3-2s / H3-2S XPON** (fault `too_many_commits`
+paling sering hari-hari terakhir). ~99% dari 317 device punya node `WANPPPConnection` — **bukan** keterbatasan
+firmware.
+
 ## Network Navigation Restructure & OLT Credential Registry (v0.8.1)
 
 **Built as a same-branch addendum to the still-open `v0.8.1-librenms-install`

@@ -3,6 +3,38 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## Fix Parameter PPPoE GenieACS + insiden `too_many_commits` (branch `fix-genieacs-pppoe-provision`, 2026-09-02, kode di-stage, BELUM diterapkan live / belum di-merge)
+
+**44 fault GenieACS dibersihkan lewat NBI** (HTTP 200 semua) — **tapi ~38 langsung regenerasi** karena
+akar masalahnya bukan fault-nya: provision `default`/`default-optical` (di-manage `docker/genieacs/presets/`,
+ditambahkan ~2026-08-16, CLAUDE.md v0.7.2 usang soal ini) **terlalu berat**, mentok `MAX_COMMIT_ITERATIONS`
+(32, efektif 64) SETIAP Inform di ~30 device pohon-besar (M63X XPON / H3-2S XPON / M12X5G / GM220-S).
+
+**Kode di-stage (BELUM diterapkan ke GenieACS live — `genieacs-cwmp` tidak di-recreate, mongo tidak
+di-update; menunggu Agung):**
+- `docker/genieacs/presets/default-pppoe.js` — provision baru terisolasi, `declare({value: hourly})` untuk
+  `WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.{Username,ConnectionStatus,ExternalIPAddress,
+  Uptime,Name}` (wildcard — dikonfirmasi terhadap F663NV3a: koneksi pelanggan asli di `WCD.6`, bukan
+  1/2). **Scoped ke objek WANPPPConnection, BUKAN root refresh** (jebakan `too_many_commits`).
+- `docker-compose.yml` → `GENIEACS_MAX_COMMIT_ITERATIONS: "64"` di `genieacs-cwmp` (config
+  `cwmp.maxCommitIterations`). Menaikkan 32→64 tidak mengubah data yang dikumpulkan, hanya membiarkan
+  pohon besar selesai. Butuh `docker compose up -d genieacs-cwmp`.
+- `apply.sh` → 3 provision + runbook lengkap.
+
+**TIDAK dilakukan (keputusan/verifikasi Agung):** `cpe_parameter_maps` PPPoE **tidak ditambah** —
+`CpeParameterResolverService::resolvePppoeConnection()` sudah menelusuri pohon generik (halaman Detail CPE
+sudah menampilkan PPPoE username/name/status), baris map = data tak ter-wire. Menurunkan cadence
+`{path: minutes}` pada `Hosts.Host.*`/`AssociatedDevice.*` di `default.js` (butuh observasi multi-Inform).
+Membersihkan ~6737 task backlog GenieACS (1996+ `getParameterValues` untuk 6 device offline + 4 root
+`refreshObject` nyangkut).
+
+**Rekomendasi arsitektur (dari `exportgenieacsanten.xlsx`)**: adopsi pola **`VirtualParameters.*`**
+(`pppoeUsername`/`pppoeIP`/`pppoeMac`/`getpppuptime`/`RXPower`/dst) — script provisioning server-side yang
+menormalisasi path beda-beda vendor jadi satu nama konsisten, lebih tahan device baru daripada
+`cpe_parameter_maps` manual per model. **Layak, tapi keputusan terpisah — tidak diimplementasikan.** File
+xlsx hanya berisi config `ui.*`; script VP-nya sendiri perlu ditulis/diminta dari rekan Agung. Detail
+lengkap: CLAUDE.md "GenieACS PPPoE Parameter + `too_many_commits` Incident".
+
 ## v0.9.4 — Skema Komisi per Pelanggan (branch `v0.9.4-skema-komisi-per-pelanggan`, implementasi selesai 2026-09-01, belum di-merge/tag)
 
 **Catatan status**: branch dari `develop` (`291a8ca`), **bukan `main`** — karena butuh pemindahan

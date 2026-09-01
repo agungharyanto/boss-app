@@ -3,11 +3,28 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## Revisi Pesan Error Bahasa Indonesia + Prioritas Dropdown (implementasi selesai 2026-09-01, belum di-merge/tag)
+## v0.14.5.1 — Revisi Pesan Error Bahasa Indonesia + Prioritas Dropdown (merged + tagged `v0.14.5.1` 2026-09-01)
 
-**Catatan status**: branch baru `revisi-pesan-error-dan-prioritas`, dibuat dari `main` (sudah termasuk
-`v0.14.5`). 2 revisi terpisah, berlaku lintas seluruh cluster "Profil Paket" (Bandwidth Profile, IP Pool
-Pelanggan, Grup Profil, Profil Hotspot, Profil PPP), bukan cuma satu form.
+**Catatan status**: branch `revisi-pesan-error-dan-prioritas` (`55b717e`), dibuat dari `main` pada
+`9e2ffee` (v0.14.5). 2 revisi terpisah, berlaku lintas seluruh cluster "Profil Paket" (Bandwidth Profile,
+IP Pool Pelanggan, Grup Profil, Profil Hotspot, Profil PPP), bukan cuma satu form.
+
+**PELAJARAN — closure branch ini sempat KELEWAT selama ~1 hari, menyebabkan split state + bug 500 aktif.**
+Alurnya: 2026-08-31 revisi ini selesai dikerjakan + diverifikasi manual lolos oleh Agung, dan
+`php artisan migrate` dijalankan ke DB dev (2 migration `change_priority_to_integer_*` tercatat **batch
+35**). Tapi git closure-nya (merge branch → `develop` → `main`, tag) tidak pernah dijalankan. Lalu kerja
+v0.16.0 (Core Network Infrastructure) lanjut di atas DB yang sama (batch 36–41) dan di-tag `v0.16.0`,
+disusul v0.14.7 — semua tanpa kode branch ini. Akibatnya kode di `main`/`develop` (`priority` string,
+factory + `HotspotPackageIndex::save()`/`PppPackageIndex::save()` mengirim `'Default'`) berjalan melawan
+kolom DB yang sudah `smallint` → **setiap create Profil Hotspot/PPP lewat UI melempar
+`SQLSTATE[22P02] invalid input syntax for type smallint: "Default"` (500)**. Test suite tetap hijau karena
+test jalan di SQLite (loosely typed) yang menyamarkan mismatch ini. Gap ketahuan saat menyusun laporan
+penutup cluster v0.14.x ("kok tidak ada tag v0.14.5.1?"), lalu branch dicari, dikonfirmasi masih utuh
+(lokal + `origin`, sinkron di `55b717e`), dan di-merge sebagai fix bug aktif — bukan closure rutin.
+**Pencegahan ke depan**: kalau sebuah revisi butuh `migrate` dijalankan ke DB dev sebelum di-merge,
+merge/tag-nya harus segera menyusul di sesi yang sama — jangan tinggalkan DB "lebih maju" dari kode di
+`main`; kalau memang harus ditunda, catat di ROADMAP sebagai item terbuka yang eksplisit, bukan cuma
+"menunggu verifikasi" di CHANGELOG.
 
 ### Revisi 1 — Pesan Validasi Bahasa Indonesia
 
@@ -72,8 +89,12 @@ Pelanggan, Grup Profil, Profil Hotspot, Profil PPP), bukan cuma satu form.
 - **Regresi**: dropdown-range test (1-8 saja, di luar range ditolak) + rate-limit-embedding test, di kedua
   modul (Livewire + Job), full regression suite dijalankan ulang.
 
-**JANGAN merge/tag** — menunggu verifikasi manual Agung, termasuk konfirmasi visual dropdown Prioritas dan
-pesan error Bahasa Indonesia lewat browser sungguhan.
+**Merged + tagged 2026-09-01** — Agung sudah verifikasi manual lolos (dropdown Prioritas + pesan error
+Bahasa Indonesia lewat browser). Merge dilakukan sebagai perbaikan bug aktif (lihat blok PELAJARAN di
+atas), dry-run merge ke `develop` bersih 0 konflik. Verifikasi pasca-merge: `HotspotPackage`/`PppPackage`
+factory + `Livewire save()` kini mengirim `priority` sebagai integer (default 8), create Profil
+Hotspot/PPP berhasil tanpa error `smallint` (dikonfirmasi via tinker transaksional yang di-rollback,
+bukan cuma baca kode); string `'Default'` kini ditolak DB dengan benar. Full regression suite hijau.
 
 ## v0.14.5 — Profil PPP (2026-08-31, merged + tagged `v0.14.5`)
 

@@ -43,6 +43,7 @@
 | v0.14.4 | Network         | Profil Hotspot                 | Paket voucher/token: harga modal/jual/promo, PPN, skema Unlimited/Limited (TimeBase/QuotaBase), link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, periode login (hari+jam) | Selesai — merged + tagged `v0.14.4` (+ 3 amendment inline) |
 | v0.14.4.1 | Network       | Revisi Grup Profil — Interface/VLAN, PPPoE Server, Expired Profile | Perluasan `network_profile_groups` (tipe PPP): binding `/interface pppoe-server server` (baca interface/VLAN NAS read-only, push service-name+default-profile), Grup Profil PPP jadi Default Profile PPPoE Server. Fitur baru "Profil Pelanggan Expired" per NAS (`nas.expired_ip_pool_id`, push `/ppp profile` fallback tanpa rate-limit). **Diberi nomor `v0.14.4.1` (bukan `v0.14.3.1`)** — dibuat dari `main` di titik tag `v0.14.4`, dan label `v0.14.3.1` sudah lebih dulu dipakai (folded ke tag `v0.14.3`) untuk fitur lain (Tipe Pemakaian IP Pool + Sidebar); pola patch-di-atas-tag-terakhir sama seperti `v0.9.2.1` | Selesai — merged + tagged `v0.14.4.1` |
 | v0.14.5 | Network         | Profil PPP                     | Paket bulanan: harga modal/jual/promo, PPN, link Bandwidth Profile (v0.14.1) + Grup Profil (v0.14.3), masa aktif, shared users, prioritas — direncanakan jadi anchor entity untuk Commission (v0.9.3) yang di-pause di v0.9.2, menggantikan `reseller_package_pricing` yang selama ini kosong data untuk ISP direct | Selesai — merged + tagged `v0.14.5` |
+| v0.14.5.1 | Network       | Revisi Profil Paket — Pesan Error Bahasa Indonesia + Prioritas Dropdown 1-8 | Lintas seluruh cluster: `lang/id/validation.php` (+auth/pagination/passwords, via `laravel-lang/lang` one-time generator) + `App\Support\ProfilPaketAttributeLabels` (nama field ID di pesan error). `priority` di `hotspot_packages`/`ppp_packages`: string → integer, dropdown 1-8 (`App\Support\RouterOsQueuePriority`, range diverifikasi live ke `ro-hotspot.bajastu.id`, default RouterOS asli = 8), push job kirim priority ke slot ke-5 `rate-limit` extended syntax. **Closure sempat KELEWAT ~1 hari** — migration sudah jalan di DB dev (batch 35, 2026-08-31) tapi kode tidak ikut ter-merge, lalu v0.16.0/v0.14.7 lanjut di atasnya → create Profil Hotspot/PPP lewat UI 500 (`invalid input syntax for type smallint: "Default"`). Ketahuan saat menyusun laporan penutup cluster; branch masih utuh, di-merge sebagai fix bug aktif. | Selesai — merged + tagged `v0.14.5.1` |
 | v0.14.6 | Network         | RouterOS Live-Push — Generalisasi | Fondasi live-push SUDAH ADA sejak v0.14.2.1 (khusus IP Pool) — sub-versi ini generalisasi pola yang sama (Job async, kolom sync status, komentar-stabil-sebagai-lookup-key, retry+backoff) ke Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP. **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Selesai (de-facto) — pola live-push sudah tergeneralisasi bertahap di v0.14.3–v0.14.5 (`PushNetworkProfileGroupToMikrotikJob`/`PushHotspotPackageToMikrotikJob`/`PushPppPackageToMikrotikJob` + Remove* semua ada), tidak butuh sprint terpisah; tombol "Push ke NAS" di UI ditunda ke sprint tersendiri di masa depan |
 | v0.14.7 | Network         | Rollout Produksi — Verifikasi Kesiapan `test-x86-bajastu` | **BUKAN migrasi massal.** Murni verifikasi bahwa `test-x86-bajastu` (NAS id=1, 218 sesi PPPoE production aktif) aman dipakai sebagai target sistem Profil Paket untuk **pelanggan BARU** ke depan. Langkah 0: inventaris namespace router (`docs/test-x86-bajastu-namespace-inventory.md`, acuan hindari collision). Langkah 1: uji tulis terkontrol via BOSS App (BW Profile + IP Pool `192.0.2.x` + Grup Profil PPP tanpa PPPoE-server binding + Profil PPP, label `TEST-ROLLOUT-HAPUS-SAYA`) → push → verifikasi 0 gangguan ke 218 sesi aktif (218→218→218) + 0 object existing berubah → hapus semua, router bersih 100%. **295 pelanggan existing TIDAK dimigrasikan** (tetap mixradius/local secret). | Selesai — merged + tagged `v0.14.7` |
 | v0.15.0 | Operasional     | Management Ticketing          | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Sistem tiket untuk dukungan/komplain pelanggan. Decision-gate scope lengkap (alur, integrasi modul lain, siapa yang bisa buka/tutup tiket, dll) dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
@@ -1233,9 +1234,11 @@ di-tag. Tag yang ada: `v0.14.1`, `v0.14.2` (mencakup revisi v0.14.2.1 RouterOS L
 v0.14.2.2 Auto-Refresh Status Sync), `v0.14.3` (mencakup v0.14.3.1 Tipe Pemakaian IP Pool + Sidebar
 "Profil Paket"), `v0.14.4` (+ 3 amendment inline: Field Kuota QuotaBase, Fix Address Pool/session-timeout,
 Field NAS di atas Simpan), `v0.14.4.1` (Revisi Grup Profil — Interface/VLAN, PPPoE Server, Expired
-Profile), `v0.14.5` (Profil PPP), `v0.14.7` (Rollout Produksi). v0.14.6 tidak punya tag tersendiri —
-selesai de-facto (lihat baris v0.14.6 di bawah). Tidak ada v0.14.5.1. Cluster tidak melibatkan migrasi
-pelanggan existing manapun.
+Profile), `v0.14.5` (Profil PPP), **`v0.14.5.1`** (Revisi pesan error Bahasa Indonesia + Prioritas dropdown
+1-8 — di-tag menyusul 2026-09-01, closure-nya sempat kelewat ~1 hari sehingga sempat terjadi split state
+migration-jalan-tanpa-kode + bug 500 create Profil Hotspot/PPP; lihat baris v0.14.5.1 di tabel + CHANGELOG
+untuk pelajarannya), `v0.14.7` (Rollout Produksi). v0.14.6 tidak punya tag tersendiri — selesai de-facto
+(lihat baris v0.14.6 di bawah). Cluster tidak melibatkan migrasi pelanggan existing manapun.
 
 - **v0.14.1 Bandwidth Profile** — fondasi, profil reusable upload/download min-max.
 - **v0.14.2 IP Pool Pelanggan** — konsep BARU (beda dari `VpnIpPool` v0.6.2 yang untuk tunnel VPN).
@@ -1243,6 +1246,10 @@ pelanggan existing manapun.
   live provisioning.
 - **v0.14.4 Profil Hotspot** — paket voucher/token.
 - **v0.14.5 Profil PPP** — paket bulanan, direncanakan jadi anchor Commission (v0.9.3, di-pause di v0.9.2).
+- **v0.14.5.1 Revisi Pesan Error + Prioritas** — pesan validasi framework Bahasa Indonesia lintas cluster +
+  `priority` jadi dropdown integer 1-8. Closure kelewat ~1 hari → split state (migration di DB dev tanpa
+  kode di `main`) → create Profil Hotspot/PPP 500. Di-merge sebagai fix bug aktif; lihat CHANGELOG untuk
+  pelajaran pencegahan.
 - **v0.14.6 RouterOS Live-Push** — kemampuan baru push config live ke NAS asli. *Selesai de-facto* —
   pola live-push (Job async + kolom sync + lookup-by-comment + retry/backoff) sudah tergeneralisasi
   bertahap ke Grup Profil/Profil Hotspot/Profil PPP di v0.14.3–v0.14.5, tidak butuh sprint terpisah.

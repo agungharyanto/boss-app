@@ -3,6 +3,70 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.9.3 — Commission Rate Settings (implementasi selesai 2026-09-01, belum di-merge/tag)
+
+**Catatan status**: branch `v0.9.3-commission-rate-settings` dari `main` (sudah termasuk `v0.14.7` +
+`v0.14.5.1`). Melanjutkan cluster Commission yang di-pause sejak `v0.9.2`. **Belum di-merge/tag** —
+menunggu verifikasi manual Agung. **DB dev sudah lebih maju dari `main`**: `php artisan migrate` +
+`db:seed --class=RolesAndPermissionsSeeder` sudah dijalankan ke DB dev (agar bisa diverifikasi lewat HTTP
+nyata). Kalau branch ini akhirnya dibatalkan: `php artisan migrate:rollback --step=1` (drop
+`commission_rates`) + hapus permission `commission_rates.view`/`.manage`. Pelajaran v0.14.5.1 (jangan
+tinggalkan DB lebih maju dari kode) berlaku — closure harus segera menyusul setelah Agung OK.
+
+### Investigasi (Langkah 0) — kondisi terkini setelah rename Agent→Referrer + cluster v0.14.x
+
+- `commission_ledger` (v0.3.0) tidak berubah selain rename `agent_id`→`referrer_id` (v0.9.1). Kolom:
+  `tenant_id`/`referrer_id`/`customer_id` (NOT NULL), `amount` (nullable), `status` (default `pending`,
+  cast `CommissionStatus`: Pending/Eligible/Approved/Paid/Rejected), `notes`. **0 baris.** Tidak ada
+  referensi paket sama sekali.
+- `referrers.commission_rate` sudah di-DROP di v0.9.2 (migration-nya sendiri bilang "superseded by a
+  per-package rate table planned for v0.9.3"). `ReferrerType`: Sales/Teknisi/Freelance/Admin. **0 baris
+  referrer**, jadi 0 akun login.
+- `PppPackage` pricing: `cost_price`/`sell_price` (default 0), `promo_price` (nullable), `tax_percent`.
+  **1 baris, soft-deleted** (`test-10Mbps-HomeFixed-1`, sisa test v0.14.5) → efektif 0 paket aktif.
+- `RegistrationService::register()`: komentar lama "amount diisi nanti di sprint Commission" **sudah
+  hilang** — sekarang `CommissionLedger::create()` cukup omit `amount` (→ null). `register()` tidak punya
+  parameter paket; `customers.package` string bebas. Test `RegistrationServiceTest` meng-assert eksplisit
+  `'amount' => null` — akan perlu diubah saat v0.9.4 mulai mengisi amount.
+- RBAC: v0.9.2 rename `super_admin`→`superadmin` + role baru `administrator` (`ADMIN_TIER_ROLES`,
+  `giveToAdminTier()`). `finance` role terdefinisi tapi 0 permission.
+
+### Implementasi
+
+- **Migration `commission_rates`**: `tenant_id`, `ppp_package_id` (FK, NOT NULL, unik parsial
+  `WHERE deleted_at IS NULL`), `recurring_amount`/`limited_count_amount`/`titip_amount`
+  (`decimal(12,2)` nullable), `limited_count_times` (`unsignedInteger` nullable), `is_active`
+  (default true), `timestamps` + `softDeletes`.
+- **`App\Models\CommissionRate`** — `belongsTo(PppPackage)`; `PppPackage::commissionRate()` (`HasOne`).
+  `CommissionRate::schemeErrors()` = satu sumber aturan lintas-field (pasangan `limited_count_*`, minimal
+  1 skema) dipakai bareng FormRequest + Livewire. "Terisi" = bukan null & bukan `''` (angka 0 sah).
+- **RBAC**: `commission_rates.view`/`commission_rates.manage` → `giveToAdminTier()` (superadmin +
+  administrator). Diverifikasi langsung di DB dev: superadmin/administrator = Y/Y; noc/finance/
+  customer_service = n/n.
+- **REST API** (`App\Http\Controllers\Api\V1\CommissionRateController`, `App\Services\CommissionRateService`,
+  Store/UpdateCommissionRateRequest, `CommissionRatePolicy`): `GET/POST /commission-rates`,
+  `GET/PUT/DELETE /commission-rates/{commission_rate}` di bawah `auth:sanctum` (tenant-level, tanpa
+  `reseller.context`). `ppp_package_id` tidak bisa diubah lewat `PUT`. Lihat `docs/API.md`.
+- **Livewire `/commission-rates`** (`App\Livewire\Commission\CommissionRateIndex`): me-list **SEMUA**
+  PppPackage (bukan hanya yang sudah punya rate), badge "Belum diatur"/"Aktif"/"Nonaktif", form edit
+  inline per paket (pola sama dengan `BandwidthProfileIndex`). Link sidebar di section "Operasional"
+  tepat di bawah "Referrer".
+- **Test** (28 baru): `CommissionRateApiTest` (17 — CRUD, validasi pasangan/minimal-1/non-negatif/0-sah,
+  unik per paket, tenant isolation, RBAC superadmin+administrator vs customer_service, pesan error ID),
+  `CommissionRateIndexLivewireTest` (11 — list semua paket, soft-deleted tidak muncul, set/edit/hapus
+  rate, semua validasi, RBAC).
+
+### Verifikasi HTTP nyata (2×, terhadap `https://boss.bajastu.id`)
+
+- Login `super_admin@boss.local` → `/dashboard` 200, sidebar berisi `<a href=".../commission-rates">Rate
+  Komisi</a>`. `GET /commission-rates` → 200, render judul + kolom + empty-state "Belum ada Profil PPP"
+  (benar — 0 PppPackage aktif).
+- Login `customer_service@boss.local` → sidebar TIDAK ada `commission-rates` (0 kemunculan),
+  `GET /commission-rates` → **403**.
+
+**Kondisi data**: fitur akan tampil kosong sampai ada Profil PPP sungguhan dibuat lewat `/ppp-packages` —
+bukan bug, cuma kondisi data saat ini (1 PppPackage yang ada sudah soft-deleted).
+
 ## v0.14.5.1 — Revisi Pesan Error Bahasa Indonesia + Prioritas Dropdown (merged + tagged `v0.14.5.1` 2026-09-01)
 
 **Catatan status**: branch `revisi-pesan-error-dan-prioritas` (`55b717e`), dibuat dari `main` pada

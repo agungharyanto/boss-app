@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\BandwidthProfileController;
+use App\Http\Controllers\Api\V1\CommissionRateController;
 use App\Http\Controllers\Api\V1\CpeDeviceController;
 use App\Http\Controllers\Api\V1\CpeParameterMapController;
 use App\Http\Controllers\Api\V1\CustomerContactController;
@@ -244,6 +245,17 @@ Route::prefix('v1')->group(function () {
         Route::post('referrers/{referrer}/deactivate', [ReferrerController::class, 'deactivate']);
         Route::post('referrers/{referrer}/generate-login-account', [ReferrerController::class, 'generateLoginAccount']);
         Route::post('referrers/{referrer}/link-user', [ReferrerController::class, 'linkUser']);
+
+        // v0.9.3 — Commission Rate Settings, tier-admin-only (see
+        // CommissionRatePolicy), no reseller.context needed. FK ke
+        // ppp_packages SAJA (komisi hanya untuk paket bulanan PPP). Satu
+        // rate aktif per paket — store menolak paket yang sudah punya rate,
+        // update tidak menerima ppp_package_id.
+        Route::get('commission-rates', [CommissionRateController::class, 'index']);
+        Route::post('commission-rates', [CommissionRateController::class, 'store']);
+        Route::get('commission-rates/{commission_rate}', [CommissionRateController::class, 'show']);
+        Route::put('commission-rates/{commission_rate}', [CommissionRateController::class, 'update']);
+        Route::delete('commission-rates/{commission_rate}', [CommissionRateController::class, 'destroy']);
 
         // v0.14.1 — fondasi cluster "Profil Paket". Tier-admin-only (see
         // BandwidthProfilePolicy), no reseller.context needed —

@@ -23,7 +23,7 @@
         [
             'id' => 'operasional',
             'label' => __('Operasional'),
-            'active' => request()->routeIs('web.resellers.*') || request()->routeIs('web.reseller-package-pricing.*') || request()->routeIs('web.referrers.*'),
+            'active' => request()->routeIs('web.resellers.*') || request()->routeIs('web.reseller-package-pricing.*') || request()->routeIs('web.referrers.*') || request()->routeIs('web.commission-rates.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\Reseller::class)
                     ? ['route' => 'web.resellers.index', 'label' => __('Reseller')]
@@ -33,6 +33,12 @@
                     : null,
                 auth()->user()->can('viewAny', \App\Models\Referrer::class)
                     ? ['route' => 'web.referrers.index', 'label' => __('Referrer')]
+                    : null,
+                // v0.9.3 — Commission Rate Settings, tepat di bawah Referrer
+                // (konsep komisi/referral). Tier-admin-only, sama gate
+                // dengan CommissionRatePolicy::viewAny().
+                auth()->user()->can('viewAny', \App\Models\CommissionRate::class)
+                    ? ['route' => 'web.commission-rates.index', 'label' => __('Rate Komisi')]
                     : null,
             ]),
         ],

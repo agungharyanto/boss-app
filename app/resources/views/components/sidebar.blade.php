@@ -23,13 +23,15 @@
         [
             'id' => 'operasional',
             'label' => __('Operasional'),
-            'active' => request()->routeIs('web.resellers.*') || request()->routeIs('web.reseller-package-pricing.*') || request()->routeIs('web.referrers.*'),
+            // "Package Pricing" (reseller_package_pricing) link dihapus dari
+            // sidebar — fitur itu 0 baris data & digantikan cost_price/
+            // sell_price di Profil Hotspot/Profil PPP; 2 tempat harga bikin
+            // ambigu. Route/controller/model-nya sengaja TIDAK dihapus
+            // (resiko ke fitur reseller lain), cuma link menunya.
+            'active' => request()->routeIs('web.resellers.*') || request()->routeIs('web.referrers.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\Reseller::class)
                     ? ['route' => 'web.resellers.index', 'label' => __('Reseller')]
-                    : null,
-                auth()->user()->can('viewAny', \App\Models\ResellerPackagePricing::class)
-                    ? ['route' => 'web.reseller-package-pricing.index', 'label' => __('Package Pricing')]
                     : null,
                 auth()->user()->can('viewAny', \App\Models\Referrer::class)
                     ? ['route' => 'web.referrers.index', 'label' => __('Referrer')]
@@ -43,7 +45,14 @@
                 || request()->routeIs('web.reseller-tax-policies.*')
                 || request()->routeIs('web.subscriptions.*')
                 || request()->routeIs('web.invoices.*')
-                || request()->routeIs('web.payment-reconciliation.*'),
+                || request()->routeIs('web.payment-reconciliation.*')
+                // Cluster "Profil Paket" dipindah ke sini dari "Network"
+                // (harga jual/modal paket = konsep Billing, bukan Network).
+                || request()->routeIs('web.bandwidth-profiles.*')
+                || request()->routeIs('web.customer-ip-pools.*')
+                || request()->routeIs('web.network-profile-groups.*')
+                || request()->routeIs('web.hotspot-packages.*')
+                || request()->routeIs('web.ppp-packages.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\TaxComponent::class)
                     ? ['route' => 'web.tax-components.index', 'label' => __('Tax Components')]
@@ -60,6 +69,38 @@
                 auth()->user()->can('viewAny', \App\Models\Invoice::class)
                     ? ['route' => 'web.payment-reconciliation.index', 'label' => __('Payment Reconciliation')]
                     : null,
+                // "Profil Paket" — grup collapsible TOGGLE-MURNI (tanpa
+                // key 'route'): klik parent HANYA expand/collapse, tidak
+                // navigasi ke mana pun. Beda dari NAS/Perangkat CPE yang
+                // parent row-nya tetap link ke halaman index-nya sendiri.
+                // Bandwidth Profile (dulu jadi link parent) kini jadi child
+                // pertama. Semua 5 permission selalu diberikan bersamaan
+                // (giveToAdminTier), jadi meng-gate seluruh grup pada
+                // viewAny(BandwidthProfile) tidak pernah menyembunyikan
+                // halaman yang bisa dicapai user — tiap child tetap punya
+                // check sendiri (defense in depth).
+                auth()->user()->can('viewAny', \App\Models\BandwidthProfile::class)
+                    ? [
+                        'id' => 'profil-paket',
+                        'toggle_only' => true,
+                        'label' => __('Profil Paket'),
+                        'children' => array_filter([
+                            ['route' => 'web.bandwidth-profiles.index', 'label' => __('Bandwidth Profile')],
+                            auth()->user()->can('viewAny', \App\Models\CustomerIpPool::class)
+                                ? ['route' => 'web.customer-ip-pools.index', 'label' => __('IP Pool Pelanggan')]
+                                : null,
+                            auth()->user()->can('viewAny', \App\Models\NetworkProfileGroup::class)
+                                ? ['route' => 'web.network-profile-groups.index', 'label' => __('Grup Profil')]
+                                : null,
+                            auth()->user()->can('viewAny', \App\Models\HotspotPackage::class)
+                                ? ['route' => 'web.hotspot-packages.index', 'label' => __('Profil Hotspot')]
+                                : null,
+                            auth()->user()->can('viewAny', \App\Models\PppPackage::class)
+                                ? ['route' => 'web.ppp-packages.index', 'label' => __('Profil PPP')]
+                                : null,
+                        ]),
+                    ]
+                    : null,
             ]),
         ],
         [
@@ -75,14 +116,16 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*') || request()->routeIs('web.bandwidth-profiles.*') || request()->routeIs('web.customer-ip-pools.*') || request()->routeIs('web.network-profile-groups.*') || request()->routeIs('web.hotspot-packages.*') || request()->routeIs('web.ppp-packages.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*'),
             // v0.8.1 — nested one level deeper than a plain link: an item
             // with a 'children' key renders as its own expand/collapse
             // sub-group (own localStorage key, same pattern as the
             // top-level clusters below) instead of a bare <a>. NAS/
             // Perangkat CPE both keep their own real index page as the
             // parent row's link — only the chevron toggles the sub-item,
-            // navigation still works independently of expand state.
+            // navigation still works independently of expand state. (Grup
+            // "Profil Paket" dulu di sini juga; sekarang pindah ke cluster
+            // "Billing & Finance" sebagai grup toggle-murni.)
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\Nas::class)
                     ? [
@@ -96,49 +139,6 @@
                     : null,
                 auth()->user()->can('viewAny', \App\Models\OltDevice::class)
                     ? ['route' => 'web.olt-devices.index', 'label' => __('OLT')]
-                    : null,
-                // v0.14.3.1 — was 3 separate flat items (Bandwidth Profile,
-                // IP Pool Pelanggan, Grup Profil), grouped into one
-                // collapsible "Profil Paket" parent, exact same 'children'
-                // pattern as NAS/Perangkat CPE above — Bandwidth Profile
-                // (the cluster's own v0.14.1 foundation) is the parent
-                // row's own link, the other two are its children. All 3
-                // permissions are always granted together (same
-                // giveToAdminTier() tier, see RolesAndPermissionsSeeder's
-                // own seedBandwidthProfilePermissions()/
-                // seedCustomerIpPoolPermissions()/
-                // seedNetworkProfileGroupPermissions() docblocks), so
-                // gating the whole group on BandwidthProfile's own
-                // viewAny() never hides a page a user could otherwise
-                // reach — each child still carries its own independent
-                // check too, same defense-in-depth as every other gated
-                // link in this file.
-                auth()->user()->can('viewAny', \App\Models\BandwidthProfile::class)
-                    ? [
-                        'id' => 'profil-paket',
-                        'route' => 'web.bandwidth-profiles.index',
-                        'label' => __('Profil Paket'),
-                        'children' => array_filter([
-                            auth()->user()->can('viewAny', \App\Models\CustomerIpPool::class)
-                                ? ['route' => 'web.customer-ip-pools.index', 'label' => __('IP Pool Pelanggan')]
-                                : null,
-                            auth()->user()->can('viewAny', \App\Models\NetworkProfileGroup::class)
-                                ? ['route' => 'web.network-profile-groups.index', 'label' => __('Grup Profil')]
-                                : null,
-                            // v0.14.4 — same cluster "Profil Paket", same
-                            // giveToAdminTier() posture as its 2 siblings
-                            // above (see seedHotspotPackagePermissions()).
-                            auth()->user()->can('viewAny', \App\Models\HotspotPackage::class)
-                                ? ['route' => 'web.hotspot-packages.index', 'label' => __('Profil Hotspot')]
-                                : null,
-                            // v0.14.5 — same cluster "Profil Paket", same
-                            // giveToAdminTier() posture as its siblings
-                            // above (see seedPppPackagePermissions()).
-                            auth()->user()->can('viewAny', \App\Models\PppPackage::class)
-                                ? ['route' => 'web.ppp-packages.index', 'label' => __('Profil PPP')]
-                                : null,
-                        ]),
-                    ]
                     : null,
                 // v0.8.2 — plain permission check (no Eloquent model backs
                 // this page, LibreNMS device data isn't a boss_db table),
@@ -216,8 +216,14 @@
             {{ __('Dashboard') }}
         </a>
 
+        {{-- Semua grup collapsible DEFAULT TERTUTUP saat halaman pertama
+             dibuka. Pengecualian: grup yang route aktif-nya ada di dalamnya
+             ($cluster['active'] / $subActive) di-auto-buka supaya user tahu
+             posisinya. Pilihan manual user tetap dipersist di localStorage
+             ('true' = pernah dibuka manual) dan dihormati untuk grup yang
+             TIDAK sedang aktif. --}}
         @foreach ($clusters as $cluster)
-            <div x-data="{ open: localStorage.getItem('sidebar-cluster-{{ $cluster['id'] }}') !== 'false' }">
+            <div x-data="{ open: {{ $cluster['active'] ? 'true' : 'false' }} || localStorage.getItem('sidebar-cluster-{{ $cluster['id'] }}') === 'true' }">
                 <button
                     type="button"
                     x-on:click="open = !open; localStorage.setItem('sidebar-cluster-{{ $cluster['id'] }}', open)"
@@ -239,29 +245,50 @@
                 >
                     @foreach ($cluster['links'] as $link)
                         @if (! empty($link['children']))
-                            {{-- v0.8.1 — nested sub-group: the parent row is
-                                 still a real link to its own index page, the
-                                 chevron independently toggles the children
-                                 list below it (own localStorage key so the
-                                 expand state persists like top-level
-                                 clusters do). --}}
-                            <div x-data="{ subOpen: localStorage.getItem('sidebar-subgroup-{{ $link['id'] }}') !== 'false' }">
-                                <div class="flex items-center rounded-md {{ request()->routeIs($link['route']) ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100' }}">
-                                    <a href="{{ route($link['route']) }}" class="flex-1 px-3 py-1.5 text-sm">
-                                        {{ $link['label'] }}
-                                    </a>
+                            @php
+                                // Dua tipe parent grup:
+                                //  - link-and-toggle: punya key 'route' — label = link ke
+                                //    halaman index-nya sendiri, chevron toggle child (NAS,
+                                //    Perangkat CPE). Perilaku lama, tidak diubah.
+                                //  - toggle-murni: TANPA key 'route' (atau 'toggle_only') —
+                                //    klik parent HANYA expand/collapse, tidak navigasi
+                                //    (Profil Paket).
+                                $isToggleOnly = empty($link['route']);
+                                $subActive = (! $isToggleOnly && request()->routeIs($link['route']))
+                                    || collect($link['children'])->contains(fn ($c) => request()->routeIs($c['route']));
+                            @endphp
+                            <div x-data="{ subOpen: {{ $subActive ? 'true' : 'false' }} || localStorage.getItem('sidebar-subgroup-{{ $link['id'] }}') === 'true' }">
+                                @if ($isToggleOnly)
                                     <button
                                         type="button"
                                         x-on:click="subOpen = !subOpen; localStorage.setItem('sidebar-subgroup-{{ $link['id'] }}', subOpen)"
                                         x-bind:aria-expanded="subOpen.toString()"
                                         aria-controls="sidebar-subgroup-{{ $link['id'] }}"
-                                        class="px-2 py-1.5 focus:outline-none"
+                                        class="w-full flex items-center justify-between px-3 py-1.5 text-sm rounded-md focus:outline-none {{ $subActive ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100' }}"
                                     >
+                                        <span>{{ $link['label'] }}</span>
                                         <svg x-bind:class="subOpen ? 'rotate-90' : ''" class="w-3.5 h-3.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
                                         </svg>
                                     </button>
-                                </div>
+                                @else
+                                    <div class="flex items-center rounded-md {{ request()->routeIs($link['route']) ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100' }}">
+                                        <a href="{{ route($link['route']) }}" class="flex-1 px-3 py-1.5 text-sm">
+                                            {{ $link['label'] }}
+                                        </a>
+                                        <button
+                                            type="button"
+                                            x-on:click="subOpen = !subOpen; localStorage.setItem('sidebar-subgroup-{{ $link['id'] }}', subOpen)"
+                                            x-bind:aria-expanded="subOpen.toString()"
+                                            aria-controls="sidebar-subgroup-{{ $link['id'] }}"
+                                            class="px-2 py-1.5 focus:outline-none"
+                                        >
+                                            <svg x-bind:class="subOpen ? 'rotate-90' : ''" class="w-3.5 h-3.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                @endif
                                 <div id="sidebar-subgroup-{{ $link['id'] }}" x-show="subOpen" x-transition class="ml-4 mt-1 space-y-1">
                                     @foreach ($link['children'] as $child)
                                         <a

@@ -59,6 +59,11 @@ class PppPackage extends Model
             'promo_price' => 'decimal:2',
             'tax_percent' => 'decimal:2',
             'active_duration_unit' => HotspotDurationUnit::class,
+            // Revisi Prioritas Dropdown — dulu string bebas ('Default'),
+            // sekarang integer 1-8 (RouterOS Queue Priority) — lihat
+            // App\Support\RouterOsQueuePriority untuk verifikasi range/
+            // default dan mekanisme push-nya.
+            'priority' => 'integer',
             'login_days' => 'array',
             'is_active' => 'boolean',
             'mikrotik_sync_status' => MikrotikSyncStatus::class,

@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use App\Enums\NetworkProfileGroupType;
 use App\Models\CustomerIpPool;
 use App\Models\NetworkProfileGroup;
+use App\Support\ProfilPaketAttributeLabels;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -117,5 +118,16 @@ class StoreNetworkProfileGroupRequest extends FormRequest
         if (! $pool->usage_type->isCompatibleWith($groupType)) {
             $validator->errors()->add('customer_ip_pool_id', "IP Pool ini bertipe pemakaian \"{$pool->usage_type->label()}\", tidak cocok untuk Grup Profil tipe \"{$groupType->label()}\".");
         }
+    }
+
+    /**
+     * Revisi Pesan Error Bahasa Indonesia — nama field di pesan validasi
+     * (mis. "Harga Jual wajib diisi." bukan "The sell price field is
+     * required.") lewat satu sumber tunggal dipakai lintas seluruh cluster
+     * "Profil Paket" — lihat ProfilPaketAttributeLabels sendiri.
+     */
+    public function attributes(): array
+    {
+        return ProfilPaketAttributeLabels::forFormRequest();
     }
 }

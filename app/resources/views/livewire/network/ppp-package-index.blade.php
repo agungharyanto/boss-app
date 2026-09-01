@@ -94,7 +94,11 @@
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700">{{ __('Prioritas') }}</label>
-                    <input type="text" wire:model="priority" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                    <select wire:model="priority" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                        @foreach ($priorityOptions as $value => $label)
+                            <option value="{{ $value }}">{{ $label }}</option>
+                        @endforeach
+                    </select>
                     @error('priority') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                 </div>
             </div>
@@ -227,7 +231,11 @@
                                             </select>
                                         </div>
                                         <input type="number" min="1" wire:model="editSharedUsers" placeholder="{{ __('Shared Users') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
-                                        <input type="text" wire:model="editPriority" placeholder="{{ __('Prioritas') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                        <select wire:model="editPriority" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                            @foreach ($priorityOptions as $value => $label)
+                                                <option value="{{ $value }}">{{ $label }}</option>
+                                            @endforeach
+                                        </select>
                                     </div>
                                     @error('editActiveDurationValue') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                                     @error('editActiveDurationUnit') <span class="text-xs text-red-600">{{ $message }}</span> @enderror

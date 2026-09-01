@@ -443,4 +443,14 @@ class NasIndex extends Component
         $this->apiPort = 8728;
         $this->resetErrorBag();
     }
+
+    /**
+     * Revisi Pesan Error Bahasa Indonesia — hanya field milik modal "Profil
+     * Pelanggan Expired" (bagian dari cluster "Profil Paket") yang relevan
+     * di komponen ini; field NAS lainnya di luar scope revisi ini.
+     */
+    public function validationAttributes(): array
+    {
+        return ['expiredProfileIpPoolId' => 'IP Pool'];
+    }
 }

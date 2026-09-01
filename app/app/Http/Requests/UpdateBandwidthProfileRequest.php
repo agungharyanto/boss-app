@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Models\BandwidthProfile;
+use App\Support\ProfilPaketAttributeLabels;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -54,5 +55,16 @@ class UpdateBandwidthProfileRequest extends FormRequest
             'download_max' => ['sometimes', 'required', 'integer', 'gte:download_min'],
             'is_active' => ['sometimes', 'boolean'],
         ];
+    }
+
+    /**
+     * Revisi Pesan Error Bahasa Indonesia — nama field di pesan validasi
+     * (mis. "Harga Jual wajib diisi." bukan "The sell price field is
+     * required.") lewat satu sumber tunggal dipakai lintas seluruh cluster
+     * "Profil Paket" — lihat ProfilPaketAttributeLabels sendiri.
+     */
+    public function attributes(): array
+    {
+        return ProfilPaketAttributeLabels::forFormRequest();
     }
 }

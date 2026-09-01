@@ -1587,3 +1587,83 @@ permission `monitoring.manage`.
 ```json
 { "success": true, "message": "Device berhasil dihapus dari LibreNMS", "data": null, "meta": [] }
 ```
+
+## Core Network Infrastructure Management (v0.16.0, Langkah 3)
+
+Inventaris topologi fiber — `fiber_nodes` (OTB/Closure/ODC) melengkapi `odps` (ODP, v0.5.0) yang sudah ada.
+Tier-admin-only, permission `network_infrastructure.view`/`.manage` (di-seed Langkah 2). Business logic di
+`App\Services\Network\FiberTopologyService` (BOSS-006) — Controller tipis. `FiberNodePolicy` menjaga
+`fiber-nodes/*`; `fiber-cables`/`splitters`/`fiber-accessories` memakai pengecekan permission mentah (tidak
+ada Policy per-model terpisah, ketiganya berbagi satu pasang permission tanpa distingsi per-baris).
+
+### `GET /fiber-nodes`
+
+List `fiber_nodes` milik tenant yang login. Query optional: `?node_type=` (`otb`/`closure`/`odc`),
+`?search=` (local_label), `?per_page=`.
+
+### `POST /fiber-nodes`
+
+Body: `node_type` (required, `otb`/`closure`/`odc`), `local_label` (optional), `reseller_id` (optional),
+`parent_type`/`parent_id` (optional — morph ke `FiberNode` atau `Odp`, nilai `parent_type` adalah FQCN
+literal, mis. `App\Models\FiberNode` — belum ada alias pendek di sprint ini), `latitude`/`longitude`
+(optional), `notes` (optional). `loss_in_db`/`loss_out_db` **wajib diisi kalau `node_type=odc`**, opsional
+untuk `otb`/`closure` (lihat `FiberTopologyService::isLossRequired()`).
+
+### `GET /fiber-nodes/{fiber_node}` · `PUT /fiber-nodes/{fiber_node}` · `DELETE /fiber-nodes/{fiber_node}`
+
+`PUT` — field sama seperti `POST`, `node_type` `sometimes`. Aturan `loss_in_db`/`loss_out_db` wajib untuk
+ODC berlaku juga di sini (fallback ke tipe/loss tersimpan kalau field itu tidak ikut dikirim). `DELETE` —
+soft delete.
+
+### `GET /fiber-cables` · `POST /fiber-cables`
+
+Body `POST`: `from_type`/`from_id`, `to_type`/`to_id` (morph ke `FiberNode`/`Odp`, endpoint harus beda),
+`total_cores` (wajib genap), `tube_count`, `cores_per_tube` (`tube_count * cores_per_tube` harus sama
+dengan `total_cores`, juga harus genap). Sukses langsung auto-generate baris `FiberCore` sejumlah
+`total_cores`, warna `tube_color`/`core_color` dari siklus 12 warna TIA/EIA-598-C
+(`App\Services\Network\FiberColorService`).
+
+### `GET /splitters` · `POST /splitters`
+
+Body `POST`: `owner_type`/`owner_id` (morph ke `FiberNode`/`Odp`), `ratio` (string bebas, mis. `"1:8"`),
+`model` (optional). **v0.16.0 Langkah 4**: `GET` sekarang di-scope per tenant lewat
+`Splitter::scopeTenantScoped()` — sebelumnya (Langkah 3) `index()` genuinely tidak difilter tenant sama
+sekali (Splitter tidak punya kolom `tenant_id` sendiri, diturunkan implisit dari owner-nya), bug cross-
+tenant nyata yang ditemukan & ditutup di Langkah 4, bukan perilaku yang disengaja sebelumnya.
+
+### `GET /fiber-accessories` · `POST /fiber-accessories`
+
+Body `POST`: **salah satu wajib** `fiber_cable_id` ATAU `splitter_id` (tidak boleh dua-duanya),
+`accessory_type` (`pin_adaptor`/`connector`/`splice_fusion`/`splice_mechanical`), `expected_loss_db`/
+`measured_loss_db` (optional), `location_note` (optional). `GET` juga di-scope per tenant sejak Langkah 4
+(`FiberAccessory::scopeTenantScoped()`), bug yang sama seperti `/splitters` di atas.
+
+```json
+{
+  "success": true,
+  "message": "Titik topologi fiber berhasil dibuat",
+  "data": {
+    "id": 1,
+    "tenant_id": 1,
+    "reseller_id": null,
+    "node_type": "odc",
+    "node_type_label": "ODC",
+    "local_label": "ODC-Kaliwungu-1",
+    "parent_type": null,
+    "parent_id": null,
+    "latitude": -6.9,
+    "longitude": 110.4,
+    "loss_in_db": 1.2,
+    "loss_out_db": 1.5,
+    "notes": null,
+    "photos": [],
+    "created_at": "2026-09-01T10:00:00+00:00",
+    "updated_at": "2026-09-01T10:00:00+00:00"
+  },
+  "meta": []
+}
+```
+
+**Belum ada di Langkah 3** (menyusul di Langkah 4): visual splice-diagram, link Google Maps direction,
+capacity report. Halaman web CRUD dasar (Livewire) + upload foto (GPS+kamera browser, draft offline
+localStorage) sudah ada di `/fiber-nodes` — lihat `docs/ROADMAP.md`'s bagian v0.16.0 untuk detail.

@@ -46,6 +46,7 @@
 | v0.14.6 | Network         | RouterOS Live-Push — Generalisasi | Fondasi live-push SUDAH ADA sejak v0.14.2.1 (khusus IP Pool) — sub-versi ini generalisasi pola yang sama (Job async, kolom sync status, komentar-stabil-sebagai-lookup-key, retry+backoff) ke Bandwidth Profile/Grup Profil/Profil Hotspot/Profil PPP. **Lihat governance note NAS test-x86-bajastu vs ro-hotspot di CLAUDE.md — WAJIB dibaca sebelum sub-versi ini dikerjakan** | Backlog |
 | v0.14.7 | Network         | Push ke NAS — UI & Rollout Produksi | Tombol "Push ke NAS" di UI Grup Profil/Profil Hotspot/Profil PPP, rollout ke NAS produksi setelah v0.14.6 diverifikasi aman di NAS uji coba | Backlog |
 | v0.15.0 | Operasional     | Management Ticketing          | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Sistem tiket untuk dukungan/komplain pelanggan. Decision-gate scope lengkap (alur, integrasi modul lain, siapa yang bisa buka/tutup tiket, dll) dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
+| v0.16.0 | Network         | Core Network Infrastructure Management | Inventaris topologi fiber fleksibel (OTB/Closure/ODC self-referencing parent via `fiber_nodes`, ODP tetap di tabel `odps` v0.5.0 existing + kolom parent link tambahan) — GPS+foto per titik, kabel/tube/core (jumlah genap saja, warna TIA/EIA-598-C auto+override), splitter rasio bebas + redaman (in/out) dengan referensi non-blocking, aksesori (pin adaptor/connector/splice) dengan redaman terukur, visual splice-diagram (bukan tabel polos), klik koordinat→Google Maps direction, notifikasi fault-correlation ODP penuh ke OdpLocatorService, draft offline localStorage. Langkah 0-13 selesai (…Langkah 8: cluster sidebar "Topology Fiber", Peta Topologi Leaflet + waypoint; Langkah 9: peta per-kabel, satelit Esri, ekspor KMZ; Langkah 10: layer checklist + Pelanggan + filter KMZ; Langkah 11: OSRM routing self-hosted + Cek Jalur ke ODP + kapasitas ODP popup; Langkah 12: bind koordinat pelanggan manual + multi-select layer kabel; Langkah 13: CapacityReport hormati soft-delete + penamaan kabel deskriptif + scroll checklist; cleanup data test dieksekusi) — draft offline diverifikasi masih jalan di penutupan sprint | Selesai — commit final di branch v0.16.0-core-network-infrastructure, menunggu konfirmasi merge/tag Agung |
 | v0.17.0 | Operasional     | UI/UX Polish — Profesionalisasi Tampilan BOSS App | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Perbaikan visual menyeluruh (warna, tipografi, spacing, komponen) memakai skill `ui-ux-pro-max` (terinstal `2026-08-31`, lihat catatan instalasi di bawah), target stack Laravel Blade/Livewire yang dipakai BOSS App. Halaman/area prioritas mana yang dipoles duluan akan di-decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
@@ -1701,3 +1702,655 @@ berhasil di percobaan pertama.
 **Scope v0.17.0 sendiri sengaja belum ditentukan** — baris tabel di atas cuma reservasi nomor+nama+skill,
 sama seperti pola `v0.15.0` (Ticketing). Decision-gate halaman/area prioritas dilakukan terpisah saat sprint
 ini dimulai, bukan sekarang.
+
+## v0.16.0 — Core Network Infrastructure Management (branch `v0.16.0-core-network-infrastructure`, Langkah 0-1: investigasi + migration skeleton, implementasi Model/Service/UI belum dimulai)
+
+Modul inventaris topologi fiber (OTB/Closure/ODC/kabel/tube/core/splitter/aksesori) — melengkapi `odps`
+(v0.5.0, cuma titik ODP) dengan seluruh titik/segmen topologi fiber lain yang selama ini tidak tercatat sama
+sekali di BOSS App. Branch dibuat dari `main` di titik tag `v0.14.5` (plus commit dokumentasi murni
+`v0.17.0`, tanpa kode) — dikonfirmasi via `git log`/`git tag` sebelum mulai, bukan diasumsikan.
+
+**Langkah 0 (investigasi read-only) — 4 poin, semua dikonfirmasi lewat pembacaan file asli, bukan histori
+chat**:
+
+1. **Cek collision nama** (`FiberNode`/`fiber_nodes`/`FiberCable`/`fiber_cables`/`FiberCore`/`fiber_cores`/
+   `Splitter`/`splitters`/`FiberAccessory`/`fiber_accessories`/`FiberNodePhoto`/`fiber_node_photos`) — bersih,
+   nol collision nyata. Satu-satunya hit ("Splitter", 2x) murni prose comment di docblock
+   `cpe-devices/show.blade.php` (istilah topologi GenieACS/TR-069), bukan class/table/route nyata.
+2. **Struktur `odps`/`odp_ports` dibaca ulang langsung dari migration/model/factory asli** — persis cocok
+   dengan yang didokumentasikan di CLAUDE.md (kolom, `OdpLocatorService::findNearestAvailable()`'s Haversine
+   SQL + scoping tenant/reseller). Tidak ada migration ALTER apa pun terhadap kedua tabel ini sejak v0.5.0.
+   **Satu diskrepansi ditemukan dan dikoreksi** (lihat "Koreksi Langkah 0 poin 2" di bawah) — `odps` genuinely
+   tidak punya kolom `status`/`node_type`/`deleted_at` sama sekali, desain awal yang mengasumsikan gate
+   validasi "status bukan draft" pada `odps` salah dan sudah dibatalkan.
+3. **Morph relation existing** — ada SATU (`App\Models\ResellerTaxLedger::reference(): MorphTo`, v0.3.3),
+   tapi satu arah saja (tanpa `morphMany` pasangan, tanpa FK constraint DB, satu konsumer nyata `Invoice`).
+   Pola v0.16.0 (morph dua arah ke beberapa tipe parent — `FiberNode`/`Odp` sekaligus, dengan navigasi
+   `hasMany`-style dari sisi parent) genuinely pola baru di codebase ini — dicatat eksplisit sesuai instruksi.
+4. **Skill `ui-ux-pro-max`** — dikonfirmasi aktif (`claude plugin list`: versi `2.13.0`, scope `user`, status
+   `enabled`).
+
+**Koreksi Langkah 0 poin 2 (dari Agung, sebelum Langkah 1 dimulai)**: instruksi awal ("`loss_in_db`/
+`loss_out_db` WAJIB NOT NULL di Service layer khusus untuk `node_type` odc/odp saat status bukan draft")
+adalah kesalahan desain di sisi planning, bukan temuan yang perlu diakomodasi kolom baru. Desain yang benar,
+dikonfirmasi eksplisit:
+- `loss_in_db`/`loss_out_db` di `fiber_nodes` DAN `odps` **tetap nullable, tanpa constraint apa pun** di
+  level DB maupun Model/Eloquent — sengaja, karena banyak baris `odps` lama (v0.5.0) belum pernah disurvei
+  datanya, dan alur existing (registrasi pelanggan, `OdpLocatorService`, assignment port `WorkOrder`) tidak
+  boleh terganggu sama sekali oleh requirement baru ini.
+- "Wajib diisi" hanya akan berlaku sebagai validasi FormRequest di form input/edit data splice (Langkah 2,
+  belum dibangun) — scope form itu: `fiber_nodes` bertipe `node_type=odc` + SEMUA baris `odps` (satu baris
+  `odps` = satu ODP, tidak butuh `node_type`). OTB/Closure tidak wajib redaman (bukan titik splitting).
+- **Tidak ada kolom `status`/draft yang ditambahkan ke tabel manapun di sprint ini** — kalau Langkah 2 nanti
+  ternyata butuh state seperti itu, didiskusikan terpisah saat itu, bukan diasumsikan sekarang.
+
+**Langkah 1 — migration skeleton (schema-only, TANPA Model/Service/Livewire/API)**, dijalankan sesuai desain
+Langkah 0 di atas (tidak ada perubahan dari draft semula selain koreksi di atas):
+
+- `fiber_nodes`: `id`, `tenant_id` (FK), `reseller_id` (nullable FK, pola sama `odps`), `node_type` (enum:
+  `otb`/`closure`/`odc`), `local_label` (nullable), `parent_type`/`parent_id` (nullable morph,
+  self-referencing ke `fiber_nodes` lain), `latitude`/`longitude` (`decimal:10,7`, nullable — beda dari
+  `odps` yang NOT NULL, karena sebuah `fiber_node` baru bisa saja belum dipetakan GPS-nya saat baris pertama
+  dibuat), `loss_in_db`/`loss_out_db` (nullable, tanpa constraint — lihat koreksi di atas), `notes`
+  (nullable), timestamps, `deleted_at` (soft delete).
+- Alter `odps`: tambah `parent_type`/`parent_id` (nullable morph) + `loss_in_db`/`loss_out_db` (nullable,
+  tanpa constraint) — kolom lain yang sudah ada TIDAK disentuh, `odp_ports` TIDAK disentuh sama sekali.
+- `fiber_node_photos`: `id`, `owner_type`/`owner_id` (morph ke `fiber_nodes` ATAU `odps`), `photo_path`,
+  `caption` (nullable), `taken_at` (nullable), timestamps.
+- `fiber_cables`: `id`, `tenant_id` (FK), `from_type`/`from_id` (morph), `to_type`/`to_id` (morph),
+  `total_cores` (unsignedInteger — validasi genap di Service/FormRequest Langkah 2, bukan DB constraint),
+  `tube_count`, `cores_per_tube`, timestamps.
+- `fiber_cores`: `id`, `fiber_cable_id` (FK `cascadeOnDelete`), `tube_number`, `core_number_in_tube`,
+  `tube_color`/`core_color` (nullable override), `status` (enum: `used`/`spare`), timestamps. Unique
+  `(fiber_cable_id, tube_number, core_number_in_tube)`.
+- `splitters`: `id`, `owner_type`/`owner_id` (morph ke `fiber_nodes`/`odps`), `ratio` (string bebas, mis.
+  `"1:8"`), `model` (nullable), timestamps.
+- `fiber_accessories`: `id`, `fiber_cable_id` (nullable FK) ATAU `splitter_id` (nullable FK) — salah satu
+  wajib diisi (validasi Service layer Langkah 2, bukan DB constraint), `accessory_type` (enum:
+  `pin_adaptor`/`connector`/`splice_fusion`/`splice_mechanical`), `expected_loss_db`/`measured_loss_db`
+  (decimal), `location_note` (nullable), timestamps.
+
+**Tidak ada Model/Service/Livewire/API ditulis di sesi ini** — murni migration + dokumentasi roadmap, sesuai
+instruksi eksplisit. Langkah 2 (Model + Service + validasi + seed referensi redaman splitter) menunggu
+prompt terpisah.
+
+**Langkah 2 — Model, Enum, Service layer, validasi, referensi redaman (backend saja, belum ada Livewire/
+UI/route)**:
+
+- 3 enum baru: `FiberNodeType` (otb/closure/odc), `FiberCoreStatus` (used/spare), `FiberAccessoryType`
+  (pin_adaptor/connector/splice_fusion/splice_mechanical) — pola sama enum existing (backed string + label()).
+- 6 Model baru (`FiberNode`, `FiberNodePhoto`, `FiberCable`, `FiberCore`, `Splitter`, `FiberAccessory`) +
+  6 factory pasangannya. **Morph dua arah genuinely dibangun** (bukan cuma `morphTo()` satu arah seperti
+  `ResellerTaxLedger::reference()`) — `FiberNode`/`Odp` sama-sama dapat `parent()`/`photos()`/`splitters()`/
+  `cablesAsFrom()`/`cablesAsTo()`/`fiberCablesAsEndpoint()`; `FiberNode` juga dapat `childNodes()`/
+  `childOdps()`. `Odp.php` (v0.5.0, existing) diperluas dengan relasi-relasi ini plus `parent_type`/
+  `parent_id`/`loss_in_db`/`loss_out_db` ditambahkan ke `$fillable`/`casts()` — kolom-kolom ini sudah ada di
+  DB sejak migration Langkah 1 tapi belum pernah dipakai model sampai sekarang. Diverifikasi langsung lewat
+  `tinker` ke database dev real: `parent()`, `childOdps()`, `photos()`, `splitters()`,
+  `fiberCablesAsEndpoint()` semuanya genuinely bekerja end-to-end (data test dibersihkan setelahnya).
+- `App\Services\Network\FiberColorService` — siklus 12 warna TIA/EIA-598-C, `resolveColor(int $position)`,
+  posisi 1/13/25 dan 12/24 dikonfirmasi menghasilkan warna yang sama (test).
+- `App\Services\Network\SplitterLossReferenceService` — referensi redaman non-blocking per rasio splitter
+  (`expectedLossFor()`, `null` untuk rasio custom di luar tabel — bukan error) + default redaman per
+  `FiberAccessoryType`.
+- `App\Services\Network\FiberTopologyService` — `createCable()` (validasi core genap + tube×core-per-tube
+  genap + sama dengan total core, lalu auto-generate baris `FiberCore` dengan warna dari
+  `FiberColorService`) dan `isLossRequired(FiberNode|Odp $target): bool` (true untuk `FiberNode` tipe Odc
+  atau untuk `Odp` apa pun, false untuk OTB/Closure) — dipanggil dari FormRequest, bukan lifecycle
+  event/observer, sesuai koreksi desain Langkah 0/1 di atas.
+- 5 FormRequest baru (`StoreFiberNodeRequest`, `UpdateFiberNodeRequest`, `StoreFiberCableRequest`,
+  `StoreSplitterRequest`, `StoreFiberAccessoryRequest`) — pesan error kustom Bahasa Indonesia. **Catatan
+  cakupan penting**: `StoreOdpRequest`/`UpdateOdpRequest` (v0.5.0, existing, dipakai alur registrasi ODP
+  yang tidak boleh terganggu) SENGAJA TIDAK disentuh — validasi "loss wajib untuk ODP" untuk form registrasi
+  ODP existing bukan scope Langkah 2 ini; sisi "ODP" dari `isLossRequired()` diuji langsung terhadap Service
+  (bukan lewat FormRequest HTTP, karena belum ada FormRequest Odp yang menegakkannya) — lihat komentar di
+  `FiberTopologyServiceTest` untuk penjelasan lengkap. Form "data splice" v0.16 yang sesungguhnya menegakkan
+  ini untuk ODP adalah pekerjaan Langkah 3+.
+- Permission baru `network_infrastructure.view`/`.manage` (tier-admin-only, satu pasang untuk seluruh
+  modul) — ditambahkan ke `RolesAndPermissionsSeeder` DAN langsung di-re-seed ke database dev real
+  (disiplin yang sama dari insiden berulang di cluster v0.14.x — jangan asumsikan kode saja cukup).
+  **Catatan drift ditemukan, TIDAK diperbaiki di sesi ini (di luar scope)**: `stubs/laravel-app/database/
+  seeders/RolesAndPermissionsSeeder.php` sudah basi sejak sebelum sesi ini (hilang `seedHotspotPackagePermissions()`
+  dan seluruh permission Profil PPP) — bukan drift yang diperkenalkan sesi ini, dicatat di sini supaya
+  tidak terlupakan untuk sesi pembersihan terpisah.
+- **Bug nyata ditemukan dan diperbaiki sebelum sempat merusak apa pun**: docblock baru di
+  `RolesAndPermissionsSeeder.php` sempat mengandung `bandwidth_profiles.*/customer_ip_pools.*` — urutan
+  karakter `*/` menutup komentar PHP secara prematur, persis kelas bug yang sudah didokumentasikan
+  berulang kali di CLAUDE.md ("Infra Tunnel IP Block" — variabel/teks yang membentuk `*/` di dalam
+  komentar). Ditangkap langsung oleh `php -l`/Pint sebelum commit, diperbaiki dengan menghindari `.*/` di
+  prosa.
+- Test: 3 file Unit (`FiberColorServiceTest`, `SplitterLossReferenceServiceTest`,
+  `FiberTopologyServiceTest` — yang terakhir menyentuh DB nyata, pola penempatan sama seperti
+  `Tests\Unit\Services\Installation\OdpLocatorServiceTest`) + 1 file Feature
+  (`FiberNodeLossValidationTest`, menguji `StoreFiberNodeRequest`/`UpdateFiberNodeRequest` langsung tanpa
+  HTTP/route karena belum ada Controller — teknik standar Laravel: `Request::create()` + `Validator::make()`
+  + `$request->withValidator()` manual). 29 test baru, semua hijau.
+- Full regression suite: 1163/1163 hijau (1134 + 29 baru), Pint clean di semua file yang disentuh/dibuat.
+
+**Tidak ada Livewire/route/view ditulis** — Langkah 3 (termasuk visual splice-diagram pakai
+`ui-ux-pro-max`) menunggu prompt terpisah.
+
+**Langkah 3 — API route + Livewire CRUD dasar + GPS/foto browser + menu sidebar (belum visual
+splice-diagram, itu Langkah 4)**:
+
+- **API** (Sanctum, tier-admin-only): `GET/POST/GET-show/PUT/DELETE /api/v1/fiber-nodes`,
+  `GET/POST /api/v1/fiber-cables`, `GET/POST /api/v1/splitters`, `GET/POST /api/v1/fiber-accessories` —
+  lihat `docs/API.md`'s bagian "Core Network Infrastructure Management" untuk detail lengkap. Controller
+  tipis (BOSS-006) — semua logic ke `FiberTopologyService`, diperluas dengan `createNode()`/`updateNode()`/
+  `deleteNode()`/`createSplitter()`/`createAccessory()`/`updateCoordinates()`/`addPhoto()`/`deletePhoto()`/
+  `listTopologyPoints()` (union query `fiber_nodes`+`odps`, di Service bukan Livewire, sesuai instruksi).
+  `FiberNodePolicy` (viewAny/view/manage, pola sama `BandwidthProfilePolicy`) menjaga `/fiber-nodes/*` —
+  `fiber-cables`/`splitters`/`fiber-accessories` TIDAK punya Policy per-model sendiri (tidak diminta),
+  memakai pengecekan permission mentah (`network_infrastructure.view`/`.manage`) langsung di Controller,
+  sama posture `MonitoringController`.
+- **Bug nyata ditangkap sebelum sempat jalan**: `listTopologyPoints()` versi pertama memakai `union()`
+  langsung di atas Eloquent Builder — baris hasil `odps` akan di-hydrate sebagai model `FiberNode` (karena
+  union dipanggil dari Builder `FiberNode`), lalu `casts()` `FiberNode` mencoba cast string literal `'odp'`
+  ke enum `FiberNodeType` yang tidak punya case itu → crash. Diperbaiki dengan `->toBase()` di kedua sisi
+  sebelum `union()`/`get()` — scope global (tenant/reseller) sudah ter-bake ke WHERE clause di titik itu,
+  hasilnya `stdClass` polos tanpa casting Eloquent sama sekali. Diverifikasi ulang lewat `tinker` ke DB dev
+  real sebelum lanjut.
+- **Livewire (Blade+Alpine, tanpa React/Vue)**: `FiberNodeIndex` (list gabungan, filter `node_type`
+  termasuk pseudo-value `odp`, search) — `FiberNodeForm` (create/edit OTB/Closure/ODC) — sengaja
+  `component Livewire TERPISAH` dari Index (beda dari pola "satu mega-komponen" cluster Profil Paket)
+  supaya bisa dipakai ulang. `GpsPhotoCapture` (reusable, embed di `FiberNodeForm` mode edit DAN halaman
+  baru `OdpEdit`) — desain final: SELALU butuh owner yang sudah tersimpan (tidak pernah `null`), karena
+  Livewire tidak bisa oper `TemporaryUploadedFile` antar komponen lewat network round-trip — mode CREATE
+  `FiberNodeForm` pakai input lat/long polos sendiri, redirect ke mode edit (komponen sama, id baru) begitu
+  tersimpan, baru `GpsPhotoCapture` muncul. Tombol "Ambil lokasi saya" (Alpine `navigator.geolocation`)
+  cuma isi input, TIDAK auto-submit — user tetap bisa geser manual. Foto: `type=file capture="environment"`
+  multiple, preview thumbnail via `TemporaryUploadedFile->temporaryUrl()` SEBELUM tombol "Unggah Foto"
+  ditekan (bukan auto-upload saat file dipilih).
+- **Temuan nyata, bukan diasumsikan**: dikonfirmasi lewat grep sebelum membangun apa pun — **tidak ada
+  halaman web edit Odp sama sekali** di codebase ini (Odp API-only sejak v0.5.0, `OdpController`,
+  kemungkinan dikonsumsi app lapangan/teknisi terpisah). Instruksi "reuse ke halaman edit Odp yang sudah
+  ada" TIDAK bisa dipenuhi harfiah karena halaman itu tidak eksis — dibuat halaman BARU minimal,
+  `App\Livewire\Installation\OdpEdit` (`/odps/{odp}/edit`), yang **TIDAK menyentuh** `StoreOdpRequest`/
+  `UpdateOdpRequest`/`OdpController` v0.5.0 sama sekali — `code`/`name`/`total_ports` ditampilkan READ-ONLY,
+  cuma field baru v0.16.0 (parent link, `loss_in_db`/`loss_out_db` — WAJIB untuk Odp, tidak pernah nullable
+  di UI ini, sesuai `isLossRequired()`) + GPS/foto (lewat `GpsPhotoCapture`) yang bisa diedit, lewat method
+  Service baru `FiberTopologyService::updateOdpTopologyFields()` yang terpisah total dari alur registrasi
+  lama. Diuji eksplisit (`OdpEditLivewireTest::test_saving_never_touches_odps_own_core_registration_fields`)
+  bahwa `code`/`name`/`total_ports` genuinely tidak berubah lewat halaman ini.
+- **`App\Http\Controllers\FiberNodePhotoController`** (baru) — tidak ada preseden serving foto private-disk
+  ke Blade di codebase ini sebelumnya (`WorkOrderPhoto`, sepupu terdekat, upload-only lewat API, tidak
+  pernah ditampilkan balik di UI manapun) — endpoint kecil auth-gated (`network_infrastructure.view`/
+  `.manage`) supaya `<img>` di `GpsPhotoCapture` bisa menampilkan foto yang sudah tersimpan.
+- **Draft offline** (`FiberNodeForm` saja, sesuai scope) — localStorage key `fiber_node_draft_new`/
+  `fiber_node_draft_{id}`, ditulis via listener `input` ter-debounce di root form (bukan `x-model` per-field
+  terpisah — lebih sederhana untuk 9 field `wire:model`), ditawarkan "Lanjutkan draft tersimpan?" saat form
+  dibuka dan draft ada (tidak pernah auto-overwrite), dihapus dari localStorage lewat event
+  `fiber-node-saved` yang di-dispatch `FiberNodeForm::save()` setelah sukses.
+- **Menu sidebar**: "Topologi Fiber" ditambahkan ke cluster "Network" yang sudah ada (bukan cluster baru —
+  dikonfirmasi cluster ini sudah eksis sejak v0.3.1), pola `viewAny` guard yang sama dengan link lain di
+  cluster itu.
+- **Gotcha test nyata**: `UploadedFile::fake()->image(...)` butuh ekstensi GD PHP, yang TIDAK terpasang di
+  environment ini — diperbaiki pakai `UploadedFile::fake()->create($name, $kb, $mimeType)` (fake file
+  dengan MIME eksplisit, tidak butuh GD sama sekali) — tidak memengaruhi kode produksi, `addPhoto()` cuma
+  menyimpan file mentah, tidak pernah memproses gambar.
+- **Test**: 20 Feature API (`FiberNodeApiTest`/`FiberCableApiTest`/`SplitterAndFiberAccessoryApiTest` —
+  401/403/201/200, tolak core ganjil, tolak endpoint sama di kedua sisi kabel, tolak aksesori
+  dua-pemilik/tanpa-pemilik) + 20 Livewire (`FiberNodeIndexLivewireTest`/`FiberNodeFormLivewireTest`/
+  `GpsPhotoCaptureLivewireTest`/`OdpEditLivewireTest` — render, submit sukses, validasi loss ODC/ODP). 40
+  test baru, semua hijau.
+- **Diverifikasi nyata lewat request HTTP sungguhan** (login session real + `curl` ke `boss-nginx`, bukan
+  cuma `Livewire::test()`): `GET /fiber-nodes` dan `GET /fiber-nodes/create` mengembalikan 200 dengan
+  konten yang benar; `GET /api/v1/fiber-nodes` lewat token Sanctum real mengembalikan envelope JSON yang
+  benar; link sidebar "Topologi Fiber" genuinely ada di HTML halaman real. Token test dihapus setelahnya.
+- Full regression suite: 1203/1203 hijau (1163 + 40 baru), Pint clean di semua file yang disentuh/dibuat.
+  `docs/API.md` diupdate dengan bagian baru untuk endpoint-endpoint ini.
+
+**Tidak dimulai: visual splice-diagram, link Google Maps direction, capacity report** — Langkah 4, akan
+pakai plugin `ui-ux-pro-max`, prompt terpisah menyusul.
+
+**Langkah 4 — Visual splice-diagram + Google Maps + Capacity Report + notifikasi ODP-penuh (v0.16.0 selesai
+penuh, Langkah 0-4)**:
+
+- **`ui-ux-pro-max` genuinely dipakai, tapi lewat CLI-nya langsung, bukan tool `Skill`** — plugin yang
+  di-install lewat `claude plugin install` di sesi sebelumnya (v0.17.0) belum terdaftar di tool `Skill`
+  sesi INI (butuh restart sesi Claude Code untuk plugin baru terdaftar — keterbatasan siklus-hidup sesi,
+  bukan sesuatu yang bisa diperbaiki dari dalam sesi). Dipanggil langsung lewat `scripts/search.py`
+  plugin itu sendiri (persis cara dokumentasinya sendiri bilang harus dipanggil) — query ke domain
+  `chart`/`color`/`ux`/`style` menghasilkan panduan konkret yang genuinely dipakai: warna status traffic-
+  light (hijau <60%/amber 60-80%/merah >80%, dari pola "bullet chart"), density "data-dense dashboard"
+  (padding minimal, tabel compact) untuk Capacity Report, dan disiplin aksesibilitas "warna tidak pernah
+  jadi satu-satunya sinyal" (setiap swatch/badge selalu disertai teks) diterapkan di core-map dan progress
+  bar. **Dipakai HANYA untuk 3 komponen baru** (`FiberNodeDetail`/`CapacityReport` + partial pendukungnya)
+  — `FiberNodeIndex`/`FiberNodeForm`/`GpsPhotoCapture` dari Langkah 3 TIDAK dipoles ulang, cuma ditambah
+  link fungsional (Detail, Maps) memakai gaya visual yang SUDAH ada di file itu.
+- **`FiberNodeDetail`** (`/fiber-nodes/{id}/detail`, `/odps/{id}/detail` — satu komponen, dua route, karena
+  ODP juga titik splice yang sah) — diagram splice server-rendered (Blade+SVG inline, bukan library chart
+  baru): kabel masuk (kiri) | node/splitter di tengah (rasio+redaman) | kabel keluar/anak (kanan, grid
+  kartu — TIDAK pernah satu diagram raksasa untuk banyak percabangan, sesuai instruksi). Core map per
+  kabel: dot berwarna per core (grouped per tube), warna dari `FiberColorService::hexForName()`
+  (reverse-lookup baru) dengan fallback abu-abu + label teks untuk warna override yang bukan dari siklus
+  12 warna. List aksesori dengan badge warning (amber, bukan blocking) kalau selisih redaman terukur vs
+  referensi >2dB.
+- **`App\Services\Network\FiberTopologyService::spliceDiagramData()`** — union kabel masuk (`cablesAsTo`)/
+  keluar (`cablesAsFrom`, sumber "anak" untuk diagram — bukan `parent_type`/`parent_id`, sesuai instruksi
+  eksplisit yang minta pakai graf kabel) + splitter + aksesori, semua relasi Langkah 2 dipakai langsung
+  tanpa perubahan.
+- **`CapacityReport`** (`/capacity-report`, menu baru "Kapasitas Jaringan" di cluster Network) — 3 kategori
+  (ODP: port terpakai dari `odp_ports` langsung, tidak duplikasi data; Splitter: **lihat catatan
+  reinterpretasi di bawah**; Kabel: core terpakai dari `fiber_cores.status`), progress bar traffic-light,
+  filter cari + filter ">80% penuh".
+- **Reinterpretasi eksplisit, bukan penyimpangan diam-diam**: instruksi asli minta hitung kapasitas
+  splitter dari "`fiber_cables` yang `from_type`/`from_id` mengarah ke splitter" — tapi skema Langkah 2/3
+  yang sudah dibangun (`StoreFiberCableRequest`) memvalidasi `from_type`/`to_type` HANYA boleh `FiberNode`
+  atau `Odp`, tidak pernah `Splitter`. Daripada membuka ulang validasi Langkah 3 (di luar scope "jangan
+  sentuh halaman lain"), kapasitas splitter dihitung dari jumlah `FiberAccessory` yang `splitter_id`-nya
+  mengarah ke splitter itu (tiap aksesori = satu output leg splitter yang sudah diterminasi) dibanding
+  jumlah output dari string rasio (`"1:8"` → 8) — interpretasi yang setia ke skema nyata yang sudah ada,
+  dicatat di sini dan di `docs/API.md` supaya tidak diasumsikan sebagai bug.
+- **Bug keamanan nyata ditemukan & ditutup, bukan bagian dari scope asli Langkah 4**: `Splitter`/
+  `FiberAccessory` tidak punya kolom `tenant_id` sendiri (di-scope implisit lewat owner polimorfik,
+  sesuai desain Langkah 2) — tapi `SplitterController::index()`/`FiberAccessoryController::index()`
+  (Langkah 3) SAMA SEKALI tidak memfilter tenant, jadi setiap tenant bisa melihat splitter/aksesori
+  tenant lain lewat API. Ditemukan saat mendesain query Capacity Report (yang butuh query `Splitter`
+  langsung, bukan lewat relasi owner). Ditutup dengan `scopeTenantScoped()` baru di kedua model + dipakai
+  di kedua Controller Langkah 3 + 2 test regresi baru — diverifikasi nyata lewat `tinker` ke DB dev real
+  (query tanpa scope genuinely bocor 2 tenant, query dengan scope genuinely cuma 1) sebelum dipakai di
+  Controller.
+- **Google Maps direction** — link `https://www.google.com/maps/dir/?api=1&destination={lat},{lng}` (tab
+  baru) ditambahkan di `FiberNodeDetail` (header), `OdpEdit` (field baru `latitude`/`longitude` read-only
+  di `render()`, catatan: bisa sedikit basi sampai render berikutnya karena `GpsPhotoCapture` adalah child
+  Livewire terpisah — batasan kecil yang diterima, tidak diminta reaktif), dan `FiberNodeIndex` (icon SVG
+  kecil per baris yang punya GPS — penambahan fungsional saja, gaya visual tidak diubah).
+- **Notifikasi ODP-penuh** — infrastruktur GENUINELY BARU di codebase ini (dikonfirmasi lewat grep sebelum
+  membangun apa pun: tidak ada `App\Notifications`, `App\Events`, `App\Listeners`, atau tabel
+  `notifications` sama sekali, meski `User` sudah pakai trait `Notifiable` sejak scaffold awal, tidak
+  pernah dipakai). Dibangun jalur Laravel-native minimal: migration `notifications` (skema standar),
+  `App\Events\OdpCapacityExhausted`, `App\Notifications\OdpCapacityExhaustedNotification` (channel
+  `database` saja — bukan WhatsApp, karena ini alert internal staff, bukan pesan pelanggan, beda model
+  sesi/template sama sekali dari modul WhatsApp Gateway), `App\Listeners\NotifyOdpCapacityExhausted`
+  (`ShouldQueue`, auto-discovered Laravel, tidak perlu registrasi manual). `OdpLocatorService::
+  findNearestAvailable()` — signature/return type genuinely TIDAK berubah, cuma menyisipkan
+  `event(new OdpCapacityExhausted($customer))` tepat sebelum `return null` saat query benar-benar nol hasil
+  (bukan saat null karena pelanggan belum punya koordinat). `tests/Unit/Services/Installation/
+  OdpLocatorServiceTest.php` (v0.5.0) **zero diff**, dikonfirmasi lewat `git diff --stat`, 6 test lama tetap
+  hijau tanpa perubahan assertion — test event/notifikasi baru ada di file TERPISAH.
+- **Test**: 19 baru (7 `FiberNodeDetailLivewireTest` + 6 `CapacityReportLivewireTest` + 4
+  `OdpCapacityExhaustedEventTest` + 2 regresi cross-tenant leak di `SplitterAndFiberAccessoryApiTest`),
+  semua hijau. Full regression suite: 1222/1222 (1203 + 19 baru), Pint clean.
+- **Diverifikasi nyata lewat request HTTP sungguhan** (login session real + `curl`, bukan cuma
+  `Livewire::test()`): `GET /capacity-report`, `GET /fiber-nodes/{id}/detail` (termasuk link Maps genuinely
+  ada di HTML), dan sidebar "Kapasitas Jaringan" — semua dikonfirmasi 200 dengan konten benar. Data test
+  dibersihkan setelahnya.
+- `docs/API.md` diupdate (catatan fix tenant-scoping di `/splitters`/`/fiber-accessories`).
+
+**Langkah 5 — Splitter di form, GPS/foto pre-save, peta Leaflet, form kabel (perbaikan gap dari
+verifikasi UI Agung):**
+
+- **A. Section Splitter di form** — `FiberNodeForm` (hanya saat Tipe = ODC) & `OdpEdit` (ODP selalu titik
+  splitting): rasio bebas ketik + `<datalist>` saran + model, disimpan lewat
+  `FiberTopologyService::attachSplitter()` (owner = titik ini). Splitter yang sudah ada ditampilkan +
+  bisa dihapus. Rasio stale diabaikan bila Tipe di-switch keluar dari ODC sebelum simpan. **Tidak ada
+  tabel `splitter_photos` di skema v0.16** — "foto splitter" memakai bagian Foto milik titik itu (dicatat
+  di UI), bukan migration baru.
+- **B. `SplitterLossReferenceService`** — tambah rasio PON ganjil (1:3/1:5/1:6/1:7) + FBT asimetris
+  (50:50/40:60/30:70/20:80/10:90). Field rasio TETAP free-text; `suggestedRatios()` baru hanya mengisi
+  datalist; `expectedLossFor()` tetap `null` aman untuk rasio di luar tabel. **Catatan (tidak diubah,
+  di luar scope):** `FiberTopologyService::parseRatioOutputs()` di Capacity Report menafsirkan `X:Y`
+  sebagai Y leg — untuk splitter asimetris (fisiknya 1x2) ini akan salah hitung; belum diperbaiki karena
+  "jangan sentuh capacity calculation" masih berlaku, splitter asimetris di lapangan jarang.
+- **C. Investigasi GpsPhotoCapture edit-only** — bukan bug, **batasan sengaja** (didokumentasikan di
+  docblock kedua komponen): butuh owner yang sudah persisted (foto perlu `owner_id` nyata; Livewire tidak
+  bisa oper `TemporaryUploadedFile` antar 2 instance komponen). **Ditutup di sini**: create mode
+  `FiberNodeForm` kini punya tombol "Ambil lokasi saya" + picker foto (Livewire temporary upload, preview
+  sebelum simpan) + peta langsung di komponennya sendiri; `save()` create menulis node + foto + splitter
+  dalam SATU transaksi lewat `FiberTopologyService::createNodeWithAttachments()`. Pesan "GPS & foto
+  tersedia setelah titik ini disimpan" dihapus. Edit mode tetap delegasi GPS+foto ke `GpsPhotoCapture`
+  (yang juga dapat peta).
+- **D. Peta Leaflet + tile OSM** (gratis, tanpa API key) — `resources/js/app.js` `window.fiberLocationMap`
+  (di-bundle via Vite/npm `leaflet`, KONSISTEN dengan chart.js — bukan `<script>` CDN, jadi tercakup
+  `FrontendBuildTest` & tidak ada dependensi CDN runtime untuk tool internal; tile OSM tetap dari
+  `tile.openstreetmap.org` saat runtime). Pin draggable dua arah dengan field Latitude/Longitude (geser
+  pin → set field via `$wire.set(..., false)`; ketik field → `$watch('$wire.latitude')` → pin pindah).
+  Marker abu-abu = titik topologi lain (`FiberTopologyService::mapReferencePoints()`, tenant-scoped,
+  read-only). Div peta `wire:ignore` (Leaflet memiliki subtree-nya).
+- **E. `FiberCableForm`** (Livewire baru, `App\Livewire\Network\FiberCableForm`, route
+  `/fiber-nodes/{fiber_node}/cables/create` & `/odps/{odp}/cables/create`, tombol "Tambah kabel keluar"
+  di `FiberNodeDetail`) — pilih titik tujuan (`FiberTopologyService::cableTargetCandidates()` — exclude
+  diri sendiri + titik yang sudah jadi anak), `total_cores`/`tube_count`/`cores_per_tube` (validasi genap
+  + tube×core = total, pesan Indonesia inline). Setelah simpan → tabel review `FiberCore` (nomor tube/
+  core + badge warna via `FiberColorService`, bukan teks saja) dengan override warna manual per core
+  (`FiberTopologyService::overrideCoreColor()`). **Belum ada endpoint API untuk override warna per-core**
+  (fitur touch-up niche; `POST /fiber-cables` yang existing sudah menutup pembuatan kabel + generate
+  core).
+- **F. Poles ui-ux-pro-max** (Skill aktif) `FiberNodeForm`/`OdpEdit`/`FiberCableForm`: penanda field wajib
+  (`*` + legenda), `type="number"`/`inputmode="decimal"`, `<fieldset>`/`<legend>` + heading section,
+  `wire:loading` feedback tombol simpan ("Menyimpan…"), label ber-`for`/`id`, `aria-label` swatch warna,
+  peta di dekat field koordinat. Dalam sistem visual existing (gray-50 card, tombol primary) — bukan
+  palet baru.
+- **G. Test**: `FiberCableFormLivewireTest` (baru, 6), `FiberNodeFormLivewireTest` (+7: splitter create/
+  edit/hidden-non-ODC/stale, foto attach setelah simpan, gagal create tak menyisakan apa pun),
+  `OdpEditLivewireTest` (+1 splitter), `SplitterLossReferenceServiceTest` (+rasio baru + `suggestedRatios`),
+  `FiberTopologyServiceTest` (+5: createNodeWithAttachments/attachSplitter no-op/overrideCoreColor/
+  cableTargetCandidates/mapReferencePoints). Test lama `test_gps_photo_capture_widget_only_appears_in_edit_mode`
+  diganti (membalik batasan yang memang di-reverse poin C).
+
+**Langkah 6 — Fix upload foto, tombol kamera/galeri, port OTB + simulasi patching (bug + fitur dari
+verifikasi Agung di `boss.bajastu.id`):**
+
+- **A. Akar masalah "The newPhotos.0 failed to upload." (dikonfirmasi, bukan ditebak):** image
+  `php:8.4-fpm-alpine` **tidak membawa `php.ini` sama sekali** (`Loaded Configuration File: (none)`),
+  jadi `upload_max_filesize`/`post_max_size` = default compiled **2M/8M**. Foto kamera HP rutin >2M →
+  SAPI PHP menolak file part (`UPLOAD_ERR_INI_SIZE`) **sebelum** handler `/livewire/upload-file` jalan →
+  Livewire menampilkan pesan "failed to upload". **nginx BUKAN penyebab** (`docker/nginx/nginx.conf`
+  sudah `client_max_body_size 20M`); `storage/app/private` sudah `www-data`-owned (bukan drift permission
+  seperti kelas bug `/tmp`). Livewire config juga belum di-publish → default temp rule 12MB (juga terlalu
+  kecil untuk foto high-res). **Fix**: `docker/php/conf.d/zz-boss-uploads.ini` (bind-mount single-file di
+  4 service PHP, pola sama `nginx.conf` — bukan dir mount yang akan menyembunyikan `docker-php-ext-*.ini`)
+  → `upload_max_filesize=20M`, `post_max_size=25M`, `memory_limit=256M`; `nginx.conf` `client_max_body_size`
+  20M→25M (biar sejajar); `config/livewire.php` di-publish, `temporary_file_upload.rules` →
+  `['required','file','max:20480']`. **Diverifikasi nyata di server**: sesi login sungguhan +
+  `POST /livewire/upload-file` file 6MB (>2M lama, <8M lama — mengisolasi `upload_max_filesize`) →
+  `HTTP 200 {"paths":[...]}`; sebelum fix request identik = 422 "failed to upload". Container di-recreate +
+  `boss-nginx` di-restart (aturan stale FastCGI upstream), `php -i` mengonfirmasi limit baru live. Artefak
+  test di `livewire-tmp` dibersihkan.
+- **B. Tombol kamera & galeri terpisah** — `App\Livewire\Concerns\StagesPhotoUploads` (trait, pola sama
+  `ValidatesCustomHistoryRange`): "Ambil foto" (`accept=image/* capture=environment`) & "Pilih dari
+  galeri" (`accept=image/*` tanpa `capture`). Satu `wire:model` file tunggal tidak bisa "append" (tiap
+  `change` menimpa) → tiap sumber punya staging prop sendiri (`cameraPhotos`/`galleryPhotos`), hook
+  `updated*` MERGE ke `$newPhotos` lalu kosongkan staging → foto kamera + galeri bisa di satu grid
+  pratinjau. Partial `partials/photo-picker.blade.php` dipakai `FiberNodeForm` (create) & `GpsPhotoCapture`.
+- **C. Port OTB + simulasi patching** — migration baru (bukan edit Langkah 1): `fiber_nodes.port_count`
+  (unsignedInteger nullable, wajib di form saat `node_type=otb`), `fiber_cores.port_number`
+  (unsignedInteger nullable = port fisik OTB tempat core diterminasi). `FiberNodeDetail` untuk OTB:
+  tabel **"Simulasi Port"** (baris 1..port_count → kosong "belum dipatch" ATAU swatch warna core + `→`
+  label node tujuan resolve dari `fiber_cables.to_type/to_id`) + tabel assign (`FiberTopologyService::
+  assignCorePort()` — validasi `1 ≤ port ≤ port_count`, unik per OTB, core harus berasal dari OTB itu;
+  kosong = lepas patch). `FiberNodeFactory` default `port_count` (node_type default = otb). Assign UI ada
+  di `FiberNodeDetail` ("form terpisah kecil"), bukan `FiberCableForm` — brief membolehkan salah satu
+  ("atau").
+- **D. Test**: `+2` `FiberNodeFormLivewireTest` (foto tersimpan di disk setelah node dibuat; kamera+galeri
+  merge; port_count wajib OTB + field OTB-only; port_count persist), `+4` `FiberNodeDetailLivewireTest`
+  (simulasi render kosong+terisi; absen untuk non-OTB; port > port_count ditolak; duplikat ditolak),
+  `+5` `FiberTopologyServiceTest` (assignCorePort ≤count/duplikat/null-clear/wrong-OTB, otbPortSimulation
+  shape). 3 test OTB-save lama diberi `->set('portCount', ...)`.
+
+**Langkah 7 — Bulk save port, koreksi salah-assign + audit, tambah aksesori, sambung OTB↔OLT:**
+
+- **D. Investigasi OLT**: ADA `App\Models\OltDevice` first-class penuh (v0.8.1 "OLT Credential Registry")
+  — `BelongsToTenant`+`BelongsToResellerScope`, `nas_id` FK, `olt_model_id` FK → `OltModel`
+  (`supported_pon_type` `OltPonType`) → `OltManufacturer`; tabel `olt_devices`, Policy, Service, Livewire
+  `/olt-devices`. **3 OLT nyata (2× HSGQ + ZTE C300) ADA sebagai baris** di `boss_db.olt_devices` (id 1/2/4,
+  tenant 1). Tidak ada entity `PonPort`. → Desain "model ada": `fiber_cores.olt_device_id` (FK nullable →
+  `olt_devices`, `nullOnDelete`) + `fiber_cores.olt_pon_port_label` (string bebas). Keterbatasan diterima:
+  OLT-link butuh core dari kabel keluar OTB (tak ada "port uplink murni tanpa core") — technical debt.
+- **A. Bulk save**: satu `<form wire:submit="saveAllPorts">` di bawah tabel — validasi SELURUH baris
+  (`FiberTopologyService::assignCorePorts()`) sebelum simpan, **all-or-nothing** (1 baris invalid →
+  tidak ada yang tersimpan, tiap baris error dilaporkan). Uniqueness bulk = "dua baris BERBEDA klaim satu
+  port dalam submit yang sama". Tombol "Simpan" per-baris tetap ada (opsional, `assignPort()`).
+- **B. Koreksi salah-assign + audit**: `assignCorePort()` (per-baris) sekarang **auto-lepas** holder lama
+  bila port sudah keisi core lain (bukan error "port dipakai"); pindah core ke port baru bukan self-conflict.
+  Tabel `fiber_core_port_logs` (`performed_by` nullable, pola `cpe_action_logs`): `old/new_port_number`,
+  `old/new_olt_label` (denormalized). Riwayat "3 perubahan terakhir" di bawah tabel Simulasi Port.
+- **C. + Tambah Aksesori**: tombol di section "Aksesori di Jalur Ini" → form inline
+  (`FiberNodeDetail::addAccessory()`): target = kabel/splitter yang menyentuh node
+  (`accessoryTargetsForNode()`), `accessory_type`, lokasi, `expected_loss_db` auto-prefill
+  (`suggestedAccessoryLoss()` — `expectedLossFor(ratio)` untuk splitter, `defaultAccessoryLossFor(type)`
+  untuk kabel), `measured_loss_db` **wajib**. Reuse `FiberTopologyService::createAccessory()` (Langkah 2).
+- **D. Tampilan OLT**: baris `connects_to_olt=true` di Simulasi Port pakai badge indigo "OLT: {nama} -
+  {PON label}" alih-alih panah ke nama node.
+- **Fix redirect setelah simpan sukses** (dari pesan Agung, digabung): `FiberNodeForm` create+edit →
+  `web.fiber-nodes.index` (create dulu redirect ke edit — tak perlu lagi karena create sudah handle GPS/
+  foto/splitter sendiri sejak Langkah 5); `OdpEdit` → `web.fiber-nodes.index` (tak ada ODP web list
+  tersendiri di v0.5.0 — API-only; halaman "Topologi Fiber" gabungan adalah tempat baris ODP dilist &
+  di-Edit); `FiberCableForm::saveCoreColors()` → detail node asal (create cable/`save()` tetap tampilkan
+  review inline dulu). Form Aksesori tetap di halaman (Livewire re-render). Splitter ikut redirect
+  parent-form (bagian dari `save()`). Gagal validasi → tetap di form (perilaku existing, tak diubah).
+- **E. Test**: `FiberTopologyServiceTest` +5 (auto-release per-row, self-move bukan konflik, bulk 2-baris-1-
+  port ditolak all-or-nothing, bulk swap valid, olt clears on port null), `FiberNodeDetailLivewireTest` +7
+  (per-row auto-release, bulk all-or-nothing + persist-all, OLT display, tambah aksesori + wajib measured),
+  redirect test ×3 (`FiberNodeForm`/`OdpEdit`/`FiberCableForm` — sukses redirect, gagal tetap).
+
+**Langkah 8 — Restrukturisasi menu + Peta Topologi dengan waypoint kabel:**
+
+- **A. Sidebar**: cluster top-level BARU "Topology Fiber" (sejajar "Network", bukan sub-menu). "Topologi
+  Fiber" + "Kapasitas Jaringan" dipindah ke sana dari cluster "Network" (dihapus juga dari string `active`
+  cluster Network). Item + judul halaman "Topologi Fiber" (FiberNodeIndex) di-rename "Daftar Perangkat
+  Passive" — sidebar, `<h1>`, dan judul form FiberNodeForm ("Titik Topologi Fiber Baru"/"Edit Titik
+  Topologi Fiber" → "Perangkat Passive Baru"/"Edit Perangkat Passive"). Header form kabel/link "Kembali"
+  generik dibiarkan.
+- **B. Migration `fiber_cable_waypoints`**: `id`, `fiber_cable_id` FK `cascadeOnDelete`, `sequence`
+  unsignedInteger, `latitude`/`longitude` `decimal(10,7)`, timestamps, index `(fiber_cable_id, sequence)`.
+  `App\Models\FiberCableWaypoint` (+ factory), `FiberCable::waypoints()` HasMany diurut `sequence`. Tanpa
+  `tenant_id` — scoped lewat cable (pola sama `fiber_cores`/`fiber_accessories`).
+- **C. Halaman "Peta Topologi"** (`App\Livewire\Network\FiberTopologyMap`, `/fiber-topology-map`, di cluster
+  "Topology Fiber"): Leaflet+OSM bundled via Vite (`window.fiberTopologyMap`, pola sama `fiberLocationMap`
+  Langkah 5). Semua `fiber_nodes`+`odps` bercoordinat jadi marker (warna per `node_type`), **TANPA garis
+  kabel default**. Garis muncul hanya saat satu koneksi core dipilih — lewat `?core=<id>` (link "Lihat di
+  peta" per-baris di tabel "Koneksi Core" baru di FiberNodeDetail) atau picker di halaman. Warna garis =
+  warna core (`FiberColorService::hexForName`, fallback `#6366F1` untuk nama override). Garis = endpoint
+  asal → waypoint (urut `sequence`) → endpoint tujuan; lurus kalau tak ada waypoint. Edit: klik garis untuk
+  masuk mode edit, klik garis untuk tambah titik belok, seret handle untuk pindah, klik-dua-kali handle
+  untuk hapus; "Simpan Rute" → `saveRoute()` → `FiberTopologyService::replaceCableWaypoints()` (hapus semua
+  waypoint lama cable itu, insert ulang `sequence` 1..n). Bisa banyak core sekaligus (dibandingkan), pilih
+  satu-satu, tak ada "tampilkan semua". Line data ke map lewat event `topology-lines-updated` (map di dalam
+  `wire:ignore`).
+- **D. Test**: `FiberTopologyMapLivewireTest` (11 — migrasi kolom, waypoint urut `sequence`, render tanpa
+  garis default, pilih core → 1 garis warna benar, hide core, `?core=` preselect, `saveRoute` replace bukan
+  stack, `saveRoute` list kosong = clear, waypoint tersimpan ikut di line, viewer non-manage ditolak
+  `saveRoute` 403, delete cable cascade waypoint), `FiberNodeDetailLivewireTest` +2 (link "Lihat di peta"
+  ada + href `?core=`, link disembunyikan kalau endpoint tanpa koordinat), `SidebarNavigationTest` +2
+  (cluster "Topology Fiber" + "Daftar Perangkat Passive"/"Peta Topologi" untuk admin-tier, link
+  disembunyikan untuk non-admin), `FiberNodeFormLivewireTest` ×2 assertion di-update ke judul baru,
+  `FrontendBuildTest` hijau setelah `npm run build`.
+
+**Langkah 9 — Fix peta per-kabel, layer satelit, ekspor KMZ (dari testing Agung):**
+
+- **A. "Lihat di peta" → level KABEL**: unit pilihan di SELURUH fitur peta sekarang selalu `FiberCable`,
+  tidak ada satu pun titik interaksi yang minta pilih core individual. `?core=` → `?cable=`;
+  `coreLineData()` → `cableLineData()`; `mappableCoreOptions()` → `mappableCableOptions()`;
+  `selectedCoreIds`/`showCore`/`hideCore` → `...Cable...`. Warna garis kabel = konstanta netral
+  `FiberTopologyService::CABLE_LINE_COLOR` (`#1E3A8A`, biru tua) — BUKAN warna core (satu kabel banyak
+  core beda warna). `cableCoreConnections()` sekarang dikelompokkan per-kabel: tabel FiberNodeDetail tetap
+  menampilkan SEMUA core, tapi tombol "Lihat di peta" cuma satu di header tiap grup kabel (bukan per baris
+  core). Halaman Peta Topologi dapat dropdown "Kabel #id — Node A → Node B" untuk pilih kabel langsung
+  dari peta.
+- **B. Investigasi `fiber_cables`** — lihat "Investigasi fiber_cables (Langkah 9)" di bawah. 4 baris:
+  #2/#3 = sisa data factory (tenant 34, 0 core), #5/#6 = input asli Agung (tenant 1 "ISP Demo"). **Belum
+  dihapus — menunggu konfirmasi Agung.**
+- **C. Layer satelit**: `L.control.layers` — "Peta" (OSM, default) + "Satelit" (Esri World Imagery,
+  `server.arcgisonline.com/.../World_Imagery/MapServer/tile/{z}/{y}/{x}`, gratis tanpa API key), toggle
+  standar Leaflet di pojok kanan atas.
+- **D. Ekspor KMZ**: tombol "Ekspor KMZ" → `FiberTopologyService::buildTopologyKml()` (DOMDocument native,
+  Placemark/Point per node+odp, Placemark/LineString per cable yang koordinat kedua ujungnya lengkap,
+  lewat waypoint urut) → `buildTopologyKmz()` (ZipArchive native, entry tunggal `doc.kml`) →
+  `response()->streamDownload()`. Tidak ada package baru.
+- **E. Test**: `FiberTopologyMapLivewireTest` (15 — termasuk garis 1 per kabel warna `CABLE_LINE_COLOR`
+  bukan warna core, `?cable=` preselect, opsi per-kabel, KMZ = zip valid berisi `doc.kml` dengan
+  `<Placemark>`/`<Point>`/`<LineString>`, KML skip cable tanpa koordinat lengkap, URL Esri ada di bundle),
+  `FiberNodeDetailLivewireTest` ×2 (link per-kabel bukan per-core: tepat 1 "Lihat di peta" untuk kabel
+  4-core, `?cable=` ada + `?core=` tidak ada; link tersembunyi tanpa koordinat).
+
+## Investigasi fiber_cables (Langkah 9) — hasil, belum eksekusi hapus
+
+Isi `boss_db.fiber_cables` per 2026-08-31 (semua dicek via `withoutGlobalScopes()`):
+
+| id | from → to | core/tube | tenant | created_at | Verdict |
+|----|-----------|-----------|--------|------------|---------|
+| 2 | FiberNode#5 (OTB-1) → FiberNode#6 (ODC-1) | 4 / 1 | **34** | 2026-08-31 11:23:48 | **SISA DATA FACTORY** |
+| 3 | FiberNode#6 (ODC-1) → Odp#3 (ODP-X) | 2 / 1 | **34** | 2026-08-31 11:23:48 | **SISA DATA FACTORY** |
+| 5 | FiberNode#10 (OTB48-Kaliwungu) → FiberNode#11 (C-48) | 48 / 4 | **1** | 2026-08-31 15:57:13 | **ASLI AGUNG** |
+| 6 | FiberNode#13 (OTB24-BMR) → FiberNode#14 (Closure-96) | 24 / 2 | **1** | 2026-08-31 19:39:54 | **ASLI AGUNG** |
+
+- **id #1 & #4 sudah tidak ada** (hard-deleted sebelumnya — `FiberCable` tak pakai SoftDeletes). Ini yang
+  bikin urutan id "loncat" (#2,#3,#5,#6) dan bikin "Kabel #6" terlihat mencurigakan padahal asli.
+- **#2/#3 = sisa data test Claude Code**: tenant 34 "Hoppe-Greenfelder" adalah nama Faker dari
+  `Tenant::factory()` (dibuat 2026-08-31 11:23:47, 1 detik sebelum kedua cable). FiberNode#5/#6 + Odp#3 +
+  Splitter#4 semua tenant 34, timestamp sama persis — satu burst factory. **0 fiber_cores** di kedua
+  cable (createCable selalu generate core; 0 core = dibuat lewat `FiberCable::factory()` mentah / core-nya
+  sudah dibersihkan) — makin menegaskan ini artefak verifikasi Langkah 2/3/4, bukan input UI.
+- **#5/#6 = asli Agung** di tenant 1 "ISP Demo" (tenant yang dipakai `super_admin@boss.local`): label
+  realistis (Kaliwungu/Bumireja — nama lokasi ISP nyata di codebase ini), koordinat Jawa Tengah (-7.53,
+  108.80), core lengkap (48/48 & 24/24), `fiber_core_port_logs` 24 baris `performed_by=1` jam 19:40
+  (Agung bulk-patch cable #6 lewat UI), waypoint 4+5 baris (Agung tes halaman Peta Topologi Langkah 8),
+  1 fiber_accessory + 2 foto di node 10. created_at tersebar sore–malam = pola manusia, bukan burst.
+
+**Rekomendasi hapus (menunggu konfirmasi Agung):**
+- HAPUS: FiberCable #2, #3; FiberNode #5 (OTB-1), #6 (ODC-1); Odp #3 (ODP-X); Splitter #4; opsional Tenant
+  #34 "Hoppe-Greenfelder" itu sendiri. Tidak ada fiber_cores/waypoint/port_log/foto tersangkut.
+- KEEP: FiberCable #5, #6 + FiberNode #10/#11/#13/#14 + semua data turunannya.
+- FiberNode #9 (OTB-48CORE) & #12 (OTB24-BMR) — **soft-deleted milik Agung** (tenant 1, workflow
+  buat→hapus→buat-ulang). Bukan sasaran hapus; keputusan Agung.
+
+**Cleanup Langkah 9B — DIEKSEKUSI (dikonfirmasi Agung).** Hard-delete: `FiberCable` #2/#3, `FiberNode` #5
+(OTB-1)/#6 (ODC-1) (`forceDelete`, SoftDeletes), `Odp` #3 (ODP-X), `Splitter` #4, `Tenant` #34
+("Hoppe-Greenfelder", factory) — semua dalam satu `DB::transaction`. Verifikasi pasca-hapus: `fiber_cables`
+tersisa #5/#6 (+ #7 yang Agung buat setelah laporan investigasi) dengan data utuh — cable #5: 48/48 core
+patched + 4 waypoint; cable #6: 24/24 + 5 waypoint; 72 port_log + 2 accessory + 1 foto tetap ada. Tenant 1
+& FiberNode #9-#16 tidak disentuh. **Catatan**: setelah laporan investigasi, Agung sudah lanjut testing —
+FiberNode #10/#11/#13/#14 kini soft-deleted olehnya, `FiberCable` #7 + FiberNode #15/#16 baru (tenant 1);
+cable #5/#6 sekarang menggantung ke node soft-deleted → otomatis tak muncul di peta (`morphCoords()` hormati
+`SoftDeletingScope`), perilaku benar, bukan bug.
+
+**Langkah 10 — Layer Pelanggan + Checklist View & Export:**
+
+- **A. Investigasi sumber koordinat pelanggan**: `Customer` (`customers.latitude`/`longitude`, `decimal:7`,
+  nullable, fillable) + `customers.address`/`name`/`status` (`CustomerStatus`). Dibaca
+  `OdpLocatorService::findNearestAvailable(Customer)` untuk Haversine — TIDAK ada sumber koordinat lain
+  (`WorkOrder` tak punya lat/lng; cuma FiberNode/Odp/Customer/FiberCableWaypoint). **Realita sekarang: 0
+  dari 551 customer punya koordinat** → layer "Pelanggan" kosong hari ini, harus degrade rapi (Agung isi
+  koordinat nanti / import). `Customer` pakai `BelongsToTenant`+`BelongsToResellerScope` → `topologyMapCustomers()`
+  ter-scope sama seperti `topologyMapMarkers()` untuk node.
+- **B. Checklist layer di Peta Topologi**: `FiberTopologyService::MAP_CATEGORIES` = `[cable, otb, closure,
+  odc, odp, customer]`, `DEFAULT_MAP_LAYERS` = `[otb, closure, odc, odp]` (kabel+pelanggan MATI saat
+  pertama buka — prinsip "jangan render semua" dari Langkah 8/9). Leaflet `L.control.layers` overlay
+  (checkbox, `collapsed:false`, pojok kanan atas) — satu `L.layerGroup` per kategori, marker masuk grup
+  kategorinya, grup default-on ditambahkan ke map saat init. Marker pelanggan: `L.divIcon` kotak merah
+  (`#dc2626`, beda dari circleMarker node fiber), popup nama+alamat+status. Layer "Kabel" auto-nyala
+  begitu ada kabel dipilih (aksi eksplisit user, tak perlu suruh cari checkbox lagi).
+- **C. Checklist di Ekspor KMZ**: tombol "Ekspor KMZ" → panel checklist 6 kategori (`wire:model="exportCategories"`,
+  default SEMUA dicentang) + tombol "Download KMZ". `buildTopologyKml(?array $categories)` / `buildTopologyKmz(?array)`
+  — `null` = semua (back-compat), selain itu difilter: marker node berdasar `node_type ∈ categories`,
+  placemark pelanggan hanya kalau `'customer'` dicentang, `<LineString>` kabel hanya kalau `'cable'`
+  dicentang. `normaliseCategories()` buang kategori tak dikenal. Panel disable tombol kalau 0 kategori.
+- **D. Test**: `FiberTopologyServiceTest` +3 (`topologyMapCustomers` cuma yang bercoordinat,
+  `DEFAULT_MAP_LAYERS` = 4 tipe node saja, `buildTopologyKml` per-kategori: `['otb']` → point OTB tanpa
+  closure/pelanggan/linestring, `['cable']` → linestring tanpa point, `['customer']` → "Pelanggan: X"
+  tanpa node, `[]` → tanpa `<Placemark>`, no-arg → semua), `FiberTopologyMapLivewireTest` +4
+  (`defaultLayers`/`categories` di view + 6 label checklist tampil, `customers` cuma yang bercoordinat +
+  alamat, `exportCategories` default 6 + `exportKmz` OK setelah di-set `['otb']`, KML terfilter).
+  `FrontendBuildTest` hijau (`boss-customer-marker`/`defaultLayers` di bundle).
+
+**Langkah 11 — Routing OSRM + Cek Jalur ke ODP + kapasitas ODP di popup peta:**
+
+- **A. Investigasi infra (STOP checkpoint, disetujui Agung)**: disk Docker (`/var`) 44 GB free vs ~6 GB
+  puncak → aman. Geofabrik tidak punya breakdown per-provinsi Indonesia → extract terkecil yang mencakup
+  Jawa Tengah = **Java (`indonesia/java-latest.osm.pbf`, 854 MB)**. Steady-state OSRM ~4,5 GB (image 450 MB
+  + `.osrm.*` MLD fileset ~3,5 GB), puncak preprocessing ~5,5 GB, RAM `osrm-extract` ~3 GB (host headroom
+  ~17 GB).
+- **B. Container `osrm`** (`docker/osrm/Dockerfile` = `ghcr.io/project-osrm/osrm-backend:v5.27.1` +
+  `curl`; `entrypoint.sh` first-boot: download extract → `osrm-extract -p car.lua` → `osrm-partition` →
+  `osrm-customize` → `touch .osrm-ready` → `exec osrm-routed --algorithm mld --max-alternatives 5`;
+  volume persisten `osrm_data`; internal-only, no host port, `http://osrm:5000` di boss-network — pola
+  sama librenms/genieacs/docker-stats-proxy). `.env.example`/`.env`: `OSRM_URL`/`OSRM_TIMEOUT`/`OSRM_PBF_URL`.
+  `config/services.php` `osrm.url`/`osrm.timeout` (default `http://osrm:5000` / 5s). **Diverifikasi
+  end-to-end**: rute nyata 2 titik Kaliwungu (Jawa Tengah) → `code: Ok`, 662 m / 95 s / 14-titik geometry;
+  disk `/var` 29→34 GB (+5, sesuai estimasi).
+- **C. `App\Services\Network\RoutingService::getRouteOptions(fromLat,fromLng,toLat,toLng)`** → GET
+  `{osrm}/route/v1/driving/{lng},{lat};{lng},{lat}?alternatives=true&overview=full&geometries=geojson`,
+  `Http::timeout(5)`. Parse tiap `routes[]` → `{label, distance_meters, duration_seconds, geometry, is_fallback}`,
+  urut terpendek→terpanjang, opsi ke-0 = **"Rekomendasi"**, sisanya "Alternatif B/C/…" (huruf sesuai
+  jumlah rute nyata). Gagal (connection/timeout/non-2xx/`code !== 'Ok'`/routes kosong) → 1 opsi fallback
+  garis lurus Haversine `is_fallback:true` label "Estimasi lurus (routing tidak tersedia)" + `Log::warning`
+  (tidak silent).
+- **D. `App\Livewire\Network\OdpRouteCheck`** (`/cek-jalur`, cluster "Topology Fiber"): titik prospek
+  (Ambil lokasi saya / pin geser peta), tautan pelanggan opsional (cari nama/HP → auto-isi + koordinat),
+  atau nama/alamat prospek bebas (belum jadi `Customer`). `OdpLocatorService::nearestCandidates(lat,lng,limit)`
+  baru — beberapa ODP terdekat (BUKAN cuma 1, TIDAK difilter "ada port kosong"), tiap kandidat + jarak +
+  badge kapasitas. `calculateRoutes()` → semua opsi OSRM di peta (garis warna beda, Rekomendasi tebal solid,
+  alternatif dashed), catatan bebas per opsi ("Via Jalan A" — tanpa kalkulasi biaya), `saveRoute($i)` →
+  `sales_route_notes` (`customer_id` nullable, `prospect_name`/`address`, `from_lat/lng`, `target_odp_id`,
+  `route_label`, `route_geometry` json, `distance_meters`, `is_straight_line_estimate`, `note`, `created_by`)
+  — murni referensi, nol sentuhan billing. Gate `network_infrastructure.view/.manage` (sama modul fiber;
+  akses role sales = keputusan RBAC terpisah — dicatat, tidak diasumsikan).
+- **E. Kapasitas ODP di popup peta**: `FiberTopologyService::odpCapacities()` (used = status `used`, sama
+  hitung CapacityReport) + `capacityZone(?int)` (threshold IDENTIK `capacity-progress-bar.blade.php`:
+  >80 penuh merah / ≥60 hampir penuh amber / else longgar hijau / null tidak diketahui). `capacityReport()`
+  di-refactor pakai `odpCapacities()` (nol duplikasi query) — regresi CapacityReportLivewireTest tetap
+  hijau. `topologyMapMarkers()` sematkan `capacity` ke marker ODP → popup Leaflet "X/Y port terpakai" +
+  badge warna. Kandidat di `OdpRouteCheck` juga pakai `capacityZone()` yang sama.
+- **F. Test**: `RoutingServiceTest` (6 — multi-alternatif urut+label, 1 rute = Rekomendasi saja, fallback
+  saat unreachable/non-2xx/`code!=Ok`, URL+query benar), `OdpRouteCheckLivewireTest` (9 — kandidat muncul
+  setelah titik diset + dispatch, semua alternatif urut + dispatch `routes-updated`, tolak ODP bukan
+  kandidat, fallback garis lurus ditandai, simpan note tanpa/dengan customer_id, note fallback flagged,
+  non-privileged 403), `OdpLocatorServiceTest` +2 (`nearestCandidates` urut jarak + kapasitas + ODP penuh
+  tetap tampil, limit), `FiberTopologyServiceTest` +4 (`capacityZone` threshold, `odpCapacities`/marker/report
+  berbagi angka sama, marker capacity null saat total_ports 0). `FrontendBuildTest` hijau (`odpRouteMap`).
+
+**Langkah 12 — Koordinat pelanggan (bind manual) + multi-select layer kabel:**
+
+- **A. Investigasi "ke mana CSV koordinat pelanggan"** — **datanya genuinely tidak pernah ada di DB, tidak
+  bisa diselamatkan**. Temuan: 3 CSV di `app/storage/app/imports/` (`all_customers_import.csv` 561 baris,
+  `mixradius-cpe-match.csv`, `mac_reference.csv`) — **tak satupun punya kolom koordinat**
+  (`all_customers_import.csv` header = `phone,fullname,address,nik,legacy_member_id,legacy_username`;
+  address = teks biasa "Dusun Kaliadem Rt 002...", nol lat/lng, nol link Maps). `ImportLegacyCustomers`
+  command tidak menyentuh lat/lng. Tidak ada tabel staging/import di Postgres (`\dt` — nol tabel
+  `*_staging`/`*_import`). `radius_db` cuma 9 tabel FreeRADIUS standar. Tidak ada CSV ter-track di git
+  (`git log --all --diff-filter=A` untuk `*.csv` = kosong), tidak ada `git stash`, tidak ada branch
+  koordinat. Satu-satunya kode yang pernah menulis `customers.latitude/longitude` = form registrasi v0.3.0
+  (`RegisterCustomer` Livewire + `StoreRegistrationRequest` API) — keduanya `nullable`, tidak pernah wajib.
+  **0 dari 551 customer punya koordinat.** Kesimpulan: CSV yang pernah dilihat Agung mungkin file referensi
+  berbeda yang tidak pernah masuk, atau ingatan mencampur "address teks" (yang ADA) dengan "koordinat GPS".
+  → lanjut Bagian B.
+- **B. "Lengkapi Koordinat Pelanggan"** (`App\Livewire\Customers\CustomerCoordinateFill`,
+  `/customers/lengkapi-koordinat`, cluster "Pelanggan", di dalam grup `reseller.context`). Daftar pelanggan
+  `latitude IS NULL OR longitude IS NULL` (paginated 15, search nama/`cid`/HP), tombol "Set Lokasi" per
+  baris → picker Leaflet (`@include('livewire.network.partials.location-map')`, pola sama FiberNodeForm/
+  OdpEdit) + "Ambil lokasi saya" → `saveLocation()` menulis **HANYA** `customers.latitude/longitude`
+  (`$customer->update([...])` 2 kolom, komentar eksplisit "no relation"). Setelah simpan → hilang dari list
+  + otomatis muncul di layer "Pelanggan" Peta Topologi (`topologyMapCustomers()` query `whereNotNull` —
+  konsisten, nol kerjaan tambahan). Gate: `authorize('viewAny', Customer)` di mount, `authorize('update',
+  $customer)` per-baris (= `customers.manage` ATAU staf reseller sendiri, `CustomerPolicy::update`).
+  `$canManage` di list mirror aturan itu (`customers.manage` OR `ResellerUser` aktif).
+- **C. Multi-select layer kabel di Peta Topologi** — dropdown+tombol "Tampilkan" lama (`cableToAdd`/
+  `addPickedCable`, dihapus) → **checklist** `wire:model.live="selectedCableIds"` (array checkbox) +
+  tombol "Pilih Semua"/"Kosongkan" (`toggleAllCables()`). `updatedSelectedCableIds()` hook normalisasi ke
+  int + `pushLines()`. Semua kabel tetap warna netral `CABLE_LINE_COLOR` (BUKAN warna beda per kabel).
+  Uncheck satu kabel → cuma itu yang hilang, sisanya tetap (`renderLines` redraw yang tersisa). Chips
+  "sedang ditampilkan" tetap ada sebagai ringkasan aktif (× = `hideCable`). `showCable`/`hideCable` tetap
+  ada (dipakai `?cable=` deep-link + chips).
+- **D. Test**: `CustomerCoordinateFillLivewireTest` (7 — list hanya tanpa koordinat (termasuk yang 1 kolom
+  terisi = masih incomplete), search nama/cid/HP, `saveLocation` isi 2 kolom + **assert eksplisit
+  `WorkOrder::count()===0` / `sales_route_notes`===0 / `odp_ports`===0 / `$customer->workOrders()->count()===0`
+  + status/address tak berubah**, drop dari list setelah simpan, validasi range, view-only user → 403,
+  no-permission → mount 403), `FiberTopologyMapLivewireTest` +3 (multi-select 2 garis netral sekaligus,
+  "Pilih Semua" pilih semua lalu kosongkan, uncheck 1 dari 2 → sisa 1 = kabel yang benar). `FrontendBuildTest`/
+  `SidebarNavigationTest` hijau.
+
+**Langkah 13 — 3 perbaikan kecil dari testing Agung:**
+
+- **A. CapacityReport hormati soft-delete endpoint** — `FiberTopologyService::capacityReport()` kategori
+  "Kabel Fiber" sekarang `->filter(fn ($c) => $this->cableEndpointsIntact($c))` (exclude kabel yang
+  from/to-nya FiberNode soft-deleted), konsisten dengan `morphCoords()` yang sudah dipakai peta/KMZ.
+  Kategori "Splitter" juga di-filter (`morphExists($splitter->owner_type, $owner_id)` — splitter yang node
+  owner-nya soft-deleted = orphan). Kategori "ODP" **tidak** butuh filter (Odp tak punya SoftDeletes, dan
+  peta menampilkan semua ODP tanpa peduli parent — komentar eksplisit di kode). Helper baru:
+  `morphExists()` (private, `FiberNode::whereKey()->exists()` hormati SoftDeletingScope; Odp selalu ada),
+  `cableEndpointsIntact()` (private).
+- **B. `FiberTopologyService::describeCable(FiberCable): string`** (public) — format
+  **"Kabel {total_cores} Core {asal} ↔ {tujuan}"** (contoh "Kabel 48 Core OTB48-Kaliwungu ↔ Closure-48").
+  `morphShortLabel()` (private) resolve nama dari `fiber_node.local_label` ATAU `odp.code` (bukan bentuk
+  "code - name"); endpoint soft-deleted/hilang → fallback **"Titik dihapus"** (tidak crash/null). Dipakai
+  di SEMUA teks kabel yang dibaca user: `capacityReport()`, `mappableCableOptions()` (checklist Peta
+  Topologi), `cableLineData()` (chip "sedang ditampilkan" + nama LineString KMZ), `cableCoreConnections()`
+  (field baru `description`, header grup tabel Koneksi Core FiberNodeDetail), `accessoryTargetsForNode()`
+  (dropdown "Terpasang di"), `coreCardData()` (field baru `cable_description`, tabel Assign Port ke Core),
+  serta 2 spot splice-diagram di `fiber-node-detail.blade.php` (kartu "Kabel Masuk" + "via {kabel}" kartu
+  anak) lewat `topologyService` yang di-pass ke view. Semua `"Kabel #{id}"` yang dibaca user hilang; `#id`
+  cuma di URL (`?cable=5`) dan `cable_id`/`data-*` internal.
+- **C. Scroll checklist kabel** (`fiber-topology-map.blade.php`) — kontainer checklist `max-h-24
+  overflow-y-auto` (~3 baris, sisanya scroll di dalam, TIDAK meluas ke bawah). "Pilih Semua"/"Kosongkan"
+  di header, di LUAR area scroll (selalu kelihatan).
+- **D. Test**: `CapacityReportLivewireTest` +2 (kabel endpoint soft-deleted hilang dari `capacityReport()['cables']`;
+  splitter owner soft-deleted hilang dari `['splitters']`) + 1 di-update (label deskriptif bukan `#id`).
+  `FiberTopologyMapLivewireTest` +2 (`describeCable` format benar node↔node & node↔odp & fallback
+  "Titik dihapus"; checklist di dalam kontainer `max-h-24 overflow-y-auto`, toggle di luarnya) + 1
+  di-update (`cableOptions` label = `describeCable`, tanpa `#`).
+
+**v0.16.0 Core Network Infrastructure Management — Langkah 0 sampai 13 selesai** (cleanup 9B dieksekusi;
+container `osrm` verified). Menunggu verifikasi manual Agung lewat browser sebelum merge/tag — SEMUA
+(Langkah 5-13) masih uncommitted.

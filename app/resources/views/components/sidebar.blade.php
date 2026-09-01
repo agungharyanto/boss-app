@@ -9,6 +9,15 @@
                 auth()->user()->can('register-customer')
                     ? ['route' => 'web.customers.register', 'label' => __('Registrasi Pelanggan')]
                     : null,
+                // v0.16.0 Langkah 12 — manual coordinate bind (feeds the
+                // Peta Topologi "Pelanggan" layer). Same gate as "Daftar
+                // Pelanggan"'s own page (CustomerPolicy::viewAny — admits
+                // internal staff + reseller staffers); the per-row "Set
+                // Lokasi" action is separately gated on customers.manage /
+                // CustomerPolicy::update inside the component.
+                auth()->user()->can('viewAny', \App\Models\Customer::class)
+                    ? ['route' => 'web.customers.coordinates', 'label' => __('Lengkapi Koordinat')]
+                    : null,
             ]),
         ],
         [
@@ -151,6 +160,36 @@
                             ? [['route' => 'web.cpe-devices.status-check', 'label' => __('Cek Status Device')]]
                             : [],
                     ]
+                    : null,
+            ]),
+        ],
+        [
+            // v0.16.0 Langkah 8 — the fiber-topology module (Daftar
+            // Perangkat Passive / Peta Topologi / Kapasitas Jaringan) was
+            // 2 flat items inside the "Network" cluster; promoted to its
+            // own top-level cluster, parallel to "Network", since it's a
+            // distinct passive-plant concern from the active-network
+            // (NAS/OLT/CPE/monitoring) items. All 3 links share the one
+            // network_infrastructure.view/.manage permission pair, gated
+            // via FiberNodePolicy::viewAny() same as before the move.
+            'id' => 'topology-fiber',
+            'label' => __('Topology Fiber'),
+            'active' => request()->routeIs('web.fiber-nodes.*') || request()->routeIs('web.odps.*') || request()->routeIs('web.capacity-report.*') || request()->routeIs('web.fiber-topology-map.*') || request()->routeIs('web.odp-route-check.*'),
+            'links' => array_filter([
+                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
+                    ? ['route' => 'web.fiber-nodes.index', 'label' => __('Daftar Perangkat Passive')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
+                    ? ['route' => 'web.fiber-topology-map.index', 'label' => __('Peta Topologi')]
+                    : null,
+                // v0.16.0 Langkah 11 — same permission gate (fiber module),
+                // reachable by sales in practice pending a separate RBAC
+                // decision to grant sales roles network_infrastructure.view.
+                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
+                    ? ['route' => 'web.odp-route-check.index', 'label' => __('Cek Jalur ke ODP')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\FiberNode::class)
+                    ? ['route' => 'web.capacity-report.index', 'label' => __('Kapasitas Jaringan')]
                     : null,
             ]),
         ],

@@ -8,6 +8,9 @@ use App\Http\Controllers\Api\V1\CustomerController;
 use App\Http\Controllers\Api\V1\CustomerIpPoolController;
 use App\Http\Controllers\Api\V1\CustomerTimelineController;
 use App\Http\Controllers\Api\V1\DashboardWidgetSettingController;
+use App\Http\Controllers\Api\V1\FiberAccessoryController;
+use App\Http\Controllers\Api\V1\FiberCableController;
+use App\Http\Controllers\Api\V1\FiberNodeController;
 use App\Http\Controllers\Api\V1\HealthController;
 use App\Http\Controllers\Api\V1\HotspotPackageController;
 use App\Http\Controllers\Api\V1\InvoiceController;
@@ -25,6 +28,7 @@ use App\Http\Controllers\Api\V1\ResellerController;
 use App\Http\Controllers\Api\V1\ResellerPackagePricingController;
 use App\Http\Controllers\Api\V1\ResellerTaxPolicyController;
 use App\Http\Controllers\Api\V1\ResellerUserController;
+use App\Http\Controllers\Api\V1\SplitterController;
 use App\Http\Controllers\Api\V1\SubscriptionController;
 use App\Http\Controllers\Api\V1\TaxComponentController;
 use App\Http\Controllers\Api\V1\TaxLedgerController;
@@ -294,6 +298,25 @@ Route::prefix('v1')->group(function () {
         Route::put('ppp-packages/{ppp_package}', [PppPackageController::class, 'update']);
         Route::delete('ppp-packages/{ppp_package}', [PppPackageController::class, 'destroy']);
         Route::post('ppp-packages/{ppp_package}/resync', [PppPackageController::class, 'resync']);
+
+        // v0.16.0 Core Network Infrastructure Management, Langkah 3 — same
+        // tier-admin-only posture (see FiberNodePolicy). fiber-cables/
+        // splitters/fiber-accessories share the single
+        // network_infrastructure.view/.manage permission pair with no
+        // per-row Policy (see FiberCableController's own docblock) —
+        // index/store only for those three this Langkah, no id-scoped
+        // routes yet (not asked for; splice-diagram editing is Langkah 4).
+        Route::get('fiber-nodes', [FiberNodeController::class, 'index']);
+        Route::post('fiber-nodes', [FiberNodeController::class, 'store']);
+        Route::get('fiber-nodes/{fiber_node}', [FiberNodeController::class, 'show']);
+        Route::put('fiber-nodes/{fiber_node}', [FiberNodeController::class, 'update']);
+        Route::delete('fiber-nodes/{fiber_node}', [FiberNodeController::class, 'destroy']);
+        Route::get('fiber-cables', [FiberCableController::class, 'index']);
+        Route::post('fiber-cables', [FiberCableController::class, 'store']);
+        Route::get('splitters', [SplitterController::class, 'index']);
+        Route::post('splitters', [SplitterController::class, 'store']);
+        Route::get('fiber-accessories', [FiberAccessoryController::class, 'index']);
+        Route::post('fiber-accessories', [FiberAccessoryController::class, 'store']);
 
         // v0.8.4 — read-only Dashboard Monitoring API, WhatsApp-bot
         // integration foothold (see App\Http\Controllers\Api\V1\

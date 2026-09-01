@@ -240,6 +240,62 @@ class VpnScriptGeneratorLivewireTest extends TestCase
     }
 
     /**
+     * v0.16 hotfix regression (real incident 2026-08-31, ro-hotspot): a
+     * host reboot left every WireGuard node offline. "Generate ulang"
+     * used to revoke the NAS's last account FIRST, then fail the
+     * reprovision with "no VPN server online" — stranding the NAS with
+     * ZERO account. The capacity precheck must now run BEFORE the revoke.
+     */
+    public function test_revoke_and_regenerate_does_not_revoke_the_existing_account_when_every_node_is_offline(): void
+    {
+        $this->fakeWireGuard();
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $server = VpnServer::factory()->create(['protocol' => 'wireguard', 'subnet_cidr' => '172.23.200.0/29']);
+        $server->provisionIpPool();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(VpnScriptGenerator::class)
+            ->set('selectedNasId', $nas->id)
+            ->set('vpnProtocol', 'wireguard')
+            ->call('generateVpn');
+
+        $accountId = VpnAccount::where('nas_id', $nas->id)->where('status', 'active')->firstOrFail()->id;
+
+        // node goes offline (host reboot, container down, …)
+        $server->update(['status' => 'offline']);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(VpnScriptGenerator::class)
+            ->set('selectedNasId', $nas->id)
+            ->set('vpnProtocol', 'wireguard')
+            ->call('revokeAndRegenerate');
+
+        $this->assertStringContainsString('Tidak ada VPN server online', (string) $component->get('errorMessage'));
+        // The existing account is UNTOUCHED — not revoked.
+        $this->assertDatabaseHas('vpn_accounts', ['id' => $accountId, 'status' => 'active']);
+        // Recovery button stays offered (there's still an active account).
+        $component->assertSet('canRevokeAndRegenerate', true);
+    }
+
+    public function test_generate_vpn_surfaces_a_clean_error_instead_of_a_500_when_no_node_is_online(): void
+    {
+        $this->fakeWireGuard();
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        VpnServer::factory()->create(['protocol' => 'wireguard', 'status' => 'offline', 'subnet_cidr' => '172.23.200.0/29']);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(VpnScriptGenerator::class)
+            ->set('selectedNasId', $nas->id)
+            ->set('vpnProtocol', 'wireguard')
+            ->call('generateVpn');
+
+        $this->assertStringContainsString('Tidak ada VPN server online', (string) $component->get('errorMessage'));
+        $this->assertDatabaseMissing('vpn_accounts', ['nas_id' => $nas->id, 'status' => 'active']);
+    }
+
+    /**
      * v0.8.1 end-to-end regression: a NAS with tr069_management_subnet set
      * must get the VPN node's own tunnel gateway address appended to
      * allowed-address (so traffic MASQUERADEd onto it by

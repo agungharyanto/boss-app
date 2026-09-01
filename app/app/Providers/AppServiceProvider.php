@@ -6,8 +6,10 @@ use App\Models\Customer;
 use App\Models\CustomerContact;
 use App\Observers\CustomerContactObserver;
 use App\Observers\CustomerObserver;
+use App\Services\Network\Contracts\NasWireguardInspector;
 use App\Services\Network\Contracts\RouterOsGateway;
 use App\Services\Network\RouterOsApiGateway;
+use App\Services\Network\RouterOsNasWireguardInspector;
 use App\Support\ResellerContext;
 use Illuminate\Support\ServiceProvider;
 
@@ -24,6 +26,9 @@ class AppServiceProvider extends ServiceProvider
 
         // v0.6.1 — tests bind a fake here instead of hitting a real router.
         $this->app->bind(RouterOsGateway::class, RouterOsApiGateway::class);
+
+        // v0.16 — "Cek Koneksi RADIUS" diagnostic (menu NAS).
+        $this->app->bind(NasWireguardInspector::class, RouterOsNasWireguardInspector::class);
     }
 
     /**

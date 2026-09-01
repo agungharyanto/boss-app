@@ -51,6 +51,8 @@ class VpnProvisioningService
             );
         }
 
+        $this->ensureCapacityFor($protocol);
+
         $username = 'nas-'.$nas->id;
 
         $account = DB::transaction(function () use ($nas, $protocol, $username) {
@@ -157,6 +159,33 @@ class VpnProvisioningService
         // $account in place via ->update(), so the in-memory instance
         // already reflects every persisted change — nothing is stale here.
         return $account;
+    }
+
+    /**
+     * v0.16 hotfix (real incident 2026-08-31, ro-hotspot) — a
+     * SIDE-EFFECT-FREE version of the "is there an Online node with spare
+     * capacity for this protocol" gate inside provision()'s transaction
+     * (kept byte-identical to that query on purpose). provision() calls it
+     * as an early bail; VpnScriptGenerator::revokeAndRegenerate() calls it
+     * BEFORE revoking the NAS's current account, so an obviously-doomed
+     * regenerate (e.g. all WireGuard nodes offline after a host reboot)
+     * fails while the NAS still has its working account rather than
+     * stranding it with none.
+     */
+    public function ensureCapacityFor(VpnProtocol $protocol): void
+    {
+        $available = VpnServer::query()
+            ->where('protocol', $protocol)
+            ->where('is_active', true)
+            ->where('status', VpnServerStatus::Online)
+            ->whereColumn('current_clients', '<', 'max_clients')
+            ->exists();
+
+        if (! $available) {
+            throw new VpnProvisioningException(
+                "Tidak ada VPN server online dengan kapasitas tersedia untuk protokol {$protocol->label()}."
+            );
+        }
     }
 
     /**

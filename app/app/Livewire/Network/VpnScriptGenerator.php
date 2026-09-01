@@ -4,6 +4,8 @@ namespace App\Livewire\Network;
 
 use App\Enums\VpnAccountStatus;
 use App\Enums\VpnProtocol;
+use App\Exceptions\VpnIpPoolExhaustedException;
+use App\Exceptions\VpnProvisioningException;
 use App\Exceptions\VpnScriptGenerationException;
 use App\Models\Nas;
 use App\Models\VpnAccount;
@@ -91,7 +93,9 @@ class VpnScriptGenerator extends Component
         try {
             $script = $service->generateVpnScript($nas, VpnProtocol::from($this->vpnProtocol), $this->routerOsVersion);
             $this->publishDownloadableScript($script, $tokens);
-        } catch (VpnScriptGenerationException $e) {
+        } catch (VpnScriptGenerationException|VpnProvisioningException|VpnIpPoolExhaustedException $e) {
+            // Provisioning failures (no node online, IP pool exhausted)
+            // were previously uncaught here and surfaced as a raw 500.
             $this->errorMessage = $e->getMessage();
             $this->canRevokeAndRegenerate = $this->hasActiveAccountForSelectedProtocol($nas);
         }
@@ -123,18 +127,30 @@ class VpnScriptGenerator extends Component
             ->where('status', VpnAccountStatus::Active)
             ->first();
 
-        if ($existing !== null) {
-            $provisioning->revoke($existing);
-        }
-
         try {
+            if ($existing !== null) {
+                // v0.16 hotfix (real incident 2026-08-31, ro-hotspot): a
+                // host reboot left every WireGuard node offline; clicking
+                // "generate ulang" here revoked the NAS's last account
+                // FIRST, then the reprovision threw "no VPN server online"
+                // — stranding the NAS with ZERO account. Precheck capacity
+                // BEFORE revoking so a doomed regenerate leaves the
+                // existing (working) account untouched.
+                $provisioning->ensureCapacityFor($protocol);
+                $provisioning->revoke($existing);
+            }
+
             $script = $service->generateVpnScript($nas, $protocol, $this->routerOsVersion);
             $this->publishDownloadableScript($script, $tokens);
-        } catch (VpnScriptGenerationException $e) {
+        } catch (VpnScriptGenerationException|VpnProvisioningException|VpnIpPoolExhaustedException $e) {
             $this->errorMessage = $e->getMessage();
         }
 
-        $this->canRevokeAndRegenerate = false;
+        // If the old account was revoked but the fresh script never got
+        // published (a rarer failure AFTER the capacity precheck passed),
+        // the NAS now has no active account — re-offer "generate" (a plain
+        // retry) rather than the revoke-and-regenerate button.
+        $this->canRevokeAndRegenerate = $this->hasActiveAccountForSelectedProtocol($nas);
     }
 
     public function generateRadius(VpnScriptService $service, ScriptDownloadTokenService $tokens): void

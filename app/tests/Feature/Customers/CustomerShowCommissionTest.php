@@ -115,11 +115,11 @@ class CustomerShowCommissionTest extends TestCase
     }
 
     /**
-     * Aturan konservatif v0.9.4: pelanggan yang SUDAH punya referrer, lalu
-     * referrer/paket-nya diganti → HANYA kolom customers yang di-update,
-     * TIDAK ada baris commission_ledger baru (belum ada aturan yang jelas).
+     * Opsi (c) — referrer TERKUNCI setelah terisi: perubahan editReferrerId
+     * dari client diabaikan total di server. Referrer lama dipertahankan,
+     * tidak ada commission_ledger yang dibuat/diubah.
      */
-    public function test_changing_an_existing_referrer_does_not_create_a_new_ledger(): void
+    public function test_an_existing_referrer_is_locked_and_cannot_be_changed(): void
     {
         $user = $this->admin();
         $oldReferrer = Referrer::factory()->create(['tenant_id' => $user->tenant_id]);
@@ -132,19 +132,22 @@ class CustomerShowCommissionTest extends TestCase
         $this->actingAs($user);
 
         Livewire::test(CustomerShow::class, ['customer' => $customer])
+            ->assertViewHas('referrerLocked', true)
             ->call('startEditingCommission')
             ->set('editReferrerId', $newReferrer->id)
             ->call('updateCommissionAttribution')
             ->assertHasNoErrors();
 
-        $this->assertSame($newReferrer->id, $customer->fresh()->referred_by_referrer_id);
+        // Referrer TIDAK berubah — tetap yang lama.
+        $this->assertSame($oldReferrer->id, $customer->fresh()->referred_by_referrer_id);
         $this->assertSame(0, CommissionLedger::where('customer_id', $customer->id)->count());
     }
 
-    public function test_clearing_a_referrer_does_not_create_a_ledger(): void
+    public function test_a_locked_referrer_cannot_be_cleared_but_the_package_can_still_change(): void
     {
         $user = $this->admin();
         $referrer = Referrer::factory()->create(['tenant_id' => $user->tenant_id]);
+        $package = $this->package($user->tenant_id);
         $customer = Customer::factory()->create([
             'tenant_id' => $user->tenant_id,
             'referred_by_referrer_id' => $referrer->id,
@@ -155,10 +158,13 @@ class CustomerShowCommissionTest extends TestCase
         Livewire::test(CustomerShow::class, ['customer' => $customer])
             ->call('startEditingCommission')
             ->set('editReferrerId', null)
+            ->set('editPppPackageId', $package->id)
             ->call('updateCommissionAttribution')
             ->assertHasNoErrors();
 
-        $this->assertNull($customer->fresh()->referred_by_referrer_id);
+        $fresh = $customer->fresh();
+        $this->assertSame($referrer->id, $fresh->referred_by_referrer_id); // tetap terkunci
+        $this->assertSame($package->id, $fresh->ppp_package_id);            // paket berubah
         $this->assertSame(0, CommissionLedger::where('customer_id', $customer->id)->count());
     }
 }

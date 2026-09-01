@@ -55,20 +55,40 @@ dari `subscriptions`.
 - Panel baru **"Paket & Referral"** di `CustomerShow` (pola sama `editingProfile`/`updateProfile`):
   `startEditingCommission()` / `updateCommissionAttribution()` — field Paket (dropdown), Referrer
   (dropdown, default "Tidak ada referral"), Skema Komisi (reaktif, sama seperti Langkah 2).
-- **Aturan atribusi (sengaja konservatif)**:
-  - `referred_by_referrer_id` **null → terisi**: buat 1 `CommissionLedger` Pending baru (logic sama
-    dg registrasi, scheme+amount kalau skema dipilih).
-  - **Kasus lain** (ganti referrer yang sudah ada, hapus referrer, cuma ganti paket): **HANYA update
-    kolom `customers`, TIDAK menyentuh `commission_ledger` sama sekali.** Belum ada aturan yang jelas
-    apakah ganti referrer harus bikin ledger baru / void yang lama — **butuh keputusan terpisah Agung**
-    (lihat "Skenario terbuka" di bawah). UI menampilkan warning kecil saat pelanggan sudah punya referrer.
+- **Aturan atribusi**:
+  - `referred_by_referrer_id` **null → terisi**: field Referrer editable → buat 1 `CommissionLedger`
+    Pending baru (logic sama dg registrasi, scheme+amount kalau skema dipilih).
+  - **Referrer SUDAH terisi → opsi (c) diterapkan: field Referrer TERKUNCI** (lihat amendment di bawah).
+    Hanya field Paket yang bisa diubah untuk pelanggan yang sudah punya referrer; `commission_ledger`
+    tidak pernah dibuat/diubah/di-void dari panel ini.
 
-### Skenario terbuka — perlu keputusan Agung (poin yang diminta dilaporkan)
+### Amendment — opsi (c) "lock field Referrer" diterapkan + nominal Rupiah di label skema (2026-09-01)
 
-Pelanggan yang **SUDAH** punya referrer, lalu admin ganti referrer/paket-nya. Sekarang: kolom di-update,
-`commission_ledger` tidak disentuh (baris lama tetap menunjuk referrer lama). Opsi yang mungkin: (a) biarkan
-begini (atribusi historis tidak diutak-atik), (b) void baris lama + buat baru untuk referrer baru, (c) lock
-field referrer setelah terisi (hanya boleh null→set). **Tidak diputuskan sepihak.**
+**1. Label dropdown "Skema Komisi" menyertakan nominal Rupiah.** `CommissionRate::schemeOptions()` (SATU
+sumber kebenaran — dipakai form registrasi & panel edit, nol duplikat format currency) sekarang
+menghasilkan label `"Per Bulan - Rp 3.000"` / `"2 Kali - Rp 33.000"` (ribuan pakai titik, tanpa desimal,
+lewat helper privat `formatRupiah()` = `number_format(..., 0, ',', '.')`). Diverifikasi terhadap rate
+nyata paket `HomeFixed-10Mbps` (#6): recurring 3000, limited 33000×2.
+
+**2. Skenario terbuka "ganti referrer existing" → diputuskan pakai opsi (c): field Referrer terkunci
+setelah terisi.** Di `CustomerShow`:
+- `referrerLocked()` = `customer.referred_by_referrer_id !== null`. Kalau terkunci, blade merender
+  Referrer sebagai input **disabled** (nama referrer + catatan "Referrer terkunci setelah diisi — tidak
+  bisa diganti/dihapus dari sini"), bukan `<select>`.
+- `updateCommissionAttribution()` **mengabaikan total** `editReferrerId` dari client kalau terkunci
+  (`$newReferrerId = $hadReferrer ? nilai_lama : $this->editReferrerId`) + tidak memvalidasi/memakainya
+  — defense in depth terhadap wire request yang dibuat-buat. Field Skema Komisi juga otomatis tidak
+  muncul saat terkunci (tidak ada ledger baru yang akan dibuat).
+- Alasan: mengganti/menghapus referrer yang sudah ada mengubah jejak atribusi/komisi — bukan aksi inline
+  biasa. Koreksi (kalau perlu) = jalur admin tersendiri, belum dibangun. Sejalan dg prinsip "append-only,
+  koreksi lewat entri baru" (CLAUDE.md v0.9.2 portal referrer).
+- **Kalau Agung sebenarnya mau opsi (a) atau (b)** — perubahannya kecil & terisolasi di `CustomerShow` +
+  blade + 2 test; tinggal bilang.
+
+Test terkait diupdate: `test_an_existing_referrer_is_locked_and_cannot_be_changed`,
+`test_a_locked_referrer_cannot_be_cleared_but_the_package_can_still_change`,
+`test_scheme_labels_include_the_rupiah_amount_from_the_rate` (+ asersi label lama disesuaikan ke format
+Rupiah).
 
 ### Test
 

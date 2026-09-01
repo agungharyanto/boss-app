@@ -109,7 +109,31 @@ class RegisterCustomerLivewireTest extends TestCase
             ->set('ppp_package_id', $package->id)
             ->set('selectedReferrerId', $referrer->id)
             ->assertViewHas('showSchemeField', true)
-            ->assertViewHas('schemeOptions', ['recurring' => 'Per Bulan']);
+            ->assertViewHas('schemeOptions', ['recurring' => 'Per Bulan - Rp 15.000']);
+    }
+
+    public function test_scheme_labels_include_the_rupiah_amount_from_the_rate(): void
+    {
+        $user = $this->userWithRole('superadmin');
+        $referrer = Referrer::factory()->create(['tenant_id' => $user->tenant_id]);
+        $package = $this->package($user->tenant_id);
+        CommissionRate::factory()->create([
+            'ppp_package_id' => $package->id,
+            'recurring_amount' => 3000,
+            'limited_count_amount' => 33000,
+            'limited_count_times' => 2,
+        ]);
+
+        $this->actingAs($user);
+
+        Livewire::test(RegisterCustomer::class)
+            ->set('ppp_package_id', $package->id)
+            ->set('selectedReferrerId', $referrer->id)
+            ->assertViewHas('schemeOptions', [
+                'recurring' => 'Per Bulan - Rp 3.000',
+                'limited_count' => '2 Kali - Rp 33.000',
+            ])
+            ->assertSeeInOrder(['Per Bulan - Rp 3.000', '2 Kali - Rp 33.000']);
     }
 
     public function test_scheme_field_hidden_without_a_referrer_or_a_rate(): void

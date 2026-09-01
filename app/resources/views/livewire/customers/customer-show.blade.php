@@ -67,15 +67,19 @@
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Referrer</label>
-                    <select wire:model.live="editReferrerId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
-                        <option value="">Tidak ada referral</option>
-                        @foreach ($availableReferrers as $referrer)
-                            <option value="{{ $referrer->id }}">{{ $referrer->name }} ({{ $referrer->type->label() }})</option>
-                        @endforeach
-                    </select>
-                    @error('editReferrerId') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
-                    @if ($customer->referred_by_referrer_id !== null)
-                        <p class="text-xs text-amber-700 mt-1">Pelanggan ini sudah punya referrer. Mengubahnya hanya memperbarui atribusi — tidak membuat entri komisi baru.</p>
+                    @if ($referrerLocked)
+                        <input type="text" disabled
+                            value="{{ $currentReferrer ? $currentReferrer->name.' ('.$currentReferrer->type->label().')' : '—' }}"
+                            class="mt-1 block w-full rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm">
+                        <p class="text-xs text-gray-500 mt-1">Referrer terkunci setelah diisi — tidak bisa diganti/dihapus dari sini. Hanya paket yang bisa diubah.</p>
+                    @else
+                        <select wire:model.live="editReferrerId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                            <option value="">Tidak ada referral</option>
+                            @foreach ($availableReferrers as $referrer)
+                                <option value="{{ $referrer->id }}">{{ $referrer->name }} ({{ $referrer->type->label() }})</option>
+                            @endforeach
+                        </select>
+                        @error('editReferrerId') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                     @endif
                 </div>
 

@@ -6061,11 +6061,16 @@ dan tetap tidak akan, sampai ada keputusan terpisah untuk menjadikan BOSS App su
 - **`RegistrationService::register()`** dapat param ke-3 `?string $scheme`. `StoreRegistrationRequest`:
   `package` → `ppp_package_id` (nullable, exists tenant-scoped) + `scheme` (`in:recurring,limited_count`).
 - **`CustomerShow`** — panel inline baru **"Paket & Referral"** (`startEditingCommission()` /
-  `updateCommissionAttribution()`, pola sama `editingProfile`/`updateProfile`). **Aturan atribusi sengaja
-  konservatif**: `referred_by_referrer_id` **null → terisi** = buat 1 `CommissionLedger` Pending baru;
-  **kasus lain** (ganti referrer yang sudah ada, hapus referrer, cuma ganti paket) = **HANYA update kolom
-  `customers`, `commission_ledger` tidak disentuh**. Apakah ganti referrer harus void ledger lama / buat
-  baru = **keputusan terbuka, belum diputuskan** (lihat CHANGELOG v0.9.4 "Skenario terbuka").
+  `updateCommissionAttribution()`, pola sama `editingProfile`/`updateProfile`). **Aturan atribusi**:
+  `referred_by_referrer_id` **null → terisi** = field editable, buat 1 `CommissionLedger` Pending baru.
+  **Referrer SUDAH terisi → opsi (c): field TERKUNCI** (`referrerLocked()` → blade render input disabled,
+  `updateCommissionAttribution()` abaikan total `editReferrerId` dari client). Hanya field Paket yang
+  bisa diubah; `commission_ledger` tidak pernah dibuat/diubah/di-void dari panel ini untuk pelanggan yang
+  sudah punya referrer. Koreksi referrer = jalur admin tersendiri (belum dibangun), sejalan prinsip
+  "append-only" (v0.9.2). Lihat CHANGELOG v0.9.4 amendment.
+- **Label dropdown "Skema Komisi"** menyertakan nominal Rupiah lewat `CommissionRate::schemeOptions()`
+  (satu sumber kebenaran, dipakai form registrasi + panel edit): `"Per Bulan - Rp 3.000"` /
+  `"{times} Kali - Rp 33.000"` (`number_format(..., 0, ',', '.')`).
 - **`RegistrationServiceTest`'s `amount => null` di-split**: perilaku lama (referrer tanpa skema → NULL)
   dipertahankan sebagai test terpisah, skenario baru (skema → amount dari rate) ditambahkan. Sama untuk
   `RegistrationApiTest`.

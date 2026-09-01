@@ -54,26 +54,42 @@ class CommissionRate extends Model
 
     /**
      * v0.9.4 — opsi "Skema Komisi" yang tersedia untuk rate ini, dipakai
-     * form registrasi + edit pelanggan. HANYA skema yang amount-nya
-     * benar-benar diisi. "Titip" SENGAJA tidak termasuk (mekanisme
-     * terpisah, di luar scope v0.9.4).
+     * form registrasi + edit pelanggan (SATU sumal kebenaran — kedua tempat
+     * memanggil method ini, tidak ada duplikat format currency). HANYA
+     * skema yang amount-nya benar-benar diisi. "Titip" SENGAJA tidak
+     * termasuk (mekanisme terpisah, di luar scope v0.9.4).
+     *
+     * Label menyertakan nominal Rupiah (ribuan pakai titik, tanpa desimal)
+     * supaya admin tahu persis nilainya sebelum memilih:
+     *   'recurring'     => 'Per Bulan - Rp 3.000'
+     *   'limited_count' => '2 Kali - Rp 33.000'
      *
      * @return array<string, string> value => label
-     *                               ('recurring' => 'Per Bulan', 'limited_count' => '3 Kali')
      */
     public function schemeOptions(): array
     {
         $options = [];
 
         if ($this->recurring_amount !== null) {
-            $options[CommissionScheme::Recurring->value] = 'Per Bulan';
+            $options[CommissionScheme::Recurring->value] =
+                'Per Bulan - Rp '.self::formatRupiah($this->recurring_amount);
         }
 
         if ($this->limited_count_amount !== null) {
-            $options[CommissionScheme::LimitedCount->value] = $this->limited_count_times.' Kali';
+            $options[CommissionScheme::LimitedCount->value] =
+                $this->limited_count_times.' Kali - Rp '.self::formatRupiah($this->limited_count_amount);
         }
 
         return $options;
+    }
+
+    /**
+     * Format nominal komisi: ribuan pakai titik, tanpa desimal
+     * (mis. "3000.00" -> "3.000", "33000.00" -> "33.000").
+     */
+    private static function formatRupiah(string|float $amount): string
+    {
+        return number_format((float) $amount, 0, ',', '.');
     }
 
     /**

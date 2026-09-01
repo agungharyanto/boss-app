@@ -136,7 +136,10 @@ class CustomerShow extends Component
     {
         $options = [];
 
-        $referrerSelected = $this->editReferrerId !== null;
+        // Skema hanya relevan untuk atribusi BARU (null -> set). Kalau
+        // referrer sudah terkunci, tidak ada ledger yang dibuat, jadi field
+        // skema tidak perlu muncul.
+        $referrerSelected = ! $this->referrerLocked() && $this->editReferrerId !== null;
 
         if ($referrerSelected && $this->editPppPackageId !== null) {
             $rate = CommissionRate::where('ppp_package_id', $this->editPppPackageId)
@@ -149,14 +152,25 @@ class CustomerShow extends Component
         return ['options' => $options, 'show' => $options !== []];
     }
 
+    public function referrerLocked(): bool
+    {
+        // Opsi (c) — field Referrer terkunci setelah terisi: hanya boleh
+        // null -> set. Mengganti / menghapus referrer yang sudah ada bukan
+        // aksi inline biasa (mengubah jejak atribusi/komisi) — kalau perlu
+        // koreksi, itu jalur admin tersendiri, belum dibangun. Sejalan
+        // dengan prinsip "append-only, koreksi lewat entri baru" (CLAUDE.md
+        // v0.9.2 portal referrer).
+        return $this->customer->referred_by_referrer_id !== null;
+    }
+
     /**
-     * Aturan atribusi (v0.9.4, sengaja konservatif):
+     * Aturan atribusi (v0.9.4):
      *  - referrer null -> terisi  : buat 1 baris commission_ledger Pending
      *    baru (logic sama dg registrasi), scheme+amount kalau skema dipilih.
-     *  - kasus lain (ganti referrer, hapus referrer, cuma ganti paket):
-     *    HANYA update kolom customers, TIDAK menyentuh commission_ledger
-     *    sama sekali — belum ada aturan yang jelas apakah ganti referrer
-     *    harus bikin ledger baru / void yang lama. Lihat CHANGELOG.
+     *  - referrer SUDAH terisi     : field-nya terkunci (lihat
+     *    referrerLocked()) — perubahan editReferrerId diabaikan total di
+     *    server, hanya editPppPackageId yang boleh berubah. Tidak ada
+     *    commission_ledger yang dibuat/diubah/di-void.
      */
     public function updateCommissionAttribution(CommissionAttributionService $service): void
     {
@@ -164,19 +178,30 @@ class CustomerShow extends Component
 
         $tenantId = auth()->user()->tenant_id;
 
-        $this->validate([
+        $hadReferrer = $this->customer->referred_by_referrer_id !== null;
+
+        $rules = [
             'editPppPackageId' => [
                 'nullable', 'integer',
                 Rule::exists('ppp_packages', 'id')->where('tenant_id', $tenantId)->whereNull('deleted_at'),
             ],
-            'editReferrerId' => [
+        ];
+
+        // Referrer hanya divalidasi/dipakai kalau belum terkunci.
+        if (! $hadReferrer) {
+            $rules['editReferrerId'] = [
                 'nullable', 'integer',
                 Rule::exists('referrers', 'id')->where('tenant_id', $tenantId),
-            ],
-        ]);
+            ];
+        }
 
-        $hadReferrer = $this->customer->referred_by_referrer_id !== null;
-        $newReferrerId = $this->editReferrerId;
+        $this->validate($rules);
+
+        // Terkunci: nilai lama dipertahankan, apa pun yang dikirim client.
+        $newReferrerId = $hadReferrer
+            ? $this->customer->referred_by_referrer_id
+            : $this->editReferrerId;
+
         $scheme = $this->resolveEditScheme();
 
         DB::transaction(function () use ($service, $hadReferrer, $newReferrerId, $scheme) {
@@ -407,6 +432,7 @@ class CustomerShow extends Component
             'currentReferrer' => $this->customer->referredBy,
             'commissionSchemeOptions' => $schemeState['options'],
             'showCommissionSchemeField' => $schemeState['show'],
+            'referrerLocked' => $this->referrerLocked(),
         ]);
     }
 }

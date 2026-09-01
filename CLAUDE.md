@@ -7107,6 +7107,72 @@ Livewire), `PppPackageApiTest` (11 test REST API), `PppPackageTest` (8 test unit
 semua file yang disentuh (3 isu style pre-existing di file yang tidak disentuh, tidak diperbaiki sesuai
 disiplin codebase ini).
 
+## OSRM Self-Hosted Routing (v0.16.0 Langkah 11)
+
+**First real routing engine in this codebase** — the "Cek Jalur ke ODP" sales feature needs the actual
+road route a motorbike visit / cable run would follow, not a straight line. `App\Services\Network\
+RoutingService` is the only consumer.
+
+**Container `osrm`** (`docker/osrm/Dockerfile` + `entrypoint.sh`): `ghcr.io/project-osrm/osrm-backend:v5.27.1`
++ `curl` (base image ships no HTTP client). First boot: downloads a Geofabrik `.osm.pbf` (`OSRM_PBF_URL`,
+default `indonesia/java-latest.osm.pbf` — **854 MB, the smallest Geofabrik region covering Central Java;
+there is NO per-province Indonesia split**), then `osrm-extract -p /opt/car.lua` → `osrm-partition` →
+`osrm-customize` (MLD pipeline, peak ~3 GB RAM, ~4 min total), then `touch /data/.osrm-ready` and
+`exec osrm-routed --algorithm mld --max-alternatives 5 --port 5000`. The `.osrm-ready` marker makes every
+later restart skip straight to `osrm-routed` — same "process once, persist to a volume, re-attach on boot"
+idiom as `docker/openvpn`'s PKI bootstrap. Persistent volume `osrm_data` (`/data`, ~4.6 GB: 854 MB pbf +
+~3.7 GB `.osrm.*` fileset). **Profile is `car`** (motorbike/cable-run estimate, not heavy vehicles).
+**Internal-only, no host port** (BOSS-010) — reached at `http://osrm:5000` over boss-network, same posture
+as librenms/genieacs/docker-stats-proxy. Changing coverage = change `OSRM_PBF_URL` + wipe `osrm_data` so
+it re-processes.
+
+**Verified for real** (not just mocked): a route between two Kaliwungu (Central Java, the area
+`test-x86-bajastu` serves) points returned `code: Ok`, 662 m / 95 s / 14-point GeoJSON geometry. Disk
+`/var` went 29 → 34 GB (`docker system df` before adding was 40% used on a 77 GB filesystem, 44 GB free —
+the STOP-checkpoint investigation confirmed ample headroom before the container was added).
+
+**`RoutingService::getRouteOptions()` degrades, never silently fails** — OSRM unreachable / timeout /
+non-2xx / `code !== 'Ok'` / empty routes → a single straight-line Haversine option flagged
+`is_fallback: true`, label `"Estimasi lurus (routing tidak tersedia)"`, + `Log::warning`. Options are
+sorted shortest-first; index 0 is relabelled `"Rekomendasi"`, the rest `"Alternatif B/C/…"` (letter tracks
+the real count OSRM returned — OSRM only returns genuine alternatives, often just 1 for a short leg).
+
+**Saved routes** (`sales_route_notes`, `App\Models\SalesRouteNote`): pure reference, **no billing/invoice
+code ever reads this table**. `customer_id` nullable (a sales prospect isn't a `Customer` row yet —
+`prospect_name`/`prospect_address` carry the free-text identity then). `is_straight_line_estimate` records
+whether the saved geometry came from the OSRM fallback.
+
+**`OdpLocatorService::nearestCandidates(lat, lng, limit)`** (new, alongside the untouched
+`findNearestAvailable(Customer)`): several nearest ODPs, NOT filtered to "has an available port" (a full
+ODP is still shown, with its capacity), tenant/reseller scoping from `Odp`'s own global scopes (a Livewire
+request context, not a queued job). **Gotcha fixed while building**: `->withCount([...])->select('odps.*')`
+wipes the withCount subquery — `select('odps.*')` must come BEFORE `withCount()`, then `selectRaw()` for
+the distance.
+
+**ODP capacity in the map popup** (`FiberTopologyService::odpCapacities()` + `capacityZone(?int)`): the
+single source of the ODP used/total figure — `capacityReport()` (refactored to call it, zero duplicated
+query) AND `topologyMapMarkers()`'s ODP marker popup both use it. `capacityZone()`'s thresholds mirror
+`partials/capacity-progress-bar.blade.php` EXACTLY (>80 penuh/red, ≥60 hampir-penuh/amber, else
+longgar/green, null = unknown/gray) — returned as data so the Leaflet popup renders the same words/colours
+without re-deriving thresholds in JS.
+
+## Customer Coordinates — no historical data exists (v0.16.0 Langkah 12)
+
+**Investigated in full — there is NO importable customer-coordinate dataset anywhere, and there never
+was.** `customers.latitude`/`longitude` (added v0.3.0 for the registration form, always `nullable`) is the
+only place customer coordinates have ever lived, and **0 of 551 real customers have them**. The three
+legacy-import CSVs in `app/storage/app/imports/` (`all_customers_import.csv` — the 561-row MixRadius
+export, `mixradius-cpe-match.csv`, `mac_reference.csv`) have **no coordinate column at all** — addresses
+are free text ("Dusun Kaliadem Rt 002 Rw 002 Kel Kaliwungu…"), no lat/lng, no Maps links.
+`ImportLegacyCustomers` never touched coordinates. No staging/import table exists in `boss_db`
+(`radius_db` is only the 9 standard FreeRADIUS tables). Nothing coordinate-related is or ever was tracked
+in git (checked `git log --all --diff-filter=A` for `*.csv`, `git stash`, every branch). If someone
+recalls Agung providing a coordinate CSV, it was either a different file never landed anywhere
+retrievable, or "address text" (which exists) conflated with "GPS coordinates" (which don't). **Don't
+re-run this investigation** — the answer is: coordinates are entered going forward via
+`App\Livewire\Customers\CustomerCoordinateFill` (`/customers/lengkapi-koordinat`, a manual per-customer
+pin-drop that writes ONLY `latitude`/`longitude`, deliberately no ODP link) or the registration form.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,
@@ -7116,10 +7182,11 @@ dynamic `whatsapp-*` queues, v0.4.0) + `boss-scheduler` (loops `schedule:run` ev
 host port) + `freeradius` (FreeRADIUS 3.2, v0.6.1, internal-only, no host port, static
 `boss-network` IP `172.28.0.10`) + `freeradius-db` (Postgres 16, `radius_db` — a SEPARATE Postgres instance
 from `boss-postgresql`, per BOSS-009) + `openvpn` (OpenVPN 2.6, v0.6.2), `wireguard` (WireGuard 1.0, v0.6.3),
-`l2tp` (strongSwan 5.9 + xl2tpd 1.3, v0.6.3) — the four VPN protocol containers besides `boss-nginx` are the
-ones with published host ports (UDP 1194/51820/500+4500+1701 respectively — real Mikrotik NAS devices dial
-in from outside `boss-network` entirely, BOSS-010 exception by design; no other container exposes a host
-port). All share the `boss-network` bridge network (fixed IPAM subnet `172.28.0.0/24` since v0.6.2);
+`l2tp` (strongSwan 5.9 + xl2tpd 1.3, v0.6.3) + `osrm` (OSRM 5.27, v0.16.0 Langkah 11, internal-only, no
+host port, `http://osrm:5000` — see the "OSRM Self-Hosted Routing" section above) — the four VPN protocol
+containers besides `boss-nginx` are the ones with published host ports (UDP 1194/51820/500+4500+1701
+respectively — real Mikrotik NAS devices dial in from outside `boss-network` entirely, BOSS-010 exception
+by design; no other container exposes a host port). All share the `boss-network` bridge network (fixed IPAM subnet `172.28.0.0/24` since v0.6.2);
 `boss-app`'s `app/` directory is bind-mounted read-write, nginx mounts it read-only. `boss-app` also shares
 named volumes with each VPN container (`vpn_pki`/`vpn_ccd` with `openvpn`, `vpn_wg_data` with `wireguard`,
 `vpn_l2tp_secrets` with `l2tp`) — see "VPN Server Node #1 (v0.6.2)" and "Multi-Protocol VPN & Script

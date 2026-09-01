@@ -62,6 +62,12 @@ services:
     working_dir: /var/www/html
     volumes:
       - ./app:/var/www/html
+      # v0.16.0 Langkah 6 — raises upload_max_filesize/post_max_size off
+      # PHP's 2M/8M compiled defaults (the base image ships no php.ini),
+      # the confirmed cause of "The newPhotos.0 failed to upload." for
+      # phone-camera photos. Single-FILE mount, never the conf.d dir
+      # (that would hide docker-php-ext-*.ini and break every extension).
+      - ./docker/php/conf.d/zz-boss-uploads.ini:/usr/local/etc/php/conf.d/zz-boss-uploads.ini:ro
       # v0.6.2 — shared with the openvpn container. VpnProvisioningService
       # runs `easyrsa` (Process facade) directly against these to
       # issue/revoke OpenVPN client certs and write client-config-dir
@@ -125,6 +131,12 @@ services:
     command: php artisan queue:work --sleep=3 --tries=3 --max-time=3600
     volumes:
       - ./app:/var/www/html
+      # v0.16.0 Langkah 6 — raises upload_max_filesize/post_max_size off
+      # PHP's 2M/8M compiled defaults (the base image ships no php.ini),
+      # the confirmed cause of "The newPhotos.0 failed to upload." for
+      # phone-camera photos. Single-FILE mount, never the conf.d dir
+      # (that would hide docker-php-ext-*.ini and break every extension).
+      - ./docker/php/conf.d/zz-boss-uploads.ini:/usr/local/etc/php/conf.d/zz-boss-uploads.ini:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
@@ -159,6 +171,12 @@ services:
     entrypoint: ["/entrypoint.sh", "sh", "-c", "while true; do php artisan queue:work --queue=$(php artisan whatsapp:queue-names) --sleep=3 --tries=3 --max-time=300; done"]
     volumes:
       - ./app:/var/www/html
+      # v0.16.0 Langkah 6 — raises upload_max_filesize/post_max_size off
+      # PHP's 2M/8M compiled defaults (the base image ships no php.ini),
+      # the confirmed cause of "The newPhotos.0 failed to upload." for
+      # phone-camera photos. Single-FILE mount, never the conf.d dir
+      # (that would hide docker-php-ext-*.ini and break every extension).
+      - ./docker/php/conf.d/zz-boss-uploads.ini:/usr/local/etc/php/conf.d/zz-boss-uploads.ini:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
@@ -196,6 +214,12 @@ services:
     entrypoint: ["/entrypoint.sh", "sh", "-c", "(while true; do php artisan cpe:auto-match-legacy-devices --no-interaction; sleep \"${CPE_AUTO_MATCH_INTERVAL_SECONDS:-60}\"; done) & while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"]
     volumes:
       - ./app:/var/www/html
+      # v0.16.0 Langkah 6 — raises upload_max_filesize/post_max_size off
+      # PHP's 2M/8M compiled defaults (the base image ships no php.ini),
+      # the confirmed cause of "The newPhotos.0 failed to upload." for
+      # phone-camera photos. Single-FILE mount, never the conf.d dir
+      # (that would hide docker-php-ext-*.ini and break every extension).
+      - ./docker/php/conf.d/zz-boss-uploads.ini:/usr/local/etc/php/conf.d/zz-boss-uploads.ini:ro
       # v0.6.4 — VpnCheckNodeHealth (routes/console.php, ->everyMinute())
       # is the scheduled command that actually READS these heartbeat files,
       # and schedule:run genuinely executes here, in boss-scheduler, not in
@@ -1249,6 +1273,33 @@ services:
       - boss-network
     # Port 6379 SENGAJA TIDAK di-expose ke host (RULE BOSS-010)
 
+  # v0.16.0 Langkah 11 — self-hosted OSRM routing engine for the "Cek
+  # Jalur ke ODP" sales feature (real road route sales/technician would
+  # drive, not a straight line). Profile = car (motorbike visit /
+  # cable-run estimate, not heavy vehicles). First boot downloads the
+  # Geofabrik Java extract (~854 MB, the smallest region covering Central
+  # Java — Geofabrik has no per-province split) and runs
+  # osrm-extract/partition/customize ONCE, writing the .osrm.* fileset to
+  # the persistent osrm_data volume; a `.osrm-ready` marker makes every
+  # later restart skip straight to `osrm-routed`. Internal-only (no host
+  # port, BOSS-010) — reached at http://osrm:5000 over boss-network,
+  # same posture as librenms/genieacs/docker-stats-proxy.
+  osrm:
+    build:
+      context: ./docker/osrm
+    container_name: boss-osrm
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Jakarta
+      OSRM_PBF_URL: ${OSRM_PBF_URL:-https://download.geofabrik.de/asia/indonesia/java-latest.osm.pbf}
+    volumes:
+      - osrm_data:/data
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    networks:
+      - boss-network
+
 networks:
   boss-network:
     driver: bridge
@@ -1284,3 +1335,7 @@ volumes:
   # mechanism.
   certbot_conf:
   certbot_www:
+  # v0.16.0 Langkah 11 — OSRM's downloaded .osm.pbf + the processed
+  # .osrm.* MLD fileset + the `.osrm-ready` marker. Persistent so the
+  # multi-minute one-time preprocessing never re-runs on a restart.
+  osrm_data:

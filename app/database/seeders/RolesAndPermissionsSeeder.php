@@ -64,6 +64,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedNetworkProfileGroupPermissions();
         $this->seedHotspotPackagePermissions();
         $this->seedPppPackagePermissions();
+        $this->seedFiberNetworkPermissions();
     }
 
     /**
@@ -462,6 +463,28 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedPppPackagePermissions(): void
     {
         $permissions = ['ppp_packages.view', 'ppp_packages.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
+    }
+
+    /**
+     * v0.16.0 Core Network Infrastructure Management — one permission pair
+     * covers the whole module (FiberNode/FiberCable/FiberCore/Splitter/
+     * FiberAccessory + the new fields on Odp), same posture as the
+     * bandwidth_profiles and customer_ip_pools permission pairs —
+     * tier-admin-only for now. FiberNode/Odp DO have a nullable
+     * reseller_id, so a future reseller_users-membership carve-out
+     * (mirroring NasPolicy/OltDevicePolicy) is plausible once real
+     * Livewire/UI ownership rules are decided in Langkah 3 — deliberately
+     * not built ahead of that decision.
+     */
+    private function seedFiberNetworkPermissions(): void
+    {
+        $permissions = ['network_infrastructure.view', 'network_infrastructure.manage'];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

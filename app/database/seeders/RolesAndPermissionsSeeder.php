@@ -59,6 +59,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedOltDevicePermissions();
         $this->seedMonitoringPermissions();
         $this->seedReferrerPermissions();
+        $this->seedCommissionRatePermissions();
         $this->seedBandwidthProfilePermissions();
         $this->seedCustomerIpPoolPermissions();
         $this->seedNetworkProfileGroupPermissions();
@@ -385,6 +386,26 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedReferrerPermissions(): void
     {
         $permissions = ['referrers.view', 'referrers.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
+    }
+
+    /**
+     * v0.9.3 Commission Rate Settings — tier-admin-only, same posture as
+     * referrers.*: commission_rates has no reseller_id (tenant-level only,
+     * FK ke ppp_packages), jadi tidak ada carve-out keanggotaan
+     * reseller_users di sini. `finance` role sengaja TIDAK diberi view di
+     * sini — sampai v0.9.3 role itu belum pernah punya permission apa pun
+     * (lihat komentar di run()); menambahkannya untuk modul ini akan jadi
+     * keputusan RBAC tersendiri, bukan asumsi.
+     */
+    private function seedCommissionRatePermissions(): void
+    {
+        $permissions = ['commission_rates.view', 'commission_rates.manage'];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

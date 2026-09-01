@@ -378,6 +378,52 @@ detail teknis lengkap termasuk dua regresi nyata yang ditemukan & diperbaiki saa
 
 ---
 
+## Commission Rate Settings (v0.9.3)
+
+Tabel rate komisi per **Profil PPP** (`ppp_packages`, v0.14.5). FK ke `ppp_packages` **saja** — komisi
+hanya untuk paket bulanan PPP; Hotspot/Token pakai skema "Agent" terpisah, di luar scope cluster v0.9.x.
+Satu rate aktif per paket (`commission_rates.ppp_package_id` unik parsial `WHERE deleted_at IS NULL`).
+Permission: `commission_rates.view`/`commission_rates.manage`, tier admin saja
+(`superadmin`/`administrator`). Business logic di `App\Services\CommissionRateService`, dipakai bareng
+oleh endpoint di bawah dan Livewire `Commission\CommissionRateIndex` (`/commission-rates`).
+
+**Belum ada dampak apa pun ke perhitungan komisi per pelanggan** — `commission_ledger.amount` masih null
+saat registrasi. Menghubungkan pelanggan/langganan ke satu `ppp_package_id` adalah pekerjaan inti v0.9.4,
+bukan v0.9.3.
+
+3 skema komisi (semua nullable, minimal 1 wajib diisi):
+- `recurring_amount` — Komisi Per Bulan.
+- `limited_count_amount` + `limited_count_times` — skema "X-kali pembayaran": nominal per pembayaran untuk
+  `limited_count_times` kali pertama. **Pasangan** — keduanya terisi atau keduanya kosong.
+  `limited_count_times` fleksibel (integer ≥ 1, tidak fixed).
+- `titip_amount` — Komisi Titip (one-off).
+
+Validasi: tiap amount kalau diisi ≥ 0 (angka 0 yang eksplisit sah); `limited_count_*` berpasangan;
+minimal 1 dari ketiga skema harus terisi.
+
+### `GET /commission-rates`
+
+List rate komisi milik tenant yang login (dengan `ppp_package` ter-embed). Query opsional: `?is_active=`,
+`?per_page=`.
+
+### `POST /commission-rates`
+
+Body: `ppp_package_id` (wajib — harus paket milik tenant, belum di-soft-delete, dan belum punya rate
+aktif), lalu salah satu/lebih dari `recurring_amount`, `limited_count_amount` + `limited_count_times`,
+`titip_amount`; `is_active` opsional (default `true`). Response `201`.
+
+### `GET /commission-rates/{commission_rate}` · `PUT /commission-rates/{commission_rate}`
+
+`PUT` menerima field amount + `is_active` — **`ppp_package_id` tidak bisa diubah** (rate terikat ke
+paketnya; untuk paket lain buat rate baru). Field yang tidak ikut dikirim di-fallback ke nilai tersimpan
+saat validasi lintas-field.
+
+### `DELETE /commission-rates/{commission_rate}`
+
+Soft delete. Setelah dihapus, paket yang sama boleh dibuatkan rate baru (unique parsial).
+
+---
+
 ## Bandwidth Profile (v0.14.1)
 
 Fondasi cluster "Profil Paket" (terinspirasi MixRadius V3.2). Permission: `bandwidth_profiles.view`/

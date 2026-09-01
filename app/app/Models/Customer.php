@@ -34,7 +34,11 @@ class Customer extends Model
         'nik',
         'latitude',
         'longitude',
+        // v0.3.0 varchar bebas — DIGANTIKAN ppp_package_id di v0.9.4 tapi
+        // kolomnya tidak di-drop (nol data, minim risiko). Berhenti dipakai
+        // dari form, tetap fillable supaya jalur lama tidak error.
         'package',
+        'ppp_package_id',
     ];
 
     protected function casts(): array
@@ -108,6 +112,15 @@ class Customer extends Model
     public function referredBy(): BelongsTo
     {
         return $this->belongsTo(Referrer::class, 'referred_by_referrer_id');
+    }
+
+    /**
+     * v0.9.4 — paket PPP pelanggan, HANYA untuk link komisi (lihat
+     * commission_rates). TIDAK terkait subscriptions/billing.
+     */
+    public function pppPackage(): BelongsTo
+    {
+        return $this->belongsTo(PppPackage::class);
     }
 
     public function reseller(): BelongsTo

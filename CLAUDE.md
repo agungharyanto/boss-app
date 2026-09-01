@@ -6030,6 +6030,56 @@ sungguhan dibuat lewat `/ppp-packages` — bukan bug. `referrers` juga 0 baris.
 sesuai pelajaran v0.14.5.1, DB dev sekarang lebih maju dari `main`; closure (merge/tag) harus segera
 menyusul setelah Agung verifikasi manual. Belum di-merge/tag.
 
+## Skema Komisi per Pelanggan (v0.9.4)
+
+**Menutup gap yang diflag v0.9.3**: menautkan pelanggan ke satu `ppp_packages.id` sehingga
+`commission_rates` bisa dipakai mengisi `commission_ledger.amount`.
+
+**KONSTRAIN — `subscriptions` / `SubscriptionService` / `GenerateDueInvoices` TIDAK DISENTUH.** Billing
+pelanggan masih manual/MixRadius; BOSS App belum jadi sumber tagihan. Mengaktifkan `subscriptions`
+berisiko generate invoice ganda ke pelanggan real. **`customers.ppp_package_id` (v0.9.4) sepenuhnya
+independen dari `subscriptions`** — murni untuk link komisi. `subscriptions` tidak punya `ppp_package_id`
+dan tetap tidak akan, sampai ada keputusan terpisah untuk menjadikan BOSS App sumber tagihan.
+
+- **`customers.package` (varchar, v0.3.0) — field write-only mati.** Investigasi Langkah 0 memastikan NOL
+  pembacaan di seluruh codebase (detail pelanggan, list, invoice, `{package_name}` WhatsApp =
+  `subscription->name` bukan ini, export, dashboard — semua nol; 551 customers semua `package = NULL`).
+  v0.9.4 mengganti pemakaiannya di form registrasi dengan `customers.ppp_package_id` (FK→`ppp_packages`,
+  nullable, `nullOnDelete`). **Kolom `package` TIDAK di-drop** — nol data, drop = risiko tidak perlu;
+  masih di `$fillable` supaya jalur lama tidak error, cukup berhenti dipakai.
+- **`commission_ledger.scheme`** (`App\Enums\CommissionScheme`: `recurring` / `limited_count`, nullable).
+  `commission_ledger.amount` (ada sejak v0.3.0) baru **mulai benar-benar diisi** di v0.9.4.
+- **`App\Services\CommissionAttributionService::createPendingLedger(Customer, Referrer, ?string $scheme)`**
+  — satu tempat pembuatan baris `commission_ledger` Pending, dipakai bareng `RegistrationService::register()`
+  (registrasi) dan `App\Livewire\Customers\CustomerShow` (edit pelanggan existing). Resolusi: `$scheme`
+  null → `scheme/amount` NULL (perilaku pra-v0.9.4, tidak maksa); `$scheme` diisi & `CommissionRate`
+  aktif paket punya nominalnya → `scheme + amount` terisi; `$scheme` diisi tapi rate tidak punya
+  nominalnya → tetap NULL (jaring pengaman, tidak menebak). **Titip tidak pernah di-resolve lewat sini.**
+- **`CommissionRate::schemeOptions()` / `amountForScheme()`** — opsi "Skema Komisi" yang ditawarkan UI
+  = hanya skema dengan `amount` non-null pada rate yang `is_active=true`. Label: "Per Bulan" /
+  "{`limited_count_times`} Kali". **"Titip" tidak pernah ditawarkan** (di luar scope v0.9.4).
+- **`RegistrationService::register()`** dapat param ke-3 `?string $scheme`. `StoreRegistrationRequest`:
+  `package` → `ppp_package_id` (nullable, exists tenant-scoped) + `scheme` (`in:recurring,limited_count`).
+- **`CustomerShow`** — panel inline baru **"Paket & Referral"** (`startEditingCommission()` /
+  `updateCommissionAttribution()`, pola sama `editingProfile`/`updateProfile`). **Aturan atribusi**:
+  `referred_by_referrer_id` **null → terisi** = field editable, buat 1 `CommissionLedger` Pending baru.
+  **Referrer SUDAH terisi → opsi (c): field TERKUNCI** (`referrerLocked()` → blade render input disabled,
+  `updateCommissionAttribution()` abaikan total `editReferrerId` dari client). Hanya field Paket yang
+  bisa diubah; `commission_ledger` tidak pernah dibuat/diubah/di-void dari panel ini untuk pelanggan yang
+  sudah punya referrer. Koreksi referrer = jalur admin tersendiri (belum dibangun), sejalan prinsip
+  "append-only" (v0.9.2). Lihat CHANGELOG v0.9.4 amendment.
+- **Label dropdown "Skema Komisi"** menyertakan nominal Rupiah lewat `CommissionRate::schemeOptions()`
+  (satu sumber kebenaran, dipakai form registrasi + panel edit): `"Per Bulan - Rp 3.000"` /
+  `"{times} Kali - Rp 33.000"` (`number_format(..., 0, ',', '.')`).
+- **`RegistrationServiceTest`'s `amount => null` di-split**: perilaku lama (referrer tanpa skema → NULL)
+  dipertahankan sebagai test terpisah, skenario baru (skema → amount dari rate) ditambahkan. Sama untuk
+  `RegistrationApiTest`.
+
+**Kondisi data saat dibangun**: 1 `PppPackage` aktif (`HomeFixed-10Mbps` #6, dibuat Agung saat verifikasi
+v0.9.3) dengan `CommissionRate` (recurring 3000, limited 33000×2) + 1 `Referrer` aktif — cukup untuk
+verifikasi HTTP nyata. **DB dev sudah di-`migrate`** (2 kolom); kalau branch dibatalkan
+`migrate:rollback --step=2`.
+
 ## Cluster Profil Paket (v0.14.x) — Konstrain NAS Produksi
 
 **WAJIB dibaca sebelum eksekusi sub-versi apa pun di cluster v0.14.x (Bandwidth Profile → IP Pool

@@ -2,8 +2,14 @@
 
 namespace Tests\Feature\Api;
 
+use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
+use App\Enums\NetworkProfileGroupType;
 use App\Enums\RegistrationChannel;
+use App\Models\BandwidthProfile;
+use App\Models\CommissionRate;
+use App\Models\NetworkProfileGroup;
+use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -27,6 +33,20 @@ class RegistrationApiTest extends TestCase
         $user->assignRole($role);
 
         return $user;
+    }
+
+    private function package(int $tenantId): PppPackage
+    {
+        $group = NetworkProfileGroup::factory()->create([
+            'tenant_id' => $tenantId,
+            'type' => NetworkProfileGroupType::Ppp,
+        ]);
+
+        return PppPackage::factory()->create([
+            'tenant_id' => $tenantId,
+            'network_profile_group_id' => $group->id,
+            'bandwidth_profile_id' => BandwidthProfile::factory()->create(['tenant_id' => $tenantId])->id,
+        ]);
     }
 
     public function test_sales_internal_can_register_a_customer_without_a_referrer(): void
@@ -84,10 +104,83 @@ class RegistrationApiTest extends TestCase
         ]);
 
         $response->assertCreated();
+        // Perilaku LAMA (tanpa scheme) tetap: ledger Pending, amount NULL.
         $this->assertDatabaseHas('commission_ledger', [
             'referrer_id' => $referrer->id,
             'status' => CommissionStatus::Pending->value,
+            'amount' => null,
+            'scheme' => null,
         ]);
+    }
+
+    /**
+     * Perilaku BARU (v0.9.4) — ppp_package_id + referrer + scheme:
+     * commission_ledger.amount + scheme terisi dari commission_rates.
+     */
+    public function test_registering_with_ppp_package_and_scheme_fills_commission_amount(): void
+    {
+        $user = $this->userWithRole('superadmin');
+        $referrer = Referrer::factory()->create(['tenant_id' => $user->tenant_id]);
+        $package = $this->package($user->tenant_id);
+        CommissionRate::factory()->create([
+            'ppp_package_id' => $package->id,
+            'recurring_amount' => 25000,
+            'limited_count_amount' => null,
+            'limited_count_times' => null,
+        ]);
+
+        $response = $this->actingAs($user)->postJson('/api/v1/registrations', [
+            'name' => 'Andi Komisi',
+            'address' => 'Jl. Kenanga No. 9',
+            'phone_number' => '081234567899',
+            'referred_by_referrer_id' => $referrer->id,
+            'ppp_package_id' => $package->id,
+            'scheme' => CommissionScheme::Recurring->value,
+        ]);
+
+        $response->assertCreated();
+        $this->assertDatabaseHas('customers', [
+            'name' => 'Andi Komisi',
+            'ppp_package_id' => $package->id,
+        ]);
+        $this->assertDatabaseHas('commission_ledger', [
+            'referrer_id' => $referrer->id,
+            'status' => CommissionStatus::Pending->value,
+            'scheme' => CommissionScheme::Recurring->value,
+            'amount' => '25000.00',
+        ]);
+    }
+
+    public function test_an_invalid_scheme_value_is_rejected(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $response = $this->actingAs($user)->postJson('/api/v1/registrations', [
+            'name' => 'Salah Skema',
+            'address' => 'Jl. Kenanga No. 10',
+            'phone_number' => '081234567810',
+            'scheme' => 'titip',
+        ]);
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['scheme']);
+    }
+
+    public function test_ppp_package_from_another_tenant_is_rejected(): void
+    {
+        $user = $this->userWithRole('superadmin');
+        $other = $this->userWithRole('superadmin');
+        $foreignPackage = $this->package($other->tenant_id);
+
+        $response = $this->actingAs($user)->postJson('/api/v1/registrations', [
+            'name' => 'Paket Asing',
+            'address' => 'Jl. Kenanga No. 11',
+            'phone_number' => '081234567811',
+            'ppp_package_id' => $foreignPackage->id,
+        ]);
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['ppp_package_id']);
     }
 
     public function test_role_without_register_customer_permission_is_forbidden(): void

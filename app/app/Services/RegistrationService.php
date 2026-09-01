@@ -2,12 +2,10 @@
 
 namespace App\Services;
 
-use App\Enums\CommissionStatus;
 use App\Enums\CustomerStatus;
 use App\Enums\RegistrationChannel;
 use App\Enums\RegistrationStatus;
 use App\Enums\WhatsappEventType;
-use App\Models\CommissionLedger;
 use App\Models\Customer;
 use App\Models\Referrer;
 use App\Services\Whatsapp\WhatsappGatewayService;
@@ -17,6 +15,7 @@ class RegistrationService
 {
     public function __construct(
         private readonly WhatsappGatewayService $whatsappService,
+        private readonly CommissionAttributionService $commissionAttribution,
     ) {}
 
     /**
@@ -28,11 +27,17 @@ class RegistrationService
      * registering with no referral picked), registration_channel falls back
      * to 'admin' and no commission_ledger row is created at all.
      *
-     * @param  array{name: string, address: string, phone_number: string, nik?: ?string, latitude?: ?float, longitude?: ?float, package?: ?string}  $data
+     * v0.9.4 — $scheme (nullable 'recurring'/'limited_count'): kalau diisi
+     * DAN customer.ppp_package_id punya CommissionRate aktif dengan amount
+     * untuk skema itu, commission_ledger.scheme + amount ikut terisi. Kalau
+     * $scheme null (admin skip pilihan skema), ledger tetap dibuat Pending
+     * dengan scheme+amount NULL — persis perilaku lama, tidak maksa.
+     *
+     * @param  array{name: string, address: string, phone_number: string, nik?: ?string, latitude?: ?float, longitude?: ?float, package?: ?string, ppp_package_id?: ?int}  $data
      */
-    public function register(array $data, ?Referrer $registeredBy = null): Customer
+    public function register(array $data, ?Referrer $registeredBy = null, ?string $scheme = null): Customer
     {
-        $customer = DB::transaction(function () use ($data, $registeredBy) {
+        $customer = DB::transaction(function () use ($data, $registeredBy, $scheme) {
             $customer = Customer::create([
                 ...$data,
                 'status' => CustomerStatus::Prospek,
@@ -44,12 +49,7 @@ class RegistrationService
             ]);
 
             if ($registeredBy !== null) {
-                CommissionLedger::create([
-                    'tenant_id' => $customer->tenant_id,
-                    'referrer_id' => $registeredBy->id,
-                    'customer_id' => $customer->id,
-                    'status' => CommissionStatus::Pending,
-                ]);
+                $this->commissionAttribution->createPendingLedger($customer, $registeredBy, $scheme);
             }
 
             return $customer;

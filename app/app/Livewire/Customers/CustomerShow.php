@@ -8,11 +8,17 @@ use App\Actions\Customers\UpdateCustomerContactAction;
 use App\Actions\Customers\UpdateCustomerStatusAction;
 use App\Enums\ContactAccessLevel;
 use App\Enums\CustomerStatus;
+use App\Models\CommissionRate;
 use App\Models\CpeDevice;
 use App\Models\Customer;
 use App\Models\CustomerContact;
+use App\Models\PppPackage;
+use App\Models\Referrer;
+use App\Services\CommissionAttributionService;
 use App\Services\Network\CpeBindingService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Livewire\Attributes\Validate;
 use Livewire\Component;
 use Throwable;
@@ -65,12 +71,24 @@ class CustomerShow extends Component
     #[Validate('required|string|max:255')]
     public string $newDeviceSerial = '';
 
+    // v0.9.4 — panel "Paket & Referral" (inline edit, pola sama dengan
+    // editingProfile/updateProfile). HANYA untuk link komisi — TIDAK
+    // menyentuh subscriptions/billing.
+    public bool $editingCommission = false;
+
+    public ?int $editPppPackageId = null;
+
+    public ?int $editReferrerId = null;
+
+    public ?string $editCommissionScheme = null;
+
     public function mount(Customer $customer): void
     {
         $this->authorize('view', $customer);
 
         $this->customer = $customer;
         $this->syncProfileFields();
+        $this->syncCommissionFields();
     }
 
     private function syncProfileFields(): void
@@ -78,6 +96,140 @@ class CustomerShow extends Component
         $this->name = $this->customer->name;
         $this->address = $this->customer->address;
         $this->phone_number = $this->customer->phone_number;
+    }
+
+    private function syncCommissionFields(): void
+    {
+        $this->editPppPackageId = $this->customer->ppp_package_id;
+        $this->editReferrerId = $this->customer->referred_by_referrer_id;
+        $this->editCommissionScheme = null;
+    }
+
+    public function startEditingCommission(): void
+    {
+        $this->authorize('update', $this->customer);
+        $this->syncCommissionFields();
+        $this->editingCommission = true;
+    }
+
+    public function cancelEditingCommission(): void
+    {
+        $this->editingCommission = false;
+        $this->syncCommissionFields();
+        $this->resetErrorBag(['editPppPackageId', 'editReferrerId', 'editCommissionScheme']);
+    }
+
+    public function updatedEditPppPackageId(): void
+    {
+        $this->editCommissionScheme = null;
+    }
+
+    public function updatedEditReferrerId(): void
+    {
+        $this->editCommissionScheme = null;
+    }
+
+    /**
+     * @return array{options: array<string, string>, show: bool}
+     */
+    private function commissionSchemeState(): array
+    {
+        $options = [];
+
+        // Skema hanya relevan untuk atribusi BARU (null -> set). Kalau
+        // referrer sudah terkunci, tidak ada ledger yang dibuat, jadi field
+        // skema tidak perlu muncul.
+        $referrerSelected = ! $this->referrerLocked() && $this->editReferrerId !== null;
+
+        if ($referrerSelected && $this->editPppPackageId !== null) {
+            $rate = CommissionRate::where('ppp_package_id', $this->editPppPackageId)
+                ->where('is_active', true)
+                ->first();
+
+            $options = $rate?->schemeOptions() ?? [];
+        }
+
+        return ['options' => $options, 'show' => $options !== []];
+    }
+
+    public function referrerLocked(): bool
+    {
+        // Opsi (c) — field Referrer terkunci setelah terisi: hanya boleh
+        // null -> set. Mengganti / menghapus referrer yang sudah ada bukan
+        // aksi inline biasa (mengubah jejak atribusi/komisi) — kalau perlu
+        // koreksi, itu jalur admin tersendiri, belum dibangun. Sejalan
+        // dengan prinsip "append-only, koreksi lewat entri baru" (CLAUDE.md
+        // v0.9.2 portal referrer).
+        return $this->customer->referred_by_referrer_id !== null;
+    }
+
+    /**
+     * Aturan atribusi (v0.9.4):
+     *  - referrer null -> terisi  : buat 1 baris commission_ledger Pending
+     *    baru (logic sama dg registrasi), scheme+amount kalau skema dipilih.
+     *  - referrer SUDAH terisi     : field-nya terkunci (lihat
+     *    referrerLocked()) — perubahan editReferrerId diabaikan total di
+     *    server, hanya editPppPackageId yang boleh berubah. Tidak ada
+     *    commission_ledger yang dibuat/diubah/di-void.
+     */
+    public function updateCommissionAttribution(CommissionAttributionService $service): void
+    {
+        $this->authorize('update', $this->customer);
+
+        $tenantId = auth()->user()->tenant_id;
+
+        $hadReferrer = $this->customer->referred_by_referrer_id !== null;
+
+        $rules = [
+            'editPppPackageId' => [
+                'nullable', 'integer',
+                Rule::exists('ppp_packages', 'id')->where('tenant_id', $tenantId)->whereNull('deleted_at'),
+            ],
+        ];
+
+        // Referrer hanya divalidasi/dipakai kalau belum terkunci.
+        if (! $hadReferrer) {
+            $rules['editReferrerId'] = [
+                'nullable', 'integer',
+                Rule::exists('referrers', 'id')->where('tenant_id', $tenantId),
+            ];
+        }
+
+        $this->validate($rules);
+
+        // Terkunci: nilai lama dipertahankan, apa pun yang dikirim client.
+        $newReferrerId = $hadReferrer
+            ? $this->customer->referred_by_referrer_id
+            : $this->editReferrerId;
+
+        $scheme = $this->resolveEditScheme();
+
+        DB::transaction(function () use ($service, $hadReferrer, $newReferrerId, $scheme) {
+            $this->customer->update([
+                'ppp_package_id' => $this->editPppPackageId,
+                'referred_by_referrer_id' => $newReferrerId,
+            ]);
+
+            if (! $hadReferrer && $newReferrerId !== null) {
+                $referrer = Referrer::findOrFail($newReferrerId);
+                $service->createPendingLedger($this->customer, $referrer, $scheme);
+            }
+        });
+
+        $this->customer = $this->customer->refresh();
+        $this->editingCommission = false;
+        $this->syncCommissionFields();
+    }
+
+    private function resolveEditScheme(): ?string
+    {
+        $state = $this->commissionSchemeState();
+
+        if (! $state['show'] || $this->editCommissionScheme === null) {
+            return null;
+        }
+
+        return array_key_exists($this->editCommissionScheme, $state['options']) ? $this->editCommissionScheme : null;
     }
 
     public function startEditingProfile(): void
@@ -264,6 +416,8 @@ class CustomerShow extends Component
             ->filter(fn (CustomerStatus $status) => $this->customer->status->canTransitionTo($status))
             ->values();
 
+        $schemeState = $this->commissionSchemeState();
+
         return view('livewire.customers.customer-show', [
             'contacts' => $this->customer->contacts()->latest()->get(),
             'timelineEntries' => $this->customer->timelineEntries()->with('actor')->paginate(15),
@@ -272,6 +426,13 @@ class CustomerShow extends Component
             'canManage' => auth()->user()->can('update', $this->customer),
             'cpeDevice' => $this->customer->cpeDevices()->first(),
             'canAddDevice' => auth()->user()->can('create', [CpeDevice::class, $this->customer->reseller]),
+            'availablePackages' => PppPackage::where('is_active', true)->orderBy('name')->get(),
+            'availableReferrers' => Referrer::where('is_active', true)->orderBy('name')->get(),
+            'currentPppPackage' => $this->customer->pppPackage,
+            'currentReferrer' => $this->customer->referredBy,
+            'commissionSchemeOptions' => $schemeState['options'],
+            'showCommissionSchemeField' => $schemeState['show'],
+            'referrerLocked' => $this->referrerLocked(),
         ]);
     }
 }

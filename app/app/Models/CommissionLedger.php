@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CommissionLedgerFactory;
@@ -21,6 +22,7 @@ class CommissionLedger extends Model
         'referrer_id',
         'customer_id',
         'amount',
+        'scheme',
         'status',
         'notes',
     ];
@@ -29,6 +31,7 @@ class CommissionLedger extends Model
     {
         return [
             'amount' => 'decimal:2',
+            'scheme' => CommissionScheme::class,
             'status' => CommissionStatus::class,
         ];
     }

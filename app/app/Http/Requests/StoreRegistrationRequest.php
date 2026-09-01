@@ -41,11 +41,19 @@ class StoreRegistrationRequest extends FormRequest
             'nik' => ['nullable', 'string', 'max:20'],
             'latitude' => ['nullable', 'numeric', 'between:-90,90'],
             'longitude' => ['nullable', 'numeric', 'between:-180,180'],
-            'package' => ['nullable', 'string', 'max:255'],
+            // v0.9.4 — `package` (varchar bebas) diganti FK ke ppp_packages.
+            // Kolom lama tidak di-drop tapi tidak lagi diterima di sini.
+            'ppp_package_id' => [
+                'nullable', 'integer',
+                Rule::exists('ppp_packages', 'id')->where('tenant_id', $tenantId)->whereNull('deleted_at'),
+            ],
             'referred_by_referrer_id' => [
                 'nullable', 'integer',
                 Rule::exists('referrers', 'id')->where('tenant_id', $tenantId),
             ],
+            // Hanya dipakai kalau referrer + paket dipilih & rate-nya punya
+            // skema itu — kalau tidak, diabaikan (amount tetap NULL).
+            'scheme' => ['nullable', Rule::in(['recurring', 'limited_count'])],
         ];
     }
 

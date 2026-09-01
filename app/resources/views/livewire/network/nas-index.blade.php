@@ -211,6 +211,82 @@
         </div>
     @endif
 
+    {{-- v0.16 — Cek Koneksi RADIUS diagnostic --}}
+    @if ($showRadiusDiagnosticModal)
+        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" wire:click.self="closeRadiusDiagnosticModal">
+            <div class="bg-white rounded-md p-6 w-full max-w-lg space-y-4 max-h-[90vh] overflow-y-auto">
+                <div class="flex items-center justify-between">
+                    <h2 class="font-medium">Cek Koneksi RADIUS</h2>
+                    <button wire:click="closeRadiusDiagnosticModal" type="button" class="text-sm text-gray-400 hover:text-gray-700">&times;</button>
+                </div>
+                <p class="text-xs text-gray-500">Diagnostik 3 langkah — tunnel WireGuard (sisi server) → router bisa ping FreeRADIUS lewat tunnel → interface WireGuard (sisi router). Kelihatan di langkah mana putusnya.</p>
+
+                @if ($diagnosticResult === null)
+                    <button wire:click="runRadiusDiagnostic" wire:loading.attr="disabled" wire:target="runRadiusDiagnostic" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm disabled:opacity-50">
+                        <span wire:loading.remove wire:target="runRadiusDiagnostic">Jalankan Diagnostik</span>
+                        <span wire:loading wire:target="runRadiusDiagnostic">Mengecek… (ping router bisa ~10 dtk)</span>
+                    </button>
+                @else
+                    {{-- Inline statement form only — a raw PHP block directive anywhere in
+                         this file makes Blade's block regex swallow the earlier
+                         "$ports = $this->currentPorts()" statement up to its close tag. --}}
+                    @php($diagBadge = ['ok' => 'bg-green-100 text-green-800', 'warn' => 'bg-amber-100 text-amber-800', 'fail' => 'bg-red-100 text-red-800', 'skip' => 'bg-gray-100 text-gray-600'])
+                    @php($diagStepLabel = ['ok' => 'OK', 'warn' => 'Perhatian', 'fail' => 'GAGAL', 'skip' => 'Dilewati'])
+                    @php($diagOverallLabel = ['ok' => 'OK', 'degraded' => 'Sebagian', 'down' => 'Putus'])
+                    @php($diagOverallKey = $diagnosticResult['overall'] === 'ok' ? 'ok' : ($diagnosticResult['overall'] === 'degraded' ? 'warn' : 'fail'))
+                    <div class="text-xs text-gray-400">
+                        NAS: <span class="text-gray-700 font-medium">{{ $diagnosticResult['nas']['name'] }}</span>
+                        · {{ $diagnosticResult['ran_at'] }}
+                        · Ringkasan:
+                        <span class="px-1.5 py-0.5 rounded {{ $diagBadge[$diagOverallKey] }}">{{ $diagOverallLabel[$diagnosticResult['overall']] ?? $diagnosticResult['overall'] }}</span>
+                    </div>
+
+                    <ol class="space-y-2">
+                        @foreach ($diagnosticResult['steps'] as $i => $step)
+                            <li class="border border-gray-200 rounded-md p-3">
+                                <div class="flex items-center justify-between gap-2">
+                                    <span class="text-sm font-medium text-gray-700">{{ $i + 1 }}. {{ $step['label'] }}</span>
+                                    <span class="text-xs px-2 py-0.5 rounded {{ $diagBadge[$step['status']] ?? '' }}">{{ $diagStepLabel[$step['status']] ?? $step['status'] }}</span>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">{{ $step['detail'] }}</p>
+                            </li>
+                        @endforeach
+                    </ol>
+
+                    @if (count($diagnosticResult['suggestions']) > 0)
+                        <div class="border border-amber-200 bg-amber-50 rounded-md p-3 space-y-1">
+                            <p class="text-xs font-semibold text-amber-800">Saran (perlu tindakan manual — TIDAK dijalankan otomatis):</p>
+                            @foreach ($diagnosticResult['suggestions'] as $sugg)
+                                <p class="text-xs text-amber-800">• {{ $sugg['label'] }}</p>
+                            @endforeach
+                        </div>
+                    @endif
+
+                    @if ($diagnosticResult['self_solve_available'])
+                        <div class="border border-gray-200 rounded-md p-3 space-y-2">
+                            <p class="text-xs text-gray-600">Self-solve aman &amp; reversible untuk NAS ini saja: trigger ulang handshake peer + sinkron route fragment. Tidak menyentuh container / NAS lain.</p>
+                            <button wire:click="applyRadiusSelfSolve" wire:loading.attr="disabled" wire:target="applyRadiusSelfSolve" wire:confirm="Trigger ulang handshake WireGuard untuk NAS ini?" class="px-3 py-1.5 border border-gray-300 rounded-md hover:bg-gray-50 text-xs disabled:opacity-50">
+                                <span wire:loading.remove wire:target="applyRadiusSelfSolve">Coba Self-Solve</span>
+                                <span wire:loading wire:target="applyRadiusSelfSolve">Menjalankan…</span>
+                            </button>
+                            @if ($selfSolveResult !== null)
+                                <p class="text-xs {{ $selfSolveResult['retriggered'] ? 'text-green-700' : 'text-amber-700' }}">{{ $selfSolveResult['message'] }}</p>
+                            @endif
+                        </div>
+                    @endif
+
+                    <div class="flex items-center gap-3 pt-1">
+                        <button wire:click="runRadiusDiagnostic" wire:loading.attr="disabled" wire:target="runRadiusDiagnostic" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm disabled:opacity-50">
+                            <span wire:loading.remove wire:target="runRadiusDiagnostic">Cek Ulang</span>
+                            <span wire:loading wire:target="runRadiusDiagnostic">Mengecek…</span>
+                        </button>
+                        <button wire:click="closeRadiusDiagnosticModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">Tutup</button>
+                    </div>
+                @endif
+            </div>
+        </div>
+    @endif
+
     {{-- LIST --}}
     <div class="border border-gray-200 rounded-md overflow-x-auto">
         <table class="w-full text-sm">
@@ -247,6 +323,9 @@
                             <button wire:click="openProvisionApiModal({{ $nas->id }})" class="text-primary hover:underline">User API</button>
                             <button wire:click="openExpiredProfileModal({{ $nas->id }})" class="text-primary hover:underline" title="Profil Pelanggan Expired{{ $nas->expiredIpPool ? ' — '.$nas->expiredIpPool->name.' ('.$nas->expired_profile_mikrotik_sync_status?->label().')' : '' }}">
                                 Profil Expired
+                            </button>
+                            <button wire:click="openRadiusDiagnosticModal({{ $nas->id }})" class="text-primary hover:underline" title="Diagnostik 3-langkah: tunnel → FreeRADIUS → interface router">
+                                Cek Koneksi RADIUS
                             </button>
                             <button wire:click="delete({{ $nas->id }})" wire:confirm="Hapus NAS ini?" class="text-red-500 hover:underline">Hapus</button>
                         </td>

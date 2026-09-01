@@ -51,45 +51,128 @@ class SidebarNavigationTest extends TestCase
     }
 
     /**
-     * v0.14.3.1 — Bandwidth Profile/IP Pool Pelanggan/Grup Profil were 3
-     * flat "Network" cluster items, now grouped under one collapsible
-     * "Profil Paket" parent (same 'children' pattern as NAS/Perangkat
-     * CPE) — the parent row IS Bandwidth Profile's own real link
-     * (relabeled), IP Pool Pelanggan/Grup Profil are its children. This is
-     * a purely visual reorganization: no route changed, so every
-     * underlying page must still be reachable at its original URL.
+     * v0.14.3.1 — Bandwidth Profile/IP Pool Pelanggan/Grup Profil/Profil
+     * Hotspot/Profil PPP grouped under one collapsible "Profil Paket".
+     * restrukturisasi-sidebar — grup ini pindah dari cluster "Network" ke
+     * "Billing & Finance", parent-nya jadi TOGGLE-MURNI (bukan link),
+     * Bandwidth Profile jadi child pertama. Reorganisasi visual: tidak ada
+     * route yang berubah, tiap halaman tetap di URL aslinya.
      */
     public function test_admin_tier_user_sees_the_grouped_profil_paket_menu(): void
     {
         $user = $this->userWithRole('superadmin');
 
-        $response = $this->actingAs($user)->get('/bandwidth-profiles');
+        $response = $this->actingAs($user)->get('/invoices');
 
         $response->assertSee('Profil Paket');
+        $response->assertSee('Bandwidth Profile');
         $response->assertSee('IP Pool Pelanggan');
         $response->assertSee('Grup Profil');
-        // v0.14.4 — third child added to the same "Profil Paket" group.
         $response->assertSee('Profil Hotspot');
+        $response->assertSee('Profil PPP');
     }
 
-    public function test_profil_paket_parent_link_points_to_the_bandwidth_profiles_page(): void
+    public function test_profil_paket_parent_is_a_pure_toggle_not_a_link(): void
     {
         $user = $this->userWithRole('superadmin');
 
-        $this->actingAs($user)
-            ->get('/customer-ip-pools')
-            ->assertSee(route('web.bandwidth-profiles.index'), false);
+        $html = $this->actingAs($user)->get('/invoices')->getContent();
+
+        // Parent row is a <button> toggling the subgroup, label wrapped in
+        // a <span> — NOT an <a href> to any page.
+        $this->assertMatchesRegularExpression(
+            '/<button[^>]*aria-controls="sidebar-subgroup-profil-paket"[^>]*>\s*<span>Profil Paket<\/span>/s',
+            $html
+        );
+        // Bandwidth Profile is still reachable — now as a child link.
+        $this->assertStringContainsString(route('web.bandwidth-profiles.index'), $html);
+        // The old link-parent markup (label directly inside an <a class="flex-1 ...">)
+        // must not wrap "Profil Paket" anymore.
+        $this->assertDoesNotMatchRegularExpression(
+            '/<a href="[^"]*bandwidth-profiles[^"]*"\s+class="flex-1[^>]*>\s*Profil Paket/s',
+            $html
+        );
     }
 
     public function test_profil_paket_children_still_link_to_their_original_routes(): void
     {
         $user = $this->userWithRole('superadmin');
 
-        $response = $this->actingAs($user)->get('/network-profile-groups');
+        $response = $this->actingAs($user)->get('/invoices');
 
+        $response->assertSee(route('web.bandwidth-profiles.index'), false);
         $response->assertSee(route('web.customer-ip-pools.index'), false);
         $response->assertSee(route('web.network-profile-groups.index'), false);
         $response->assertSee(route('web.hotspot-packages.index'), false);
+        $response->assertSee(route('web.ppp-packages.index'), false);
+    }
+
+    public function test_profil_paket_sits_in_billing_finance_not_network(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $html = $this->actingAs($user)->get('/invoices')->getContent();
+
+        $billingPos = strpos($html, '<span>Billing &amp; Finance</span>');
+        $networkPos = strpos($html, '<span>Network</span>');
+        $profilPaketPos = strpos($html, '<span>Profil Paket</span>');
+
+        $this->assertNotFalse($billingPos);
+        $this->assertNotFalse($networkPos);
+        $this->assertNotFalse($profilPaketPos);
+        // "Profil Paket" is rendered inside the Billing & Finance cluster,
+        // which comes before the Network cluster in the sidebar.
+        $this->assertGreaterThan($billingPos, $profilPaketPos);
+        $this->assertLessThan($networkPos, $profilPaketPos);
+    }
+
+    public function test_package_pricing_link_is_gone_from_the_sidebar(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $response = $this->actingAs($user)->get('/customers');
+
+        $response->assertDontSee('Package Pricing');
+        $response->assertDontSee(route('web.reseller-package-pricing.index'), false);
+    }
+
+    public function test_sidebar_clusters_default_collapsed_except_the_active_one(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $html = $this->actingAs($user)->get('/invoices')->getContent();
+
+        // Active cluster (Billing & Finance — /invoices lives here) auto-opens.
+        $this->assertStringContainsString(
+            "x-data=\"{ open: true || localStorage.getItem('sidebar-cluster-billing-finance') === 'true' }\"",
+            $html
+        );
+        // Every other cluster defaults closed.
+        $this->assertStringContainsString(
+            "x-data=\"{ open: false || localStorage.getItem('sidebar-cluster-network') === 'true' }\"",
+            $html
+        );
+        $this->assertStringContainsString(
+            "x-data=\"{ open: false || localStorage.getItem('sidebar-cluster-pelanggan') === 'true' }\"",
+            $html
+        );
+    }
+
+    public function test_profil_paket_subgroup_auto_opens_on_its_own_pages(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $onPage = $this->actingAs($user)->get('/hotspot-packages')->getContent();
+        $this->assertStringContainsString(
+            "x-data=\"{ subOpen: true || localStorage.getItem('sidebar-subgroup-profil-paket') === 'true' }\"",
+            $onPage
+        );
+
+        $offPage = $this->actingAs($user)->get('/invoices')->getContent();
+        $this->assertStringContainsString(
+            "x-data=\"{ subOpen: false || localStorage.getItem('sidebar-subgroup-profil-paket') === 'true' }\"",
+            $offPage
+        );
     }
 
     /**

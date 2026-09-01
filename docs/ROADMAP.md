@@ -54,6 +54,22 @@
 | v0.18.0 | Billing & Finance | Accounting & Financial Reporting | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Modul akuntansi: laporan pemasukan harian, pemasukan per periode (mingguan/bulanan/custom range), laporan laba-rugi, pencatatan pengeluaran (expenses). Sinkronisasi dengan modul pajak yang sudah ada (Tax Components/Reseller Tax Policy, v0.3.3 Regulatory Tax Engine) — termasuk perhitungan BHP USO (kewajiban regulasi telekomunikasi Indonesia): berapa yang harus dibayar ISP sendiri, dan berapa yang harus dibayar tiap reseller. Decision-gate scope lengkap dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 | v0.19.0 | Operasional     | Feature Toggle / Module Management | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Halaman Pengaturan untuk enable/disable modul fitur besar (kandidat: GenieACS/TR-069, FreeRADIUS, WhatsApp Gateway, Payment Gateway, OLT/SmartOLT integration, Profil Paket live-push, dan modul lain — list final berdasarkan hasil audit Docker vs Monitoring, lihat CLAUDE.md). Tujuan: BOSS App direncanakan dijual sebagai SaaS ke ISP lain — saat onboarding tenant trial/demo baru, admin perlu kontrol modul mana yang aktif/ditampilkan, supaya trial user tidak melihat fitur setengah jadi atau tidak relevan buat mereka. Scope detail (termasuk apakah per-tenant atau global, dan mekanisme teknisnya) belum ditentukan — decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 
+## Item Maintenance Window Terjadwal (bukan versi sprint — infra, butuh jendela downtime)
+
+- **MW-1 — `boss-network` IPAM: tambah `ip-range` (atau pin semua container).** AKAR MASALAH insiden
+  WireGuard node IP collision (2026-08-31 asli, berulang 2026-09-02). `boss-network` cuma punya `subnet`,
+  tanpa `ip-range` → pool dinamis Docker meliputi seluruh `/24` termasuk `.4`/`.5`/`.11` yang di-pin
+  manual untuk `wireguard-node2/3`/`wireguard` (node1). Container tak-pin yang start duluan setelah reboot
+  menyerobot IP node WireGuard → node gagal start (`Address already in use`, `Exited 137`). Mitigasi
+  parsial **B1 sudah dilakukan** (pin `openvpn-node2`→`.221`, `genieacs-ui`→`.222` — 2 penyerobot
+  tersering), tapi container tak-pin lain (`openvpn`, `openvpn-node3`, `docker-stats-proxy`, `mongo`,
+  `l2tp`, `whatsapp-gateway`, `boss-*`, dst) secara struktural masih bisa menyerobot. **Perbaikan penuh
+  (B2)**: tambah `ip-range: 172.28.0.32/27` ke IPAM `boss-network` (pool dinamis mulai `.32`, `.2`-`.31`
+  reservasi IP manual) ATAU pin `ipv4_address` untuk SEMUA container. Keduanya butuh recreate
+  `boss-network` = putus sementara SEMUA container termasuk `wireguard` node yang membawa tunnel live →
+  **wajib jendela maintenance terjadwal, tidak boleh sambil tunnel produksi aktif.** Detail lengkap:
+  CLAUDE.md bagian "WireGuard Node IP Collision After Host Reboot".
+
 Kita tidak loncat versi dalam satu cluster. Setiap versi selesai penuh
 (lihat Definition of Done di RULES.md) sebelum lanjut ke versi berikutnya.
 Urutan antar-cluster mengikuti dependency teknis: reseller sebelum

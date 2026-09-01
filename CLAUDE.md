@@ -6976,6 +6976,75 @@ A full pre-reconcile snapshot (`wg show wg0 dump` from all 3 nodes, plus human-r
 was captured and preserved before this change as a rollback baseline — never needed, since the reconcile
 completed cleanly with no disruption to either NAS's live session.
 
+## WireGuard Node IP Collision After Host Reboot — Recurring Incident (2026-08-31 asli, 2026-09-02 berulang; branch `fix-wireguard-node-ip-collision`)
+
+**AKAR MASALAH — `boss-network`'s IPAM cuma punya `subnet: 172.28.0.0/24`, TIDAK ada `ip-range`.**
+Konsekuensi: pool alokasi IP dinamis Docker (untuk container yang TIDAK di-pin `ipv4_address`) meliputi
+SELURUH `/24` — termasuk alamat rendah `.4` / `.5` / `.11` yang di-pin manual untuk `wireguard-node2` /
+`wireguard-node3` / `wireguard` (node1) lewat `WIREGUARD_NODE2/3/1_INTERNAL_IP`. Kalau container restart
+dengan urutan yang tidak menguntungkan (paling sering: setelah reboot host), container tak-pin yang start
+duluan menyerobot IP yang seharusnya milik node WireGuard → node WireGuard gagal start dengan
+`failed to set up container networking: Address already in use`, `Exited (137)`, `RestartCount=0`
+(`restart: unless-stopped` **tidak** retry container yang gagal di tahap network-setup, beda dari crash
+runtime).
+
+**Insiden asli (2026-08-31, ~11:43 WIB)** — auto-reboot host (kernel upgrade `6.8.0-137`→`138`). Saat
+boot, `docker-stats-proxy`→`.11`, `openvpn-node2`→`.4`, `genieacs-ui`→`.5`. Ketiga node WireGuard down
+~6 jam. **Nol dampak ke ~400 pelanggan `test-x86-bajastu`** (mereka auth via `/radius` `mixradius` router,
+BUKAN tunnel BOSS — `boss-radius` entry di router itu `disabled=true`); `ro-hotspot` kena timeout RADIUS
+(RADIUS-nya genuinely lewat tunnel). Node1 dipulihkan saat itu (stop `docker-stats-proxy` yang serobot
+`.11` → recreate `wireguard`). **node2/node3 SENGAJA dibiarkan `Exited` sebagai "technical debt untuk
+maintenance window terjadwal" — TIDAK PERNAH dieksekusi.** Dokumentasi lengkap insiden asli + fix F2
+(`VpnProvisioningService::ensureCapacityFor()` — memperbaiki masalah SEKUNDER: `revokeAndRegenerate()`
+yang revoke akun NAS duluan sebelum cek kapasitas node, jadi kalau semua node down akun ke-strip tanpa
+rollback) + fitur "Cek Koneksi RADIUS" per-NAS ada di branch **`hotfix/wireguard-node-ip-race`** (commit
+`a75f608`) — **branch itu tidak pernah di-merge ke `main`**, jadi CLAUDE.md di `main` tidak pernah punya
+catatan ini sampai section ini ditulis. **F2 SAMA SEKALI tidak menyentuh akar masalah IPAM.**
+
+**Insiden berulang (2026-09-02)** — `wireguard-node2`/`wireguard-node3` ternyata **masih `Exited (137)`
+sejak `FinishedAt=2026-08-31T04:43:17`** — tidak pernah dihidupkan lagi sejak insiden asli, ~2 hari.
+`docker network inspect` mengonfirmasi pola yang IDENTIK: `.4`→`openvpn-node2`, `.5`→`genieacs-ui`
+(`.11` kebetulan aman, dipegang `wireguard` sendiri). node1 sehat, sedang memegang KEDUA tunnel live
+(`test-x86-bajastu` + `ro-hotspot` — keduanya auto-switched ke node1 karena node2/3 down), nol redundansi
+selama ~2 hari itu (gap redundansi ini terjadi SEBELUM sesi perbaikan, bukan disebabkan olehnya).
+
+**Perbaikan yang DIEKSEKUSI (Opsi A + B1):**
+- **Opsi A — pulihkan node2/node3 (scoped, node1 tidak disentuh):** `docker compose stop genieacs-ui`
+  (bebaskan `.5`) → `stop openvpn-node2` (bebaskan `.4` — dikonfirmasi 0 akun OpenVPN aktif di node
+  manapun) → bawa node3 lalu node2 kembali (mereka klaim `.5`/`.4` yang sudah bebas) → nyalakan lagi
+  genieacs-ui + openvpn-node2. **GOTCHA nyata**: `docker compose up -d --force-recreate wireguard-node3`
+  **men-cascade recreate `wireguard` (node1) juga** — node1 restart ~beberapa detik, kedua NAS auto-switch
+  ke node3 (yang sudah up), tunnel tetap jalan (freeradius→NAS ping 0% loss sepanjang proses). **Jangan
+  pakai `--force-recreate` untuk node yang restartnya bisa meng-cascade ke node live** — plain
+  `docker compose up -d wireguard-node2` (untuk container yang `Exited`) TIDAK cascade.
+- **Opsi B1 — pin 2 penyerobot berulang:** `OPENVPN_NODE2_INTERNAL_IP=172.28.0.221` /
+  `GENIEACS_UI_INTERNAL_IP=172.28.0.222` (IP tinggi, di luar zona collision, di luar juga block
+  `172.28.0.224/27` yang di-trust router — jadi tidak menambah attack surface tunnel). `ipv4_address`
+  di-pin di `docker-compose.yml` untuk kedua service, container di-recreate. **GOTCHA**: menambah key ke
+  `.env` (yang dipakai `env_file: - .env` oleh HAMPIR semua service) menandai semua service itu
+  "config drifted" — `docker compose up -d genieacs-ui openvpn-node2` ikut men-recreate `freeradius` +
+  `openvpn` (rantai dependency + env-hash). Semua kembali healthy; **drift sisa dibiarkan** (benign —
+  cuma berarti recreate service X berikutnya ikut baca `.env` baru yang efeknya identik), tidak dilakukan
+  `docker compose up -d` massal (risiko men-recreate node WireGuard yang sedang live).
+
+**Verifikasi final (2026-09-02):** ketiga node `running`, `RestartCount=0`, IP benar (`.11`/`.4`/`.5`);
+`vpn_servers` semua `wireguard` = `online` (node-1 2 klien, node-2 0, node-3 1) setelah
+`vpn:check-node-health`; heartbeat + `wg-status` file ketiga node fresh; freeradius→`172.23.195.6` dan
+→`172.23.195.2` keduanya 0% loss ~6ms; tunnel live saat ini di node3, node1+node2 idle siap failover.
+**Kapasitas failover pool pulih penuh (3 node online, dari efektif 1).**
+
+**MASIH UTANG — Opsi B2, item maintenance window RESMI (bukan "nanti"):** akar masalah IPAM belum
+disentuh. Pilih salah satu, keduanya butuh **recreate `boss-network` = putus sementara SEMUA container
+di network itu, termasuk `wireguard` node yang sedang membawa tunnel live** — HARUS jendela maintenance
+terjadwal, tidak boleh dieksekusi sambil tunnel produksi aktif:
+1. Tambah `ip-range` ke IPAM `boss-network` (mis. `172.28.0.32/27` → pool dinamis mulai `.32`, reservasi
+   `.2`-`.31` khusus IP yang di-pin manual). Paling bersih, nol perubahan per-service.
+2. ATAU pin `ipv4_address` untuk SEMUA container yang belum di-pin (`openvpn`, `openvpn-node3`,
+   `docker-stats-proxy`, `genieacs-fs`, `mongo`, `l2tp`, `whatsapp-gateway`, `boss-certbot`, dan semua
+   `boss-*`) ke alamat tinggi. Lebih banyak file diubah, tapi bisa incremental per-container.
+B1 hanya menutup 2 penyerobot yang PALING sering kejadian — container tak-pin lain secara struktural masih
+bisa menyerobot `.4`/`.5`/`.11` di reboot berikutnya sampai B2 dikerjakan.
+
 ## Revisi Grup Profil — Interface/VLAN, PPPoE Server, Expired Profile (branch `revisi-grup-profil-interface-pppoe-server`)
 
 **Status**: implementasi selesai, diverifikasi REAL end-to-end terhadap `ro-hotspot.bajastu.id` (NAS id=3)

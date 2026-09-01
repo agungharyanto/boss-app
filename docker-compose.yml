@@ -618,7 +618,14 @@ services:
     env_file:
       - .env
     networks:
-      - boss-network
+      boss-network:
+        # B1 (2026-09-02) — dipin ke IP tinggi (di luar rentang rendah yang
+        # rawan collision) supaya openvpn-node2 tidak lagi menyerobot
+        # WIREGUARD_NODE2_INTERNAL_IP (172.28.0.4) saat restart-cascade —
+        # penyebab insiden berulang, lihat CLAUDE.md bagian "WireGuard Node
+        # IP Collision After Host Reboot". Perbaikan struktural penuh (IPAM
+        # ip-range) masih utang, dijadwalkan maintenance window.
+        ipv4_address: ${OPENVPN_NODE2_INTERNAL_IP}
     depends_on:
       openvpn:
         condition: service_started
@@ -1010,7 +1017,14 @@ services:
       mongo:
         condition: service_healthy
     networks:
-      - boss-network
+      boss-network:
+        # B1 (2026-09-02) — dipin ke IP tinggi (di luar rentang rendah yang
+        # rawan collision) supaya genieacs-ui tidak lagi menyerobot
+        # WIREGUARD_NODE3_INTERNAL_IP (172.28.0.5) saat restart-cascade —
+        # penyebab insiden berulang, lihat CLAUDE.md bagian "WireGuard Node
+        # IP Collision After Host Reboot". Perbaikan struktural penuh (IPAM
+        # ip-range) masih utang, dijadwalkan maintenance window.
+        ipv4_address: ${GENIEACS_UI_INTERNAL_IP}
     # GenieACS's own bundled admin UI — optional, for manual debugging only;
     # BOSS App itself never talks to this (all binding/status logic goes
     # through genieacs-nbi directly). No host port published (BOSS-010

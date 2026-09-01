@@ -6023,6 +6023,41 @@ codebase ini soal betapa mudahnya operasi yang terlihat aman ternyata berdampak 
 (lihat investigasi FreeRADIUS `require_message_authenticator`/CoA di bagian v0.6.5, yang sempat mengubah
 urutan `/radius` entry `test-x86-bajastu` sungguhan saat proses debugging).
 
+### v0.14.7 — `test-x86-bajastu` RESMI SIAP untuk sistem Profil Paket (PELANGGAN BARU saja)
+
+**Status per 2026-09-01 (v0.14.7):** `test-x86-bajastu` (NAS id=1) **verified aman & siap** dipakai sebagai
+target push sistem Profil Paket (Bandwidth Profile / IP Pool Pelanggan / Grup Profil / Profil Hotspot /
+Profil PPP) **untuk PELANGGAN BARU ke depan** — atas keputusan eksplisit Agung, dengan prosedur uji coba
+terkontrol yang sudah dijalankan:
+
+- **Langkah 0 (read-only)**: inventaris namespace penuh router disimpan di
+  `docs/test-x86-bajastu-namespace-inventory.md` — **acuan WAJIB dibaca** sebelum menambah pelanggan/paket
+  baru ke NAS ini, supaya nama `/ppp profile` / `/ip pool` / `/interface pppoe-server server` dan range IP
+  yang dipush BOSS App tidak collision dengan sistem lama (18 `/ppp profile`, 24 `/ip pool`, 9 pppoe-server
+  existing — semua milik mixradius). Konvensi comment BOSS App (`BOSS App - ...`) dikonfirmasi nol tabrakan.
+- **Langkah 1 (uji tulis terkontrol)**: lewat BOSS App dibuat 1 Bandwidth Profile + 1 IP Pool (range
+  `192.0.2.2-192.0.2.6`, RFC 5737 TEST-NET-1 — dikonfirmasi kosong di router) + 1 Grup Profil (PPP, **tanpa
+  interface_name/service_name → tidak menyentuh `/interface pppoe-server server` sama sekali**) + 1 Profil
+  PPP, semua label `TEST-ROLLOUT-HAPUS-SAYA*`, di-push ke router. Hasil: 2 `/ppp profile` + 1 `/ip pool`
+  baru muncul dengan comment `BOSS App - ...` unik, **nol object existing berubah/hilang**, `/interface
+  pppoe-server server` tetap 9. **PPP active sessions 218 → 218 → 218** (baseline → sesudah push → sesudah
+  hapus) — **nol gangguan ke pelanggan existing**. Semua object test dihapus lewat BOSS App → router bersih
+  100% (kembali 18/24/9, nol orphan, `radgroupreply boss-grup-profil-16` = 0).
+- **Kredensial API NAS id=1**: user `boss-app-api-1`, group `boss-app-api` — policy sudah include `write`
+  (dulu `!write` per catatan v0.6.5, sudah diperluas), konek OK.
+
+**Yang MASIH BERLAKU (tidak berubah):**
+- **TIDAK ADA migrasi 295 pelanggan existing** ke sistem baru — mereka tetap di mixradius/local secret.
+  Migrasi massal itu di luar scope, hanya kalau ada keputusan terpisah nanti.
+- Peringatan umum di atas tetap berlaku: NAS ini production, setiap operasi tulis harus reversible +
+  lookup-by-comment (jangan pernah lookup-by-name terhadap object yang mungkin milik mixradius). Untuk
+  eksperimen fitur BARU yang belum matang, **`ro-hotspot.bajastu.id` (id=3) tetap NAS uji coba utama** —
+  `test-x86-bajastu` "siap" ≠ "boleh dipakai coba-coba mekanisme yang belum diverifikasi di ro-hotspot".
+- Grup Profil untuk pelanggan baru di `test-x86-bajastu`: kalau butuh PPPoE Server binding
+  (interface_name + service_name), itu menyentuh `/interface pppoe-server server` — **belum diverifikasi di
+  NAS ini** (di v0.14.7 sengaja dikosongkan; binding-nya sendiri sudah diverifikasi terpisah di ro-hotspot
+  v0.14.3.1). Verifikasi terpisah dulu kalau nanti benar-benar dibutuhkan.
+
 ## Bandwidth Profile (v0.14.1)
 
 Fondasi cluster "Profil Paket". Table `bandwidth_profiles` (`tenant_id`, `name`, `upload_min`/`upload_max`/

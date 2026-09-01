@@ -139,13 +139,19 @@ dipakai bareng oleh endpoint ini dan Livewire `RegisterCustomer`.
 ### `POST /registrations`
 
 Body: `name`, `address`, `phone_number` (wajib), `nik`, `latitude`,
-`longitude`, `package` (opsional), `referred_by_referrer_id` (opsional, harus
-`id` referrer milik tenant yang sama).
+`longitude`, `ppp_package_id` (opsional — `id` `ppp_packages` milik tenant yang
+sama, belum di-soft-delete), `referred_by_referrer_id` (opsional, harus `id`
+referrer milik tenant yang sama), `scheme` (opsional — `recurring` /
+`limited_count`, lihat di bawah).
 
-> **Breaking change v0.9.1**: field ini sebelumnya bernama `referred_by_agent_id`
-> (model `Agent` di-rename jadi `Referrer` — lihat CLAUDE.md bagian v0.9.1 untuk
-> alasannya). Project masih pre-production/belum ada consumer eksternal, jadi
-> rename field dilakukan langsung tanpa periode transisi/alias.
+> **Breaking change v0.9.1**: field `referred_by_referrer_id` sebelumnya bernama
+> `referred_by_agent_id` (model `Agent` di-rename jadi `Referrer`). Project masih
+> pre-production/belum ada consumer eksternal, jadi rename dilakukan langsung.
+>
+> **Breaking change v0.9.4**: field `package` (varchar bebas) diganti
+> `ppp_package_id` (FK ke `ppp_packages`). Kolom `customers.package` tidak di-drop
+> tapi endpoint ini tidak lagi menerimanya. **`ppp_package_id` ini hanya untuk
+> menautkan komisi — tidak terkait `subscriptions`/billing.**
 
 Aturan atribusi referrer: kalau user yang login sudah terhubung ke sebuah
 `Referrer` (`referrers.user_id`), registrasi **selalu** diatribusikan ke
@@ -154,8 +160,16 @@ terhubung ke referrer manapun (mis. `superadmin` mendaftarkan langsung),
 `referred_by_referrer_id` dipakai kalau dikirim, atau `registration_channel`
 jadi `admin` tanpa referral kalau tidak.
 
-Setiap registrasi dengan referrer otomatis membuat satu baris `commission_ledger`
-berstatus `pending` (`amount` masih null — diisi di sprint v0.9.0 Commission).
+Setiap registrasi dengan referrer membuat satu baris `commission_ledger`
+berstatus `pending`. **v0.9.4**: kalau `scheme` dikirim **DAN** `ppp_package_id`
+punya `CommissionRate` aktif dengan nominal untuk skema itu
+(`recurring_amount` untuk `recurring`, `limited_count_amount` untuk
+`limited_count`), maka `commission_ledger.scheme` + `amount` ikut terisi dari
+rate tsb. Kalau `scheme` tidak dikirim (atau rate tidak punya nominalnya),
+`scheme` + `amount` tetap `null` — **persis perilaku pra-v0.9.4, backward
+compatible.** Skema "Titip" **tidak** di-resolve lewat jalur ini (mekanisme
+terpisah).
+
 Response `201` berisi `CustomerResource` seperti `POST /customers`.
 
 ### `GET /referrals`

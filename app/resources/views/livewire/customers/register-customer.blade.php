@@ -44,8 +44,16 @@
 
         <div>
             <label class="block text-sm font-medium text-gray-700">Paket</label>
-            <input type="text" wire:model="package" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
-            @error('package') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+            <select wire:model.live="ppp_package_id" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                <option value="">— Pilih paket —</option>
+                @foreach ($availablePackages as $package)
+                    <option value="{{ $package->id }}">{{ $package->name }}</option>
+                @endforeach
+            </select>
+            @error('ppp_package_id') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+            @if ($availablePackages->isEmpty())
+                <p class="text-xs text-gray-500 mt-1">Belum ada Profil PPP aktif — buat dulu di Billing &amp; Finance &rarr; Profil Paket &rarr; Profil PPP.</p>
+            @endif
         </div>
 
         <div>
@@ -56,7 +64,7 @@
                     class="mt-1 block w-full rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm">
                 <p class="text-xs text-gray-500 mt-1">Otomatis terisi sesuai akun Anda yang login.</p>
             @else
-                <select wire:model="selectedReferrerId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                <select wire:model.live="selectedReferrerId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                     <option value="">Tidak ada referral</option>
                     @foreach ($availableReferrers as $referrer)
                         <option value="{{ $referrer->id }}">{{ $referrer->name }} ({{ $referrer->type->label() }})</option>
@@ -65,6 +73,20 @@
                 @error('selectedReferrerId') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             @endif
         </div>
+
+        @if ($showSchemeField)
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Skema Komisi</label>
+                <select wire:model="commissionScheme" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                    <option value="">— Tidak ditentukan —</option>
+                    @foreach ($schemeOptions as $value => $label)
+                        <option value="{{ $value }}">{{ $label }}</option>
+                    @endforeach
+                </select>
+                <p class="text-xs text-gray-500 mt-1">Menentukan nominal komisi dari rate paket. Kosongkan kalau belum mau ditentukan.</p>
+                @error('commissionScheme') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+            </div>
+        @endif
 
         <button type="submit" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90">
             Daftarkan Pelanggan

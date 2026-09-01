@@ -31,7 +31,13 @@ class RegistrationController extends Controller
         $referrer = $linkedReferrer ?? (isset($data['referred_by_referrer_id']) ? Referrer::find($data['referred_by_referrer_id']) : null);
         unset($data['referred_by_referrer_id']);
 
-        $customer = $service->register($data, $referrer);
+        // v0.9.4 — scheme diteruskan terpisah; CommissionAttributionService
+        // yang memutuskan apakah amount bisa di-resolve (kalau tidak, amount
+        // NULL — backward compatible).
+        $scheme = $data['scheme'] ?? null;
+        unset($data['scheme']);
+
+        $customer = $service->register($data, $referrer, $scheme);
 
         return $this->success(new CustomerResource($customer), 'Registrasi berhasil', [], 201);
     }

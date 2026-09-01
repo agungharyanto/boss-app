@@ -2,7 +2,9 @@
 
 namespace App\Livewire\Customers;
 
+use App\Models\CommissionRate;
 use App\Models\Customer;
+use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Services\RegistrationService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
@@ -34,10 +36,17 @@ class RegisterCustomer extends Component
     #[Validate('nullable|numeric|between:-180,180')]
     public ?float $longitude = null;
 
-    #[Validate('nullable|string|max:255')]
-    public string $package = '';
+    /**
+     * v0.9.4 — dulu input teks bebas `package`; sekarang dropdown PppPackage
+     * aktif, disimpan ke customers.ppp_package_id. Kolom `customers.package`
+     * lama dibiarkan NULL, tidak dipakai lagi.
+     */
+    public ?int $ppp_package_id = null;
 
     public ?int $selectedReferrerId = null;
+
+    /** 'recurring' / 'limited_count' — hanya relevan kalau field skema muncul (lihat schemeState()). */
+    public ?string $commissionScheme = null;
 
     public function mount(): void
     {
@@ -50,23 +59,64 @@ class RegisterCustomer extends Component
         }
     }
 
+    public function updatedPppPackageId(): void
+    {
+        // Skema tergantung paket — reset saat paket berubah.
+        $this->commissionScheme = null;
+    }
+
+    public function updatedSelectedReferrerId(): void
+    {
+        // Skema hanya relevan kalau ada referrer.
+        $this->commissionScheme = null;
+    }
+
+    /**
+     * @return array{referrer: ?Referrer, options: array<string, string>, show: bool}
+     */
+    private function schemeState(): array
+    {
+        $referrer = $this->linkedReferrer
+            ?? ($this->selectedReferrerId ? Referrer::find($this->selectedReferrerId) : null);
+
+        $options = [];
+
+        if ($referrer !== null && $this->ppp_package_id !== null) {
+            $rate = CommissionRate::where('ppp_package_id', $this->ppp_package_id)
+                ->where('is_active', true)
+                ->first();
+
+            $options = $rate?->schemeOptions() ?? [];
+        }
+
+        return [
+            'referrer' => $referrer,
+            'options' => $options,
+            'show' => $options !== [],
+        ];
+    }
+
     public function register(RegistrationService $service)
     {
         $this->authorize('register-customer');
 
         $data = $this->validate();
         $data['nik'] = $data['nik'] ?: null;
-        $data['package'] = $data['package'] ?: null;
 
-        // Mirrors StoreRegistrationRequest's nik_hash-based uniqueness
-        // check (Api/V1/RegistrationController's own entry point) — nik
-        // itself is an `encrypted` cast, so a plain Rule::unique('customers',
-        // 'nik') would never actually catch a duplicate.
         if ($data['nik'] && Customer::nikAlreadyExists($data['nik'], auth()->user()->tenant_id)) {
             $this->addError('nik', 'NIK sudah terdaftar.');
 
             return;
         }
+
+        $this->validate([
+            'ppp_package_id' => [
+                'nullable', 'integer',
+                Rule::exists('ppp_packages', 'id')
+                    ->where('tenant_id', auth()->user()->tenant_id)
+                    ->whereNull('deleted_at'),
+            ],
+        ]);
 
         if ($this->linkedReferrer) {
             $this->validate(['selectedReferrerId' => 'required']);
@@ -78,6 +128,8 @@ class RegisterCustomer extends Component
             $referrer = $this->selectedReferrerId ? Referrer::find($this->selectedReferrerId) : null;
         }
 
+        $scheme = $this->resolveScheme();
+
         $customer = $service->register([
             'name' => $data['name'],
             'phone_number' => $data['phone_number'],
@@ -85,12 +137,29 @@ class RegisterCustomer extends Component
             'nik' => $data['nik'],
             'latitude' => $this->latitude,
             'longitude' => $this->longitude,
-            'package' => $data['package'],
-        ], $referrer);
+            'ppp_package_id' => $this->ppp_package_id,
+        ], $referrer, $scheme);
 
         session()->flash('status', "Pelanggan {$customer->name} berhasil diregistrasi.");
 
         return redirect()->route('web.customers.show', $customer);
+    }
+
+    /**
+     * Skema hanya diteruskan kalau field-nya memang muncul (ada referrer +
+     * paket + opsi valid) DAN nilai yang dipilih ada di daftar opsi. Kalau
+     * tidak, null — RegistrationService/CommissionAttributionService jatuh
+     * ke perilaku lama (amount NULL).
+     */
+    private function resolveScheme(): ?string
+    {
+        $state = $this->schemeState();
+
+        if (! $state['show'] || $this->commissionScheme === null) {
+            return null;
+        }
+
+        return array_key_exists($this->commissionScheme, $state['options']) ? $this->commissionScheme : null;
     }
 
     public function render()
@@ -99,8 +168,13 @@ class RegisterCustomer extends Component
             ? collect()
             : Referrer::where('is_active', true)->orderBy('name')->get();
 
+        $state = $this->schemeState();
+
         return view('livewire.customers.register-customer', [
             'availableReferrers' => $availableReferrers,
+            'availablePackages' => PppPackage::where('is_active', true)->orderBy('name')->get(),
+            'schemeOptions' => $state['options'],
+            'showSchemeField' => $state['show'],
         ]);
     }
 }

@@ -4373,6 +4373,75 @@ section and real container names (`boss-app`, `boss-scheduler`,
 `genieacs-cwmp`) genuinely present in the rendered HTML. Full regression
 suite green at 701/701 (12 new tests), Pint clean.
 
+## Audit Docker vs Monitoring + Aturan Wajib untuk Service Baru (2026-09-02)
+
+**ATURAN TETAP, berlaku untuk SEMUA sprint sejak sekarang (governance note permanen, sama level dengan
+aturan re-seed permission / konstrain NAS produksi di atas):**
+
+> **Setiap kali fitur baru dibangun yang butuh service/container Docker tambahan** (Alpine atau image
+> lain apa pun) **WAJIB ditambahkan ke halaman Monitoring** (LibreNMS + mekanisme container-stats yang
+> berlaku saat itu — lihat "Container Stats via docker-socket-proxy" di atas) **di sprint yang sama —
+> JANGAN ditunda ke sprint terpisah.** Tujuannya: Agung punya visibilitas penuh atas kesehatan semua
+> service yang berjalan, tidak ada container "siluman" yang jalan tanpa termonitor. Untuk service Docker
+> baru, minimal: tambahkan nama container-nya ke `ContainerStatsService::CONTAINER_GROUPS` (kelompok yang
+> masuk akal, bukan dibiarkan jatuh ke "Lainnya" begitu saja) — dan kalau service itu punya health-check
+> aplikasi sendiri yang berarti (bukan cuma "container Up"), pertimbangkan juga apakah perlu disurfacekan
+> ke `/monitoring`, bukan cuma diam di halaman modulnya sendiri.
+
+### Audit Docker vs Monitoring (2026-09-02) — hasil, BUKAN kode baru
+
+Dijalankan sebagai audit murni (tidak menyentuh kode fitur), membandingkan `docker-compose.yml` (30
+service nyata, dibaca langsung dari file — bukan ditebak dari nama modul) terhadap apa yang benar-benar
+ter-capture oleh mekanisme monitoring yang ada.
+
+**Kesimpulan utama: tidak ada service yang JALAN tapi genuinely tak terlihat sama sekali** —
+`ContainerStatsService::syncAll()` (v0.8.4 Bagian C) memanggil `GET /containers/json` ke
+`docker-stats-proxy` **tanpa filter apa pun** — ini me-list SEMUA container yang sedang `running` di host,
+bukan daftar kurasi manual. Dikonfirmasi lewat query langsung ke `container_stats_history`: batch sync
+normal berisi **28 baris** — persis sama dengan jumlah container yang genuinely `running` saat itu (30
+service terdefinisi − 2 yang sedang exited, lihat insiden di bawah). `groupFor()`'s fallback ke
+`"Lainnya"` (lihat docblock class itu sendiri) memang secara sengaja dirancang supaya container baru yang
+belum sempat dikategorikan tetap MUNCUL, cuma belum terkelompokkan rapi — bukan hilang.
+
+**Tapi 2 gap nyata ditemukan, keduanya di level MEKANISME, bukan "container X lupa ditambahkan":**
+
+1. **`ContainerStatsHistory` cuma menyimpan metrik resource (CPU/mem/network/disk) — TIDAK PERNAH
+   menyimpan/menyurfacekan status container itu sendiri (running/exited) atau hasil Docker HEALTHCHECK
+   (`healthy`/`unhealthy`).** Konsekuensi nyata: begitu sebuah container **exited**, dia langsung berhenti
+   muncul di `/containers/json` response berikutnya — jadi dia juga langsung berhenti muncul di riwayat
+   `container_stats_history` DAN di halaman `/monitoring`, **tanpa satu baris log/alert pun yang bilang
+   "container ini baru saja mati"**. Container yang down bukan tampil sebagai "merah/down" — dia cuma
+   **diam-diam tidak muncul lagi**, yang di UI terlihat identik dengan "sudah lama tidak pernah ada".
+2. **`CONTAINER_GROUPS` (const di `ContainerStatsService`) belum diupdate sejak era v0.8.3** — `mongo`,
+   `whatsapp-gateway`, `freeradius`, `freeradius-db`, `genieacs-cwmp`/`nbi`/`fs`/`ui`, `docker-stats-proxy`,
+   `rsyslog-receiver`, `osrm`, `certbot` semuanya jatuh ke grup fallback **"Lainnya"** — genuinely
+   terlihat di `/monitoring`, tapi tidak terkelompokkan bermakna (kosmetik, bukan gap visibilitas).
+
+**Gap ketiga, beda kelas — level APLIKASI, bukan level container:** LibreNMS sendiri (SNMP, `addDevice()`)
+cuma memonitor **5 device**: router `test-x86-bajastu`, 3 OLT, dan self-host (`172.28.0.1`). Kesehatan
+APLIKASI dari GenieACS/FreeRADIUS-sebagai-server-RADIUS/tunnel WireGuard/sesi WhatsApp Gateway/Payment
+Gateway masing-masing punya mekanismenya sendiri di tempat lain (Test Connection NAS, halaman status sesi
+WhatsApp, healthcheck Docker FreeRADIUS via Status-Server, dst) — **tidak ada satu pun yang di-aggregate ke
+`/monitoring`** sebagai satu pane-of-glass. Bukan "tidak termonitor sama sekali", tapi tersebar di
+beberapa tempat berbeda, bukan satu dashboard.
+
+**INSIDEN NYATA ditemukan selagi audit (2026-09-02), BELUM DIPERBAIKI — menunggu keputusan Agung**:
+`wireguard-node2` DAN `wireguard-node3` (2 dari 3 node pool WireGuard) **berstatus `Exited (137)`**
+(`docker ps -a`), bukan `running`. `docker inspect` menunjukkan `OOMKilled=false`, error tersimpan
+`"failed to set up container networking: Address already in use"` — pola yang cocok dengan kelas bug yang
+sudah pernah didokumentasikan di file ini (`ipv4_address` yang di-pin bentrok saat container coba
+recreate/restart, lihat bagian "Infra Tunnel IP Block"/WireGuard di atas). **Ini contoh nyata gap #1 di
+atas**: kedua node ini sudah lama exited, tapi tidak ada sinyal "down" apa pun di `/monitoring` — cuma
+diam-diam absen dari `container_stats_history`. **TIDAK disentuh/direstart** selama audit ini (sesuai
+instruksi "jangan langsung tambahkan kode/perbaikan") — dampaknya: `test-x86-bajastu` (NAS produksi) yang
+sedang tidak berada di node1 kehilangan 2 dari 3 opsi failover pool. Perlu keputusan/eksekusi terpisah
+Agung, bukan diasumsikan aman untuk dibiarkan.
+
+**Sengaja TIDAK ditindaklanjuti dengan kode di sprint ini** (murni audit + governance note, sesuai
+instruksi) — daftar gap di atas jadi kandidat scope untuk sprint monitoring berikutnya, dan jadi salah
+satu sumber "list final" modul untuk `v0.19.0` Feature Toggle / Module Management (lihat
+`docs/ROADMAP.md`).
+
 ## Riwayat/Edit/Remove for Monitoring Devices (v0.8.4 Bagian D)
 
 **RRD filename patterns for CPU/Memory/Temperature history are vendor-

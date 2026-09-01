@@ -3,6 +3,94 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.9.4 — Skema Komisi per Pelanggan (branch `v0.9.4-skema-komisi-per-pelanggan`, implementasi selesai 2026-09-01, belum di-merge/tag)
+
+**Catatan status**: branch dari `develop` (`291a8ca`), **bukan `main`** — karena butuh pemindahan
+Referrer/Rate Komisi (`74cb16a`) yang masih di `develop` saja. **DB dev sudah di-`migrate`** (2 kolom baru)
+untuk verifikasi HTTP; kalau branch dibatalkan: `migrate:rollback --step=2`. Belum di-merge/tag.
+
+**KONSTRAIN yang dipegang ketat**: **`subscriptions`, `SubscriptionService`, `GenerateDueInvoices` TIDAK
+disentuh sama sekali.** Billing pelanggan masih manual/MixRadius — BOSS App belum jadi sumber tagihan.
+`customers.ppp_package_id` yang dibangun di sini **HANYA** untuk menautkan komisi, sepenuhnya independen
+dari `subscriptions`.
+
+### Langkah 0 (investigasi) — temuan kunci
+
+- `customers.package` (varchar, v0.3.0) = **field write-only mati**: ditulis form registrasi, **NOL
+  pembacaan** di mana pun (detail pelanggan, list, invoice, `{package_name}` WA = `subscription->name`
+  bukan ini, export, dashboard — semua nol). 551 customers, **semua `package = NULL`**, 0 `referred_by_
+  referrer_id`. Blast radius ganti→FK: ~5 file, semua jalur registrasi.
+- `subscriptions` = modul lengkap (v0.3.4) tapi **tidak punya `ppp_package_id`**, 0 baris, registrasi
+  tidak pernah bikin subscription. Sengaja tidak disentuh.
+
+### Langkah 1 — migration & model
+
+- `2026_09_01_220000` — `customers.ppp_package_id` (FK→`ppp_packages`, nullable, `nullOnDelete`).
+  `customers.package` **TIDAK di-drop** (nol data, minim risiko), cuma berhenti dipakai.
+- `2026_09_01_220100` — `commission_ledger.scheme` (varchar nullable, `App\Enums\CommissionScheme`:
+  `recurring` / `limited_count`). `amount` (ada sejak v0.3.0) baru mulai benar-benar diisi di sini.
+- `App\Enums\CommissionScheme` (baru). `Customer::pppPackage()` BelongsTo + `ppp_package_id` fillable.
+  `CommissionLedger`: `scheme` fillable + cast. `CommissionRate::schemeOptions()` (opsi tersedia — hanya
+  amount non-null, **Titip tidak termasuk**) + `amountForScheme()`.
+
+### Langkah 2 — form registrasi
+
+- `RegisterCustomer` (Livewire): input teks "Paket" → **dropdown `PppPackage` aktif** (`is_active=true`),
+  disimpan ke `customers.ppp_package_id`.
+- Dropdown **"Skema Komisi" reaktif** (`wire:model.live` di paket + referrer) — muncul HANYA kalau:
+  referrer dipilih **DAN** paket dipilih **DAN** `CommissionRate` paket itu aktif dengan ≥1 dari
+  `recurring_amount`/`limited_count_amount`. Opsi: "Per Bulan" (jika recurring) dan/atau "{N} Kali" (jika
+  limited, N = `limited_count_times`). **"Titip" tidak pernah ditampilkan** (di luar scope).
+- `RegistrationService::register(array, ?Referrer, ?string $scheme)` — param `$scheme` baru. Pembuatan
+  `CommissionLedger` di-ekstrak ke **`App\Services\CommissionAttributionService::createPendingLedger()`**
+  (dipakai bareng edit pelanggan). Kalau `$scheme` diisi & rate punya amount-nya → `scheme` + `amount`
+  terisi; kalau `$scheme` null (admin skip) → **`scheme = NULL, amount = NULL`, persis perilaku lama**
+  (backward compatible, tidak maksa). Jaring pengaman: `$scheme` diisi tapi rate tidak punya amount untuk
+  skema itu → tetap `scheme/amount` NULL, tidak error, tidak menebak.
+- API `POST /registrations`: rule `package` diganti `ppp_package_id` (nullable, exists tenant-scoped) +
+  `scheme` (nullable, `in:recurring,limited_count`). `RegistrationController` meneruskan `$scheme` terpisah.
+
+### Langkah 3 — edit pelanggan existing
+
+- Panel baru **"Paket & Referral"** di `CustomerShow` (pola sama `editingProfile`/`updateProfile`):
+  `startEditingCommission()` / `updateCommissionAttribution()` — field Paket (dropdown), Referrer
+  (dropdown, default "Tidak ada referral"), Skema Komisi (reaktif, sama seperti Langkah 2).
+- **Aturan atribusi (sengaja konservatif)**:
+  - `referred_by_referrer_id` **null → terisi**: buat 1 `CommissionLedger` Pending baru (logic sama
+    dg registrasi, scheme+amount kalau skema dipilih).
+  - **Kasus lain** (ganti referrer yang sudah ada, hapus referrer, cuma ganti paket): **HANYA update
+    kolom `customers`, TIDAK menyentuh `commission_ledger` sama sekali.** Belum ada aturan yang jelas
+    apakah ganti referrer harus bikin ledger baru / void yang lama — **butuh keputusan terpisah Agung**
+    (lihat "Skenario terbuka" di bawah). UI menampilkan warning kecil saat pelanggan sudah punya referrer.
+
+### Skenario terbuka — perlu keputusan Agung (poin yang diminta dilaporkan)
+
+Pelanggan yang **SUDAH** punya referrer, lalu admin ganti referrer/paket-nya. Sekarang: kolom di-update,
+`commission_ledger` tidak disentuh (baris lama tetap menunjuk referrer lama). Opsi yang mungkin: (a) biarkan
+begini (atribusi historis tidak diutak-atik), (b) void baris lama + buat baru untuk referrer baru, (c) lock
+field referrer setelah terisi (hanya boleh null→set). **Tidak diputuskan sepihak.**
+
+### Test
+
+- `RegistrationServiceTest` — split jadi test terpisah: perilaku LAMA (referrer, tanpa skema → amount
+  NULL) **dipertahankan**, + BARU (recurring / limited_count → amount dari rate) + jaring pengaman.
+- `RegistrationApiTest` — +3 (ppp_package+scheme isi amount, scheme invalid ditolak, paket lintas-tenant
+  ditolak); perilaku lama (amount/scheme NULL) diperketat asersinya.
+- `RegisterCustomerLivewireTest` — +4 (dropdown skema hanya opsi tersedia, field hidden tanpa referrer,
+  registrasi dg skema isi amount, tanpa skema tetap null).
+- `CustomerShowCommissionTest` (file baru, 4) — null→set bikin ledger, +scheme isi amount, ganti referrer
+  existing TIDAK bikin ledger, hapus referrer TIDAK bikin ledger.
+- **29 test terarah hijau.** Full regression suite: (lihat commit).
+
+### Verifikasi HTTP nyata (`https://boss.bajastu.id`, `super_admin`)
+
+- `/customers/register`: dropdown "Paket" berisi `HomeFixed-10Mbps` (`wire:model.live="ppp_package_id"`),
+  input teks lama hilang; "Tidak ada referral" default; "Skema Komisi" **tidak muncul** sebelum
+  referrer+paket dipilih. Setelah paket+referrer di-set (via Livewire nyata) → field muncul dengan opsi
+  **"Per Bulan"** + **"2 Kali"** (dari rate paket #6: recurring 3000, limited 33000×2), **tanpa opsi
+  Titip**.
+- `/customers/434`: panel "Paket & Referral" + tombol "Edit paket & referral" ter-render.
+
 ## Restrukturisasi Sidebar (branch `restrukturisasi-sidebar` + v0.9.3, digabung ke `develop`/`main` 2026-09-01)
 
 **Catatan status**: branch `restrukturisasi-sidebar` dari `main` (`1a07b2e`). Murni UI — nol perubahan

@@ -49,6 +49,70 @@
         @endif
     </div>
 
+    {{-- Paket & Referral (v0.9.4 — link komisi saja, TIDAK terkait billing/subscriptions) --}}
+    <div class="p-4 border border-gray-200 rounded-md">
+        <h2 class="text-sm font-semibold text-gray-700 mb-3">Paket &amp; Referral</h2>
+
+        @if ($editingCommission)
+            <form wire:submit="updateCommissionAttribution" class="space-y-3">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Paket</label>
+                    <select wire:model.live="editPppPackageId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                        <option value="">— Tidak ada paket —</option>
+                        @foreach ($availablePackages as $package)
+                            <option value="{{ $package->id }}">{{ $package->name }}</option>
+                        @endforeach
+                    </select>
+                    @error('editPppPackageId') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Referrer</label>
+                    <select wire:model.live="editReferrerId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                        <option value="">Tidak ada referral</option>
+                        @foreach ($availableReferrers as $referrer)
+                            <option value="{{ $referrer->id }}">{{ $referrer->name }} ({{ $referrer->type->label() }})</option>
+                        @endforeach
+                    </select>
+                    @error('editReferrerId') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    @if ($customer->referred_by_referrer_id !== null)
+                        <p class="text-xs text-amber-700 mt-1">Pelanggan ini sudah punya referrer. Mengubahnya hanya memperbarui atribusi — tidak membuat entri komisi baru.</p>
+                    @endif
+                </div>
+
+                @if ($showCommissionSchemeField)
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Skema Komisi</label>
+                        <select wire:model="editCommissionScheme" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                            <option value="">— Tidak ditentukan —</option>
+                            @foreach ($commissionSchemeOptions as $value => $label)
+                                <option value="{{ $value }}">{{ $label }}</option>
+                            @endforeach
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">Hanya dipakai kalau referrer baru di-set untuk pelanggan yang sebelumnya belum punya referrer.</p>
+                    </div>
+                @endif
+
+                <div class="flex gap-2">
+                    <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">Simpan</button>
+                    <button type="button" wire:click="cancelEditingCommission" class="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300">Batal</button>
+                </div>
+            </form>
+        @else
+            <dl class="grid grid-cols-2 gap-2 text-sm">
+                <dt class="text-gray-500">Paket</dt>
+                <dd class="text-gray-800">{{ $currentPppPackage?->name ?? '—' }}</dd>
+                <dt class="text-gray-500">Referrer</dt>
+                <dd class="text-gray-800">{{ $currentReferrer ? $currentReferrer->name.' ('.$currentReferrer->type->label().')' : 'Tidak ada referral' }}</dd>
+            </dl>
+
+            @if ($canManage)
+                <button wire:click="startEditingCommission" class="mt-3 text-sm text-primary hover:underline">
+                    Edit paket &amp; referral
+                </button>
+            @endif
+        @endif
+    </div>
+
     {{-- Status lifecycle --}}
     @if ($canManage)
         <div class="p-4 border border-gray-200 rounded-md">

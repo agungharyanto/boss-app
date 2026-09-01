@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\CommissionScheme;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CommissionRateFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -13,11 +14,12 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * v0.9.3 — konfigurasi rate komisi untuk satu PppPackage. Lihat migration
  * `create_commission_rates_table` untuk arti tiap kolom / ketiga skema.
  *
- * Belum dikonsumsi oleh perhitungan komisi per pelanggan mana pun —
- * `commission_ledger.amount` masih null saat registrasi (lihat
- * RegistrationService). Menghubungkan pelanggan/langganan ke satu
- * `ppp_package_id` (sehingga rate ini bisa dipakai menghitung `amount`)
- * adalah pekerjaan inti v0.9.4, bukan scope v0.9.3 — lihat CLAUDE.md.
+ * v0.9.4 — mulai dikonsumsi: `customers.ppp_package_id` + `commission_ledger.
+ * scheme` menautkan atribusi referral ke rate ini, dan
+ * `App\Services\CommissionAttributionService` mengisi `commission_ledger.
+ * amount` dari `recurring_amount` / `limited_count_amount` sesuai skema yang
+ * dipilih. `titip_amount` tetap TIDAK dipakai jalur ini (mekanisme
+ * terpisah). Sepenuhnya independen dari `subscriptions`/billing.
  */
 class CommissionRate extends Model
 {
@@ -48,6 +50,44 @@ class CommissionRate extends Model
     public function pppPackage(): BelongsTo
     {
         return $this->belongsTo(PppPackage::class);
+    }
+
+    /**
+     * v0.9.4 — opsi "Skema Komisi" yang tersedia untuk rate ini, dipakai
+     * form registrasi + edit pelanggan. HANYA skema yang amount-nya
+     * benar-benar diisi. "Titip" SENGAJA tidak termasuk (mekanisme
+     * terpisah, di luar scope v0.9.4).
+     *
+     * @return array<string, string> value => label
+     *                               ('recurring' => 'Per Bulan', 'limited_count' => '3 Kali')
+     */
+    public function schemeOptions(): array
+    {
+        $options = [];
+
+        if ($this->recurring_amount !== null) {
+            $options[CommissionScheme::Recurring->value] = 'Per Bulan';
+        }
+
+        if ($this->limited_count_amount !== null) {
+            $options[CommissionScheme::LimitedCount->value] = $this->limited_count_times.' Kali';
+        }
+
+        return $options;
+    }
+
+    /**
+     * v0.9.4 — nominal komisi untuk skema tertentu, atau null kalau skema
+     * itu tidak tersedia di rate ini (amount-nya null / skema tidak
+     * dikenal). Titip tidak pernah di-resolve lewat sini.
+     */
+    public function amountForScheme(?string $scheme): ?float
+    {
+        return match ($scheme) {
+            CommissionScheme::Recurring->value => $this->recurring_amount !== null ? (float) $this->recurring_amount : null,
+            CommissionScheme::LimitedCount->value => $this->limited_count_amount !== null ? (float) $this->limited_count_amount : null,
+            default => null,
+        };
     }
 
     /**

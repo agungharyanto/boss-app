@@ -11,6 +11,7 @@ use App\Http\Middleware\EnsureAdminPanelAccess;
 use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
 use App\Livewire\Billing\SubscriptionIndex;
+use App\Livewire\Commission\CommissionRateIndex;
 use App\Livewire\Customers\CustomerCoordinateFill;
 use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
@@ -173,6 +174,11 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // v0.9.2 — CRUD Referrer (admin-side), same posture as /resellers above
     // (tenant-level, no reseller.context needed).
     Route::get('/referrers', ReferrerIndex::class)->name('referrers.index');
+
+    // v0.9.3 — Commission Rate Settings, same posture as /referrers above
+    // (tenant-level, no reseller.context needed). Halaman ini me-list
+    // SEMUA PppPackage; rate diisi/diedit inline per paket.
+    Route::get('/commission-rates', CommissionRateIndex::class)->name('commission-rates.index');
 
     // v0.14.1 — fondasi cluster "Profil Paket", same posture as /referrers
     // above (tenant-level, no reseller.context needed — BandwidthProfile

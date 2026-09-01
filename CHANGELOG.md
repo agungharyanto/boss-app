@@ -3,6 +3,152 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## Restrukturisasi Sidebar (branch `restrukturisasi-sidebar`, implementasi selesai 2026-09-01, belum di-merge/tag)
+
+**Catatan status**: branch `restrukturisasi-sidebar` dari `main` (`1a07b2e`). Murni UI — nol perubahan
+backend/route kecuali **menghapus 1 link menu**. Belum di-merge/tag, menunggu verifikasi manual Agung.
+
+### Investigasi komponen sidebar (Langkah 2) — dijawab sebelum ubah perilaku
+
+- **Q1 — NAS / Perangkat CPE / Profil Paket saat ini semua berperilaku IDENTIK.** Parent row grup
+  `children` (v0.8.1) dipecah jadi 2 target klik terpisah: (a) label teks = `<a href="{{ route($link['route']) }}">`
+  sungguhan → klik = navigasi ke halaman itu (NAS→`/nas`, CPE→`/cpe-devices`, Profil Paket→`/bandwidth-profiles`);
+  (b) tombol chevron kecil = `x-on:click="subOpen = !subOpen"` → cuma toggle child, tanpa navigasi.
+  Jadi BUKAN "klik = navigasi DAN toggle sekaligus" — label & chevron target berbeda, tidak overlap.
+  Tidak ada satu pun yang toggle-murni; ketiganya link ke halaman lewat label-nya.
+- **Q2 — komponen sidebar SEKARANG TIDAK punya kemampuan bikin parent toggle-murni.** Cabang
+  `@if (! empty($link['children']))` selalu render label parent sebagai `<a href="{{ route($link['route']) }}">`
+  — selalu butuh & pakai key `route`. Tidak ada jalur kode untuk parent `children` tanpa route.
+  Kemampuan ini **genuinely perlu ditambah** — dan ditambah di sini, mendukung 2 tipe parent supaya
+  section lain tidak ikut berubah.
+
+### Perubahan
+
+1. **Link "Package Pricing" (`reseller_package_pricing`) dihapus dari sidebar** (section Operasional) +
+   referensi `web.reseller-package-pricing.*` dari `active` cluster itu. **Route/controller/model/service/
+   policy/test-nya TIDAK disentuh** (di luar scope, resiko ke fitur reseller lain). Dicek dengan grep:
+   `sidebar.blade.php` adalah **satu-satunya** file UI yang mereferensikan route ini — tidak ada tombol/
+   redirect/widget lain yang mengarah ke sana.
+2. **Komponen sidebar menambah tipe parent "toggle-murni"**: sebuah link `children` **tanpa** key `route`
+   (flag `toggle_only`) di-render sebagai satu `<button>` (label + chevron jadi satu, klik = expand/collapse,
+   nol navigasi). Tipe lama "link-and-toggle" (punya `route`) tetap dipakai NAS/Perangkat CPE, tidak berubah
+   sama sekali.
+3. **Grup "Profil Paket" pindah** dari cluster "Network" → "Billing & Finance" (harga jual/modal paket =
+   konsep billing). `active` kedua cluster diupdate. Nama grup tetap "Profil Paket".
+4. **"Profil Paket" jadi toggle-murni** (`toggle_only => true`, key `route` dihapus). "Bandwidth Profile"
+   (dulu jadi link parent) kini jadi **child pertama** (5 child: Bandwidth Profile, IP Pool Pelanggan,
+   Grup Profil, Profil Hotspot, Profil PPP). Gate grup tetap `viewAny(BandwidthProfile)` (5 permission
+   selalu diberikan bersamaan via `giveToAdminTier`); tiap child tetap punya `can()` sendiri.
+5. **Semua grup collapsible DEFAULT TERTUTUP** saat halaman pertama dibuka — `x-data` diubah dari
+   `localStorage.getItem(...) !== 'false'` (default terbuka) jadi
+   `{{ $active ? 'true' : 'false' }} || localStorage.getItem(...) === 'true'` (default tertutup).
+   Pengecualian: grup yang route aktifnya ada di dalamnya di-auto-buka (`$cluster['active']` yang sejak
+   dulu dihitung tapi tidak pernah dipakai, kini dipakai; `$subActive` dihitung baru untuk sub-grup dari
+   route parent + semua child). Pilihan manual user (`localStorage === 'true'`) tetap dihormati untuk grup
+   yang tidak sedang aktif. **Trade-off**: grup yang sedang aktif selalu menang atas localStorage — user
+   tidak bisa mem-persist "tutup" untuk cluster halaman yang sedang dibuka (dianggap wajar — user butuh
+   konteks posisi).
+
+### Test
+
+`SidebarNavigationTest` — 3 test lama diupdate (Profil Paket kini di `/invoices`-context, parent =
+toggle-murni, Bandwidth Profile jadi child), 5 test baru:
+`test_profil_paket_parent_is_a_pure_toggle_not_a_link` (regex: `<button aria-controls="sidebar-subgroup-profil-paket"><span>Profil Paket</span>`,
++ negatif: markup `<a class="flex-1">` lama tidak lagi membungkus "Profil Paket"),
+`test_profil_paket_sits_in_billing_finance_not_network` (posisi byte: Billing&Finance < Profil Paket < Network),
+`test_package_pricing_link_is_gone_from_the_sidebar`,
+`test_sidebar_clusters_default_collapsed_except_the_active_one` (assert string `x-data` init: aktif =
+`open: true || ...`, lain = `open: false || ...`),
+`test_profil_paket_subgroup_auto_opens_on_its_own_pages` (`/hotspot-packages` → `subOpen: true || ...`,
+`/invoices` → `subOpen: false || ...`). **13/13 hijau.**
+
+### Verifikasi HTTP nyata (`https://boss.bajastu.id`)
+
+- `super_admin@boss.local` → `GET /invoices` 200: "Package Pricing" **0 kemunculan**; "Profil Paket"
+  1×, di-render sebagai `<button ...aria-controls="sidebar-subgroup-profil-paket"><span>Profil Paket</span>`
+  (bukan `<a>`); posisi byte antara header "Billing & Finance" (@8119) dan "Network" (@16820); 5 child
+  link (bandwidth-profiles/customer-ip-pools/network-profile-groups/hotspot-packages/ppp-packages) semua
+  ada; cluster `billing-finance` `x-data="{ open: true || ...}"`, `network`/`pelanggan` `open: false || ...`.
+- `customer_service@boss.local` → `GET /customers` 200: tidak ada "Profil Paket" maupun "Package Pricing".
+
+### Langkah verifikasi manual untuk Agung
+
+1. Login admin → **hard-refresh** (Ctrl+Shift+R) `/dashboard` → sidebar: **semua grup tertutup** (cuma
+   header + chevron kelihatan). Klik "Billing & Finance" → terbuka; di dalamnya ada "Profil Paket" (paling
+   bawah) + chevron.
+2. Klik "Profil Paket" → **TIDAK pindah halaman** (URL tetap `/dashboard`), cuma daftar 5 child muncul
+   (Bandwidth Profile / IP Pool Pelanggan / Grup Profil / Profil Hotspot / Profil PPP). Klik lagi → tutup.
+3. Klik "Bandwidth Profile" (child) → baru pindah ke `/bandwidth-profiles`. Perhatikan: grup "Billing &
+   Finance" + sub-grup "Profil Paket" **auto-terbuka** (karena halaman aktif), grup lain tetap tertutup.
+4. Cek cluster "Network": "Profil Paket" **tidak ada lagi** di situ (cuma NAS / OLT / Monitoring /
+   Perangkat CPE). NAS & Perangkat CPE tetap seperti dulu — klik label = pindah halaman, klik chevron =
+   toggle.
+5. Cek "Package Pricing" **hilang total** dari sidebar (dulu di "Operasional", di bawah "Reseller").
+   Halaman `/reseller-package-pricing` sendiri masih ada kalau diketik manual (route tidak dihapus).
+## v0.9.3 — Commission Rate Settings (implementasi selesai 2026-09-01, belum di-merge/tag)
+
+**Catatan status**: branch `v0.9.3-commission-rate-settings` dari `main` (sudah termasuk `v0.14.7` +
+`v0.14.5.1`). Melanjutkan cluster Commission yang di-pause sejak `v0.9.2`. **Belum di-merge/tag** —
+menunggu verifikasi manual Agung. **DB dev sudah lebih maju dari `main`**: `php artisan migrate` +
+`db:seed --class=RolesAndPermissionsSeeder` sudah dijalankan ke DB dev (agar bisa diverifikasi lewat HTTP
+nyata). Kalau branch ini akhirnya dibatalkan: `php artisan migrate:rollback --step=1` (drop
+`commission_rates`) + hapus permission `commission_rates.view`/`.manage`. Pelajaran v0.14.5.1 (jangan
+tinggalkan DB lebih maju dari kode) berlaku — closure harus segera menyusul setelah Agung OK.
+
+### Investigasi (Langkah 0) — kondisi terkini setelah rename Agent→Referrer + cluster v0.14.x
+
+- `commission_ledger` (v0.3.0) tidak berubah selain rename `agent_id`→`referrer_id` (v0.9.1). Kolom:
+  `tenant_id`/`referrer_id`/`customer_id` (NOT NULL), `amount` (nullable), `status` (default `pending`,
+  cast `CommissionStatus`: Pending/Eligible/Approved/Paid/Rejected), `notes`. **0 baris.** Tidak ada
+  referensi paket sama sekali.
+- `referrers.commission_rate` sudah di-DROP di v0.9.2 (migration-nya sendiri bilang "superseded by a
+  per-package rate table planned for v0.9.3"). `ReferrerType`: Sales/Teknisi/Freelance/Admin. **0 baris
+  referrer**, jadi 0 akun login.
+- `PppPackage` pricing: `cost_price`/`sell_price` (default 0), `promo_price` (nullable), `tax_percent`.
+  **1 baris, soft-deleted** (`test-10Mbps-HomeFixed-1`, sisa test v0.14.5) → efektif 0 paket aktif.
+- `RegistrationService::register()`: komentar lama "amount diisi nanti di sprint Commission" **sudah
+  hilang** — sekarang `CommissionLedger::create()` cukup omit `amount` (→ null). `register()` tidak punya
+  parameter paket; `customers.package` string bebas. Test `RegistrationServiceTest` meng-assert eksplisit
+  `'amount' => null` — akan perlu diubah saat v0.9.4 mulai mengisi amount.
+- RBAC: v0.9.2 rename `super_admin`→`superadmin` + role baru `administrator` (`ADMIN_TIER_ROLES`,
+  `giveToAdminTier()`). `finance` role terdefinisi tapi 0 permission.
+
+### Implementasi
+
+- **Migration `commission_rates`**: `tenant_id`, `ppp_package_id` (FK, NOT NULL, unik parsial
+  `WHERE deleted_at IS NULL`), `recurring_amount`/`limited_count_amount`/`titip_amount`
+  (`decimal(12,2)` nullable), `limited_count_times` (`unsignedInteger` nullable), `is_active`
+  (default true), `timestamps` + `softDeletes`.
+- **`App\Models\CommissionRate`** — `belongsTo(PppPackage)`; `PppPackage::commissionRate()` (`HasOne`).
+  `CommissionRate::schemeErrors()` = satu sumber aturan lintas-field (pasangan `limited_count_*`, minimal
+  1 skema) dipakai bareng FormRequest + Livewire. "Terisi" = bukan null & bukan `''` (angka 0 sah).
+- **RBAC**: `commission_rates.view`/`commission_rates.manage` → `giveToAdminTier()` (superadmin +
+  administrator). Diverifikasi langsung di DB dev: superadmin/administrator = Y/Y; noc/finance/
+  customer_service = n/n.
+- **REST API** (`App\Http\Controllers\Api\V1\CommissionRateController`, `App\Services\CommissionRateService`,
+  Store/UpdateCommissionRateRequest, `CommissionRatePolicy`): `GET/POST /commission-rates`,
+  `GET/PUT/DELETE /commission-rates/{commission_rate}` di bawah `auth:sanctum` (tenant-level, tanpa
+  `reseller.context`). `ppp_package_id` tidak bisa diubah lewat `PUT`. Lihat `docs/API.md`.
+- **Livewire `/commission-rates`** (`App\Livewire\Commission\CommissionRateIndex`): me-list **SEMUA**
+  PppPackage (bukan hanya yang sudah punya rate), badge "Belum diatur"/"Aktif"/"Nonaktif", form edit
+  inline per paket (pola sama dengan `BandwidthProfileIndex`). Link sidebar di section "Operasional"
+  tepat di bawah "Referrer".
+- **Test** (28 baru): `CommissionRateApiTest` (17 — CRUD, validasi pasangan/minimal-1/non-negatif/0-sah,
+  unik per paket, tenant isolation, RBAC superadmin+administrator vs customer_service, pesan error ID),
+  `CommissionRateIndexLivewireTest` (11 — list semua paket, soft-deleted tidak muncul, set/edit/hapus
+  rate, semua validasi, RBAC).
+
+### Verifikasi HTTP nyata (2×, terhadap `https://boss.bajastu.id`)
+
+- Login `super_admin@boss.local` → `/dashboard` 200, sidebar berisi `<a href=".../commission-rates">Rate
+  Komisi</a>`. `GET /commission-rates` → 200, render judul + kolom + empty-state "Belum ada Profil PPP"
+  (benar — 0 PppPackage aktif).
+- Login `customer_service@boss.local` → sidebar TIDAK ada `commission-rates` (0 kemunculan),
+  `GET /commission-rates` → **403**.
+
+**Kondisi data**: fitur akan tampil kosong sampai ada Profil PPP sungguhan dibuat lewat `/ppp-packages` —
+bukan bug, cuma kondisi data saat ini (1 PppPackage yang ada sudah soft-deleted).
+
 ## v0.14.5.1 — Revisi Pesan Error Bahasa Indonesia + Prioritas Dropdown (merged + tagged `v0.14.5.1` 2026-09-01)
 
 **Catatan status**: branch `revisi-pesan-error-dan-prioritas` (`55b717e`), dibuat dari `main` pada

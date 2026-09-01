@@ -9,6 +9,7 @@ use Database\Factories\PppPackageFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
 
@@ -79,6 +80,17 @@ class PppPackage extends Model
     public function bandwidthProfile(): BelongsTo
     {
         return $this->belongsTo(BandwidthProfile::class);
+    }
+
+    /**
+     * v0.9.3 — konfigurasi rate komisi untuk paket ini (satu baris per
+     * paket, di-enforce oleh unique parsial di commission_rates). HasOne,
+     * bukan HasMany. Null selama admin belum mengatur rate lewat
+     * /commission-rates.
+     */
+    public function commissionRate(): HasOne
+    {
+        return $this->hasOne(CommissionRate::class);
     }
 
     /**

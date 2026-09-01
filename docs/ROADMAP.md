@@ -31,7 +31,8 @@
 | v0.8.4  | Network         | Dialup Syslog & RADIUS Migration | Fix SNAT per-NAS WireGuard, domain `boss.bajastu.id`+TLS, refactor `VpnSyncRouteFragments` (hilangkan router API login noise), pipeline syslog rsyslog→LibreNMS+UI+API, migrasi 295 akun PPPoE `ro-hotspot` ke RADIUS BOSS App, Riwayat Dialup di Detail CPE (reaktivasi `radacct`) | Selesai |
 | v0.9.0  | Billing & Finance | Commission                   | Eligibility, approval, payment, clawback (menyempurnakan commission_ledger v0.3.0)             | Backlog |
 | v0.9.1  | Billing & Finance | Rename Agent → Referrer      | Rename fondasi sebelum logic Commission (v0.9.0) mulai — tabel/model `agents` (dari v0.3.0) jadi `referrers`, hindari tabrakan nama dengan `Agent` yang direncanakan khusus untuk modul Token/Hotspot masa depan | Selesai |
-| v0.9.2  | Billing & Finance | CRUD Referrer, Portal Login & RBAC Two-Tier | CRUD Referrer (admin), portal login self-service pertama non-admin di codebase ini (HP+password, guard `web` sama), rename `super_admin`→`superadmin` + role baru `administrator` (permission operasional identik), middleware `admin.panel`/`referrer.portal` menutup celah akses lintas-persona pertama kali | Implementasi selesai — verifikasi akhir pending |
+| v0.9.2  | Billing & Finance | CRUD Referrer, Portal Login & RBAC Two-Tier | CRUD Referrer (admin), portal login self-service pertama non-admin di codebase ini (HP+password, guard `web` sama), rename `super_admin`→`superadmin` + role baru `administrator` (permission operasional identik), middleware `admin.panel`/`referrer.portal` menutup celah akses lintas-persona pertama kali | Selesai — merged + tagged `v0.9.2` (+ `v0.9.2.1`) |
+| v0.9.3  | Billing & Finance | Commission Rate Settings      | Tabel `commission_rates` — rate komisi per **Profil PPP** (FK `ppp_packages` saja; Hotspot/Token pakai skema Agent terpisah, di luar v0.9.x). 3 skema: `recurring_amount` (Per Bulan), `limited_count_amount`+`limited_count_times` (skema X-kali, berpasangan, times fleksibel), `titip_amount` (Titip); minimal 1 wajib. REST API + Livewire `/commission-rates` (list SEMUA PppPackage, form rate inline per paket), permission `commission_rates.*` tier-admin. **BELUM ada dampak ke perhitungan komisi per pelanggan** — `commission_ledger.amount` masih null; menghubungkan pelanggan/langganan→`ppp_package_id` = inti v0.9.4. | Implementasi selesai — DB dev sudah di-migrate + seed, menunggu verifikasi manual Agung sebelum merge/tag |
 | v0.10.0 | Network         | Outage Engine                 | ONT down detection, korelasi area, incident, maintenance                                      | Backlog |
 | v0.11.0 | Customer App    | Mobile Self-Service Portal    | Auth guard customer terpisah, ganti password (OTP), cek pemakaian, bayar tagihan               | Backlog |
 | v0.12.0 | Network         | PPPoE Provisioning & Technician API | Provisioning kredensial PPPoE (`radcheck`) hasil instalasi teknisi — di luar scope v0.7.5 karena `work_order_devices` tidak punya link balik ke `radcheck`. Sekalian API/otorisasi resmi teknisi/bot WhatsApp submit device (menggantikan bridge CS manual sementara dari v0.7.5) | Backlog |
@@ -99,12 +100,10 @@ dicatat sekaligus di sini.
 2. **`v0.15.0` dipakai untuk reservasi slot "Management Ticketing"** — slot
    kosong pertama yang genuinely tersedia setelah cluster `v0.14.x`
    (`v0.14.1`-`v0.14.7`, rentang terkunci untuk "Profil Paket", lihat
-   bagian di bawah). **`v0.9.3` ke atas SENGAJA TIDAK dipakai** meski belum
-   punya baris tabel sendiri — nomor itu sudah disebut berulang di file ini
-   (baris `v0.14.5`, bagian `v0.9.2` di bawah) sebagai kelanjutan Commission
-   yang di-pause di `v0.9.2` ("anchor entity untuk Commission (`v0.9.3`)"),
-   jadi secara efektif sudah direservasi meski belum ditulis sebagai baris
-   — mengisinya dengan fitur lain akan menabrak rencana Commission nanti.
+   bagian di bawah). **`v0.9.3` DIPAKAI untuk Commission Rate Settings**
+   (lihat baris tabel — kelanjutan cluster Commission yang di-pause di
+   `v0.9.2`); `v0.9.4` ke atas direncanakan untuk skema komisi per
+   pelanggan (butuh jalur pelanggan/langganan → `ppp_package_id` dulu).
    Rentang `v0.15.0`-`v0.20.0` dikonfirmasi genuinely kosong total (nol
    referensi di seluruh file) sebelum amandemen ini.
 

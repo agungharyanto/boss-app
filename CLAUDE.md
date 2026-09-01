@@ -5994,6 +5994,42 @@ added to `ReferrerPortalLoginTest`), Pint clean. **Merged and tagged** — Agung
 (all 8 demo accounts, root routing, both logout flows) before merge; `v0.9.2-referrer-crud-portal-rbac`
 merged `--no-ff` into `develop` then `main`, tagged `v0.9.2`, pushed to GitHub.
 
+## Commission Rate Settings (v0.9.3)
+
+**`commission_rates` — konfigurasi rate komisi per `PppPackage` (v0.14.5), admin-editable.** FK ke
+`ppp_packages` **saja**, `NOT NULL`, unik parsial (`WHERE deleted_at IS NULL` — satu rate aktif per paket,
+rate yang sudah di-soft-delete boleh diganti). Hotspot/Token sengaja TIDAK punya rate komisi di sini —
+konsep "Agent" terpisah yang di luar scope cluster v0.9.x (`ReferrerType::Admin` ≠ modul Agent yang belum
+ada). 3 skema opsional, minimal 1 wajib: `recurring_amount` (Per Bulan), `limited_count_amount` +
+`limited_count_times` (skema X-kali — berpasangan, `times` FLEKSIBEL, tidak fixed ke 2), `titip_amount`
+(Titip). `CommissionRate::schemeErrors()` adalah satu sumber tunggal aturan lintas-field (pasangan +
+minimal-1) dipakai bareng `Store`/`UpdateCommissionRateRequest` + `App\Livewire\Commission\CommissionRateIndex`
+— "terisi" = bukan `null` & bukan `''` (angka `0` yang eksplisit dianggap terisi/sah). Permission
+`commission_rates.view`/`.manage` → `giveToAdminTier()` (superadmin + administrator saja; `finance` role
+sengaja tidak diberi — sampai sekarang role itu belum pernah punya permission apa pun, menambahkannya jadi
+keputusan RBAC tersendiri). `PppPackage::commissionRate()` = `HasOne`.
+
+**GAP INTI yang harus ditutup di v0.9.4 — BUKAN scope v0.9.3, diflag sejak investigasi Langkah 0**: saat
+ini **tidak ada satu pun jalur terstruktur dari `customers`/`subscriptions` ke `ppp_packages.id`**.
+`customers.package` adalah `varchar` bebas; `subscriptions` (0 baris) ber-FK ke `reseller_package_pricing`
+(juga 0 baris), **tidak ada `ppp_package_id`**. `RegistrationService::register()` membuat baris
+`commission_ledger` dengan `amount` **null** (komentar lama "amount diisi nanti" sudah hilang — sekarang
+`amount` cuma di-omit dari `create()`), dan `RegistrationServiceTest` meng-assert eksplisit `'amount' =>
+null`. Jadi `commission_rates` untuk sekarang **murni tabel konfigurasi tanpa konsumen** — tidak ada kode
+yang membacanya untuk menghitung komisi siapa pun. v0.9.4 (skema komisi per pelanggan) adalah tempat
+`amount` mulai diisi: butuh (a) kolom penghubung pelanggan/langganan → `ppp_package_id`, (b) `RegistrationService`
+/ jalur lain me-resolve rate dari `CommissionRate`, (c) update `RegistrationServiceTest`'s `amount => null`.
+
+**Kondisi data saat dibangun**: `ppp_packages` aktif = **0 baris** (hanya 1 baris soft-deleted sisa test
+v0.14.5). Halaman `/commission-rates` akan tampil kosong ("Belum ada Profil PPP") sampai ada Profil PPP
+sungguhan dibuat lewat `/ppp-packages` — bukan bug. `referrers` juga 0 baris.
+
+**Status**: implementasi + 28 test baru selesai, full suite hijau, diverifikasi HTTP nyata 2× terhadap
+`https://boss.bajastu.id` (sidebar "Rate Komisi" muncul untuk superadmin, absen + `GET /commission-rates`
+403 untuk `customer_service`). **DB dev sudah di-`migrate` + `db:seed`** (agar bisa diverifikasi HTTP) —
+sesuai pelajaran v0.14.5.1, DB dev sekarang lebih maju dari `main`; closure (merge/tag) harus segera
+menyusul setelah Agung verifikasi manual. Belum di-merge/tag.
+
 ## Cluster Profil Paket (v0.14.x) — Konstrain NAS Produksi
 
 **WAJIB dibaca sebelum eksekusi sub-versi apa pun di cluster v0.14.x (Bandwidth Profile → IP Pool

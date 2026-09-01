@@ -136,6 +136,52 @@ class SidebarNavigationTest extends TestCase
         $response->assertDontSee(route('web.reseller-package-pricing.index'), false);
     }
 
+    /**
+     * "Referrer" + "Rate Komisi" dipindah dari cluster "Operasional" ke
+     * "Billing & Finance". Cluster "Operasional" sekarang tinggal
+     * "Reseller" (dibiarkan 1-item, keputusan membubarkan menunggu
+     * konfirmasi).
+     */
+    public function test_referrer_and_rate_komisi_live_in_billing_finance(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $html = $this->actingAs($user)->get('/invoices')->getContent();
+
+        $billingPos = strpos($html, '<span>Billing &amp; Finance</span>');
+        $komunikasiPos = strpos($html, '<span>Komunikasi</span>');
+        $referrerPos = strpos($html, route('web.referrers.index'));
+        $rateKomisiPos = strpos($html, route('web.commission-rates.index'));
+
+        $this->assertNotFalse($referrerPos);
+        $this->assertNotFalse($rateKomisiPos);
+        // Both rendered inside the Billing & Finance cluster (after its
+        // header, before the next cluster "Komunikasi").
+        $this->assertGreaterThan($billingPos, $referrerPos);
+        $this->assertLessThan($komunikasiPos, $referrerPos);
+        $this->assertGreaterThan($billingPos, $rateKomisiPos);
+        $this->assertLessThan($komunikasiPos, $rateKomisiPos);
+    }
+
+    public function test_operasional_cluster_now_only_has_reseller(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $html = $this->actingAs($user)->get('/customers')->getContent();
+
+        // Operasional cluster content sits between its own header and the
+        // next cluster header ("Billing & Finance").
+        $start = strpos($html, 'sidebar-cluster-operasional"');
+        $end = strpos($html, 'sidebar-cluster-billing-finance"');
+        $this->assertNotFalse($start);
+        $this->assertNotFalse($end);
+        $operasionalBlock = substr($html, $start, $end - $start);
+
+        $this->assertStringContainsString(route('web.resellers.index'), $operasionalBlock);
+        $this->assertStringNotContainsString(route('web.referrers.index'), $operasionalBlock);
+        $this->assertStringNotContainsString(route('web.commission-rates.index'), $operasionalBlock);
+    }
+
     public function test_sidebar_clusters_default_collapsed_except_the_active_one(): void
     {
         $user = $this->userWithRole('superadmin');

@@ -28,19 +28,14 @@
             // sell_price di Profil Hotspot/Profil PPP; 2 tempat harga bikin
             // ambigu. Route/controller/model-nya sengaja TIDAK dihapus
             // (resiko ke fitur reseller lain), cuma link menunya.
-            'active' => request()->routeIs('web.resellers.*') || request()->routeIs('web.referrers.*') || request()->routeIs('web.commission-rates.*'),
+            // "Referrer" + "Rate Komisi" dipindah ke cluster "Billing &
+            // Finance" (konsep komisi/keuangan). Cluster ini sekarang
+            // tinggal "Reseller" — dibiarkan 1-item dulu, keputusan
+            // membubarkan/memindah menunggu konfirmasi.
+            'active' => request()->routeIs('web.resellers.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\Reseller::class)
                     ? ['route' => 'web.resellers.index', 'label' => __('Reseller')]
-                    : null,
-                auth()->user()->can('viewAny', \App\Models\Referrer::class)
-                    ? ['route' => 'web.referrers.index', 'label' => __('Referrer')]
-                    : null,
-                // v0.9.3 — Commission Rate Settings, tepat di bawah Referrer
-                // (konsep komisi/referral). Tier-admin-only, sama gate
-                // dengan CommissionRatePolicy::viewAny().
-                auth()->user()->can('viewAny', \App\Models\CommissionRate::class)
-                    ? ['route' => 'web.commission-rates.index', 'label' => __('Rate Komisi')]
                     : null,
             ]),
         ],
@@ -58,7 +53,11 @@
                 || request()->routeIs('web.customer-ip-pools.*')
                 || request()->routeIs('web.network-profile-groups.*')
                 || request()->routeIs('web.hotspot-packages.*')
-                || request()->routeIs('web.ppp-packages.*'),
+                || request()->routeIs('web.ppp-packages.*')
+                // "Referrer" + "Rate Komisi" dipindah ke sini dari
+                // "Operasional" (komisi/keuangan).
+                || request()->routeIs('web.referrers.*')
+                || request()->routeIs('web.commission-rates.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\TaxComponent::class)
                     ? ['route' => 'web.tax-components.index', 'label' => __('Tax Components')]
@@ -106,6 +105,15 @@
                                 : null,
                         ]),
                     ]
+                    : null,
+                // Dipindah dari cluster "Operasional" — Referrer & rate
+                // komisinya adalah konsep komisi/keuangan. Tier-admin-only,
+                // gate sama dengan ReferrerPolicy / CommissionRatePolicy.
+                auth()->user()->can('viewAny', \App\Models\Referrer::class)
+                    ? ['route' => 'web.referrers.index', 'label' => __('Referrer')]
+                    : null,
+                auth()->user()->can('viewAny', \App\Models\CommissionRate::class)
+                    ? ['route' => 'web.commission-rates.index', 'label' => __('Rate Komisi')]
                     : null,
             ]),
         ],

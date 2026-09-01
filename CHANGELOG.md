@@ -3,6 +3,48 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.9.5 — Commission Ledger Auto-Maturity (branch `v0.9.5-commission-auto-maturity`, implementasi selesai 2026-09-02, belum di-merge/tag)
+
+**Hook otomatis**: `App\Services\InvoiceService::markPaid()` (satu-satunya jalur sah "invoice pelanggan
+lunas" — dua pemanggil: PATCH manual v0.3.4 + webhook Xendit v0.3.5) sekarang memanggil
+`App\Services\CommissionLedgerMaturityService::matureForPaidInvoice($invoice)`. Baris `commission_ledger`
+milik `$invoice->customer_id` yang masih **Pending DAN sudah punya `amount`** (diisi v0.9.4 dari
+`CommissionRate`) → naik ke **Eligible**, dengan jejak di `notes` (nomor invoice + tanggal).
+
+- **Baris Pending TANPA `amount`** (referrer diisi tanpa skema — backward-compatible v0.9.4) sengaja
+  **tidak** ikut matang: tidak ada nominal yang bisa dibayarkan.
+- **Idempoten**: `InvoiceService::transition()` sudah menjamin `markPaid()` hanya "menang" sekali
+  (`Paid→Paid` ditolak state machine), jadi hook tidak pernah double-matang.
+- **Tenant-eksplisit, tidak bergantung `Auth`** — `withoutGlobalScopes()` + `where('tenant_id',
+  $invoice->tenant_id)`, karena `markPaid()` bisa jalan dari webhook Xendit tanpa user login (pola sama
+  seperti `TaxCalculationService::writeLedgerEntry()`).
+- **`subscriptions` / `SubscriptionService` / `GenerateDueInvoices` TIDAK disentuh** — hook murni membaca
+  `$invoice->customer_id`. `customers.ppp_package_id` (v0.9.4) tetap independen dari billing.
+
+**"Skip = gugur, bukan tertunda"** tercapai secara trivial & benar untuk langkah minimal ini: kalau
+pembayaran di-skip, `markPaid()` tidak pernah dipanggil untuk periode itu → baris tetap Pending, tidak ada
+yang keliru jadi Eligible.
+
+### Batas struktur (DILAPORKAN, tidak ditebak — butuh keputusan skema Agung)
+
+`commission_ledger` **tidak punya kolom period / invoice_id / urutan** — 1 baris per atribusi (customer,
+referrer), bukan 1 baris per periode/pembayaran. Konsekuensi:
+
+| Diminta di PART C | Status | Kenapa |
+|---|---|---|
+| Skema **Recurring**: tiap invoice bulanan lunas → **baris ledger BARU** (append-only, per pembayaran) | **BELUM didukung** | Tidak ada kolom period/invoice_id untuk membedakan "komisi bulan ke-N". Hook v0.9.5 hanya mematangkan 1 baris registrasi yang sudah ada. |
+| Skema **Limited-Count**: baris untuk periode yang **di-skip** tetap Pending / status-lain (bukan Eligible), skip = gugur permanen | **BELUM bisa direpresentasikan** | Tidak ada per-periode. Model saat ini tidak bisa membedakan "kamu melewatkan periode 2, jadi komisi periode 2 hangus" dari "kamu belum bayar apa-apa". Tidak ada counter "sudah N dari M kali". |
+
+**Rekomendasi untuk v0.9.5 lanjutan / v0.9.0** (tidak dibangun, keputusan Agung): tambah
+`commission_ledger.invoice_id` (nullable, `nullOnDelete`) + `matureForPaidInvoice()` diubah dari "flip
+baris Pending yang ada" jadi "**append 1 baris Eligible per invoice lunas**", di-cap oleh
+`CommissionRate::limited_count_times` untuk skema Limited-Count (berhenti bikin baris setelah N). Itu
+menutup kedua baris tabel di atas sekaligus dan tetap append-only.
+
+**Test**: `CommissionMaturityTest` (8 kasus — matang recurring & limited_count, Pending-tanpa-amount tetap
+Pending, non-Pending tak disentuh, skip = tetap Pending, pelanggan lain / tenant lain tak terpengaruh,
+no-ledger = no-op). **Full regression suite 1417 hijau** (1409 + 8). Pint clean. Belum di-merge/tag.
+
 ## v0.9.4 — Skema Komisi per Pelanggan (branch `v0.9.4-skema-komisi-per-pelanggan`, implementasi selesai 2026-09-01, belum di-merge/tag)
 
 **Catatan status**: branch dari `develop` (`291a8ca`), **bukan `main`** — karena butuh pemindahan

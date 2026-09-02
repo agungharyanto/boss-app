@@ -18,6 +18,7 @@ class InvoiceService
         private readonly TaxCalculationService $taxService,
         private readonly InvoiceNumberService $numberService,
         private readonly WhatsappGatewayService $whatsappService,
+        private readonly CommissionLedgerMaturityService $commissionMaturity,
     ) {}
 
     /**
@@ -137,6 +138,14 @@ class InvoiceService
         $invoice = $this->transition($invoice, InvoiceStatus::Paid);
         $invoice->update(['paid_at' => now()]);
         $invoice = $invoice->fresh();
+
+        // v0.9.5 — pematangan komisi otomatis: baris commission_ledger Pending
+        // milik pelanggan invoice ini yang sudah punya `amount` (v0.9.4) naik
+        // jadi Eligible. Aman & idempoten: transition() sudah menjamin markPaid()
+        // hanya bisa "menang" sekali (Paid→Paid ditolak), jadi hook ini tidak
+        // pernah double-matang. Tidak menyentuh subscriptions / SubscriptionService
+        // / GenerateDueInvoices — murni membaca $invoice->customer_id.
+        $this->commissionMaturity->matureForPaidInvoice($invoice);
 
         // v0.4.0 WhatsApp Gateway contract: both callers of markPaid() (the
         // v0.3.4 manual PATCH endpoint and PaymentService::handleWebhook())

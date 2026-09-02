@@ -21,6 +21,7 @@ class CommissionLedger extends Model
         'tenant_id',
         'referrer_id',
         'customer_id',
+        'invoice_id',
         'amount',
         'scheme',
         'status',
@@ -44,5 +45,15 @@ class CommissionLedger extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    /**
+     * v0.9.5 — invoice yang memicu baris komisi ini matang/lahir. NULL untuk
+     * baris "template" dari registrasi yang belum pernah tersambung ke
+     * invoice lunas.
+     */
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(Invoice::class);
     }
 }

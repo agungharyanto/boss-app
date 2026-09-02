@@ -3,6 +3,51 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.9.5 — Commission Ledger Auto-Maturity, APPEND per invoice (branch `v0.9.5-commission-auto-maturity`, redesain 2026-09-02, belum di-merge/tag)
+
+**Redesain (dikonfirmasi Agung): komisi diperoleh PER INVOICE LUNAS, bukan sekali flip.**
+
+`App\Services\InvoiceService::markPaid()` (satu-satunya jalur sah "invoice lunas" — PATCH manual v0.3.4 +
+webhook Xendit v0.3.5) memanggil `App\Services\CommissionLedgerMaturityService::matureForPaidInvoice($invoice)`.
+Setiap invoice pelanggan yang lunas:
+
+- **Skema `recurring`**: satu baris `commission_ledger` **Eligible** per invoice lunas, tanpa batas —
+  komisi bulanan berlanjut selama pelanggan bayar.
+- **Skema `limited_count`**: sama (satu baris per invoice lunas), tapi **di-cap ke
+  `CommissionRate::limited_count_times`**. Setelah N baris komisi diperoleh (Eligible/Approved/Paid),
+  invoice lunas berikutnya **tidak lagi** menghasilkan baris.
+- **Skip pembayaran** (invoice tidak pernah lunas): `markPaid()` tidak dipanggil → tidak ada baris
+  komisi. **"Gugur, bukan tertunda" tercapai natural — nol logic tambahan.**
+
+**Baris "template" v0.9.4** (dibuat saat registrasi / saat admin men-set referrer — Pending,
+`invoice_id` NULL): invoice **pertama** yang lunas mematangkan baris INI di tempat (Eligible +
+`invoice_id`, `amount` di-refresh dari rate **saat ini**, bukan nilai template lama). Invoice berikutnya
+baru genuinely membuat baris baru (append). Template **tanpa scheme** (referrer diisi tanpa memilih skema)
+tidak pernah menghasilkan komisi sampai admin melengkapi skema-nya.
+
+**Migration** `2026_09_02_120000_add_invoice_id_to_commission_ledger_table.php`:
+- `commission_ledger.invoice_id` (nullable FK → `invoices`, `nullOnDelete` — hapus invoice tidak
+  menghapus jejak komisi yang sudah diperoleh referrer).
+- **Indeks unik parsial** `WHERE invoice_id IS NOT NULL` — satu invoice = maksimal satu baris komisi
+  (penjaga idempotensi lapis DB; banyak baris template `invoice_id` NULL tetap boleh berdampingan).
+
+**Idempoten berlapis**: (1) unik parsial DB, (2) cek `where('invoice_id', $invoice->id)->exists()` di
+service, (3) `InvoiceService::transition()` sudah menjamin `markPaid()` menang sekali (`Paid→Paid`
+ditolak state machine).
+
+**`subscriptions` / `SubscriptionService` / `GenerateDueInvoices` TIDAK disentuh** — service ini murni
+membaca `$invoice->customer_id` + `$customer->ppp_package_id` (v0.9.4, independen dari billing) +
+`CommissionRate`. Tenant-eksplisit, tidak bergantung `Auth` (jalur webhook Xendit).
+
+**Test**: `CommissionMaturityTest` (10 kasus — matang template di tempat, amount dari rate saat ini bukan
+template lama, recurring append per invoice, limited_count berhenti di cap, template tanpa scheme tak
+pernah generate, skip = tak ada baris, idempotensi 1 invoice = 1 baris, no-referral = no-op, pelanggan
+lain / tenant lain tak terpengaruh). **Full regression suite** (lihat commit). Pint clean. Belum
+di-merge/tag.
+
+**DB dev**: migration BELUM dijalankan di DB dev (0 invoice, 1 `commission_ledger`, 1 `commission_rate`).
+Kalau branch dibatalkan: `migrate:rollback --step=1`.
+
 ## v0.9.4 — Skema Komisi per Pelanggan (branch `v0.9.4-skema-komisi-per-pelanggan`, implementasi selesai 2026-09-01, belum di-merge/tag)
 
 **Catatan status**: branch dari `develop` (`291a8ca`), **bukan `main`** — karena butuh pemindahan

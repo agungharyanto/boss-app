@@ -98,6 +98,19 @@ isolasi scope password_reset↔titip, kode salah ditolak, rate limit.
 - Merge `main` ke branch ini (hotfix `WhatsappMessageLog::scopeKnownEventType()` + lainnya) — bersih,
   tanpa konflik.
 
+**Amendment kedua (investigasi timeout kirim WhatsApp, 2026-09-02):**
+- OTP percobaan kirim berikutnya `failed` dengan `cURL error 28: timed out after 30002ms` (beda dari
+  "session not connected"). Investigasi: sesi "direct" `connection: open` tapi tiap IQ query ke WhatsApp
+  timeout 60s (`fetchProps`/`init queries`, dan `sendMessage` internal). Dikonfirmasi via kirim manual
+  langsung ke API gateway (bypass Laravel) → **murni sisi Baileys/WhatsApp**, nomor `6281389014113`
+  kemungkinan di-restrict WhatsApp (nomor baru + churn pairing). BUKAN bug kode BOSS App.
+- **Fix robustness** (`whatsapp-gateway/src/sessionManager.js` — image di-`--build`): `sendMessage`
+  fast-fail 20s via `Promise.race` + cek `sock.user.id`; reconnect exponential backoff (5s→60s) ganti
+  tight loop; `DisconnectReason.badSession` di-handle (wipe + re-pair, bukan loop creds rusak);
+  `markOnlineOnConnect:false` + `syncFullHistory:false`. Laravel `SendWhatsappMessageJob` timeout 30→35s.
+- **Butuh aksi Agung** (bukan kode): nomor WhatsApp "direct" harus istirahat / re-pair QR / ganti ke
+  nomor mapan sebelum OTP bisa benar-benar terkirim.
+
 ---
 
 ## v0.9.5 — Commission Ledger Auto-Maturity, APPEND per invoice (branch `v0.9.5-commission-auto-maturity`, redesain 2026-09-02, belum di-merge/tag)

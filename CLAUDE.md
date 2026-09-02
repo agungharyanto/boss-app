@@ -443,6 +443,26 @@ disconnect instead reconnects on its own using the same saved creds.
 **Outbound-only this sprint** — no inbound/2-way handling at all (planned future integration point:
 Chatwoot, one shared number for all CS, tracked as backlog in `docs/ROADMAP.md`, not started).
 
+**Baileys session-health robustness (v0.9.6, investigasi OTP timeout 2026-09-02)** — gejala nyata:
+sesi "direct" (`6281389014113`, baru di-pair) `connection: 'open'` tapi TIAP IQ query ke server WhatsApp
+timeout 60s (`fetchProps`/`executeInitQueries` "Timed Out" tiap ~60s setelah connect; `sock.sendMessage()`
+juga hang 60s). Dikonfirmasi lewat kirim manual langsung ke API gateway (bypass Laravel) — **murni sisi
+Baileys/WhatsApp, BUKAN bug BOSS App**: network ke WhatsApp OK (200/352ms), container 0 restart,
+auth_state fresh, `fetchLatestBaileysVersion()` → versi WA terkini. Signature klasik **nomor
+di-restrict/rate-limit WhatsApp** (nomor baru + pemakaian linked-device + churn pair/unpair) — WhatsApp
+terima Noise handshake tapi abaikan stanza sesi ini. Tidak bisa diperbaiki dari kode; nomornya harus
+"istirahat" / re-pair / ganti nomor mapan.
+**Fix robustness yang DITERAPKAN** (`whatsapp-gateway/src/sessionManager.js`, image di-`--build`):
+- `sendMessage()` — `Promise.race` dengan **`SEND_TIMEOUT_MS = 20000`** + cek `sock.user?.id` (bukan cuma
+  flag `entry.status` yang basi) → error jelas dalam 20s, bukan hang 60s lalu cURL-28 opaque di Laravel.
+- Reconnect **exponential backoff** (5s→60s cap, reset saat `open`) — dulu tight loop tiap `close`, bikin
+  restriction makin parah.
+- `DisconnectReason.badSession` (500) diperlakukan seperti `loggedOut` — wipe auth_state + tunggu re-pair,
+  jangan loop reconnect pakai creds rusak selamanya.
+- `makeWASocket({ markOnlineOnConnect: false, syncFullHistory: false })` — fase init lebih ringan.
+- Laravel `SendWhatsappMessageJob` HTTP timeout 30→**35s** (sedikit di atas gateway's 20s fast-fail supaya
+  error nyata yang propagate). Bukan sekadar "naikkan angka" — gateway sekarang fail-fast, ini beri margin.
+
 **Template resolution**: `App\Services\Whatsapp\WhatsappTemplateService::resolve()` — a reseller's own
 active override (`whatsapp_message_templates.reseller_id` = that reseller) wins; otherwise falls back to
 the tenant's default ISP-level template (`reseller_id` null) for the same `event_type`. Both `resolve()`

@@ -264,6 +264,7 @@ class WhatsappGatewayIndex extends Component
         });
 
         $logs = WhatsappMessageLog::query()
+            ->knownEventType()
             ->when($this->statusFilter !== '', fn ($q) => $q->where('status', $this->statusFilter))
             ->when($isAdmin && $this->resellerFilter !== null, fn ($q) => $q->where('reseller_id', $this->resellerFilter))
             ->latest()

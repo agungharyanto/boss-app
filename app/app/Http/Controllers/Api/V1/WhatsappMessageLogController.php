@@ -23,6 +23,7 @@ class WhatsappMessageLogController extends Controller
         $this->authorize('viewAny', WhatsappMessageLog::class);
 
         $logs = WhatsappMessageLog::query()
+            ->knownEventType()
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
             ->when($request->filled('reseller_id'), fn ($q) => $q->where('reseller_id', $request->integer('reseller_id')))
             ->latest()

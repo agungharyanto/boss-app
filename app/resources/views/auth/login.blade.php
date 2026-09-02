@@ -30,9 +30,11 @@
                 @csrf
 
                 <div>
-                    <label class="block text-sm font-medium text-gray-700">Email</label>
-                    <input type="email" name="email" value="{{ old('email') }}" required autofocus
+                    <label class="block text-sm font-medium text-gray-700">{{ __('Email atau Nomor HP') }}</label>
+                    <input type="text" name="login" value="{{ old('login') }}" required autofocus
+                        autocomplete="username" inputmode="text"
                         class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                    <p class="text-xs text-gray-500 mt-1">{{ __('Staff: email. Referral: nomor HP terdaftar.') }}</p>
                 </div>
 
                 <div>

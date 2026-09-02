@@ -3,6 +3,29 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## Login Terpadu — 1 pintu untuk Admin + Referrer (branch `login-terpadu`, dari `main`, belum di-merge/tag)
+
+Gabung 2 halaman login terpisah (`/login` Fortify email, `/referrer/login` custom HP) jadi **SATU pintu
+di `/login`** — field pertama **"Email atau Nomor HP"** (bukan 2 field terpisah).
+
+- `config/fortify.php` `'username' => 'login'` (dulu `email`), `'home' => '/'` (dulu `/dashboard`).
+- `Fortify::authenticateUsing()` — deteksi email vs HP saat submit; email → jalur staff (`users`), HP →
+  jalur Referrer (reuse `App\Support\LoginIdentifierResolver`, dipakai bareng `ReferrerLoginController`
+  jalur compat). Verifikasi password di pemanggil, bukan resolver.
+- Pesan gagal **identik** kedua jalur: `lang/id/auth.php` + `lang/en/auth.php` (baru) `failed` →
+  "Email/nomor HP atau password salah." — tidak bocorkan identitas terdaftar / jalur mana.
+- `App\Http\Responses\LoginResponse` (bind di `FortifyServiceProvider::register()`) → `redirect()->
+  intended('/')`, biarkan route `/` yang branch (satu sumber kebenaran, `EnsureAdminPanelAccess::
+  userHasAccess()`). Tidak hardcode redirect.
+- Rate limit: `config('fortify.limiters.login')` diset → route middleware `throttle:login` (HTTP 429,
+  5/menit per identifier+IP) untuk kedua jalur. `/referrer/login` POST compat tetap `throttle:6,1`.
+- `/referrer/login` GET → 302 ke `/login`; POST tetap berfungsi (kompat link/bookmark lama).
+  `ReferrerLoginController::logout()` redirect ke `route('login')`.
+- Test: `UnifiedLoginTest` (13) + `ReferrerPortalLoginTest` disesuaikan. Diverifikasi live (staff email →
+  `/dashboard`, Kamisem HP → `/referrer-portal`, wrong pw/unknown email → pesan generik sama).
+
+---
+
 ## v0.9.5 — Commission Ledger Auto-Maturity, APPEND per invoice (branch `v0.9.5-commission-auto-maturity`, redesain 2026-09-02, belum di-merge/tag)
 
 **Redesain (dikonfirmasi Agung): komisi diperoleh PER INVOICE LUNAS, bukan sekali flip.**

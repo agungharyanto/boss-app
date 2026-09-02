@@ -30,3 +30,7 @@ backups/*.sql.gz
 *.swp
 .idea/
 .vscode/
+
+# Uploaded working files (per-sprint, not committed)
+exportgenieacsanten.xlsx
+virtualParameters-*.csv

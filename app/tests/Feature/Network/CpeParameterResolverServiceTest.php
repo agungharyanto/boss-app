@@ -362,4 +362,118 @@ class CpeParameterResolverServiceTest extends TestCase
         $this->assertTrue($result[0]['enabled']);
         $this->assertSame('5C:E7:47:22:51:7D', $result[0]['mac_address']);
     }
+
+    // --- 2026-09-02: rantai fallback untuk mengisi RX/TX/MAC/uptime tanpa baris cpe_parameter_maps ---
+
+    private function fakeDevice(string $oui, string $productClass, array $igd): array
+    {
+        return [
+            '_id' => "{$oui}-{$productClass}-SN123",
+            '_deviceId' => ['_OUI' => $oui, '_ProductClass' => $productClass, '_SerialNumber' => 'SN123'],
+            'InternetGatewayDevice' => $igd,
+        ];
+    }
+
+    public function test_summary_resolves_optical_power_generically_when_no_catalog_row_exists(): void
+    {
+        // ZTE CT-COM raw positif → 10*log10(raw*1e-4)
+        $device = $this->fakeDevice('AABBCC', 'M63X XPON', [
+            'WANDevice' => ['1' => ['X_CT-COM_GponInterfaceConfig' => [
+                'RXPower' => ['_value' => 22],
+                'TXPower' => ['_value' => 17139],
+            ]]],
+        ]);
+        Http::fake(['*genieacs-nbi*' => Http::response([$device], 200)]);
+
+        $summary = app(CpeParameterResolverService::class)->resolveDeviceSummary('AABBCC-M63X XPON-SN123');
+
+        $this->assertEqualsWithDelta(10 * log10(22 * 0.0001), $summary['rx_power_dbm'], 0.001);
+        $this->assertEqualsWithDelta(10 * log10(17139 * 0.0001), $summary['tx_power_dbm'], 0.001);
+    }
+
+    public function test_summary_uses_negative_optical_raw_directly_as_dbm(): void
+    {
+        $device = $this->fakeDevice('00259E', 'EG8141A5', [
+            'WANDevice' => ['1' => ['X_GponInterafceConfig' => [
+                'RXPower' => ['_value' => -25],
+                'TXPower' => ['_value' => 2],
+            ]]],
+        ]);
+        Http::fake(['*genieacs-nbi*' => Http::response([$device], 200)]);
+
+        $summary = app(CpeParameterResolverService::class)->resolveDeviceSummary('00259E-EG8141A5-SN123');
+
+        $this->assertSame(-25.0, $summary['rx_power_dbm']);
+        $this->assertSame(2.0, $summary['tx_power_dbm']);
+    }
+
+    public function test_summary_falls_back_to_a_product_class_map_row_when_the_oui_differs(): void
+    {
+        CpeParameterMap::factory()->create([
+            'oui' => 'OTHER0',
+            'product_class' => 'M63X XPON',
+            'parameter_key' => 'rx_power_dbm',
+            'parameter_path' => 'InternetGatewayDevice.WANDevice.1.X_CT-COM_GponInterfaceConfig.RXPower',
+            'conversion_formula' => CpeParameterConversionFormula::Sff8472OpticalLog10,
+            'conversion_params' => ['scale' => 0.0001],
+        ]);
+
+        $device = $this->fakeDevice('DIFF00', 'M63X XPON', [
+            'WANDevice' => ['1' => ['X_CT-COM_GponInterfaceConfig' => ['RXPower' => ['_value' => 30]]]],
+        ]);
+        Http::fake(['*genieacs-nbi*' => Http::response([$device], 200)]);
+
+        $summary = app(CpeParameterResolverService::class)->resolveDeviceSummary('DIFF00-M63X XPON-SN123');
+
+        $this->assertEqualsWithDelta(10 * log10(30 * 0.0001), $summary['rx_power_dbm'], 0.001);
+    }
+
+    public function test_summary_resolves_mac_from_wan_ip_connection_when_ppp_has_none(): void
+    {
+        $device = $this->fakeDevice('AABBCC', 'GM220-S', [
+            'WANDevice' => ['1' => ['WANConnectionDevice' => ['2' => [
+                'WANPPPConnection' => ['1' => ['MACAddress' => ['_value' => '00:00:00:00:00:00']]],
+                'WANIPConnection' => ['1' => ['MACAddress' => ['_value' => 'AA:BB:CC:11:22:33']]],
+            ]]]],
+        ]);
+        Http::fake(['*genieacs-nbi*' => Http::response([$device], 200)]);
+
+        $summary = app(CpeParameterResolverService::class)->resolveDeviceSummary('AABBCC-GM220-S-SN123');
+
+        $this->assertSame('AA:BB:CC:11:22:33', $summary['mac_address']);
+    }
+
+    public function test_summary_resolves_uptime_from_device_info_uptime(): void
+    {
+        $device = $this->fakeDevice('AABBCC', 'GM220-S', [
+            'DeviceInfo' => ['UpTime' => ['_value' => 86400]],
+        ]);
+        Http::fake(['*genieacs-nbi*' => Http::response([$device], 200)]);
+
+        $summary = app(CpeParameterResolverService::class)->resolveDeviceSummary('AABBCC-GM220-S-SN123');
+
+        $this->assertSame(86400.0, $summary['device_uptime_seconds']);
+    }
+
+    public function test_pppoe_connection_skips_a_bridged_wan(): void
+    {
+        $device = $this->fakeDevice('AABBCC', 'GM220-S', [
+            'WANDevice' => ['1' => ['WANConnectionDevice' => ['1' => ['WANPPPConnection' => [
+                '1' => [
+                    'ConnectionType' => ['_value' => 'PPPoE_Bridged'],
+                    'Username' => ['_value' => 'bridge-mode-ignore-me'],
+                ],
+                '2' => [
+                    'ConnectionType' => ['_value' => 'IP_Routed'],
+                    'Username' => ['_value' => '081200000000'],
+                    'Name' => ['_value' => 'INTERNET'],
+                ],
+            ]]]]],
+        ]);
+        Http::fake(['*genieacs-nbi*' => Http::response([$device], 200)]);
+
+        $ppp = app(CpeParameterResolverService::class)->resolvePppoeConnection('AABBCC-GM220-S-SN123');
+
+        $this->assertSame('081200000000', $ppp['username']);
+    }
 }

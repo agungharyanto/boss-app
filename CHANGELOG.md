@@ -3,37 +3,54 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## Fix Parameter PPPoE GenieACS + insiden `too_many_commits` (branch `fix-genieacs-pppoe-provision`, 2026-09-02, kode di-stage, BELUM diterapkan live / belum di-merge)
+## Melengkapi data Perangkat CPE (RX/TX/MAC/PPPoE/Multi-SSID) + fix PPPoE GenieACS — DITERAPKAN LIVE (branch `fix-genieacs-pppoe-provision`, 2026-09-02, belum di-merge)
 
-**44 fault GenieACS dibersihkan lewat NBI** (HTTP 200 semua) — **tapi ~38 langsung regenerasi** karena
-akar masalahnya bukan fault-nya: provision `default`/`default-optical` (di-manage `docker/genieacs/presets/`,
-ditambahkan ~2026-08-16, CLAUDE.md v0.7.2 usang soal ini) **terlalu berat**, mentok `MAX_COMMIT_ITERATIONS`
-(32, efektif 64) SETIAP Inform di ~30 device pohon-besar (M63X XPON / H3-2S XPON / M12X5G / GM220-S).
+**Masalah**: banyak field di menu Perangkat CPE kosong. Investigasi: **datanya SUDAH ada di pohon
+GenieACS untuk ~99% perangkat online** — yang kurang cuma (a) `cpe_parameter_maps` di-seed per-(OUI,
+model) sampel, hanya meng-cover sebagian OUI (fleet: `M63X-XPON`/`GM220-S`/`H3-2s` punya 5-15 OUI
+masing-masing), dan (b) provision `default-optical.js` tidak mendeklarasikan TXPower + objek CMCC
+(F663NV9). RX/TX kosong bukan karena data tak ada, tapi karena resolver butuh baris map exact-OUI.
 
-**Kode di-stage (BELUM diterapkan ke GenieACS live — `genieacs-cwmp` tidak di-recreate, mongo tidak
-di-update; menunggu Agung):**
-- `docker/genieacs/presets/default-pppoe.js` — provision baru terisolasi, `declare({value: hourly})` untuk
-  `WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.{Username,ConnectionStatus,ExternalIPAddress,
-  Uptime,Name}` (wildcard — dikonfirmasi terhadap F663NV3a: koneksi pelanggan asli di `WCD.6`, bukan
-  1/2). **Scoped ke objek WANPPPConnection, BUKAN root refresh** (jebakan `too_many_commits`).
-- `docker-compose.yml` → `GENIEACS_MAX_COMMIT_ITERATIONS: "64"` di `genieacs-cwmp` (config
-  `cwmp.maxCommitIterations`). Menaikkan 32→64 tidak mengubah data yang dikumpulkan, hanya membiarkan
-  pohon besar selesai. Butuh `docker compose up -d genieacs-cwmp`.
-- `apply.sh` → 3 provision + runbook lengkap.
+**Resolver `CpeParameterResolverService` — rantai fallback (logika diport dari VP GenieACS rekan Agung
+sebagai REFERENSI, BUKAN dijadikan VirtualParameter):**
+- `mapsFor(oui, pc)`: baris `cpe_parameter_maps` exact (OUI+model) → **fallback ke product_class saja**
+  (path/formula optik ditentukan MODEL, bukan OUI).
+- `resolveOpticalDbm($device, 'RXPower'|'TXPower')`: telusuri semua objek optik vendor (CT-COM/CMCC/
+  ZTE-COM/CU/Huawei/FiberHome/Nokia). Raw NEGATIF = sudah dBm (pakai langsung), raw POSITIF =
+  `10*log10(raw*1e-4)` (SFF-8472), raw 0 = tak ada sinyal (lewati). Persis logika VP `RXPower`.
+- `resolveMacFromDevice()`: rantai WANPPPConnection → **WANIPConnection** → LANEthernetInterfaceConfig →
+  LANHostConfigManagement → `DeviceInfo.X_CU_SerialNumber` (dari VP `PonMac`/`pppoeMac`).
+- `resolveUptimeSecondsFromDevice()`: `DeviceInfo.UpTime` / `Device.DeviceInfo.UpTime`.
+- `isBridgedConnection()`: `resolvePppoeConnection()` melewati WAN mode bridge (`PPPoE_Bridged`/`bridge`)
+  — Username/IP-nya milik router di belakang ONT, bukan pelanggan (dari VP `pppoeUsername2`/`pppoeIP`).
+- `resolveDeviceSummary()` di-refactor: fetch device 1× (dulu bisa 2 GET), lalu map → fallback generik.
 
-**TIDAK dilakukan (keputusan/verifikasi Agung):** `cpe_parameter_maps` PPPoE **tidak ditambah** —
-`CpeParameterResolverService::resolvePppoeConnection()` sudah menelusuri pohon generik (halaman Detail CPE
-sudah menampilkan PPPoE username/name/status), baris map = data tak ter-wire. Menurunkan cadence
-`{path: minutes}` pada `Hosts.Host.*`/`AssociatedDevice.*` di `default.js` (butuh observasi multi-Inform).
-Membersihkan ~6737 task backlog GenieACS (1996+ `getParameterValues` untuk 6 device offline + 4 root
-`refreshObject` nyangkut).
+**Verifikasi NYATA (25 kombinasi (OUI,model) berbeda dari fleet):** RX **25/25**, TX **25/25** — termasuk
+F663NV9 (dulu 0), M32X-5G, GM220-S XPON, OUI di luar map. Nilai plausibel (RX -13..-31 dBm, TX 1.8..3.8
+dBm). MAC **5/25** — sisanya ONT ZTE genuinely tidak expose MAC-nya sendiri via TR-069 (keterbatasan
+firmware, sama seperti VP `PonMac` juga tidak dapat). PPPoE Username + Multi-SSID berfungsi.
 
-**Rekomendasi arsitektur (dari `exportgenieacsanten.xlsx`)**: adopsi pola **`VirtualParameters.*`**
-(`pppoeUsername`/`pppoeIP`/`pppoeMac`/`getpppuptime`/`RXPower`/dst) — script provisioning server-side yang
-menormalisasi path beda-beda vendor jadi satu nama konsisten, lebih tahan device baru daripada
-`cpe_parameter_maps` manual per model. **Layak, tapi keputusan terpisah — tidak diimplementasikan.** File
-xlsx hanya berisi config `ui.*`; script VP-nya sendiri perlu ditulis/diminta dari rekan Agung. Detail
-lengkap: CLAUDE.md "GenieACS PPPoE Parameter + `too_many_commits` Incident".
+**GenieACS DITERAPKAN LIVE (`apply.sh` + `docker compose up -d genieacs-cwmp`):**
+- 3 provision (`default` / `default-optical` diperluas: semua objek + TXPower + CMCC / `default-pppoe`
+  baru). `default-optical.js` `{value: hourly}` saja (bukan `{path}`) → beban commit minimal.
+- `GENIEACS_MAX_COMMIT_ITERATIONS: "128"` (32→64→128; genieacs meng-x2 internal).
+
+**`too_many_commits` — TIDAK memburuk, tapi juga TIDAK hilang** (~37 fault, sama seperti baseline
+pra-perubahan ~38). Penyebab dominan = declare `{path: minutes}` di `default.js` (`Hosts.Host.*`,
+`AssociatedDevice.*`, `WLANConfiguration`, `WANPPPConnection` container) pada perangkat pohon-terbesar,
+BUKAN penambahan optical `{value:}` ini. **Data TETAP terisi** meski ada fault — fault = konvergensi
+multi-Inform (terdokumentasi di CLAUDE.md v0.7.2), bukan kehilangan data. **Eliminasi total butuh
+menurunkan cadence `{path: minutes}` → observasi multi-Inform, rekomendasi terpisah** (risiko regresi
+kesegaran "Terakhir Terlihat" yang fix v0.7.6 justru targetkan).
+
+**`cpe_parameter_maps` PPPoE tetap TIDAK ditambah** — resolver walk generik sudah menangani; baris map =
+data tak ter-wire.
+
+**Evaluasi Virtual Parameters lengkap**: `docs/genieacs-virtual-parameters-evaluation.md`. Kesimpulan:
+ADOPSI SEBAGIAN — logika VP (RXPower/pppoeMac/pppoeUsername/bridge-skip) diport ke resolver PHP +
+provision, BUKAN dijadikan VirtualParameter GenieACS (beban perangkat: tiap panggil VP = burst
+getParameterValues; + dua sumber kebenaran). `superAdmin`/`superPassword`/`userAdmin`/`userPassword`
+(kredensial web ONT untuk CS) = fitur BARU bernilai → backlog, sprint tersendiri.
 
 ## v0.9.4 — Skema Komisi per Pelanggan (branch `v0.9.4-skema-komisi-per-pelanggan`, implementasi selesai 2026-09-01, belum di-merge/tag)
 

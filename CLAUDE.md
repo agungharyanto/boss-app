@@ -1865,10 +1865,35 @@ also no "look up WorkOrder by device serial number" endpoint —
 `index()` only filters by `status`. Both are real gaps to close as part of
 `v0.12.0`, not something to design/build yet.
 
-## GenieACS PPPoE Parameter + `too_many_commits` Incident (v0.9.5, branch `fix-genieacs-pppoe-provision` — code staged, NOT applied live)
+## GenieACS PPPoE/RX/TX/MAC/Multi-SSID — Melengkapi data Perangkat CPE (branch `fix-genieacs-pppoe-provision`, DITERAPKAN LIVE 2026-09-02, belum di-merge)
 
-**Pemicu**: Agung refresh parameter tree device di GenieACS UI, parameter PPPoE tidak muncul. Investigasi
-menemukan gambaran yang **lebih besar dari laporan awal** (dan CLAUDE.md v0.7.2 sudah usang di bagian ini):
+**UPDATE 2026-09-02 — DITERAPKAN LIVE + resolver diperluas:**
+- **`apply.sh` dijalankan** (3 provision) + **`docker compose up -d genieacs-cwmp`** (env
+  `GENIEACS_MAX_COMMIT_ITERATIONS: "128"`). `default-optical.js` diperluas: semua objek vendor + **TXPower**
+  (dulu cuma segelintir model) + objek **CMCC** (F663NV9). `default-pppoe.js` provision baru terisolasi.
+- **`CpeParameterResolverService` diperluas** (logika VP GenieACS rekan Agung diport sebagai REFERENSI,
+  BUKAN dijadikan VirtualParameter — lihat `docs/genieacs-virtual-parameters-evaluation.md`):
+  - `mapsFor()`: `cpe_parameter_maps` exact-(OUI,model) → **fallback product_class saja** (path/formula
+    optik ditentukan MODEL bukan OUI; fleet punya 5-15 OUI per model, map hanya cover sebagian).
+  - `resolveOpticalDbm()`: telusuri objek optik vendor apa pun. Raw negatif = sudah dBm, raw positif =
+    `10*log10(raw*1e-4)`, raw 0 = tak ada sinyal. Persis logika VP `RXPower`.
+  - `resolveMacFromDevice()`: WANPPPConnection → WANIPConnection → LAN* → `DeviceInfo.X_CU_SerialNumber`.
+  - `isBridgedConnection()`: `resolvePppoeConnection()` skip WAN bridge (`PPPoE_Bridged`/`bridge`).
+  - `resolveDeviceSummary()`: fetch device 1× (dulu 1-2 GET), map → fallback generik.
+- **Verifikasi nyata (25 kombinasi OUI×model): RX 25/25, TX 25/25** (F663NV9 dulu 0). **MAC 5/25** —
+  ONT ZTE genuinely tak expose MAC sendiri via TR-069 (keterbatasan firmware; VP `PonMac` pun tak dapat).
+- **`too_many_commits` TIDAK memburuk (~37, sama seperti baseline ~38) tapi TIDAK hilang** — penyebab
+  dominan = `{path: minutes}` di `default.js` (`Hosts.Host.*`/`AssociatedDevice.*`/`WLANConfiguration`/
+  `WANPPPConnection` container) pada perangkat pohon-terbesar. **Data TETAP terisi** meski ada fault
+  (konvergensi multi-Inform, CLAUDE.md v0.7.2). **Rekomendasi terpisah**: turunkan cadence
+  `{path: minutes}` → `{path: 5min}` dengan observasi multi-Inform (risiko regresi kesegaran "Terakhir
+  Terlihat" yang fix v0.7.6 targetkan — jangan diubah tanpa memantau).
+
+---
+
+**Pemicu awal**: Agung refresh parameter tree device di GenieACS UI, parameter PPPoE tidak muncul.
+Investigasi menemukan gambaran yang **lebih besar dari laporan awal** (dan CLAUDE.md v0.7.2 sudah usang di
+bagian ini):
 
 **1. `presets`/`provisions` GenieACS SUDAH terisi** (bukan kosong seperti kata v0.7.2) — di-manage lewat
 `docker/genieacs/presets/default.js` + `default-optical.js` + `apply.sh` (ditambahkan ~2026-08-16). `default.js`
@@ -1932,21 +1957,18 @@ Agung)**: instance itu memakai **`VirtualParameters.*`** (`pppoeUsername`, `pppo
 `pppoeIP`, `pppoeMac`, `getpppuptime`, `IPTR069`, `getponmode`, `RXPower`, `gettemp`, `getdeviceuptime`,
 `activedevices`, `PonMac`, `getSerialNumber`, `userAdmin`/`superAdmin`, dst) — script JS provisioning
 server-side yang menormalisasi path beda-beda vendor jadi SATU nama parameter konsisten, lalu UI + NBI
-tinggal baca `VirtualParameters.pppoeUsername` alih-alih menebak path TR-069 mentah per device. **Layak
-diadopsi BOSS App**: jauh lebih tahan terhadap device/vendor baru dibanding memelihara `cpe_parameter_maps`
-manual per (OUI, model) — satu VirtualParameter menangani semua vendor sekaligus, dan
-`CpeParameterResolverService` menyusut jadi "baca `VirtualParameters.X`" tanpa logika walk per-vendor.
-Trade-off: script VP hidup di GenieACS (`db.virtualParameters`), jadi perlu masuk `docker/genieacs/` +
-`apply.sh` (BOSS-001), dan file xlsx yang diberikan **hanya berisi config `ui.*`** — script VP-nya sendiri
-(logika resolusi path per vendor) tidak ada di export itu, perlu ditulis / diminta dari rekan Agung.
-**Keputusan terpisah, TIDAK diimplementasikan sekarang.**
+tinggal baca `VirtualParameters.pppoeUsername` alih-alih menebak path TR-069 mentah per device.
 
-**Device yang perlu Agung konfirmasi**: tidak bisa dipastikan device persis yang Agung refresh (task
-refresh-root manual sudah auto-clear). Kandidat = model pohon-besar yang jadi offender fault: **ZTE F663NV3a**
-(punya data PPPoE lengkap tapi bisa basi berhari-hari), **ZTE M63X XPON** / **GM220-S** (node
-WANPPPConnection ada, leaf tidak pernah terisi), **C-Data H3-2s / H3-2S XPON** (fault `too_many_commits`
-paling sering hari-hari terakhir). ~99% dari 317 device punya node `WANPPPConnection` — **bukan** keterbatasan
-firmware.
+**EVALUASI LENGKAP + KEPUTUSAN: `docs/genieacs-virtual-parameters-evaluation.md`.** Ringkas: **ADOPSI
+SEBAGIAN — logika VP (daftar path per-vendor + konversi RXPower + skip bridge + rantai MAC) diport ke
+`CpeParameterResolverService` PHP + provision terjadwal, BUKAN dijadikan VirtualParameter GenieACS.**
+Alasan tidak pakai VP GenieACS: (1) tiap panggil VP = burst `declare({value:Date.now()})` → GenieACS
+fetch tiap path dari perangkat → beban connection-request tinggi di halaman DataTable (lawan dari yang
+kita mau, mengingat `too_many_commits`); (2) dua sumber kebenaran (VP di `db.virtualParameters` +
+resolver PHP). File xlsx `exportgenieacsanten.xlsx` hanya `ui.*`; script VP asli ada di
+`virtualParameters-2026-09-02T021621338Z.csv` (19 VP) — dipakai sebagai referensi path/konversi.
+**`superAdmin`/`superPassword`/`userAdmin`/`userPassword` (kredensial web ONT untuk CS) = fitur BARU
+bernilai → backlog, sprint tersendiri (butuh kolom terenkripsi + UI reveal + RBAC, pola PPPoE password).**
 
 ## Network Navigation Restructure & OLT Credential Registry (v0.8.1)
 

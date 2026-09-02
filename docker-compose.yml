@@ -874,7 +874,11 @@ services:
       # yang dikumpulkan, hanya membiarkan sesi commit lebih banyak.
       # Perubahan ini butuh: `docker compose up -d genieacs-cwmp`
       # (recreate). Lihat CLAUDE.md "GenieACS ... too_many_commits".
-      GENIEACS_MAX_COMMIT_ITERATIONS: "64"
+      # 2026-09-02: dinaikkan 64→128 setelah 64 (efektif 256 — genieacs
+      # meng-x2 nilai ini internal) ternyata masih belum cukup untuk
+      # perangkat pohon-terbesar (M63X XPON / GM220-S) pada Inform pertama
+      # setelah default.js/default-optical.js/default-pppoe.js di-apply.
+      GENIEACS_MAX_COMMIT_ITERATIONS: "128"
       TZ: Asia/Jakarta
     volumes:
       # v0.8.1 fragment+reconcile — read-only, see CLAUDE.md's "Fragment+

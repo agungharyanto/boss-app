@@ -30,3 +30,7 @@ backups/*.sql.gz
 *.swp
 .idea/
 .vscode/
+
+# Referensi GenieACS dari rekan Agung (dump, bukan sumber kebenaran repo)
+exportgenieacsanten.xlsx
+virtualParameters-*.csv

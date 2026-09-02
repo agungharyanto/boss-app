@@ -54,6 +54,7 @@
 | v0.17.0 | Operasional     | UI/UX Polish — Profesionalisasi Tampilan BOSS App | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Perbaikan visual menyeluruh (warna, tipografi, spacing, komponen) memakai skill `ui-ux-pro-max` (terinstal `2026-08-31`, lihat catatan instalasi di bawah), target stack Laravel Blade/Livewire yang dipakai BOSS App. Halaman/area prioritas mana yang dipoles duluan akan di-decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 | v0.18.0 | Billing & Finance | Accounting & Financial Reporting | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Modul akuntansi: laporan pemasukan harian, pemasukan per periode (mingguan/bulanan/custom range), laporan laba-rugi, pencatatan pengeluaran (expenses). Sinkronisasi dengan modul pajak yang sudah ada (Tax Components/Reseller Tax Policy, v0.3.3 Regulatory Tax Engine) — termasuk perhitungan BHP USO (kewajiban regulasi telekomunikasi Indonesia): berapa yang harus dibayar ISP sendiri, dan berapa yang harus dibayar tiap reseller. Decision-gate scope lengkap dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 | v0.19.0 | Operasional     | Feature Toggle / Module Management | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Halaman Pengaturan untuk enable/disable modul fitur besar (kandidat: GenieACS/TR-069, FreeRADIUS, WhatsApp Gateway, Payment Gateway, OLT/SmartOLT integration, Profil Paket live-push, dan modul lain — list final berdasarkan hasil audit Docker vs Monitoring, lihat CLAUDE.md). Tujuan: BOSS App direncanakan dijual sebagai SaaS ke ISP lain — saat onboarding tenant trial/demo baru, admin perlu kontrol modul mana yang aktif/ditampilkan, supaya trial user tidak melihat fitur setengah jadi atau tidak relevan buat mereka. Scope detail (termasuk apakah per-tenant atau global, dan mekanisme teknisnya) belum ditentukan — decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
+| v0.22.0 | Operasional     | Manajemen User (Staff + Referral Terpadu) | CRUD user staff (nama/email/password, role Spatie via dropdown single-choice) dengan checkbox **"Jadikan juga Referral"** — kalau dicentang, otomatis create/link `Referrer` terhubung ke User yang sama (reuse mekanisme link `ReferrerService::linkExistingUser()` dari v0.9.2, TIDAK bangun ulang), field tambahan muncul reaktif (nomor HP wajib untuk login portal Referrer, Tipe Referrer). User & Referrer TETAP 2 entity terpisah di DB (beda level akses/keamanan) — dari sisi admin cuma 1 form. Akses: superadmin + administrator (tier-admin, permission baru `users.view`/`users.manage` + `UserPolicy`). **Gap lama sejak awal project**: User cuma bisa dibuat lewat seeder, nol UI. Nomor slot `v0.22.0` (bukan `v0.20.0`) — `v0.20.0`/`v0.21.0` didaftarkan di branch `v0.9.6-fitur-titip` (belum di-merge saat ini): Template Halaman Isolir + Template Voucher Cetak. | **In Progress** (branch `manajemen-user`, dari `main` — sesi 2026-09-02) |
 
 ## Item Maintenance Window Terjadwal (bukan versi sprint — infra, butuh jendela downtime)
 
@@ -128,7 +129,17 @@ dicatat sekaligus di sini.
    berikutnya setelah `v0.17.0` — `v0.18.0` "Accounting & Financial
    Reporting" dan `v0.19.0` "Feature Toggle / Module Management" (lihat
    baris tabel masing-masing). Keduanya murni reservasi nomor+nama, scope
-   detail belum ditentukan. `v0.20.0` masih genuinely kosong.
+   detail belum ditentukan.
+4. **`v0.20.0`/`v0.21.0` didaftarkan di branch `v0.9.6-fitur-titip`
+   (2026-09-02, belum di-merge ke `main` saat catatan ini ditulis)** —
+   "Template Halaman Isolir (Captive Page Non-Aktif)" dan "Template
+   Voucher Cetak (Token/Hotspot)". Baris tabelnya BELUM ada di `main` —
+   akan menyatu saat `v0.9.6-fitur-titip` di-merge (ROADMAP.md akan
+   konflik trivial, tinggal ambil kedua sisi).
+5. **`v0.22.0` "Manajemen User (Staff + Referral Terpadu)" (2026-09-02)** —
+   branch `manajemen-user` dari `main`. Dinomori `v0.22.0` (bukan
+   `v0.20.0`) mengikuti model bahwa `v0.20.0`/`v0.21.0` sudah dipesan
+   Isolir/Voucher di branch v0.9.6. `v0.23.0` genuinely kosong.
 
 **Keputusan arsitektur terkunci untuk seluruh cluster `v0.6.x`** (jangan
 dinegosiasi ulang tanpa konfirmasi eksplisit baru, BOSS-003):

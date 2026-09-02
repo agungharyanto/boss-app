@@ -43,9 +43,15 @@ class ReferrerActionOtpService
     ) {}
 
     /**
+     * `$actionLabel` — deskripsi singkat aksi yang dikonfirmasi kode ini,
+     * dirender ke variabel template `{action_label}` (mis. "mencatat titip
+     * pembayaran untuk Budi", "reset password akun Portal Referrer"). SATU
+     * event type `referrer_action_otp` dipakai beberapa alur — labelnya yang
+     * membedakan konteks pesan, bukan template terpisah.
+     *
      * @throws ReferrerOtpException saat rate-limited atau template WA belum di-seed
      */
-    public function issue(Referrer $referrer, string $scope, ?Customer $relatedCustomer = null): void
+    public function issue(Referrer $referrer, string $scope, string $actionLabel, ?Customer $relatedCustomer = null): void
     {
         $rateKey = $this->rateKey($referrer, $scope);
 
@@ -61,6 +67,7 @@ class ReferrerActionOtpService
             [
                 'otp_code' => $code,
                 'otp_minutes' => self::TTL_MINUTES,
+                'action_label' => $actionLabel,
             ],
             $relatedCustomer,
         );

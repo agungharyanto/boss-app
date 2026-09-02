@@ -60,7 +60,7 @@ class ReferrerForgotPassword extends Component
             session()->forget(self::SESSION_VERIFIED_AT);
 
             try {
-                $otpService->issue($referrer, $this->scopeFor($referrer->id));
+                $otpService->issue($referrer, $this->scopeFor($referrer->id), 'reset password akun Portal Referrer');
             } catch (ReferrerOtpException) {
                 // Rate-limited / template belum di-seed — jangan bocorkan.
                 // Pesan generik yang sama dipakai apa pun hasilnya.
@@ -83,7 +83,7 @@ class ReferrerForgotPassword extends Component
 
         if ($id !== null && ($referrer = $this->activeReferrer((int) $id)) !== null) {
             try {
-                $otpService->issue($referrer, $this->scopeFor((int) $id));
+                $otpService->issue($referrer, $this->scopeFor((int) $id), 'reset password akun Portal Referrer');
                 $this->otpResent = true;
             } catch (ReferrerOtpException $e) {
                 $this->addError('otp', $e->getMessage());

@@ -142,7 +142,7 @@ class ReferrerForgotPasswordTest extends TestCase
         $otp = app(ReferrerActionOtpService::class);
 
         // Code issued for password_reset...
-        $otp->issue($referrer, "password_reset:{$referrer->id}");
+        $otp->issue($referrer, "password_reset:{$referrer->id}", 'reset password');
         $resetCode = $this->otpCode($referrer->id, "password_reset:{$referrer->id}");
 
         // ...must NOT verify against a titip scope.
@@ -152,7 +152,7 @@ class ReferrerForgotPasswordTest extends TestCase
         );
 
         // And the reverse: a titip code must not verify a password_reset scope.
-        $otp->issue($referrer, "titip:{$customer->id}", $customer);
+        $otp->issue($referrer, "titip:{$customer->id}", 'titip', $customer);
         $titipCode = $this->otpCode($referrer->id, "titip:{$customer->id}");
 
         $this->assertThrows(

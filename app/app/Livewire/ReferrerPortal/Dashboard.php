@@ -128,7 +128,7 @@ class Dashboard extends Component
         $customer = $this->ownReferral($referrer, $this->titipCustomerId);
 
         try {
-            $otp->issue($referrer, $this->titipScope(), $customer);
+            $otp->issue($referrer, $this->titipScope(), "mencatat titip pembayaran untuk {$customer->name}", $customer);
         } catch (ReferrerOtpException $e) {
             $this->addError('otpCode', $e->getMessage());
 
@@ -150,7 +150,7 @@ class Dashboard extends Component
         $customer = $this->ownReferral($referrer, $this->titipCustomerId);
 
         try {
-            $otp->issue($referrer, $this->titipScope(), $customer);
+            $otp->issue($referrer, $this->titipScope(), "mencatat titip pembayaran untuk {$customer->name}", $customer);
         } catch (ReferrerOtpException $e) {
             $this->addError('otpCode', $e->getMessage());
 

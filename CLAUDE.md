@@ -95,6 +95,33 @@ to the next — no jumping ahead. `docs/ROADMAP.md` also carries forward cross-s
 what a later sprint's migrations/contracts must include because an earlier sprint deferred them) — check
 it, not just this file, before starting a new sprint.
 
+## ATURAN WAJIB — CLOSURE DISIPLIN (governance note permanen, insiden ke-4)
+
+**Sebelum memulai branch/sprint BARU, WAJIB jalankan `git log --oneline main..<branch aktif sebelumnya>`.**
+Kalau ada commit yang belum masuk `main`:
+- **SELESAIKAN dulu** — merge (`--no-ff` → develop → main → tag sesuai BOSS-002/BOSS-013), ATAU
+- **tandai eksplisit** di CLAUDE.md + laporan: "menunggu verifikasi Agung — JANGAN ditinggalkan lebih
+  dari 1 sesi".
+
+**JANGAN pindah kerjaan ke branch/sprint lain sebelum branch sebelumnya jelas statusnya.**
+
+**Kalau di tengah sesi ada instruksi pindah ke topik/branch lain padahal branch sebelumnya masih
+uncommitted / belum di-review** — WAJIB:
+1. `git commit` dulu ke branch itu (jangan pernah `git checkout` ke branch lain dengan working tree kotor
+   — perubahan ikut terbawa dan mengotori branch tujuan; ini persis yang hampir terjadi di v0.9.6).
+2. Ingatkan eksplisit ke Agung di laporan sebelum lanjut — sebutkan hash commit-nya (contoh sesi
+   2026-09-02: v0.9.6 di-commit `b2ad70d` sebelum branch `manajemen-user` dibuat).
+
+**Preseden insiden "kerja selesai tapi lupa merge" (jangan tambah nomor 5):**
+- `v0.14.5.1` — checkpoint dibiarkan uncommitted lintas branch switch, berakhir di `git stash` yang nyaris
+  hilang (lihat section "Branch Consolidation" di bawah).
+- `hotfix/wireguard-node-ip-race` — commit `a75f608` selesai, tidak pernah di-merge ke main; catatan
+  insiden node-IP-race jadi tidak ada di main sampai lama kemudian.
+- Cluster v0.8.x — beberapa sub-sprint dibiarkan uncommitted "menunggu verifikasi Agung" berhari-hari.
+- **v0.9.6 (2026-09-02)** — hampir terjadi lagi: seluruh Fitur Titip + Lupa Password masih uncommitted di
+  working tree saat instruksi pindah ke `manajemen-user` masuk. Dicegah dengan commit `b2ad70d` +
+  peringatan eksplisit di laporan sebelum lanjut.
+
 ## Sprint-based development — read this before doing anything
 
 This repo is built strictly one versioned sprint at a time per `docs/ROADMAP.md` above, and the following
@@ -6218,6 +6245,19 @@ perpanjangan layanan** (billing masih manual/MixRadius, `subscriptions`/`Subscri
   single-use. `RateLimiter` kirim ulang **3×/10 menit** per `(referrer, scope)`. `$scope` =
   `"titip:{$customerId}"` — kode untuk pelanggan A tidak bisa dipakai untuk pelanggan B. `ReferrerOtpException`
   pesan user-facing Indonesia (komponen Livewire teruskan ke `addError()`).
+  `issue(Referrer, string $scope, string $actionLabel, ?Customer)` — **`$actionLabel`** dirender ke
+  variabel template `{action_label}` (Titip: `"mencatat titip pembayaran untuk {nama}"`; Lupa Password:
+  `"reset password akun Portal Referrer"`). SATU event type `referrer_action_otp` dipakai kedua alur —
+  label yang membedakan konteks, bukan template terpisah. Template default v0.9.6 AWAL keliru
+  meng-hardcode frasa Titip + `*{customer_name}*` (jadi `"...pelanggan **."` untuk Lupa Password yang
+  `$relatedCustomer`-nya null) — diganti pakai `{action_label}` (`WhatsappMessageTemplateSeeder` + 15
+  baris di DB dev sudah di-update).
+- **OTP gagal kirim = sesi WhatsApp "direct" belum connected, BUKAN bug kode** (diinvestigasi
+  2026-09-02): `whatsapp_message_logs` id=2 `failed_reason` = `HTTP 502: session "direct" is not
+  connected (status=qr_pending)`. `buildAndQueueForReferrer()` selalu antre lewat sesi "direct"; kalau
+  sesi itu belum di-scan QR / logged_out / qr_pending → Node gateway balas 502, job retry 3× lalu
+  `failed`. Sesi "direct" (`whatsapp_sessions` `reseller_id IS NULL`) HARUS `connected` dulu (scan QR di
+  `/whatsapp-gateway`) sebelum alur OTP Referrer apa pun bisa jalan.
 - **Portal**: `App\Livewire\ReferrerPortal\Dashboard` diperluas — alur modal `startTitip()` → konfirmasi
   detail → `sendTitipOtp()` → `submitTitip()` (verify OTP → `record()`). Rekap Komisi diisi (SEMUA baris
   `commission_ledger` milik referrer — bukan `->first()`; `mount()` fallback resolve Referrer dari

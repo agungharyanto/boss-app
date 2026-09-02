@@ -85,6 +85,19 @@ untuk Referrer yang sudah punya akun — hanya ada saat create / `generateLoginA
 **Test:** `ReferrerForgotPasswordTest` (6) — reset+login berhasil, nomor tak terdaftar tidak bocor,
 isolasi scope password_reset↔titip, kode salah ditolak, rate limit.
 
+**Amendment (setelah investigasi OTP gagal kirim, 2026-09-02):**
+- `whatsapp_message_logs` id=2 (OTP ke Kamisem) `failed` karena sesi WhatsApp **"direct" belum connected**
+  (`HTTP 502: session "direct" is not connected (status=qr_pending)`) — BUKAN bug kode. Sesi "direct"
+  wajib di-scan QR dulu sebelum alur OTP Referrer jalan.
+- Bug kecil ditemukan & diperbaiki: template default `referrer_action_otp` awal meng-hardcode frasa
+  Titip + `*{customer_name}*`, jadi pesan Lupa Password (yang `$relatedCustomer`-nya null) berbunyi
+  "...pelanggan **. Berlaku...". Diganti pakai variabel baru **`{action_label}`** —
+  `ReferrerActionOtpService::issue()` sekarang wajib param `$actionLabel` (Titip: "mencatat titip
+  pembayaran untuk {nama}"; Lupa Password: "reset password akun Portal Referrer"). `WhatsappMessageTemplateSeeder`
+  + 15 baris template di DB dev sudah di-update.
+- Merge `main` ke branch ini (hotfix `WhatsappMessageLog::scopeKnownEventType()` + lainnya) — bersih,
+  tanpa konflik.
+
 ---
 
 ## v0.9.5 — Commission Ledger Auto-Maturity, APPEND per invoice (branch `v0.9.5-commission-auto-maturity`, redesain 2026-09-02, belum di-merge/tag)

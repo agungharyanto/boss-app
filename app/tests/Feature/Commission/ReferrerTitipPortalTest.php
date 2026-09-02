@@ -16,6 +16,7 @@ use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
 use App\Services\Commission\ReferrerActionOtpService;
 use App\Services\Commission\ReferrerOtpException;
@@ -54,7 +55,7 @@ class ReferrerTitipPortalTest extends TestCase
             'tenant_id' => $this->tenant->id,
             'reseller_id' => null,
             'event_type' => WhatsappEventType::ReferrerActionOtp,
-            'content' => 'Kode {otp_code} berlaku {otp_minutes} menit — {referrer_name}, pelanggan {customer_name}.',
+            'content' => 'Kode {otp_code} berlaku {otp_minutes} menit — {referrer_name}. Untuk: {action_label}.',
             'is_active' => true,
         ]);
     }
@@ -134,6 +135,12 @@ class ReferrerTitipPortalTest extends TestCase
             'event_type' => WhatsappEventType::ReferrerActionOtp->value,
             'customer_id' => $customer->id,
         ]);
+
+        // {action_label} dirender dengan konteks Titip yang benar (bukan
+        // frasa Titip yang di-hardcode di template default v0.9.6 awal).
+        $otpLog = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::ReferrerActionOtp->value)->sole();
+        $this->assertStringContainsString("mencatat titip pembayaran untuk {$customer->name}", $otpLog->rendered_content);
 
         $component->set('otpCode', $this->otpCodeFor($customer))
             ->call('submitTitip')
@@ -262,11 +269,11 @@ class ReferrerTitipPortalTest extends TestCase
         $otp = app(ReferrerActionOtpService::class);
         $scope = "titip:{$customer->id}";
 
-        $otp->issue($this->referrer, $scope, $customer);
-        $otp->issue($this->referrer, $scope, $customer);
-        $otp->issue($this->referrer, $scope, $customer);
+        $otp->issue($this->referrer, $scope, 'titip', $customer);
+        $otp->issue($this->referrer, $scope, 'titip', $customer);
+        $otp->issue($this->referrer, $scope, 'titip', $customer);
 
         $this->expectException(ReferrerOtpException::class);
-        $otp->issue($this->referrer, $scope, $customer);
+        $otp->issue($this->referrer, $scope, 'titip', $customer);
     }
 }

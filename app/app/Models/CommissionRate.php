@@ -53,11 +53,15 @@ class CommissionRate extends Model
     }
 
     /**
-     * v0.9.4 — opsi "Skema Komisi" yang tersedia untuk rate ini, dipakai
-     * form registrasi + edit pelanggan (SATU sumal kebenaran — kedua tempat
-     * memanggil method ini, tidak ada duplikat format currency). HANYA
-     * skema yang amount-nya benar-benar diisi. "Titip" SENGAJA tidak
-     * termasuk (mekanisme terpisah, di luar scope v0.9.4).
+     * v0.9.4 — opsi "Skema Komisi" *atribusi pelanggan* yang tersedia untuk
+     * rate ini, dipakai form registrasi + edit pelanggan (SATU sumber
+     * kebenaran — kedua tempat memanggil method ini, tidak ada duplikat
+     * format currency). HANYA skema yang amount-nya benar-benar diisi.
+     *
+     * "Titip" SENGAJA TIDAK termasuk di sini (v0.9.6): Titip bukan skema
+     * atribusi yang dipilih admin saat registrasi — ia dicatat per-pembayaran
+     * lewat Portal Referrer (self-service + OTP). `titipAmount()` di bawah
+     * adalah accessor terpisah untuk jalur itu.
      *
      * Label menyertakan nominal Rupiah (ribuan pakai titik, tanpa desimal)
      * supaya admin tahu persis nilainya sebelum memilih:
@@ -84,6 +88,18 @@ class CommissionRate extends Model
     }
 
     /**
+     * v0.9.6 — nominal komisi Titip untuk rate ini, atau null kalau rate ini
+     * tidak menyediakannya. Dipakai `App\Services\Commission\
+     * ReferrerTitipService` untuk mengisi `commission_ledger.amount` saat
+     * Referrer mencatat titip pembayaran. Titip tidak pernah "diketik
+     * manual" — selalu dari sini.
+     */
+    public function titipAmount(): ?float
+    {
+        return $this->titip_amount !== null ? (float) $this->titip_amount : null;
+    }
+
+    /**
      * Format nominal komisi: ribuan pakai titik, tanpa desimal
      * (mis. "3000.00" -> "3.000", "33000.00" -> "33.000").
      */
@@ -95,13 +111,20 @@ class CommissionRate extends Model
     /**
      * v0.9.4 — nominal komisi untuk skema tertentu, atau null kalau skema
      * itu tidak tersedia di rate ini (amount-nya null / skema tidak
-     * dikenal). Titip tidak pernah di-resolve lewat sini.
+     * dikenal).
+     *
+     * v0.9.6 — `titip` ikut di-resolve di sini (dari `titip_amount`) supaya
+     * `match`-nya lengkap dan `ReferrerTitipService` bisa memakainya. TAPI
+     * `CommissionLedgerMaturityService` (jalur invoice-lunas) tidak pernah
+     * memanggilnya dengan `'titip'` — baris scheme=titip dikecualikan dari
+     * lookup template di service itu.
      */
     public function amountForScheme(?string $scheme): ?float
     {
         return match ($scheme) {
             CommissionScheme::Recurring->value => $this->recurring_amount !== null ? (float) $this->recurring_amount : null,
             CommissionScheme::LimitedCount->value => $this->limited_count_amount !== null ? (float) $this->limited_count_amount : null,
+            CommissionScheme::Titip->value => $this->titipAmount(),
             default => null,
         };
     }

@@ -62,13 +62,20 @@ class CommissionLedgerMaturityService
             return 0;
         }
 
-        // Baris "template" v0.9.4 = baris pertama untuk (customer, referrer) ini.
-        // Sumber kebenaran skema komisi yang dipilih admin.
+        // Baris "template" v0.9.4 = baris NON-titip pertama untuk
+        // (customer, referrer) ini. Sumber kebenaran skema komisi atribusi
+        // yang dipilih admin. Baris scheme=titip (v0.9.6, dibuat lewat
+        // Portal Referrer) TIDAK PERNAH jadi template dan tidak pernah
+        // di-append per invoice — dikecualikan di sini.
         $templateRow = CommissionLedger::query()
             ->withoutGlobalScopes()
             ->where('tenant_id', $invoice->tenant_id)
             ->where('customer_id', $customer->id)
             ->where('referrer_id', $customer->referred_by_referrer_id)
+            ->where(function ($q) {
+                $q->whereNull('scheme')
+                    ->orWhere('scheme', '!=', CommissionScheme::Titip->value);
+            })
             ->orderBy('id')
             ->first();
 

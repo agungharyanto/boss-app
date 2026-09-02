@@ -60,6 +60,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedMonitoringPermissions();
         $this->seedReferrerPermissions();
         $this->seedCommissionRatePermissions();
+        $this->seedCommissionLedgerPermissions();
         $this->seedBandwidthProfilePermissions();
         $this->seedCustomerIpPoolPermissions();
         $this->seedNetworkProfileGroupPermissions();
@@ -412,6 +413,22 @@ class RolesAndPermissionsSeeder extends Seeder
         }
 
         $this->giveToAdminTier($permissions);
+    }
+
+    /**
+     * v0.9.6 — `commission_ledger.view`: akses baca daftar entri komisi
+     * (dipakai halaman admin "Titip Masuk", `App\Livewire\Commission\
+     * TitipMasukIndex`). Tier-admin-only, sama posture dengan
+     * commission_rates.*. Ini juga jadi benih permission untuk UI admin
+     * komisi yang lebih lengkap di v0.9.7 — tidak ada `.manage` di sini
+     * karena v0.9.6 belum punya aksi tulis apa pun di sisi admin (Titip
+     * langsung Eligible saat submit Referrer, tidak ada approve/reject).
+     */
+    private function seedCommissionLedgerPermissions(): void
+    {
+        Permission::firstOrCreate(['name' => 'commission_ledger.view', 'guard_name' => 'web']);
+
+        $this->giveToAdminTier(['commission_ledger.view']);
     }
 
     /**

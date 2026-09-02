@@ -423,7 +423,16 @@ and every query in this module use `withoutGlobalScopes()` explicitly and pass `
 runs from queued jobs and scheduled commands with no authenticated user, where `BelongsToTenant`'s
 `TenantScope` (which only filters `if (Auth::check())`) wouldn't help anyway.
 
-**Four fixed trigger types** (`App\Enums\WhatsappEventType`) — **no fifth type without asking first**:
+**Fixed trigger types** (`App\Enums\WhatsappEventType`) — **no new type without asking first**. The
+original four (below); plus **`referrer_action_otp` (v0.9.6, explicit permission from Agung)** — the first
+type whose recipient is NOT a customer. It sends a 6-digit OTP to a **Referrer's own** phone
+(`referrers.phone`) to verify a portal self-service action (currently only "Catat Titip"). It does NOT go
+through `buildAndQueue()` (Customer-bound) — a separate `WhatsappGatewayService::buildAndQueueForReferrer()`
+resolves the template at ISP level (`reseller_id` null — a Referrer has no reseller) and always queues on
+the `"direct"` session. Variables: `{referrer_name}`, `{otp_code}`, `{otp_minutes}`, `{customer_name}`,
+`{company_name}`. See the "Fitur Titip (v0.9.6)" section below.
+
+The original four:
 `invoice_due_reminder` (H-5 and H-0 only — **explicitly no overdue reminder**, once an invoice passes
 H-0 unpaid there is no further WhatsApp nudge for it, enforced almost for free by
 `whatsapp:send-due-reminders` only ever querying `InvoiceStatus::Pending`, never `Overdue`),
@@ -6177,6 +6186,74 @@ verifikasi HTTP nyata. **DB dev sudah di-`migrate`** (2 kolom); kalau branch dib
 
 **DB dev BELUM di-`migrate`** (0 invoice, 1 `commission_ledger`, 1 `commission_rate` — tidak ada yang
 terdampak). Kalau branch dibatalkan `migrate:rollback --step=1`.
+
+## Fitur Titip (v0.9.6, branch `v0.9.6-fitur-titip`, belum di-merge/tag)
+
+**Referrer mencatat sendiri pembayaran cash "titip" dari pelanggan yang ia referensikan → dapat komisi
+Titip.** Desain final dikonfirmasi Agung — **PENCATATAN pembayaran + komisi SAJA, BUKAN otomasi
+perpanjangan layanan** (billing masih manual/MixRadius, `subscriptions`/`SubscriptionService`/
+`GenerateDueInvoices` tidak disentuh; tidak ada satu pun panggilan ke NAS/RADIUS/RouterOS).
+
+- **`App\Enums\CommissionScheme::Titip`** — BEDA sifat dari `Recurring`/`LimitedCount`. Dua skema itu
+  adalah skema *atribusi pelanggan* (dipilih admin saat registrasi, lalu dimatangkan
+  `CommissionLedgerMaturityService` tiap invoice lunas). **`Titip` TIDAK PERNAH lewat jalur itu** — baris
+  `commission_ledger` scheme=titip HANYA dibuat lewat Portal Referrer. `CommissionLedgerMaturityService::
+  matureForPaidInvoice()` mengecualikan baris scheme=titip dari lookup "template" (`whereNull('scheme')
+  ->orWhere('scheme','!=','titip')`) — baris Titip tidak pernah jadi template, tidak pernah di-append per
+  invoice. `CommissionRate::amountForScheme('titip')`/`titipAmount()` di-wire, TAPI `schemeOptions()`
+  (form registrasi/edit pelanggan) **tetap tidak** menawarkan Titip.
+- **`commission_ledger.payment_period`** (date, nullable — tanggal 1 bulan pembayaran, mis. `2026-09-01`).
+  Migration `2026_09_02_140000`. Alasan: baris Titip `invoice_id` NULL → indeks unik parsial v0.9.5
+  (`WHERE invoice_id IS NOT NULL`) tidak melindunginya dari duplikat. Guard duplikat = app-layer
+  (`ReferrerTitipService::existingForMonth()`), **peringatan yang bisa di-override**, bukan hard block —
+  admin/kasus sah tetap boleh 2 entri per bulan.
+- **`App\Services\Commission\ReferrerTitipService`** — `availabilityFor()` (tombol "Catat Titip" hanya
+  muncul kalau pelanggan direferensikan Referrer ini + punya `ppp_package_id` + `CommissionRate` aktif
+  dengan `titip_amount`); `record()` → `commission_ledger` baris baru `scheme=titip status=eligible`
+  (langsung Eligible — OTP = jaring pengaman, bukan approval admin), `amount` dari
+  `CommissionRate.titip_amount` (**tidak pernah diketik manual**), `payment_period` bulan berjalan.
+  Tenant-eksplisit.
+- **OTP: `App\Services\Commission\ReferrerActionOtpService`** — kode 6-digit, cache 5 menit (plaintext,
+  Redis internal-only, sama posture `ScriptDownloadTokenService`), maks 5 salah → kode dihapus,
+  single-use. `RateLimiter` kirim ulang **3×/10 menit** per `(referrer, scope)`. `$scope` =
+  `"titip:{$customerId}"` — kode untuk pelanggan A tidak bisa dipakai untuk pelanggan B. `ReferrerOtpException`
+  pesan user-facing Indonesia (komponen Livewire teruskan ke `addError()`).
+- **Portal**: `App\Livewire\ReferrerPortal\Dashboard` diperluas — alur modal `startTitip()` → konfirmasi
+  detail → `sendTitipOtp()` → `submitTitip()` (verify OTP → `record()`). Rekap Komisi diisi (SEMUA baris
+  `commission_ledger` milik referrer — bukan `->first()`; `mount()` fallback resolve Referrer dari
+  `auth()->id()` supaya testable tanpa middleware). **CREATE-ONLY** — tidak ada method
+  edit/hapus/void di komponen (di-assert oleh test). `ReferrerReferralResource` (`GET /api/v1/referrals`):
+  field tunggal `commission_status`/`commission_amount` **dihapus** (breaking), diganti `commissions[]` +
+  `commission_total_earned`.
+- **Admin**: `App\Livewire\Commission\TitipMasukIndex` (`/titip-masuk`, permission baru
+  `commission_ledger.view` + `CommissionLedgerPolicy` auto-discovered, tier-admin-only). Daftar read-only
+  semua `commission_ledger` scheme=titip — **daftar kerja operasional** (perpanjang layanan manual di
+  MixRadius), TIDAK ada approve/reject. Benih UI admin komisi v0.9.7. Link sidebar di cluster "Billing &
+  Finance". Permission **wajib di-`db:seed --class=RolesAndPermissionsSeeder` ulang** terhadap DB dev
+  (sudah dilakukan; insiden berulang di file ini).
+- **Belum ada REST untuk alur Titip** — akun portal Referrer tidak punya Sanctum token; menambah
+  penerbitan token untuk akun Referrer = keputusan tersendiri (belum dilakukan). Business logic ada di
+  service layer, callable dari mana pun nanti.
+- **DB dev sudah di-`migrate`** (`payment_period`) + `db:seed` (permission + WA template). Kalau branch
+  dibatalkan: `migrate:rollback --step=1`.
+
+**Lupa Password Portal Referrer (digabung ke branch v0.9.6 — reuse infra OTP di atas)**:
+`App\Livewire\Auth\ReferrerForgotPassword` (`GET /referrer/forgot-password`, `guest`, link di
+`/referrer/login`). Multi-tahap Nomor HP → OTP WhatsApp → password baru. Reuse `ReferrerActionOtpService`
+dengan **scope `"password_reset:{referrerId}"`** — cache key beda dari scope `"titip:{customerId}"`, jadi
+kode reset password dan kode Titip **terisolasi penuh** (ditest 2 arah). **Anti-enumerasi**: nomor HP tak
+terdaftar / Referrer non-aktif → pesan generik yang SAMA, selalu maju ke tahap OTP, nol WA log, nol error
+spesifik; Referrer id disimpan di **session** server-side (bukan properti Livewire yang bocor ke browser).
+Rate limit kirim ulang 3×/10 menit (sama `ReferrerActionOtpService`). Password baru:
+`User::forceFill(['password' => Hash::make()])->save()`; sesi verifikasi kedaluwarsa 10 menit setelah OTP
+benar. Layout baru `layouts/referrer-guest.blade.php`.
+
+**Tidak ada aksi admin "regenerate password" untuk Referrer yang SUDAH punya akun** — `ReferrerService::
+generateLoginAccount()` hanya untuk `user_id` null, `linkExistingUser()` tidak menyentuh password. Reset
+password Kamisem (id=4) untuk verifikasi manual v0.9.6 dilakukan manual via `tinker`
+(`User::forceFill(['password' => Hash::make(Str::password(16))])->save()`). Fitur "Lupa Password" di atas
+menutup kebutuhan ini dari sisi Referrer; aksi admin regenerate (kalau nanti diperlukan) = scope
+tersendiri.
 
 ## Cluster Profil Paket (v0.14.x) — Konstrain NAS Produksi
 

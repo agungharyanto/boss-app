@@ -6149,6 +6149,35 @@ v0.9.3) dengan `CommissionRate` (recurring 3000, limited 33000×2) + 1 `Referrer
 verifikasi HTTP nyata. **DB dev sudah di-`migrate`** (2 kolom); kalau branch dibatalkan
 `migrate:rollback --step=2`.
 
+## Commission Ledger Auto-Maturity — APPEND per invoice (v0.9.5, branch `v0.9.5-commission-auto-maturity`, belum di-merge/tag)
+
+**Komisi diperoleh PER INVOICE LUNAS** (redesain dari "sekali flip", dikonfirmasi Agung).
+`App\Services\InvoiceService::markPaid()` → `App\Services\CommissionLedgerMaturityService::matureForPaidInvoice($invoice)`.
+
+- **`commission_ledger.invoice_id`** (nullable FK→`invoices`, `nullOnDelete`) + indeks **unik parsial**
+  `WHERE invoice_id IS NOT NULL` (1 invoice = maks 1 baris komisi; baris "template" `invoice_id` NULL
+  boleh banyak). Migration `2026_09_02_120000`.
+- **Baris "template" v0.9.4** (Pending, `invoice_id` NULL, dibuat saat registrasi / set referrer):
+  invoice **pertama** yang lunas mematangkannya **di tempat** (Eligible + `invoice_id`, `amount`
+  di-refresh dari `CommissionRate` **saat ini** — bukan nilai template lama). Invoice berikutnya
+  genuinely `CommissionLedger::create()` baru (append-only).
+- **`recurring`**: 1 baris Eligible per invoice lunas, tanpa batas. **`limited_count`**: di-cap ke
+  `CommissionRate::limited_count_times` — hitung baris scheme=`limited_count` ber-status
+  Eligible/Approved/Paid; kalau `>= times` → invoice lunas berikutnya tidak menghasilkan baris.
+- **Skema komisi disumberkan dari baris template** (`$templateRow?->scheme`), bukan dari mana-mana lain —
+  kalau tidak ada template atau template `scheme` NULL → tidak ada komisi (backward-compatible v0.9.4
+  "referrer tanpa skema = amount NULL = tidak dibayar"), berlaku untuk SETIAP invoice sampai admin
+  melengkapi skema.
+- **`subscriptions` / `SubscriptionService` / `GenerateDueInvoices` TIDAK disentuh** — service ini murni
+  baca `$invoice->customer_id` + `$customer->ppp_package_id` + `CommissionRate`. `withoutGlobalScopes()`
+  + `where('tenant_id', $invoice->tenant_id)` (jalur webhook Xendit tanpa Auth, pola sama
+  `TaxCalculationService::writeLedgerEntry()`).
+- **Idempoten berlapis**: unik parsial DB + cek `exists()` di service + `transition()` (markPaid menang
+  sekali). `CommissionMaturityTest` 10 kasus.
+
+**DB dev BELUM di-`migrate`** (0 invoice, 1 `commission_ledger`, 1 `commission_rate` — tidak ada yang
+terdampak). Kalau branch dibatalkan `migrate:rollback --step=1`.
+
 ## Cluster Profil Paket (v0.14.x) — Konstrain NAS Produksi
 
 **WAJIB dibaca sebelum eksekusi sub-versi apa pun di cluster v0.14.x (Bandwidth Profile → IP Pool

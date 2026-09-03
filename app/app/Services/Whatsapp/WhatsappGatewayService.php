@@ -11,6 +11,7 @@ use App\Models\Referrer;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappSession;
 use App\Services\Payment\PaymentService;
+use App\Support\WhatsappPhone;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -52,7 +53,7 @@ class WhatsappGatewayService
             'reseller_id' => $customer->reseller_id,
             'customer_id' => $customer->id,
             'invoice_id' => $invoice?->id,
-            'phone_number' => $customer->phone_number,
+            'phone_number' => WhatsappPhone::normalize($customer->phone_number),
             'event_type' => $eventType,
             'template_id' => $template->id,
             'rendered_content' => $rendered,
@@ -109,7 +110,7 @@ class WhatsappGatewayService
             'reseller_id' => null,
             'customer_id' => $relatedCustomer?->id,
             'invoice_id' => null,
-            'phone_number' => $referrer->phone,
+            'phone_number' => WhatsappPhone::normalize($referrer->phone),
             'event_type' => $eventType,
             'template_id' => $template->id,
             'rendered_content' => $rendered,

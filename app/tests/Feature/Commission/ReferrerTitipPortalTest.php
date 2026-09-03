@@ -131,7 +131,7 @@ class ReferrerTitipPortalTest extends TestCase
             ->assertSet('titipStage', 'otp');
 
         $this->assertDatabaseHas('whatsapp_message_logs', [
-            'phone_number' => '081200000001',
+            'phone_number' => '6281200000001', // dinormalisasi WhatsappPhone::normalize()
             'event_type' => WhatsappEventType::ReferrerActionOtp->value,
             'customer_id' => $customer->id,
         ]);

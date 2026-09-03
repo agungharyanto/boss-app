@@ -443,25 +443,29 @@ disconnect instead reconnects on its own using the same saved creds.
 **Outbound-only this sprint** — no inbound/2-way handling at all (planned future integration point:
 Chatwoot, one shared number for all CS, tracked as backlog in `docs/ROADMAP.md`, not started).
 
-**Baileys session-health robustness (v0.9.6, investigasi OTP timeout 2026-09-02)** — gejala nyata:
-sesi "direct" (`6281389014113`, baru di-pair) `connection: 'open'` tapi TIAP IQ query ke server WhatsApp
-timeout 60s (`fetchProps`/`executeInitQueries` "Timed Out" tiap ~60s setelah connect; `sock.sendMessage()`
-juga hang 60s). Dikonfirmasi lewat kirim manual langsung ke API gateway (bypass Laravel) — **murni sisi
-Baileys/WhatsApp, BUKAN bug BOSS App**: network ke WhatsApp OK (200/352ms), container 0 restart,
-auth_state fresh, `fetchLatestBaileysVersion()` → versi WA terkini. Signature klasik **nomor
-di-restrict/rate-limit WhatsApp** (nomor baru + pemakaian linked-device + churn pair/unpair) — WhatsApp
-terima Noise handshake tapi abaikan stanza sesi ini. Tidak bisa diperbaiki dari kode; nomornya harus
-"istirahat" / re-pair / ganti nomor mapan.
-**Fix robustness yang DITERAPKAN** (`whatsapp-gateway/src/sessionManager.js`, image di-`--build`):
-- `sendMessage()` — `Promise.race` dengan **`SEND_TIMEOUT_MS = 20000`** + cek `sock.user?.id` (bukan cuma
-  flag `entry.status` yang basi) → error jelas dalam 20s, bukan hang 60s lalu cURL-28 opaque di Laravel.
-- Reconnect **exponential backoff** (5s→60s cap, reset saat `open`) — dulu tight loop tiap `close`, bikin
-  restriction makin parah.
-- `DisconnectReason.badSession` (500) diperlakukan seperti `loggedOut` — wipe auth_state + tunggu re-pair,
-  jangan loop reconnect pakai creds rusak selamanya.
-- `makeWASocket({ markOnlineOnConnect: false, syncFullHistory: false })` — fase init lebih ringan.
-- Laravel `SendWhatsappMessageJob` HTTP timeout 30→**35s** (sedikit di atas gateway's 20s fast-fail supaya
-  error nyata yang propagate). Bukan sekadar "naikkan angka" — gateway sekarang fail-fast, ini beri margin.
+**AKAR MASALAH OTP timeout = FORMAT NOMOR, bukan restriction akun (v0.9.6, dikoreksi 2026-09-03)** —
+BUG NYATA laten sejak v0.4.0: `whatsapp-gateway/src/sessionManager.js` `toJid()` cuma
+`replace(/[^0-9]/g, '')` — nomor lokal Indonesia `087884374939` jadi `087884374939@s.whatsapp.net` (JID
+TIDAK SAH). `sock.sendMessage()` ke JID bogus meng-hang saat Baileys resolve device-list-nya → timeout
+60s. **Sempat SALAH didiagnosis (2026-09-02) sebagai "nomor di-restrict WhatsApp"** — dugaan itu KELIRU.
+Dibantah 2026-09-03: `sock.onWhatsApp("6287884374939")` balas `exists:true` dalam 380ms, dan kirim ke
+`6287884374939@s.whatsapp.net` **SUKSES ~0.3 detik** (`{"success":true,"message":"Sent"}`), full jalur
+Laravel `buildAndQueueForReferrer()` + `SendWhatsappMessageJob::handle()` → `status=sent`. Sesi tidak
+pernah di-restrict — cuma JID-nya salah. (`fetchProps`/`init queries` timeout tiap ~60s memang tetap
+muncul tapi TERBUKTI tidak memblokir kirim — noise Baileys, bukan blocker.) **Message delivery memang
+belum pernah diverifikasi end-to-end sebelum ini** (lihat catatan v0.4.0 "A real WhatsApp-app phone scan
+was never performed").
+**Fix format (2 tempat, defense-in-depth):**
+- `whatsapp-gateway/src/sessionManager.js` `toJid()` — normalisasi Indonesia: `0xxx`→`62xxx`,
+  `62xxx`→tetap, `+62xxx`→`62xxx`, `8xxx`→`62 8xxx`. Chokepoint terakhir semua kirim.
+- `App\Support\WhatsappPhone::normalize()` — dipakai `WhatsappGatewayService` saat isi
+  `whatsapp_message_logs.phone_number` → nilai tersimpan + payload ke gateway sama-sama sudah `62...`.
+  `WhatsappPhoneTest` unit.
+**Fix robustness yang tetap dipertahankan** (`whatsapp-gateway/src/sessionManager.js` — benar sebagai
+hardening, bukan akar masalah): `sendMessage()` `Promise.race` `SEND_TIMEOUT_MS = 20000` + cek
+`sock.user?.id`; reconnect exponential backoff 5s→60s; `DisconnectReason.badSession` (500) di-wipe + tunggu
+re-pair; `markOnlineOnConnect:false` + `syncFullHistory:false`; Laravel `SendWhatsappMessageJob` timeout
+30→35s.
 
 **Template resolution**: `App\Services\Whatsapp\WhatsappTemplateService::resolve()` — a reseller's own
 active override (`whatsapp_message_templates.reseller_id` = that reseller) wins; otherwise falls back to

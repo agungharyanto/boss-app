@@ -70,7 +70,7 @@ class ReferrerForgotPasswordTest extends TestCase
             ->assertSet('stage', 'otp');
 
         $this->assertDatabaseHas('whatsapp_message_logs', [
-            'phone_number' => '081299998888',
+            'phone_number' => '6281299998888', // dinormalisasi
             'event_type' => WhatsappEventType::ReferrerActionOtp->value,
         ]);
 

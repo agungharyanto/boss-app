@@ -98,18 +98,21 @@ isolasi scope password_reset↔titip, kode salah ditolak, rate limit.
 - Merge `main` ke branch ini (hotfix `WhatsappMessageLog::scopeKnownEventType()` + lainnya) — bersih,
   tanpa konflik.
 
-**Amendment kedua (investigasi timeout kirim WhatsApp, 2026-09-02):**
-- OTP percobaan kirim berikutnya `failed` dengan `cURL error 28: timed out after 30002ms` (beda dari
-  "session not connected"). Investigasi: sesi "direct" `connection: open` tapi tiap IQ query ke WhatsApp
-  timeout 60s (`fetchProps`/`init queries`, dan `sendMessage` internal). Dikonfirmasi via kirim manual
-  langsung ke API gateway (bypass Laravel) → **murni sisi Baileys/WhatsApp**, nomor `6281389014113`
-  kemungkinan di-restrict WhatsApp (nomor baru + churn pairing). BUKAN bug kode BOSS App.
-- **Fix robustness** (`whatsapp-gateway/src/sessionManager.js` — image di-`--build`): `sendMessage`
-  fast-fail 20s via `Promise.race` + cek `sock.user.id`; reconnect exponential backoff (5s→60s) ganti
-  tight loop; `DisconnectReason.badSession` di-handle (wipe + re-pair, bukan loop creds rusak);
-  `markOnlineOnConnect:false` + `syncFullHistory:false`. Laravel `SendWhatsappMessageJob` timeout 30→35s.
-- **Butuh aksi Agung** (bukan kode): nomor WhatsApp "direct" harus istirahat / re-pair QR / ganti ke
-  nomor mapan sebelum OTP bisa benar-benar terkirim.
+**Amendment kedua (investigasi timeout kirim WhatsApp, 2026-09-02 → dikoreksi 2026-09-03):**
+- Gejala: OTP `failed` dengan `cURL error 28: timed out`, `sock.sendMessage()` hang 60s.
+- **Diagnosis 2026-09-02 (KELIRU): "nomor di-restrict WhatsApp".** SALAH.
+- **Akar masalah SEBENARNYA (2026-09-03): FORMAT NOMOR.** Bug laten sejak v0.4.0:
+  `whatsapp-gateway/src/sessionManager.js` `toJid()` cuma strip non-digit — nomor lokal `087884374939`
+  jadi `087884374939@s.whatsapp.net` (JID tidak sah) → Baileys hang resolve → timeout. Dibuktikan:
+  `onWhatsApp("6287884374939")` → `exists:true` 380ms; kirim ke `6287884374939@s.whatsapp.net` **SUKSES
+  ~0.3s**; full jalur Laravel `SendWhatsappMessageJob::handle()` → `status=sent`.
+- **Fix format** (2 tempat): `toJid()` normalisasi Indonesia (`0xxx`→`62xxx` dst); `App\Support\
+  WhatsappPhone::normalize()` dipakai `WhatsappGatewayService` saat isi `whatsapp_message_logs.
+  phone_number`. `WhatsappPhoneTest` unit.
+- **Fix robustness tetap dipertahankan** (hardening yang benar, bukan akar masalah): `sendMessage`
+  fast-fail 20s + cek `sock.user.id`; reconnect exponential backoff; `DisconnectReason.badSession`
+  di-handle; `markOnlineOnConnect:false`; `SendWhatsappMessageJob` timeout 30→35s.
+- OTP ke Kamisem **sekarang benar-benar terkirim** — tidak ada aksi manual yang diperlukan lagi.
 
 ---
 

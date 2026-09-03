@@ -237,8 +237,30 @@ class SessionManager {
     }
   }
 
+  /**
+   * Normalisasi nomor Indonesia ke format JID WhatsApp (kode negara, TANPA
+   * '0' di depan, TANPA '+').
+   *
+   * BUG NYATA sebelum ini (laten sejak v0.4.0, ditemukan 2026-09-03): kode
+   * lama hanya `replace(/[^0-9]/g, '')` — nomor lokal `087884374939` jadi
+   * `087884374939@s.whatsapp.net` (JID tidak sah). `sock.sendMessage()` ke
+   * JID bogus meng-hang saat Baileys mencoba resolve device-list-nya →
+   * timeout, yang sempat SALAH didiagnosis sebagai "akun di-restrict".
+   * Terbukti: kirim ke `6287884374939@s.whatsapp.net` sukses ~1 detik.
+   *
+   *   08xxxxxxxxxx  → 62 8xxxxxxxxxx
+   *   628xxxxxxxxx  → tetap
+   *   +628xxxxxxxxx → 628xxxxxxxxx
+   *   8xxxxxxxxxx   → 62 8xxxxxxxxxx (asumsi Indonesia — deployment ISP ID)
+   */
   toJid(phoneNumber) {
-    const digits = String(phoneNumber).replace(/[^0-9]/g, '');
+    let digits = String(phoneNumber).replace(/[^0-9]/g, '');
+
+    if (digits.startsWith('0')) {
+      digits = '62' + digits.slice(1);
+    } else if (!digits.startsWith('62')) {
+      digits = '62' + digits;
+    }
 
     return `${digits}@s.whatsapp.net`;
   }

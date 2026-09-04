@@ -3,6 +3,44 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## Portal Referrer diperluas + CPE offline-palsu + link "Ganti Modem" (branch `v0.9.6-fitur-titip`, belum di-merge/tag)
+
+**BAGIAN A — Portal Referrer: daftar SEMUA pelanggan (keputusan Agung).** "Pelanggan yang Saya
+Referensikan" → **"Daftar Pelanggan"** (semua, tenant-scoped) — titip cash bisa dikumpulkan siapa saja,
+tidak harus Referrer resmi.
+- `ReferrerTitipService::availabilityFor(Customer)` — syarat "direferensikan Referrer ini" **DIHAPUS**;
+  sisa: `ppp_package_id` + `CommissionRate` aktif dengan `titip_amount`. `existingForMonth(Customer)` cek
+  per-pelanggan (siapa pun), bukan per-acting-referrer.
+- `Dashboard` Livewire: query `Customer::query()` (bukan `$referrer->referrals()`) + paginasi + search
+  (nama/CID/HP). Kolom: Nama, **CID** (`customers.cid`, sudah ada), Alamat, Paket, **Referensi**
+  (Referrer resmi — konteks, bukan filter).
+- **Rekap dipecah 2 tabel**: "Rekap Komisi" (`scheme != titip`) dan "Rekap Titip" (`scheme = titip`).
+- Komisi Titip tetap diatribusi ke Referrer yang **MENCATAT** (acting), bukan Referrer resmi.
+
+**BAGIAN B — CPE "offline palsu".** Root cause: `CpeDeviceStatusSyncService` ambang online cuma 5 menit +
+probe gagal langsung = Offline → ONT dengan `PeriodicInformInterval` panjang (1-12 jam) + `connection_request`
+gagal salah dicap Offline tiap siklus. "Ganti Modem" (re-input SN sama) set Online tanpa cek kesegaran →
+itu yang "memperbaiki".
+- Fix: ambang online → `config('services.cpe.online_threshold_minutes')` default **180 (3 jam)**; probe
+  gagal HANYA set Offline kalau Inform terakhir > `offline_hard_cutoff_minutes` default **1440 (24 jam)**
+  atau tidak pernah ada — di antara: status TIDAK diubah.
+- Fix scheduler drift: `->runInBackground()->withoutOverlapping()` pada `SyncCpeDeviceStatus`/
+  `SyncCpeSignalHistory`/`SyncContainerStats` — entrypoint `while true; schedule:run; sleep 60` diblokir
+  command foreground lama → `cpe:sync-device-status` jalan ~tiap jam bukan 15 menit, `cpe:reconcile`
+  ~tiap 20 menit bukan 5.
+- **Diverifikasi live**: sync ulang → Offline `26 → 13` (13 device pulih dari false-offline).
+
+**BAGIAN C — link "Ganti Modem".** `customer-show.blade.php` link dari `route('web.cpe-devices.index')`
+(daftar umum) → `route('web.cpe-devices.show', $cpeDevice)` (detail device yang ter-bind).
+
+**BAGIAN D — ROADMAP v0.23.0 OMCI** dikoreksi: hapus SmartOLT-sebagai-pendekatan; tegaskan integrasi
+LANGSUNG ke OLT (API/CLI native vendor), 3 jalur provisioning ke depan (TR-069/OMCI/DHCP Option 43).
+
+Test: `ReferrerTitipPortalTest` (13, disesuaikan+baru), `CpeDeviceStatusSyncServiceTest` (+2 baru),
+`CustomerShowAddDeviceTest` (+1 baru).
+
+---
+
 ## v0.9.6 — Fitur Titip (Self-Service + OTP WhatsApp) (branch `v0.9.6-fitur-titip`, belum di-merge/tag)
 
 **Referrer mencatat sendiri pembayaran cash "titip" dari pelanggan yang ia referensikan → dapat komisi

@@ -85,11 +85,16 @@ class ReferrerTitipPortalTest extends TestCase
 
     private function referredCustomer(?PppPackage $package): Customer
     {
+        return $this->customerWith($package, $this->referrer->id);
+    }
+
+    private function customerWith(?PppPackage $package, ?int $referredBy = null): Customer
+    {
         return Customer::factory()->create([
             'tenant_id' => $this->tenant->id,
             'reseller_id' => null,
             'ppp_package_id' => $package?->id,
-            'referred_by_referrer_id' => $this->referrer->id,
+            'referred_by_referrer_id' => $referredBy,
         ]);
     }
 
@@ -237,19 +242,73 @@ class ReferrerTitipPortalTest extends TestCase
             ->count());
     }
 
-    public function test_a_referrer_cannot_target_a_customer_they_did_not_refer(): void
+    public function test_a_referrer_can_catat_titip_for_a_customer_they_did_not_officially_refer(): void
     {
-        $otherCustomer = Customer::factory()->create([
+        // Perluasan v0.9.6: titip tersedia untuk pelanggan mana pun yang
+        // punya paket + rate Titip aktif, siapa pun Referrer resminya.
+        $otherReferrer = Referrer::factory()->create(['tenant_id' => $this->tenant->id]);
+        $customer = $this->customerWith($this->packageWithTitipRate(3000), $otherReferrer->id);
+
+        $component = Livewire::actingAs($this->referrer->user)
+            ->test(Dashboard::class)
+            ->assertSee('Catat Titip')
+            ->call('startTitip', $customer->id)
+            ->assertSet('titipStage', 'confirm')
+            ->call('sendTitipOtp')
+            ->assertSet('titipStage', 'otp')
+            ->set('otpCode', $this->otpCodeFor($customer))
+            ->call('submitTitip')
+            ->assertSet('titipStage', '');
+
+        // Komisi diatribusi ke Referrer yang MENCATAT, bukan Referrer resmi.
+        $row = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)
+            ->where('scheme', CommissionScheme::Titip->value)
+            ->sole();
+        $this->assertSame($this->referrer->id, $row->referrer_id);
+    }
+
+    public function test_start_titip_404s_for_a_customer_in_another_tenant(): void
+    {
+        $otherTenant = Tenant::factory()->create();
+        $foreign = Customer::factory()->create(['tenant_id' => $otherTenant->id, 'reseller_id' => null]);
+
+        Livewire::actingAs($this->referrer->user)
+            ->test(Dashboard::class)
+            ->call('startTitip', $foreign->id)
+            ->assertStatus(404);
+    }
+
+    public function test_rekap_komisi_and_rekap_titip_are_separate_tables(): void
+    {
+        $referred = $this->referredCustomer($this->packageWithTitipRate(3000));
+
+        // Baris komisi referral (recurring) untuk referrer ini.
+        CommissionLedger::factory()->create([
             'tenant_id' => $this->tenant->id,
-            'reseller_id' => null,
-            'ppp_package_id' => $this->packageWithTitipRate(3000)->id,
-            'referred_by_referrer_id' => null,
+            'referrer_id' => $this->referrer->id,
+            'customer_id' => $referred->id,
+            'scheme' => CommissionScheme::Recurring->value,
+            'status' => CommissionStatus::Eligible,
+            'amount' => 5000,
+        ]);
+        // Baris titip untuk referrer ini (pelanggan lain).
+        $titipCust = $this->customerWith($this->packageWithTitipRate(3000), null);
+        CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'referrer_id' => $this->referrer->id,
+            'customer_id' => $titipCust->id,
+            'scheme' => CommissionScheme::Titip->value,
+            'status' => CommissionStatus::Eligible,
+            'amount' => 3000,
+            'payment_period' => now()->startOfMonth()->toDateString(),
         ]);
 
         Livewire::actingAs($this->referrer->user)
             ->test(Dashboard::class)
-            ->call('startTitip', $otherCustomer->id)
-            ->assertStatus(404);
+            ->assertSeeInOrder(['Rekap Komisi', 'Rekap Titip'])
+            ->assertViewHas('commissionEntries', fn ($c) => $c->count() === 1 && $c->first()->scheme->value === 'recurring')
+            ->assertViewHas('titipEntries', fn ($t) => $t->count() === 1 && $t->first()->scheme->value === 'titip');
     }
 
     public function test_dashboard_has_no_edit_or_delete_action_for_titip_rows(): void

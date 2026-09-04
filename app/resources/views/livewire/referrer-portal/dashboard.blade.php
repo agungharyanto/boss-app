@@ -47,9 +47,12 @@
         </form>
     </div>
 
-    {{-- ---------- Pelanggan yang Saya Referensikan ---------- --}}
+    {{-- ---------- Daftar Pelanggan (SEMUA) + Catat Titip ---------- --}}
     <div class="p-4 bg-white border border-gray-200 rounded-md">
-        <h2 class="text-lg font-semibold text-gray-800 mb-3">{{ __('Pelanggan yang Saya Referensikan') }}</h2>
+        <h2 class="text-lg font-semibold text-gray-800 mb-1">{{ __('Daftar Pelanggan') }}</h2>
+        <p class="text-xs text-gray-500 mb-3">
+            {{ __('Titip pembayaran cash bisa Anda catat untuk pelanggan mana pun yang punya paket & rate Titip aktif — tidak harus pelanggan yang Anda referensikan.') }}
+        </p>
 
         @if ($titipSuccessMessage)
             <p class="mb-3 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2">
@@ -63,23 +66,31 @@
             </p>
         @endif
 
+        <input type="text" wire:model.live.debounce.300ms="search"
+            placeholder="{{ __('Cari nama / CID / nomor HP...') }}"
+            class="mb-3 block w-full max-w-sm rounded-md border-gray-300 shadow-sm text-sm">
+
         <div class="overflow-x-auto border border-gray-200 rounded-md">
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Nama') }}</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status Registrasi') }}</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Tanggal') }}</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('CID') }}</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Alamat') }}</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Paket') }}</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Referensi') }}</th>
                         <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">{{ __('Titip') }}</th>
                     </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
-                    @forelse ($referrals as $customer)
+                    @forelse ($customers as $customer)
                         @php $avail = $titipAvailability[$customer->id]; @endphp
-                        <tr wire:key="referral-{{ $customer->id }}">
+                        <tr wire:key="cust-{{ $customer->id }}">
                             <td class="px-4 py-2 text-sm text-gray-800">{{ $customer->name }}</td>
-                            <td class="px-4 py-2 text-sm text-gray-600">{{ $customer->registration_status->label() }}</td>
-                            <td class="px-4 py-2 text-sm text-gray-600">{{ $customer->created_at->format('d/m/Y') }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-600 font-mono">{{ $customer->cid ?? '—' }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-600">{{ $customer->address ?: '—' }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-600">{{ $customer->pppPackage?->name ?? '—' }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-500">{{ $customer->referredBy?->name ?? '—' }}</td>
                             <td class="px-4 py-2 text-sm text-right">
                                 @if ($avail['available'])
                                     <button type="button" wire:click="startTitip({{ $customer->id }})"
@@ -95,14 +106,16 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="4" class="px-4 py-6 text-center text-sm text-gray-500">
-                                {{ __('Belum ada pelanggan yang Anda referensikan.') }}
+                            <td colspan="6" class="px-4 py-6 text-center text-sm text-gray-500">
+                                {{ __('Tidak ada pelanggan.') }}
                             </td>
                         </tr>
                     @endforelse
                 </tbody>
             </table>
         </div>
+
+        <div class="mt-3">{{ $customers->links() }}</div>
     </div>
 
     {{-- ---------- Modal Alur Catat Titip ---------- --}}
@@ -116,6 +129,7 @@
 
                     <div class="text-sm text-gray-700 space-y-1 bg-gray-50 border border-gray-200 rounded-md p-3">
                         <p><span class="text-gray-500">{{ __('Pelanggan') }}:</span> <span class="font-medium">{{ $confirmCustomer->name }}</span></p>
+                        <p><span class="text-gray-500">{{ __('CID') }}:</span> <span class="font-mono">{{ $confirmCustomer->cid ?? '—' }}</span></p>
                         <p><span class="text-gray-500">{{ __('Alamat') }}:</span> {{ $confirmCustomer->address ?: '—' }}</p>
                         <p><span class="text-gray-500">{{ __('Paket') }}:</span> {{ $confirmCustomer->pppPackage?->name ?: '—' }}</p>
                         <p><span class="text-gray-500">{{ __('Komisi Titip') }}:</span>
@@ -130,7 +144,7 @@
                     @if ($titipDuplicateWarning)
                         <div class="text-sm bg-amber-50 border border-amber-200 rounded-md p-3 space-y-2">
                             <p class="text-amber-800">
-                                {{ __('Anda sudah pernah mencatat Titip untuk pelanggan ini di bulan ini.') }}
+                                {{ __('Sudah ada catatan Titip untuk pelanggan ini di bulan ini (mungkin dicatat orang lain).') }}
                             </p>
                             <label class="flex items-start gap-2 text-amber-900">
                                 <input type="checkbox" wire:model="titipDuplicateAcknowledged" class="mt-0.5 rounded border-gray-300">
@@ -193,9 +207,10 @@
         </div>
     @endif
 
-    {{-- ---------- Rekap Komisi ---------- --}}
+    {{-- ---------- Rekap Komisi (referral resmi, scheme != titip) ---------- --}}
     <div class="p-4 bg-white border border-gray-200 rounded-md">
-        <h2 class="text-lg font-semibold text-gray-800 mb-3">{{ __('Rekap Komisi') }}</h2>
+        <h2 class="text-lg font-semibold text-gray-800 mb-1">{{ __('Rekap Komisi') }}</h2>
+        <p class="text-xs text-gray-500 mb-3">{{ __('Komisi dari pelanggan yang Anda referensikan (Per Bulan / X-Kali).') }}</p>
 
         <div class="overflow-x-auto border border-gray-200 rounded-md">
             <table class="min-w-full divide-y divide-gray-200">
@@ -215,9 +230,7 @@
                         <tr wire:key="commission-{{ $entry->id }}">
                             <td class="px-4 py-2 text-sm text-gray-800">{{ $entry->customer?->name ?? '—' }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $entry->scheme?->label() ?? '—' }}</td>
-                            <td class="px-4 py-2 text-sm text-gray-600">
-                                {{ $entry->payment_period?->translatedFormat('F Y') ?? '—' }}
-                            </td>
+                            <td class="px-4 py-2 text-sm text-gray-600">{{ $entry->payment_period?->translatedFormat('F Y') ?? '—' }}</td>
                             <td class="px-4 py-2 text-sm text-right text-gray-800">
                                 {{ $entry->amount !== null ? 'Rp '.number_format((float) $entry->amount, 0, ',', '.') : '—' }}
                             </td>
@@ -229,7 +242,49 @@
                     @empty
                         <tr>
                             <td colspan="6" class="px-4 py-6 text-center text-sm text-gray-500">
-                                {{ __('Belum ada komisi tercatat.') }}
+                                {{ __('Belum ada komisi referral tercatat.') }}
+                            </td>
+                        </tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {{-- ---------- Rekap Titip (scheme = titip, milik Referrer ini) ---------- --}}
+    <div class="p-4 bg-white border border-gray-200 rounded-md">
+        <h2 class="text-lg font-semibold text-gray-800 mb-1">{{ __('Rekap Titip') }}</h2>
+        <p class="text-xs text-gray-500 mb-3">{{ __('Titip pembayaran cash yang Anda catat (pelanggan mana pun).') }}</p>
+
+        <div class="overflow-x-auto border border-gray-200 rounded-md">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pelanggan') }}</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Periode') }}</th>
+                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">{{ __('Nominal') }}</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status') }}</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Dicatat') }}</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    @forelse ($titipEntries as $entry)
+                        @php [$badgeClass, $badgeLabel] = $statusBadge($entry->status); @endphp
+                        <tr wire:key="titip-{{ $entry->id }}">
+                            <td class="px-4 py-2 text-sm text-gray-800">{{ $entry->customer?->name ?? '—' }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-600">{{ $entry->payment_period?->translatedFormat('F Y') ?? '—' }}</td>
+                            <td class="px-4 py-2 text-sm text-right text-gray-800">
+                                {{ $entry->amount !== null ? 'Rp '.number_format((float) $entry->amount, 0, ',', '.') : '—' }}
+                            </td>
+                            <td class="px-4 py-2 text-sm">
+                                <span class="inline-block px-2 py-0.5 text-xs font-medium rounded {{ $badgeClass }}">{{ $badgeLabel }}</span>
+                            </td>
+                            <td class="px-4 py-2 text-sm text-gray-500">{{ $entry->created_at->format('d/m/Y') }}</td>
+                        </tr>
+                    @empty
+                        <tr>
+                            <td colspan="5" class="px-4 py-6 text-center text-sm text-gray-500">
+                                {{ __('Belum ada titip tercatat.') }}
                             </td>
                         </tr>
                     @endforelse

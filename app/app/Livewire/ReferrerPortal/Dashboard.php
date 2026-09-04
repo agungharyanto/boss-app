@@ -2,6 +2,7 @@
 
 namespace App\Livewire\ReferrerPortal;
 
+use App\Enums\CommissionScheme;
 use App\Models\Customer;
 use App\Models\Referrer;
 use App\Services\Commission\ReferrerActionOtpService;
@@ -11,26 +12,34 @@ use Illuminate\Contracts\View\View;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Validate;
 use Livewire\Component;
+use Livewire\WithPagination;
 
 /**
- * v0.9.2 — profil (nomor HP read-only, nama editable), daftar pelanggan
- * yang direferensikan, dan Rekap Komisi.
+ * v0.9.2 — profil (nomor HP read-only, nama editable) + Rekap Komisi.
  *
- * v0.9.6 — Rekap Komisi diisi (SEMUA baris `commission_ledger` milik
- * Referrer, bukan `->first()`), plus alur "Catat Titip" self-service:
- * layar konfirmasi detail → OTP WhatsApp ke Referrer sendiri → submit →
- * baris `commission_ledger` scheme=titip status=eligible.
+ * v0.9.6 — alur "Catat Titip" self-service (konfirmasi detail → OTP WhatsApp
+ * ke Referrer sendiri → submit → baris `commission_ledger` scheme=titip
+ * status=eligible).
  *
- * CREATE-ONLY (CLAUDE.md): tidak ada aksi edit/hapus baris komisi di
- * portal ini. Koreksi = ranah admin.
+ * v0.9.6 (perluasan, keputusan Agung) — daftar pelanggan diperluas dari
+ * "pelanggan yang direferensikan Referrer ini" jadi **SEMUA pelanggan
+ * (tenant-scoped)**: titip pembayaran cash bisa dikumpulkan siapa saja
+ * (Sales/Teknisi/Agent), tidak harus Referrer resmi pelanggan itu. Kolom
+ * "Referensi" (Referrer resmi) hanya konteks, bukan filter. Rekap dipecah
+ * jadi 2 tabel: "Rekap Komisi" (scheme != titip) dan "Rekap Titip"
+ * (scheme = titip).
+ *
+ * CREATE-ONLY (CLAUDE.md): tidak ada aksi edit/hapus baris komisi di sini.
  *
  * Referrer aktif di-resolve sekali oleh EnsureReferrerPortalAccess dan
- * disimpan di request (`referrer` attribute) — komponen ini membacanya
- * dari sana, lalu re-authorize sendiri (defense in depth).
+ * disimpan di request (`referrer` attribute) — komponen ini membacanya dari
+ * sana, lalu re-authorize sendiri (defense in depth).
  */
 #[Layout('layouts.referrer-portal')]
 class Dashboard extends Component
 {
+    use WithPagination;
+
     public int $referrerId;
 
     #[Validate('required|string|max:255')]
@@ -42,6 +51,8 @@ class Dashboard extends Component
 
     public bool $nameUpdated = false;
 
+    public string $search = '';
+
     // --- Alur Catat Titip ---------------------------------------------------
 
     /** Pelanggan yang alur Titip-nya sedang terbuka; null = tidak ada. */
@@ -52,10 +63,9 @@ class Dashboard extends Component
 
     public string $otpCode = '';
 
-    /** Sudah ada entri Titip bulan ini untuk pelanggan ini? */
+    /** Sudah ada entri Titip bulan ini untuk pelanggan ini (oleh siapa pun)? */
     public bool $titipDuplicateWarning = false;
 
-    /** Referrer sudah men-centang "saya tetap ingin lanjut" pada peringatan duplikat. */
     public bool $titipDuplicateAcknowledged = false;
 
     public ?string $titipSuccessMessage = null;
@@ -66,9 +76,6 @@ class Dashboard extends Component
 
     public function mount(): void
     {
-        // Middleware EnsureReferrerPortalAccess sudah menaruh Referrer aktif
-        // di request; fallback ke lookup by auth id (defense in depth +
-        // testable tanpa menjalankan middleware).
         $referrer = request()->attributes->get('referrer')
             ?? Referrer::where('user_id', auth()->id())->where('is_active', true)->first();
 
@@ -78,6 +85,11 @@ class Dashboard extends Component
         $this->name = $referrer->name;
         $this->phone = $referrer->phone;
         $this->typeLabel = $referrer->type->label();
+    }
+
+    public function updatingSearch(): void
+    {
+        $this->resetPage();
     }
 
     public function updateName(): void
@@ -99,15 +111,15 @@ class Dashboard extends Component
         $this->titipSuccessMessage = null;
         $this->titipErrorMessage = null;
 
-        $referrer = $this->referrer();
-        $customer = $this->ownReferral($referrer, $customerId);
+        $this->referrer(); // re-authorize
+        $customer = $this->resolveCustomer($customerId);
 
-        $availability = $titip->availabilityFor($referrer, $customer);
+        $availability = $titip->availabilityFor($customer);
         abort_unless($availability['available'], 422, $availability['reason'] ?? 'Titip tidak tersedia.');
 
         $this->titipCustomerId = $customerId;
         $this->titipStage = 'confirm';
-        $this->titipDuplicateWarning = $titip->existingForMonth($referrer, $customer) !== null;
+        $this->titipDuplicateWarning = $titip->existingForMonth($customer) !== null;
     }
 
     // --- Titip: langkah 2 (kirim OTP) ------------------------------------
@@ -125,7 +137,7 @@ class Dashboard extends Component
         }
 
         $referrer = $this->referrer();
-        $customer = $this->ownReferral($referrer, $this->titipCustomerId);
+        $customer = $this->resolveCustomer($this->titipCustomerId);
 
         try {
             $otp->issue($referrer, $this->titipScope(), "mencatat titip pembayaran untuk {$customer->name}", $customer);
@@ -147,7 +159,7 @@ class Dashboard extends Component
         }
 
         $referrer = $this->referrer();
-        $customer = $this->ownReferral($referrer, $this->titipCustomerId);
+        $customer = $this->resolveCustomer($this->titipCustomerId);
 
         try {
             $otp->issue($referrer, $this->titipScope(), "mencatat titip pembayaran untuk {$customer->name}", $customer);
@@ -170,7 +182,7 @@ class Dashboard extends Component
         }
 
         $referrer = $this->referrer();
-        $customer = $this->ownReferral($referrer, $this->titipCustomerId);
+        $customer = $this->resolveCustomer($this->titipCustomerId);
 
         try {
             $otp->verify($referrer, $this->titipScope(), $this->otpCode);
@@ -183,9 +195,6 @@ class Dashboard extends Component
         try {
             $ledger = $titip->record($referrer, $customer);
         } catch (\RuntimeException $e) {
-            // Titip berhenti tersedia di antara startTitip() dan sekarang
-            // (mis. admin menghapus rate). OTP sudah terlanjur dipakai —
-            // batal dengan pesan jelas.
             $this->resetTitipFlow();
             $this->titipErrorMessage = $e->getMessage();
 
@@ -226,9 +235,14 @@ class Dashboard extends Component
         return $referrer;
     }
 
-    private function ownReferral(Referrer $referrer, int $customerId): Customer
+    /**
+     * Pelanggan mana pun di tenant yang sama (global scope BelongsToTenant
+     * memfilter otomatis lewat `Auth::user()->tenant_id`). BEDA dari v0.9.6
+     * awal yang membatasi ke pelanggan yang direferensikan Referrer ini.
+     */
+    private function resolveCustomer(int $customerId): Customer
     {
-        $customer = $referrer->referrals()->find($customerId);
+        $customer = Customer::query()->find($customerId);
 
         abort_if($customer === null, 404);
 
@@ -240,28 +254,40 @@ class Dashboard extends Component
         $referrer = Referrer::findOrFail($this->referrerId);
         $titip = app(ReferrerTitipService::class);
 
-        $referrals = $referrer->referrals()->with('pppPackage')->latest()->get();
+        $customers = Customer::query()
+            ->with(['pppPackage:id,name', 'referredBy:id,name'])
+            ->when($this->search !== '', function ($q) {
+                $s = '%'.trim($this->search).'%';
+                $q->where(fn ($w) => $w->where('name', 'like', $s)
+                    ->orWhere('cid', 'like', $s)
+                    ->orWhere('phone_number', 'like', $s));
+            })
+            ->orderBy('name')
+            ->paginate(15);
 
-        $titipAvailability = $referrals->mapWithKeys(
-            fn (Customer $c) => [$c->id => $titip->availabilityFor($referrer, $c)]
+        $titipAvailability = collect($customers->items())->mapWithKeys(
+            fn (Customer $c) => [$c->id => $titip->availabilityFor($c)]
         );
 
-        $commissionEntries = $referrer->commissionLedgerEntries()
+        $ledger = $referrer->commissionLedgerEntries()
             ->with('customer:id,name')
             ->orderByDesc('id')
             ->get();
 
+        $isTitip = fn ($e) => $e->scheme?->value === CommissionScheme::Titip->value;
+
         $confirmCustomer = $this->titipCustomerId !== null
-            ? $referrals->firstWhere('id', $this->titipCustomerId)
+            ? Customer::query()->find($this->titipCustomerId)
             : null;
 
         return view('livewire.referrer-portal.dashboard', [
-            'referrals' => $referrals,
+            'customers' => $customers,
             'titipAvailability' => $titipAvailability,
-            'commissionEntries' => $commissionEntries,
+            'commissionEntries' => $ledger->reject($isTitip)->values(),
+            'titipEntries' => $ledger->filter($isTitip)->values(),
             'confirmCustomer' => $confirmCustomer,
             'confirmAmount' => $confirmCustomer !== null
-                ? ($titipAvailability[$confirmCustomer->id]['amount'] ?? null)
+                ? ($titip->availabilityFor($confirmCustomer)['amount'] ?? null)
                 : null,
         ]);
     }

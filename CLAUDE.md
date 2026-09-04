@@ -1862,6 +1862,36 @@ devices), and `nas.last_ping_at` for the vantage-point NAS stayed
 completely unchanged across the run — zero ping traffic left the server,
 confirming the architectural goal.
 
+**Amendment (2026-09-04) — "offline palsu", investigasi + fix.** Agung
+melihat banyak CPE dicap Offline yang sebenarnya online — "cukup input ulang
+SN yang SAMA lewat 'Ganti Modem', langsung Online lagi". Root cause:
+1. **Ambang `_lastInform` cuma 5 menit + probe gagal LANGSUNG = Offline.**
+   ONT nyata banyak yang `PeriodicInformInterval`-nya 1-12 jam, DAN
+   `connection_request`-nya gagal (mismatch `cwmp.connectionRequestAuth` /
+   batasan routing tunnel — sudah didokumentasikan di v0.7.7 di atas). Jadi
+   device online tapi Inform-nya "stale" per 5-menit-window + probe gagal →
+   salah dicap Offline TIAP siklus sync. "Ganti Modem" (`CpeBindingService::
+   bindFromLegacyImport()` → `findByStoredSerial()`) set Online begitu
+   GenieACS cuma KENAL serial-nya (tanpa cek kesegaran Inform) → itu yang
+   bikin re-input SN "memperbaiki".
+   **Fix**: ambang online → `config('services.cpe.online_threshold_minutes')`
+   default **180 (3 jam)**; probe gagal HANYA set Offline kalau Inform
+   terakhir > `offline_hard_cutoff_minutes` default **1440 (24 jam)** atau
+   tidak pernah ada — di antara dua ambang, probe gagal **tidak mengubah
+   status** ("jangan bohong offline kalau belum yakin").
+2. **Scheduler drift.** `boss-scheduler` entrypoint = `while true; do
+   schedule:run; sleep 60; done` — command foreground yang lama (`cpe:sync-
+   device-status` ~2.5min, `cpe:sync-signal-history` ~10min) **memblokir
+   seluruh loop**, jadi `schedule:run` berikutnya telat menit-an dan
+   MELEWATI slot cron-nya. Observasi nyata: `cpe:sync-device-status` jalan
+   ~tiap JAM (bukan 15 menit), `cpe:reconcile` ~tiap 20 menit (bukan 5).
+   **Fix**: `->runInBackground()->withoutOverlapping()` pada `SyncCpeDeviceStatus`,
+   `SyncCpeSignalHistory`, `SyncContainerStats` — fork biar loop bebas hit
+   tiap slot tepat waktu. (Entrypoint loop-nya sendiri tidak disentuh — di
+   luar scope.)
+Selebihnya command-nya SENDIRI berfungsi (run manual: `Synced: 350 | Online:
+324 | Offline: 26`) — bukan job mati diam-diam.
+
 **Real-customer end-to-end verification of v0.7.4/v0.7.5, done deliberately
 against production data (Agung's explicit call, with a documented revert
 plan)**: customer Natofik (`085291591491`, `cpe_devices` serial
@@ -6258,9 +6288,15 @@ perpanjangan layanan** (billing masih manual/MixRadius, `subscriptions`/`Subscri
   (`WHERE invoice_id IS NOT NULL`) tidak melindunginya dari duplikat. Guard duplikat = app-layer
   (`ReferrerTitipService::existingForMonth()`), **peringatan yang bisa di-override**, bukan hard block —
   admin/kasus sah tetap boleh 2 entri per bulan.
-- **`App\Services\Commission\ReferrerTitipService`** — `availabilityFor()` (tombol "Catat Titip" hanya
-  muncul kalau pelanggan direferensikan Referrer ini + punya `ppp_package_id` + `CommissionRate` aktif
-  dengan `titip_amount`); `record()` → `commission_ledger` baris baru `scheme=titip status=eligible`
+- **`App\Services\Commission\ReferrerTitipService`** — `availabilityFor(Customer)` (tombol "Catat Titip"
+  muncul untuk pelanggan MANA PUN — tenant yang sama — yang punya `ppp_package_id` + `CommissionRate`
+  aktif dengan `titip_amount`). **Perluasan 2026-09-04 (keputusan Agung)**: syarat "direferensikan
+  Referrer ini" DIHAPUS — cash titip bisa dikumpulkan Sales/Teknisi/Agent mana pun, komisi diatribusi ke
+  yang MENCATAT lewat `record($actingReferrer, $customer)`. Portal `Dashboard` sekarang list
+  `Customer::query()` (paginasi + search nama/CID/HP), kolom Nama/CID/Alamat/Paket/Referensi(resmi), dan
+  Rekap dipecah 2 tabel: "Rekap Komisi" (`scheme != titip`) + "Rekap Titip" (`scheme = titip`).
+  `existingForMonth(Customer)` cek per-pelanggan (siapa pun), bukan per-acting-referrer.
+  `record()` → `commission_ledger` baris baru `scheme=titip status=eligible`
   (langsung Eligible — OTP = jaring pengaman, bukan approval admin), `amount` dari
   `CommissionRate.titip_amount` (**tidak pernah diketik manual**), `payment_period` bulan berjalan.
   Tenant-eksplisit.

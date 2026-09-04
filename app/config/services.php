@@ -180,6 +180,20 @@ return [
         'nbi_internal_ip' => env('GENIEACS_NBI_INTERNAL_IP'),
     ],
 
+    // Ambang batas status online/offline CPE (CpeDeviceStatusSyncService).
+    // `online_threshold_minutes` — device yang Inform lebih baru dari ini
+    // langsung dianggap Online tanpa probe. Default 180 (3 jam) supaya ONT
+    // dengan PeriodicInformInterval panjang (banyak vendor 1-12 jam) tidak
+    // salah dicap Offline setiap siklus sync 15 menit.
+    // `offline_hard_cutoff_minutes` — cuma setelah TIDAK ada Inform selama
+    // ini (DAN probe connection_request gagal) device benar-benar di-set
+    // Offline. Di antara dua ambang: probe gagal TIDAK mengubah status
+    // (jangan bohong "offline" kalau belum yakin).
+    'cpe' => [
+        'online_threshold_minutes' => (int) env('CPE_ONLINE_THRESHOLD_MINUTES', 180),
+        'offline_hard_cutoff_minutes' => (int) env('CPE_OFFLINE_HARD_CUTOFF_MINUTES', 1440),
+    ],
+
     // v0.8.2 — LibreNMS REST API (v0.8.1 already brought the container up
     // with token auth, see .env's LIBRENMS_API_URL/LIBRENMS_API_TOKEN).
     // Container-to-container URL only, no host port published — same

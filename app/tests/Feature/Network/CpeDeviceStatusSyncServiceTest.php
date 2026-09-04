@@ -99,7 +99,7 @@ class CpeDeviceStatusSyncServiceTest extends TestCase
             'status' => CpeDeviceStatus::Offline,
         ]);
 
-        $staleTimestamp = now()->subHours(2)->startOfSecond();
+        $staleTimestamp = now()->subHours(4)->startOfSecond();
         $freshAfterProbe = now()->addSeconds(30)->startOfSecond();
 
         $this->fakeGenieAcs(
@@ -127,7 +127,8 @@ class CpeDeviceStatusSyncServiceTest extends TestCase
             'status' => CpeDeviceStatus::Online,
         ]);
 
-        $staleTimestamp = now()->subHours(2)->startOfSecond();
+        // Inform terakhir sudah > hard-cutoff 24 jam — probe gagal -> Offline.
+        $staleTimestamp = now()->subHours(30)->startOfSecond();
 
         // Recheck shows the EXACT same stale timestamp — probe never landed.
         $this->fakeGenieAcs([
@@ -155,7 +156,7 @@ class CpeDeviceStatusSyncServiceTest extends TestCase
         ]);
 
         $this->fakeGenieAcs([
-            $this->genieAcsDevice('OUI-PC-STALE-PROBE', 'http://10.1.1.9:58000', now()->subHours(1)->toIso8601String()),
+            $this->genieAcsDevice('OUI-PC-STALE-PROBE', 'http://10.1.1.9:58000', now()->subHours(4)->toIso8601String()),
         ]);
 
         app(CpeDeviceStatusSyncService::class)->syncAll();
@@ -181,7 +182,7 @@ class CpeDeviceStatusSyncServiceTest extends TestCase
         ]);
 
         $this->fakeGenieAcs([
-            $this->genieAcsDevice('OUI-PC-STALE-DEVICEROOT', 'http://10.1.1.9:58000', now()->subHours(1)->toIso8601String()),
+            $this->genieAcsDevice('OUI-PC-STALE-DEVICEROOT', 'http://10.1.1.9:58000', now()->subHours(4)->toIso8601String()),
         ]);
 
         app(CpeDeviceStatusSyncService::class)->syncAll();
@@ -203,7 +204,7 @@ class CpeDeviceStatusSyncServiceTest extends TestCase
         ]);
 
         $this->fakeGenieAcs([
-            $this->genieAcsDevice('OUI-PC-NOURL', null, now()->subHours(1)->toIso8601String()),
+            $this->genieAcsDevice('OUI-PC-NOURL', null, now()->subHours(4)->toIso8601String()),
         ]);
 
         $result = app(CpeDeviceStatusSyncService::class)->syncAll();
@@ -244,7 +245,7 @@ class CpeDeviceStatusSyncServiceTest extends TestCase
         ]);
 
         $this->fakeGenieAcs([
-            $this->genieAcsDevice('OUI-PC-FLIPPING', 'http://10.1.1.5:58000', now()->subHours(2)->toIso8601String()),
+            $this->genieAcsDevice('OUI-PC-FLIPPING', 'http://10.1.1.5:58000', now()->subHours(30)->toIso8601String()),
         ]);
 
         $before = now()->startOfSecond();
@@ -282,6 +283,56 @@ class CpeDeviceStatusSyncServiceTest extends TestCase
         $this->assertSame(0, $result['synced']);
         $this->assertSame(1, $result['skipped']);
         Sleep::assertNeverSlept();
+    }
+
+    /**
+     * "Offline palsu" fix (2026-09-04): ONT yang Inform tiap beberapa jam
+     * (masih < ambang online 3 jam) TIDAK boleh di-probe atau di-cap
+     * Offline — langsung Online.
+     */
+    public function test_device_informing_within_the_online_threshold_stays_online_without_probe(): void
+    {
+        $device = $this->tenantDevice([
+            'genieacs_device_id' => 'OUI-PC-2H',
+            'status' => CpeDeviceStatus::Offline,
+        ]);
+
+        $this->fakeGenieAcs([
+            $this->genieAcsDevice('OUI-PC-2H', 'http://10.1.1.5:58000', now()->subHours(2)->toIso8601String()),
+        ]);
+
+        $result = app(CpeDeviceStatusSyncService::class)->syncAll();
+
+        $this->assertSame(1, $result['online']);
+        $this->assertSame(0, $result['offline']);
+        $this->assertSame(CpeDeviceStatus::Online, $device->fresh()->status);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/tasks'));
+        Sleep::assertNeverSlept();
+    }
+
+    /**
+     * Probe gagal untuk device yang Inform-nya di antara ambang online
+     * (3 jam) dan hard-cutoff (24 jam) → status TIDAK diubah (jangan bohong
+     * "offline"). Ini yang dulu bikin device online salah di-cap Offline.
+     */
+    public function test_probe_failure_does_not_flip_a_device_that_informed_within_the_hard_cutoff(): void
+    {
+        $device = $this->tenantDevice([
+            'genieacs_device_id' => 'OUI-PC-GRACE',
+            'status' => CpeDeviceStatus::Online,
+        ]);
+
+        // Inform 6 jam lalu: stale (> 3 jam) tapi masih < 24 jam. Probe gagal
+        // (recheck timestamp sama).
+        $this->fakeGenieAcs([
+            $this->genieAcsDevice('OUI-PC-GRACE', 'http://10.1.1.9:58000', now()->subHours(6)->toIso8601String()),
+        ]);
+
+        $result = app(CpeDeviceStatusSyncService::class)->syncAll();
+
+        $this->assertSame(0, $result['offline']);
+        $this->assertSame(1, $result['skipped']);
+        $this->assertSame(CpeDeviceStatus::Online, $device->fresh()->status);
     }
 
     public function test_a_device_missing_from_the_genieacs_response_entirely_is_skipped(): void

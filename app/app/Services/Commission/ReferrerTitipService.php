@@ -12,15 +12,17 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Carbon;
 
 /**
- * v0.9.6 — Fitur Titip. Referrer mencatat sendiri bahwa pelanggan yang ia
- * referensikan membayar cash "titip" ke dia; ia dapat komisi Titip
+ * v0.9.6 — Fitur Titip. Referrer mencatat sendiri bahwa seorang pelanggan
+ * membayar cash "titip" ke dia; ia dapat komisi Titip
  * (`CommissionRate.titip_amount`).
  *
  * Batasan (dikonfirmasi Agung):
- *  - HANYA untuk pelanggan yang: (a) direferensikan Referrer ini,
- *    (b) punya `ppp_package_id`, (c) paket itu punya `CommissionRate` aktif
- *    dengan `titip_amount` terisi. Pelanggan lain → tombol Titip
- *    tidak muncul.
+ *  - Tersedia untuk pelanggan MANA PUN (tenant yang sama) yang: (a) punya
+ *    `ppp_package_id`, (b) paket itu punya `CommissionRate` aktif dengan
+ *    `titip_amount` terisi. **Syarat "direferensikan Referrer ini" DIHAPUS
+ *    (perluasan v0.9.6)** — cash titip bisa dikumpulkan Sales/Teknisi/Agent
+ *    mana pun, tidak harus Referrer resmi pelanggan itu. Komisi diatribusi
+ *    ke Referrer yang MENCATAT (acting), lewat `record($referrer, ...)`.
  *  - Nominal SELALU dari `CommissionRate.titip_amount` — tidak pernah
  *    diketik manual.
  *  - Baris `commission_ledger` langsung `status = Eligible` (OTP WhatsApp
@@ -37,17 +39,18 @@ use Illuminate\Support\Carbon;
 class ReferrerTitipService
 {
     /**
+     * v0.9.6 (perluasan) — Titip tersedia untuk pelanggan MANA PUN yang
+     * punya `ppp_package_id` + `CommissionRate` aktif dengan `titip_amount`.
+     * Syarat "direferensikan Referrer ini" DIHAPUS (keputusan Agung): cash
+     * titip bisa dikumpulkan siapa saja, tidak harus Referrer resmi.
+     *
      * @return array{available: bool, reason: ?string, amount: ?float, package_name: ?string}
      */
-    public function availabilityFor(Referrer $referrer, Customer $customer): array
+    public function availabilityFor(Customer $customer): array
     {
         $deny = fn (string $reason): array => [
             'available' => false, 'reason' => $reason, 'amount' => null, 'package_name' => null,
         ];
-
-        if ($customer->referred_by_referrer_id !== $referrer->id) {
-            return $deny('Pelanggan ini tidak Anda referensikan.');
-        }
 
         if ($customer->ppp_package_id === null) {
             return $deny('Belum tersedia untuk pelanggan ini (paket PPP belum diatur admin).');
@@ -73,16 +76,18 @@ class ReferrerTitipService
     }
 
     /**
-     * Baris Titip yang sudah tercatat untuk (referrer, customer) di bulan
-     * `$period`. Dipakai UI sebagai peringatan duplikat — BUKAN untuk
-     * memblokir.
+     * Baris Titip yang sudah tercatat untuk `$customer` di bulan `$period`
+     * — oleh SIAPA PUN (bukan cuma acting referrer). Dipakai UI sebagai
+     * peringatan duplikat: satu pelanggan biasanya bayar cash sekali per
+     * bulan, jadi kalau sudah ada catatan (Referrer lain sekalipun),
+     * tampilkan peringatan. BUKAN hard block — admin/kasus sah tetap bisa
+     * override (mis. cicilan).
      */
-    public function existingForMonth(Referrer $referrer, Customer $customer, ?Carbon $period = null): ?CommissionLedger
+    public function existingForMonth(Customer $customer, ?Carbon $period = null): ?CommissionLedger
     {
         $period ??= Carbon::now();
 
         return CommissionLedger::withoutGlobalScopes()
-            ->where('referrer_id', $referrer->id)
             ->where('customer_id', $customer->id)
             ->where('scheme', CommissionScheme::Titip->value)
             ->whereDate('payment_period', $period->copy()->startOfMonth()->toDateString())
@@ -100,7 +105,7 @@ class ReferrerTitipService
      */
     public function record(Referrer $referrer, Customer $customer): CommissionLedger
     {
-        $availability = $this->availabilityFor($referrer, $customer);
+        $availability = $this->availabilityFor($customer);
 
         if (! $availability['available']) {
             throw new \RuntimeException($availability['reason'] ?? 'Titip tidak tersedia untuk pelanggan ini.');

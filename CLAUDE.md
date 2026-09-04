@@ -112,7 +112,21 @@ uncommitted / belum di-review** — WAJIB:
 2. Ingatkan eksplisit ke Agung di laporan sebelum lanjut — sebutkan hash commit-nya (contoh sesi
    2026-09-02: v0.9.6 di-commit `b2ad70d` sebelum branch `manajemen-user` dibuat).
 
-**Preseden insiden "kerja selesai tapi lupa merge" (jangan tambah nomor 5):**
+**ATURAN TAMBAHAN — JANGAN MULAI KERJAAN TAK TERKAIT SEBELUM CLOSE (ditegaskan Agung, insiden ke-5):**
+Sebelum membuat branch baru untuk topik yang **TIDAK terkait langsung** dengan sprint yang sedang
+berjalan, **WAJIB merge+tag branch yang sedang berjalan itu dulu ke `main`** — BUKAN cuma commit. Kalau
+perbaikan/instruksi baru **sejalan** dengan sprint yang sedang berjalan (mis. masih sama-sama modul
+komisi, masih sama-sama modul WhatsApp), boleh digabung ke branch yang sama tanpa closure dulu — closure
+paksa HANYA untuk topik yang genuinely tidak nyambung (mis. lagi di tengah sprint Komisi, lalu diminta
+kerjakan WhatsApp Gateway).
+
+**Kalau ada instruksi masuk untuk topik baru padahal branch sekarang masih open/belum di-merge — STOP dan
+tanya balik ke Agung, JANGAN langsung buat branch baru dari `main` tanpa konfirmasi ini:**
+> "Branch `[nama]` masih belum di-merge — mau ditutup dulu sebelum lanjut ke `[topik baru]`, atau memang
+> mau tetap paralel (dengan risiko sidebar/UI keliatan 'mundur' saat branch baru di-checkout dari `main`
+> yang basi)?"
+
+**Preseden insiden "kerja selesai tapi lupa merge" (jangan tambah nomor 6):**
 - `v0.14.5.1` — checkpoint dibiarkan uncommitted lintas branch switch, berakhir di `git stash` yang nyaris
   hilang (lihat section "Branch Consolidation" di bawah).
 - `hotfix/wireguard-node-ip-race` — commit `a75f608` selesai, tidak pernah di-merge ke main; catatan
@@ -121,6 +135,15 @@ uncommitted / belum di-review** — WAJIB:
 - **v0.9.6 (2026-09-02)** — hampir terjadi lagi: seluruh Fitur Titip + Lupa Password masih uncommitted di
   working tree saat instruksi pindah ke `manajemen-user` masuk. Dicegah dengan commit `b2ad70d` +
   peringatan eksplisit di laporan sebelum lanjut.
+- **`perpanjang-daftar-pelanggan` vs `whatsapp-gateway-reliability` (2026-09-04)** — branch komisi
+  (`perpanjang-daftar-pelanggan`, 4 commit: Perpanjang, tracking setoran, revisi Fee Komisi, Multi-Bulan)
+  dibiarkan ter-commit tapi BELUM di-merge saat instruksi topik yang genuinely tidak nyambung (WhatsApp
+  Gateway Reliability) masuk — branch baru dibuat langsung dari `main` (yang masih BELUM punya perubahan
+  sidebar "Komisi"/Portal Referrer dari sprint komisi) TANPA menanyakan konfirmasi di atas dulu. Akibat
+  nyata: kalau `whatsapp-gateway-reliability` sempat di-merge lebih dulu, sidebar/Portal Referrer akan
+  "mundur" ke state pra-komisi untuk sementara. Inilah kejadian yang melahirkan aturan tambahan ini —
+  ditutup lewat merge susulan (LANGKAH 2-3 sprint governance berikutnya), TAPI seharusnya konfirmasi di
+  atas ditanyakan SEBELUM branch baru dibuat, bukan diperbaiki belakangan.
 
 ## Sprint-based development — read this before doing anything
 

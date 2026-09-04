@@ -55,6 +55,18 @@ class WhatsappGatewayIndex extends Component
 
     public string $dailyScheduleTimesRaw = '08:00,20:00';
 
+    // --- Kode Pairing (alternatif Scan QR, sprint "whatsapp-gateway-reliability") ---
+
+    /** id sesi yang mode "Pakai Kode Pairing"-nya sedang dibuka (bukan boolean global — tiap sesi independen). */
+    public ?int $pairingModeSessionId = null;
+
+    public string $pairingPhoneNumber = '';
+
+    public ?string $pairingCodeResult = null;
+
+    /** id sesi yang kode pairing-nya baru saja diterbitkan — supaya tampil di panel yang benar. */
+    public ?int $pairingCodeSessionId = null;
+
     public function mount(): void
     {
         $this->authorize('viewAny', WhatsappSession::class);
@@ -111,6 +123,44 @@ class WhatsappGatewayIndex extends Component
         $service->refreshQrCode($session);
 
         session()->flash('status', 'Permintaan QR code baru dikirim — muat ulang beberapa detik lagi.');
+    }
+
+    public function togglePairingMode(int $sessionId): void
+    {
+        $this->pairingModeSessionId = $this->pairingModeSessionId === $sessionId ? null : $sessionId;
+        $this->pairingPhoneNumber = '';
+        $this->pairingCodeResult = null;
+        $this->pairingCodeSessionId = null;
+        $this->resetErrorBag('pairingPhoneNumber');
+    }
+
+    /**
+     * "Pakai Kode Pairing" — alternatif native Baileys `requestPairingCode`
+     * untuk menghubungkan sesi TANPA scan QR sama sekali. Lihat
+     * `whatsapp-gateway/src/sessionManager.js::requestPairingCode()` untuk
+     * kenapa ini mewajibkan sesi yang belum terhubung (wipe + pairing dari
+     * nol, sama seperti alur "refresh QR" pada sesi logged_out).
+     */
+    public function requestPairingCode(int $sessionId, WhatsappSessionService $service): void
+    {
+        $session = WhatsappSession::withoutGlobalScopes()->findOrFail($sessionId);
+        $this->authorize('manage', $session);
+
+        $this->validate([
+            'pairingPhoneNumber' => 'required|string|min:9|max:15|regex:/^[0-9+]+$/',
+        ]);
+
+        $code = $service->requestPairingCode($session, $this->pairingPhoneNumber);
+
+        if ($code === null) {
+            session()->flash('status', 'Gagal meminta kode pairing — coba lagi, atau pakai Scan QR.');
+
+            return;
+        }
+
+        $this->pairingCodeResult = $code;
+        $this->pairingCodeSessionId = $sessionId;
+        session()->flash('status', 'Kode pairing diterbitkan — masukkan di HP (Perangkat Tertaut > Tautkan dengan nomor telepon) sebelum kedaluwarsa.');
     }
 
     public function editTemplate(string $eventType): void

@@ -32,15 +32,48 @@ const RECONNECT_BASE_MS = 5000;
 const RECONNECT_MAX_MS = 60000;
 
 /**
- * Multi-session Baileys manager, keyed by session_key (reseller_id as a
- * string, or the literal "direct") — one Baileys socket + persisted
- * auth_state/{session_key}/ folder per key, per the v0.4.0 spec's fixed
- * topology (one WhatsApp number per reseller, plus one direct session).
+ * Sprint "whatsapp-gateway-reliability" — investigasi log riil ~20 jam
+ * container ini (lihat CLAUDE.md untuk detail lengkap) menemukan pola
+ * `stream:error conflict type=device_removed` berulang (3x dalam <1.5 jam
+ * pada satu window) tepat setelah sesi berhasil reconnect. Root cause yang
+ * TERBUKTI (dibaca langsung dari source Baileys `lib/Socket/socket.js`,
+ * bukan tebakan) — BUKAN kebocoran socket lama (Baileys sendiri sudah
+ * memanggil `end()`/`ws.close()` internal setiap disconnect, dikonfirmasi
+ * dari source) — melainkan RACE CONDITION nyata: `connect()` versi lama
+ * punya DUA `await` (useMultiFileAuthState, fetchLatestBaileysVersion)
+ * SEBELUM `this.sessions.set(sessionKey, entry)` — kalau `connect()`
+ * dipanggil dua kali nyaris bersamaan untuk `sessionKey` yang SAMA
+ * (mis. `index.js` mulai `app.listen()` sebelum `restoreAll()` selesai,
+ * dan request HTTP masuk di window itu; atau race UI "refresh" vs auto-
+ * reconnect timer), KEDUANYA lolos cek `!existing.sock` di
+ * `ensureConnected()` dan KEDUANYA memanggil `makeWASocket()` — dua socket
+ * hidup sekaligus mengautentikasi sebagai perangkat tertaut yang SAMA,
+ * yang oleh server WhatsApp dideteksi sebagai konflik dan salah satunya
+ * di-`device_removed`.
+ *
+ * FIX: `connectLocks` — Map<sessionKey, Promise> — panggilan `connect()`
+ * kedua untuk key yang sama SELAGI yang pertama masih berjalan tidak lagi
+ * memulai `makeWASocket()` baru, melainkan menunggu (await) Promise yang
+ * SAMA. Ini menutup race-nya secara struktural, di titik manapun ia bisa
+ * terjadi — bukan cuma di satu jalur pemicu spesifik.
+ *
+ * FIX KEDUA: `ensureConnected()`/`getOrRefreshQr()` versi lama SELAMANYA
+ * menganggap `entry.sock` yang sudah pernah di-set (walau socket-nya sudah
+ * mati/`status: 'disconnected'`) sebagai "masih ada", jadi tombol
+ * refresh/reconnect manual di UI jadi NO-OP total selama window backoff
+ * otomatis — kemungkinan besar ini akar "harus refresh berkali-kali,
+ * kelihatannya tidak ngaruh" yang dilaporkan Agung. Sekarang
+ * `getOrRefreshQr()` pada status `disconnected` membatalkan timer backoff
+ * yang masih menunggu lalu memicu reconnect SEKARANG (aman berkat lock di
+ * atas — tidak lagi bisa balapan dengan timer otomatis yang dibatalkan).
  */
 class SessionManager {
   constructor(logger) {
     this.logger = logger;
     this.sessions = new Map();
+    // sessionKey -> Promise, hanya terisi SELAGI connect() untuk key itu
+    // sedang berjalan. Lihat docblock kelas di atas.
+    this.connectLocks = new Map();
 
     if (!fs.existsSync(AUTH_STATE_DIR)) {
       fs.mkdirSync(AUTH_STATE_DIR, { recursive: true });
@@ -83,9 +116,15 @@ class SessionManager {
    * GET /sessions/{key}/qr handler logic — if the session was logged out
    * OR its persisted creds are bad (DisconnectReason.badSession), the
    * persisted creds are no longer usable, so its auth_state folder is wiped
-   * first to force a completely fresh pairing (new QR). A merely
-   * "disconnected" (transient) session already reconnects on its own via
-   * connection.update's handler below, so no wipe is needed for that case.
+   * first to force a completely fresh pairing (new QR).
+   *
+   * A merely "disconnected" (transient) session already has its own
+   * exponential-backoff reconnect timer scheduled — but that timer can be
+   * up to RECONNECT_MAX_MS (60s) away. An explicit refresh here CANCELS
+   * that pending timer and reconnects NOW instead — safe to do
+   * unconditionally because `connect()` itself is lock-protected (see
+   * class docblock), so this can never race the timer it just cancelled
+   * nor any other concurrent caller for the same key.
    */
   async getOrRefreshQr(sessionKey) {
     const entry = this.sessions.get(sessionKey);
@@ -93,9 +132,12 @@ class SessionManager {
     if (entry && (entry.status === 'logged_out' || entry.status === 'bad_session')) {
       this.wipeAuthState(sessionKey);
       this.sessions.delete(sessionKey);
+    } else if (entry && entry.status === 'disconnected' && entry.reconnectTimer) {
+      clearTimeout(entry.reconnectTimer);
+      entry.reconnectTimer = null;
     }
 
-    await this.ensureConnected(sessionKey);
+    await this.ensureConnected(sessionKey, { force: entry?.status === 'disconnected' });
 
     return this.getQrCodeData(sessionKey);
   }
@@ -105,7 +147,28 @@ class SessionManager {
     fs.rmSync(authDir, { recursive: true, force: true });
   }
 
-  async connect(sessionKey) {
+  /**
+   * Lock-protected wrapper — the actual socket-creation logic lives in
+   * `doConnect()`. A second call for the same `sessionKey` while the first
+   * is still in flight AWAITS the first call's own promise instead of
+   * starting a second `makeWASocket()` (see class docblock — this is the
+   * structural fix for the `device_removed` race).
+   */
+  connect(sessionKey) {
+    const inFlight = this.connectLocks.get(sessionKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const promise = this.doConnect(sessionKey).finally(() => {
+      this.connectLocks.delete(sessionKey);
+    });
+    this.connectLocks.set(sessionKey, promise);
+
+    return promise;
+  }
+
+  async doConnect(sessionKey) {
     const authDir = path.join(AUTH_STATE_DIR, sessionKey);
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
     const { version } = await fetchLatestBaileysVersion();
@@ -189,7 +252,8 @@ class SessionManager {
         const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
 
         this.logger.info({ sessionKey, delayMs: delay, attempt: attempt + 1 }, 'scheduling reconnect');
-        setTimeout(() => {
+        entry.reconnectTimer = setTimeout(() => {
+          entry.reconnectTimer = null;
           this.connect(sessionKey).catch((err) => {
             this.logger.error({ sessionKey, err: err.message }, 'reconnect failed');
           });
@@ -200,10 +264,10 @@ class SessionManager {
     return entry;
   }
 
-  async ensureConnected(sessionKey) {
+  async ensureConnected(sessionKey, { force = false } = {}) {
     const existing = this.sessions.get(sessionKey);
 
-    if (!existing || !existing.sock) {
+    if (!existing || !existing.sock || force) {
       return this.connect(sessionKey);
     }
 
@@ -235,6 +299,52 @@ class SessionManager {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * Sprint "whatsapp-gateway-reliability" LANGKAH 2 — alternatif Kode
+   * Pairing (native Baileys `requestPairingCode`, BUKAN ganti backend).
+   * HANYA untuk sesi yang belum pernah dipasangkan (fresh/unregistered) —
+   * kode pairing tidak berlaku untuk sesi yang sudah `connected`.
+   *
+   * Selalu MEMULAI SESI BARU (wipe dulu kalau ada sisa auth_state lama —
+   * sama seperti klik "refresh QR" pada sesi logged_out/bad_session) supaya
+   * `sock.authState.creds.registered` benar-benar `false` saat
+   * `requestPairingCode()` dipanggil — Baileys menolak/mengembalikan hasil
+   * tidak valid kalau dipanggil pada sesi yang sudah teregistrasi.
+   *
+   * @returns {Promise<string>} kode 8 karakter (mis. "ABCD-1234")
+   */
+  async requestPairingCode(sessionKey, phoneNumber) {
+    const digits = String(phoneNumber).replace(/[^0-9]/g, '');
+    if (!digits) {
+      throw new Error('phone_number is required');
+    }
+
+    const existing = this.sessions.get(sessionKey);
+    if (existing?.status === 'connected') {
+      throw new Error(`session "${sessionKey}" is already connected — pairing code only applies to a fresh session`);
+    }
+
+    // Mulai dari nol — sama seperti alur "refresh QR" pada sesi logged_out.
+    this.wipeAuthState(sessionKey);
+    this.sessions.delete(sessionKey);
+
+    const entry = await this.connect(sessionKey);
+
+    if (entry.sock.authState.creds.registered) {
+      // Seharusnya mustahil tercapai (baru saja di-wipe), tapi dijaga
+      // eksplisit karena Baileys sendiri tidak menolaknya secara jelas.
+      throw new Error('session unexpectedly already registered — cannot request a pairing code');
+    }
+
+    const code = await entry.sock.requestPairingCode(digits);
+    entry.pairingCode = code;
+    entry.pairingPhoneNumber = digits;
+
+    this.logger.info({ sessionKey, phoneNumber: digits }, 'pairing code requested');
+
+    return code;
   }
 
   /**

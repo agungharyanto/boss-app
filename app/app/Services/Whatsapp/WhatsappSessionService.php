@@ -126,6 +126,58 @@ class WhatsappSessionService
     }
 
     /**
+     * Sprint "whatsapp-gateway-reliability" LANGKAH 2 — alternatif "Kode
+     * Pairing" (native Baileys `requestPairingCode`, lihat
+     * `whatsapp-gateway/src/sessionManager.js`) sebagai pengganti scan QR
+     * saat menghubungkan sesi. HANYA berlaku untuk sesi yang BELUM
+     * terhubung — Node gateway sendiri menolak (500) kalau dipanggil pada
+     * sesi yang statusnya `connected`, jadi tidak diulang di sini (defense
+     * di satu tempat, gateway, cukup — respons error-nya sudah jelas).
+     *
+     * Sama seperti `refreshQrCode()`, ini me-wipe auth_state sesi (sisi
+     * Node) dan memulai pairing dari nol — nomor HP yang dimasukkan JADI
+     * nomor baru sesi ini begitu berhasil terhubung.
+     *
+     * @return ?string kode 8 karakter (mis. "ABCD-1234"), atau null kalau gagal
+     */
+    public function requestPairingCode(WhatsappSession $session, string $phoneNumber): ?string
+    {
+        $baseUrl = config('services.whatsapp_gateway.url');
+
+        if (! $baseUrl) {
+            Log::warning('WhatsappSessionService: services.whatsapp_gateway.url not configured, cannot request pairing code.');
+
+            return null;
+        }
+
+        $sessionKey = $session->sessionKey();
+        $body = json_encode(['phone_number' => $phoneNumber], JSON_THROW_ON_ERROR);
+        $timestamp = time();
+        $signature = $this->hmac->sign($body, $timestamp);
+
+        $response = Http::withBody($body, 'application/json')
+            ->withHeaders([
+                'X-Whatsapp-Timestamp' => (string) $timestamp,
+                'X-Whatsapp-Signature' => $signature,
+            ])
+            ->post(rtrim($baseUrl, '/')."/sessions/{$sessionKey}/pair");
+
+        if (! $response->successful()) {
+            Log::error("WhatsappSessionService: failed to request pairing code for session_key={$sessionKey}, HTTP {$response->status()}: {$response->json('message')}");
+
+            return null;
+        }
+
+        // Sesi kembali ke qr_pending sisi Laravel — belum benar-benar
+        // terhubung, cuma menunggu kode dimasukkan di HP. Webhook
+        // connection.update yang sama seperti alur QR akan meng-update ke
+        // `connected` begitu berhasil.
+        $session->update(['status' => WhatsappSessionStatus::QrPending, 'qr_code_data' => null]);
+
+        return $response->json('pairing_code');
+    }
+
+    /**
      * whatsapp:check-session-health's hourly reconciliation — actively
      * pulls GET /sessions from the Node gateway rather than only relying on
      * connection.update webhooks, in case a webhook delivery was missed.

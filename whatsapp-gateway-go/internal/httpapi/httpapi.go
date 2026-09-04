@@ -33,6 +33,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /sessions/{sessionKey}/health", s.withHMAC(s.handleHealth))
 	mux.HandleFunc("GET /sessions/{sessionKey}/qr", s.withHMAC(s.handleQR))
 	mux.HandleFunc("POST /sessions/{sessionKey}/pair", s.withHMAC(s.handlePair))
+	mux.HandleFunc("POST /sessions/{sessionKey}/logout", s.withHMAC(s.handleLogout))
 	mux.HandleFunc("POST /sessions/{sessionKey}/send", s.withHMAC(s.handleSend))
 
 	return mux
@@ -125,6 +126,19 @@ func (s *Server) handleQR(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeEnvelope(w, http.StatusOK, true, "OK", map[string]interface{}{"qr_code_data": qrCodeData})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("sessionKey")
+
+	if err := s.manager.Logout(key); err != nil {
+		slog.Error("failed to logout session", "sessionKey", key, "err", err)
+		writeEnvelope(w, http.StatusInternalServerError, false, err.Error(), nil)
+
+		return
+	}
+
+	writeEnvelope(w, http.StatusOK, true, "Logged out", nil)
 }
 
 type pairRequest struct {

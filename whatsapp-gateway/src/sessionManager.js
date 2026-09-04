@@ -148,6 +148,45 @@ class SessionManager {
   }
 
   /**
+   * POST /sessions/{key}/logout — tombol "Logout" UI (branch
+   * migrasi-whatsmeow, sub-tugas Tombol Logout + Perjelas UI Dual-Gateway).
+   * BEDA dari wipeAuthState() polos (yang cuma menghapus file lokal saat
+   * server WhatsApp SENDIRI sudah menganggap sesi tidak sah, mis.
+   * DisconnectReason.loggedOut/badSession) — ini memanggil
+   * sock.logout() Baileys DULU (best-effort) supaya server WhatsApp
+   * SENDIRI diberi tahu perangkat ini sengaja diputus tautannya, sebelum
+   * file lokal dihapus. Ini yang membersihkan entri "Perangkat Tertaut" di
+   * HP pengguna secara benar — bukan sekadar menghapus state di server
+   * kita sendiri, yang meninggalkan entri hantu di sisi WhatsApp.
+   */
+  async logout(sessionKey) {
+    const entry = this.sessions.get(sessionKey);
+
+    if (entry?.reconnectTimer) {
+      clearTimeout(entry.reconnectTimer);
+      entry.reconnectTimer = null;
+    }
+
+    if (entry?.sock) {
+      try {
+        await entry.sock.logout();
+      } catch (err) {
+        // Best-effort — kalau socket sudah mati/tidak sehat, logout()
+        // Baileys sendiri bisa melempar error; file lokal tetap dihapus
+        // di bawah terlepas dari ini berhasil atau tidak.
+        this.logger.warn({ sessionKey, err: err.message }, 'sock.logout() failed, proceeding with local wipe anyway');
+      }
+    }
+
+    this.wipeAuthState(sessionKey);
+    this.sessions.delete(sessionKey);
+
+    await notifySessionStatus(this.logger, { session_key: sessionKey, status: 'logged_out' });
+
+    this.logger.info({ sessionKey }, 'session logged out (manual)');
+  }
+
+  /**
    * Lock-protected wrapper — the actual socket-creation logic lives in
    * `doConnect()`. A second call for the same `sessionKey` while the first
    * is still in flight AWAITS the first call's own promise instead of

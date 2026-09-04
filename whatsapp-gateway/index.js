@@ -80,6 +80,20 @@ app.post('/sessions/:sessionKey/pair', verifyHmac, async (req, res) => {
   }
 });
 
+// Branch migrasi-whatsmeow — tombol "Logout" UI, BEDA dari wipe internal
+// yang sudah ada (logged_out/bad_session): ini memanggil sock.logout()
+// Baileys dulu (memberi tahu server WhatsApp) sebelum menghapus state
+// lokal — lihat sessionManager.js's logout() docblock.
+app.post('/sessions/:sessionKey/logout', verifyHmac, async (req, res) => {
+  try {
+    await sessionManager.logout(req.params.sessionKey);
+    res.json({ success: true, message: 'Logged out', data: null, meta: {} });
+  } catch (err) {
+    logger.error({ err: err.message, sessionKey: req.params.sessionKey }, 'failed to logout session');
+    res.status(500).json({ success: false, message: err.message, data: null, meta: {} });
+  }
+});
+
 app.post('/sessions/:sessionKey/send', verifyHmac, async (req, res) => {
   const { phone_number: phoneNumber, message } = req.body || {};
 

@@ -531,6 +531,42 @@ func (m *Manager) persistMapping(key string, jid types.JID) {
 	}
 }
 
+// Logout — padanan langsung logout() Node (sessionManager.js), tombol
+// "Logout" UI (branch migrasi-whatsmeow). BEDA dari wipeSession() polos
+// (dipakai internal saat server WhatsApp SENDIRI sudah menganggap sesi
+// tidak sah, mis. events.LoggedOut) — ini memanggil client.Logout(ctx)
+// whatsmeow DULU (best-effort) supaya server WhatsApp diberi tahu
+// perangkat ini SENGAJA diputus, sebelum device dihapus dari store. Tanpa
+// ini, entri "Perangkat Tertaut" di HP pengguna tertinggal sebagai entri
+// hantu di sisi WhatsApp walau state lokal kita sudah bersih.
+func (m *Manager) Logout(key string) error {
+	v, exists := m.sessions.Load(key)
+	if !exists {
+		// Tidak ada entry in-memory — tetap coba bersihkan baris pemetaan
+		// (kalau ada, dari sesi yang sempat ada sebelum proses restart)
+		// supaya idempotent, bukan error keras.
+		m.wipeSession(key)
+
+		return nil
+	}
+
+	e := v.(*entry)
+
+	if e.client != nil && e.client.Store.ID != nil {
+		if err := e.client.Logout(m.ctx); err != nil {
+			slog.Warn("Logout: client.Logout() failed, proceeding with local wipe anyway", "sessionKey", key, "err", err)
+		}
+	}
+
+	m.wipeSession(key)
+
+	m.notifier.NotifySessionStatus(webhook.StatusPayload{SessionKey: key, Status: string(StatusLoggedOut)})
+
+	slog.Info("session logged out (manual)", "sessionKey", key)
+
+	return nil
+}
+
 func (m *Manager) wipeSession(key string) {
 	if v, exists := m.sessions.LoadAndDelete(key); exists {
 		e := v.(*entry)

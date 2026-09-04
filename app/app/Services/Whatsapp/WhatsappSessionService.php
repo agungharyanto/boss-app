@@ -229,6 +229,118 @@ class WhatsappSessionService
     }
 
     /**
+     * Branch migrasi-whatsmeow — resolusi target gateway EKSPLISIT, TIDAK
+     * PERNAH ambigu. 'legacy' = gateway Node/Baileys asli (v0.4.0,
+     * `services.whatsapp_gateway.url`) — ini yang dipakai SEMUA jalur
+     * produksi (refreshQrCode/requestPairingCode/reconcileFromGateway di
+     * atas) sampai cutover eksplisit dikonfirmasi. 'go' = gateway Go/
+     * whatsmeow paralel (`services.whatsapp_gateway_go.url`, branch
+     * migrasi-whatsmeow) — belum dipakai jalur produksi mana pun, cuma
+     * panel status migrasi sementara di UI ini. HMAC secret SELALU dari
+     * `services.whatsapp_gateway.hmac_secret` untuk KEDUA target — kedua
+     * gateway wajib pakai secret yang identik selama masa transisi (lihat
+     * whatsapp-gateway-go/.env.example).
+     */
+    private function baseUrlFor(string $target): ?string
+    {
+        return match ($target) {
+            'go' => config('services.whatsapp_gateway_go.url'),
+            default => config('services.whatsapp_gateway.url'),
+        };
+    }
+
+    /**
+     * Panel "Status Migrasi Gateway" (sementara, branch migrasi-whatsmeow)
+     * — pembacaan LANGSUNG ke satu gateway spesifik (bukan
+     * whatsapp_sessions.status di DB, yang cuma merefleksikan gateway mana
+     * pun yang terakhir mengirim webhook). Read-only, tidak pernah
+     * menyimpan apa pun ke DB — murni untuk ditampilkan berdampingan biar
+     * Agung tidak salah kira lagi QR/kode masuk ke gateway yang mana.
+     *
+     * @return array{reachable: bool, status: ?string, phone_number: ?string, error: ?string}
+     */
+    public function checkGatewayHealth(string $target, string $sessionKey): array
+    {
+        $baseUrl = $this->baseUrlFor($target);
+
+        if (! $baseUrl) {
+            return ['reachable' => false, 'status' => null, 'phone_number' => null, 'error' => 'URL gateway belum dikonfigurasi.'];
+        }
+
+        $timestamp = time();
+        $signature = $this->hmac->sign('', $timestamp);
+
+        try {
+            $response = Http::timeout(5)->withHeaders([
+                'X-Whatsapp-Timestamp' => (string) $timestamp,
+                'X-Whatsapp-Signature' => $signature,
+            ])->get(rtrim($baseUrl, '/')."/sessions/{$sessionKey}/health");
+        } catch (\Throwable $e) {
+            return ['reachable' => false, 'status' => null, 'phone_number' => null, 'error' => $e->getMessage()];
+        }
+
+        if (! $response->successful()) {
+            return ['reachable' => false, 'status' => null, 'phone_number' => null, 'error' => "HTTP {$response->status()}"];
+        }
+
+        $data = $response->json('data');
+
+        return [
+            'reachable' => true,
+            'status' => $data['status'] ?? null,
+            'phone_number' => $data['phoneNumber'] ?? $data['phone_number'] ?? null,
+            'error' => null,
+        ];
+    }
+
+    /**
+     * Tombol "Logout" (branch migrasi-whatsmeow) — target gateway EKSPLISIT
+     * lewat parameter $target, tidak pernah ditebak dari status DB.
+     * Memanggil sock.logout()/client.Logout() SUNGGUHAN di sisi gateway
+     * (bukan sekadar wipe lokal) supaya entri "Perangkat Tertaut" di HP
+     * pengguna ikut bersih di sisi WhatsApp sendiri — lihat
+     * whatsapp-gateway/src/sessionManager.js::logout() /
+     * whatsapp-gateway-go/internal/session/manager.go::Logout().
+     */
+    public function logout(WhatsappSession $session, string $target): bool
+    {
+        $baseUrl = $this->baseUrlFor($target);
+
+        if (! $baseUrl) {
+            Log::warning("WhatsappSessionService: no base URL configured for target={$target}, cannot logout.");
+
+            return false;
+        }
+
+        $sessionKey = $session->sessionKey();
+        $timestamp = time();
+        $signature = $this->hmac->sign('', $timestamp);
+
+        $response = Http::withHeaders([
+            'X-Whatsapp-Timestamp' => (string) $timestamp,
+            'X-Whatsapp-Signature' => $signature,
+        ])->post(rtrim($baseUrl, '/')."/sessions/{$sessionKey}/logout");
+
+        if (! $response->successful()) {
+            Log::error("WhatsappSessionService: logout failed for session_key={$sessionKey} target={$target}, HTTP {$response->status()}");
+
+            return false;
+        }
+
+        // Reflect segera di sisi Laravel — webhook logged_out yang sama
+        // juga akan datang menyusul dan menerapkan status yang sama
+        // (idempotent, bukan konflik) hanya kalau memang gateway INI yang
+        // sedang jadi sumber status sesi tersebut (lihat resolveSessionByKey).
+        // Kalau $target adalah gateway yang BUKAN sumber status aktif saat
+        // ini (mis. logout gateway Go padahal status sesi datang dari
+        // gateway lama), update lokal ini tetap aman diterapkan — sesi
+        // tersebut memang genuinely logged out di gateway itu juga.
+        $this->applyStatus($session, WhatsappSessionStatus::LoggedOut, null, null);
+
+        return true;
+    }
+
+    /**
      * A non-null reseller_id is globally unique (resellers.id is a
      * platform-wide PK, not per-tenant), so it resolves unambiguously on
      * its own. The bare literal "direct" is NOT globally unique the moment

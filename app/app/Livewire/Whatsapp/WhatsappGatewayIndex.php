@@ -13,6 +13,7 @@ use App\Services\Whatsapp\WhatsappSessionService;
 use App\Services\Whatsapp\WhatsappTemplateService;
 use App\Support\ResellerContext;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Component;
 use Livewire\WithPagination;
 
@@ -123,6 +124,26 @@ class WhatsappGatewayIndex extends Component
         $service->refreshQrCode($session);
 
         session()->flash('status', 'Permintaan QR code baru dikirim — muat ulang beberapa detik lagi.');
+    }
+
+    /**
+     * Panel "Status Migrasi Gateway" (sementara, branch migrasi-whatsmeow)
+     * — tombol Logout per gateway, target EKSPLISIT lewat $target
+     * ('legacy'|'go'), tidak pernah ditebak. Lihat
+     * WhatsappSessionService::logout()/checkGatewayHealth() docblock.
+     */
+    public function logoutFromGateway(int $sessionId, string $target, WhatsappSessionService $service): void
+    {
+        $session = WhatsappSession::withoutGlobalScopes()->findOrFail($sessionId);
+        $this->authorize('manage', $session);
+
+        $label = $target === 'go' ? 'Gateway Baru (Go)' : 'Gateway Lama (Node)';
+
+        if ($service->logout($session, $target)) {
+            session()->flash('status', "Logout dari {$label} berhasil — sesi siap dipasangkan ulang.");
+        } else {
+            session()->flash('status', "Logout dari {$label} gagal — cek log, atau gateway sedang tidak dapat dihubungi.");
+        }
     }
 
     public function togglePairingMode(int $sessionId): void
@@ -283,6 +304,18 @@ class WhatsappGatewayIndex extends Component
             ? WhatsappSession::withoutGlobalScopes()->whereNull('reseller_id')->first()
             : null;
 
+        // Panel "Status Migrasi Gateway" (sementara, branch migrasi-whatsmeow)
+        // — dicache singkat (5 detik) supaya render Livewire yang sering
+        // (poll/tombol lain di halaman ini) tidak menghajar kedua gateway
+        // di setiap request. Boleh disederhanakan/dihapus lagi setelah
+        // cutover selesai (lihat CLAUDE.md).
+        [$legacyGatewayHealth, $goGatewayHealth] = $isAdmin && $directSession !== null
+            ? [
+                Cache::remember('whatsapp-gateway-health:legacy:direct', 5, fn () => app(WhatsappSessionService::class)->checkGatewayHealth('legacy', 'direct')),
+                Cache::remember('whatsapp-gateway-health:go:direct', 5, fn () => app(WhatsappSessionService::class)->checkGatewayHealth('go', 'direct')),
+            ]
+            : [null, null];
+
         $resellerSessions = $isAdmin
             ? WhatsappSession::with('reseller')->whereNotNull('reseller_id')->orderBy('reseller_id')->get()
             : collect();
@@ -324,6 +357,8 @@ class WhatsappGatewayIndex extends Component
             'isAdmin' => $isAdmin,
             'mySession' => $mySession,
             'directSession' => $directSession,
+            'legacyGatewayHealth' => $legacyGatewayHealth,
+            'goGatewayHealth' => $goGatewayHealth,
             'resellerSessions' => $resellerSessions,
             'templates' => $templates,
             'logs' => $logs,

@@ -8,10 +8,12 @@ use App\Http\Controllers\Auth\ReferrerLoginController;
 use App\Http\Controllers\FiberNodePhotoController;
 use App\Http\Controllers\VpnScriptDownloadController;
 use App\Http\Middleware\EnsureAdminPanelAccess;
+use App\Livewire\Auth\ReferrerForgotPassword;
 use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
 use App\Livewire\Billing\SubscriptionIndex;
 use App\Livewire\Commission\CommissionRateIndex;
+use App\Livewire\Commission\TitipMasukIndex;
 use App\Livewire\Customers\CustomerCoordinateFill;
 use App\Livewire\Customers\CustomerIndex;
 use App\Livewire\Customers\CustomerShow;
@@ -101,6 +103,13 @@ Route::middleware('guest')->group(function () {
     Route::post('/referrer/login', [ReferrerLoginController::class, 'login'])
         ->middleware('throttle:6,1')
         ->name('referrer.login.attempt');
+
+    // v0.9.6 — "Lupa Password": Livewire multi-tahap (Nomor HP → OTP
+    // WhatsApp → password baru). Reuse ReferrerActionOtpService (scope
+    // "password_reset:{id}"). Rate limit kirim OTP ada di service itu.
+    Route::get('/referrer/forgot-password', ReferrerForgotPassword::class)
+        ->middleware('throttle:20,1')
+        ->name('referrer.password.request');
 });
 
 // v0.9.2 — admin.panel closes the "no middleware blocks cross-persona
@@ -179,6 +188,11 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // (tenant-level, no reseller.context needed). Halaman ini me-list
     // SEMUA PppPackage; rate diisi/diedit inline per paket.
     Route::get('/commission-rates', CommissionRateIndex::class)->name('commission-rates.index');
+
+    // v0.9.6 — "Titip Masuk": daftar kerja operasional entri komisi Titip
+    // (dibuat Referrer lewat portal). Read-only, tier-admin-only
+    // (commission_ledger.view, CommissionLedgerPolicy).
+    Route::get('/titip-masuk', TitipMasukIndex::class)->name('titip-masuk.index');
 
     // v0.14.1 — fondasi cluster "Profil Paket", same posture as /referrers
     // above (tenant-level, no reseller.context needed — BandwidthProfile

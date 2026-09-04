@@ -54,22 +54,49 @@ use Throwable;
  *    would otherwise trigger this. sendProbe() must always pass a real,
  *    non-empty parameter path.
  *
- * Design (hybrid, addresses all three findings above): a device whose
- * GenieACS-reported `_lastInform` is already fresher than
- * self::STALE_THRESHOLD_MINUTES is marked online directly — no probe is
- * sent at all, so a device with steady periodic Informs (finding #2) is
- * never at the mercy of a broken connection_request path for it
- * specifically. Only genuinely stale devices get an active probe: fire
- * connection_request for all of them, sleep self::PROBE_WAIT_SECONDS (90s —
- * covers the 60s worst case measured above with margin), then re-check
- * `_lastInform` once more; a device whose `_lastInform` advanced past the
- * moment the probe was sent is online, otherwise offline.
+ * Design (hybrid): a device whose GenieACS-reported `_lastInform` is fresher
+ * than `config('services.cpe.online_threshold_minutes')` (default 180 = 3h)
+ * is marked online directly — no probe. Only genuinely stale devices get an
+ * active probe: fire connection_request for all of them, sleep
+ * self::PROBE_WAIT_SECONDS (90s), then re-check `_lastInform`. A device
+ * whose `_lastInform` advanced past the probe time is online.
+ *
+ * **Amendment (2026-09-04) — "offline palsu"**: dulu ambang online cuma
+ * 5 menit dan probe gagal LANGSUNG = Offline. Konsekuensi: ONT nyata yang
+ * Inform tiap 1-12 jam (banyak vendor default begitu) DAN connection_request-
+ * nya gagal (mismatch `cwmp.connectionRequestAuth` / batasan routing tunnel,
+ * lihat catatan v0.7.7) salah dicap Offline setiap siklus — sampai admin
+ * input ulang SN yang SAMA lewat "Ganti Modem" (`CpeBindingService::
+ * bindFromLegacyImport()` set Online tanpa cek kesegaran Inform). Fix:
+ * (1) ambang online jauh lebih panjang (3 jam, configurable);
+ * (2) probe gagal HANYA men-set Offline kalau Inform terakhir > hard-cutoff
+ *     (`config('services.cpe.offline_hard_cutoff_minutes')`, default 1440 =
+ *     24 jam) atau tidak pernah ada; di antara dua ambang, probe gagal TIDAK
+ *     mengubah status ("jangan bohong offline kalau belum yakin").
  */
 class CpeDeviceStatusSyncService
 {
-    private const STALE_THRESHOLD_MINUTES = 5;
-
     private const PROBE_WAIT_SECONDS = 90;
+
+    /**
+     * Inform lebih baru dari ini → langsung Online tanpa probe. BUKAN lagi
+     * 5 menit (yang salah cap Offline setiap ONT dengan
+     * PeriodicInformInterval panjang) — lihat config/services.php `cpe.*`.
+     */
+    private function onlineThreshold(): Carbon
+    {
+        return now()->subMinutes((int) config('services.cpe.online_threshold_minutes', 180));
+    }
+
+    /**
+     * Hanya kalau Inform terakhir LEBIH LAMA dari ini (dan probe gagal)
+     * device benar-benar di-set Offline. Di antara `onlineThreshold()` dan
+     * ini: probe gagal → status TIDAK diubah.
+     */
+    private function offlineHardCutoff(): Carbon
+    {
+        return now()->subMinutes((int) config('services.cpe.offline_hard_cutoff_minutes', 1440));
+    }
 
     public function __construct(
         private readonly GenieAcsClientService $genieAcsClient,
@@ -102,7 +129,7 @@ class CpeDeviceStatusSyncService
             return $result;
         }
 
-        $staleThreshold = now()->subMinutes(self::STALE_THRESHOLD_MINUTES);
+        $onlineThreshold = $this->onlineThreshold();
         $stale = [];
 
         foreach ($devices as $device) {
@@ -116,9 +143,10 @@ class CpeDeviceStatusSyncService
 
             $lastInform = $this->parseLastInform($genieAcsDevice);
 
-            // Already fresh (per GenieACS's own record of the device's last
-            // real Inform) — mark online directly, no active probe needed.
-            if ($lastInform !== null && $lastInform->greaterThan($staleThreshold)) {
+            // Inform-nya masih dalam ambang (default 3 jam) — langsung Online,
+            // tidak perlu probe. Ambang panjang ini yang bikin ONT dengan
+            // PeriodicInformInterval panjang tidak lagi salah cap Offline.
+            if ($lastInform !== null && $lastInform->greaterThan($onlineThreshold)) {
                 $this->applyStatus($device, CpeDeviceStatus::Online, $lastInform);
                 $result['synced']++;
                 $result['online']++;
@@ -151,17 +179,46 @@ class CpeDeviceStatusSyncService
 
         $recheckById = $this->fetchGenieAcsDevices(['_id', '_lastInform']) ?? collect();
 
+        $hardCutoff = $this->offlineHardCutoff();
+
         foreach ($stale as $entry) {
             $device = $entry['device'];
             $recheckDevice = $recheckById->get($device->genieacs_device_id);
             $newLastInform = $recheckDevice !== null ? $this->parseLastInform($recheckDevice) : null;
 
-            $reachable = $newLastInform !== null && $newLastInform->greaterThan($probeSentAt);
-            $status = $reachable ? CpeDeviceStatus::Online : CpeDeviceStatus::Offline;
+            $lastInform = $newLastInform ?? $entry['lastInform'];
 
-            $this->applyStatus($device, $status, $newLastInform ?? $entry['lastInform']);
+            if ($newLastInform !== null && $newLastInform->greaterThan($probeSentAt)) {
+                // Probe berhasil — device benar-benar hidup.
+                $this->applyStatus($device, CpeDeviceStatus::Online, $lastInform);
+                $result['synced']++;
+                $result['online']++;
+
+                continue;
+            }
+
+            // Probe gagal. HANYA set Offline kalau Inform terakhir sudah
+            // benar-benar lama (atau tidak pernah ada). Di rentang antara
+            // ambang online (3 jam) dan hard-cutoff (24 jam): status TIDAK
+            // diubah — probe gagal ≠ device mati (connection_request bisa
+            // gagal karena mismatch cwmp.connectionRequestAuth / routing
+            // tunnel, lihat CLAUDE.md v0.7.7), dan ONT bisa Inform tiap
+            // beberapa jam saja.
+            if ($lastInform === null || $lastInform->lessThan($hardCutoff)) {
+                $this->applyStatus($device, CpeDeviceStatus::Offline, $lastInform);
+                $result['synced']++;
+                $result['offline']++;
+
+                continue;
+            }
+
+            // Tak bisa dipastikan — biarkan status apa adanya, tapi tetap
+            // segarkan last_inform_at kalau ada nilai baru.
+            if ($newLastInform !== null) {
+                $this->applyStatus($device, $device->status, $newLastInform);
+            }
             $result['synced']++;
-            $status === CpeDeviceStatus::Online ? $result['online']++ : $result['offline']++;
+            $result['skipped']++;
         }
 
         return $result;

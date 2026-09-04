@@ -85,10 +85,17 @@ Schedule::command(SyncCpeConnectedHosts::class)->everyFiveMinutes();
 
 // Closes the gap where cpe_devices.status/last_inform_at were only ever
 // written once, at bind/reconcile time, and never refreshed again — see
-// App\Services\Network\CpeDeviceStatusSyncService's own docblock. Same
-// cadence as the legacy matcher above, for the same "not time-sensitive
-// enough to need the 5-minute jobs' tighter polling" reasoning.
-Schedule::command(SyncCpeDeviceStatus::class)->everyFifteenMinutes();
+// App\Services\Network\CpeDeviceStatusSyncService's own docblock.
+//
+// ->runInBackground() (2026-09-04) — boss-scheduler's entrypoint is a crude
+// `while true; do schedule:run; sleep 60; done` loop; a foreground command
+// that takes minutes (this one ~2.5min, SyncCpeSignalHistory ~10min) blocks
+// the WHOLE loop, so the next `schedule:run` lands minutes late and MISSES
+// its `*/15` cron slot (observed: this ran only ~hourly instead of every
+// 15 min, and cpe:reconcile only ~every 20 min instead of every 5).
+// Forking it frees the loop to hit every slot on time. ->withoutOverlapping()
+// guards the (unlikely) case two forks pile up.
+Schedule::command(SyncCpeDeviceStatus::class)->everyFifteenMinutes()->runInBackground()->withoutOverlapping();
 
 // v0.8.3 — records RX Power history (App\Models\CpeSignalHistory) for the
 // CPE detail page's new history graph. 20 minutes is a locked decision
@@ -104,7 +111,9 @@ Schedule::command(SyncCpeDeviceStatus::class)->everyFifteenMinutes();
 // some future run could push it close to the next scheduled tick, and a
 // second run starting on top of an unfinished first is worse than one run
 // occasionally starting a few minutes late.
-Schedule::command(SyncCpeSignalHistory::class)->cron('*/20 * * * *')->withoutOverlapping();
+// ->runInBackground() — see SyncCpeDeviceStatus above; this is the ~10min
+// command that was starving the scheduler loop the most.
+Schedule::command(SyncCpeSignalHistory::class)->cron('*/20 * * * *')->runInBackground()->withoutOverlapping();
 
 // v0.8.4 Bagian C — records container CPU/Memory/Network/Disk history
 // (App\Models\ContainerStatsHistory) for the Monitoring page's new
@@ -116,4 +125,6 @@ Schedule::command(SyncCpeSignalHistory::class)->cron('*/20 * * * *')->withoutOve
 // wide (5-6x) margin. ->withoutOverlapping() for the same reason as
 // SyncCpeSignalHistory above — a slow run overlapping the next tick is
 // worse than one run starting a few minutes late.
-Schedule::command(SyncContainerStats::class)->everyFiveMinutes()->withoutOverlapping();
+// ->runInBackground() — see SyncCpeDeviceStatus above; ~53s run, still
+// enough to shove the scheduler loop past a `*/5` slot for the fast jobs.
+Schedule::command(SyncContainerStats::class)->everyFiveMinutes()->runInBackground()->withoutOverlapping();

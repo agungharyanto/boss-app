@@ -68,6 +68,21 @@ class CustomerShowAddDeviceTest extends TestCase
             ->assertSee('Ganti Modem');
     }
 
+    public function test_ganti_modem_link_points_to_the_bound_devices_own_detail_page(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $customer = Customer::factory()->create(['tenant_id' => $tenant->id]);
+        $device = CpeDevice::factory()->create([
+            'tenant_id' => $tenant->id,
+            'customer_id' => $customer->id,
+            'serial_number' => 'SNBOUND777',
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CustomerShow::class, ['customer' => $customer])
+            ->assertSeeHtml('href="'.route('web.cpe-devices.show', $device).'"');
+    }
+
     public function test_button_is_hidden_for_a_user_with_no_cpe_permission_and_no_reseller_membership(): void
     {
         $tenant = Tenant::factory()->create();

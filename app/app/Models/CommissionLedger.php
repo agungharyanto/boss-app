@@ -24,6 +24,7 @@ class CommissionLedger extends Model
         'invoice_id',
         'amount',
         'scheme',
+        'payment_period',
         'status',
         'notes',
     ];
@@ -33,6 +34,7 @@ class CommissionLedger extends Model
         return [
             'amount' => 'decimal:2',
             'scheme' => CommissionScheme::class,
+            'payment_period' => 'date',
             'status' => CommissionStatus::class,
         ];
     }

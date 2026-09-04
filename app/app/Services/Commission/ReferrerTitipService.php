@@ -4,6 +4,7 @@ namespace App\Services\Commission;
 
 use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
+use App\Enums\TitipDepositStatus;
 use App\Models\CommissionLedger;
 use App\Models\CommissionRate;
 use App\Models\Customer;
@@ -120,9 +121,16 @@ class ReferrerTitipService
      * WhatsApp ke acting Referrer sudah diverifikasi oleh pemanggil).
      * Sama bentuknya dengan `record()`, hanya beda catatan konteks.
      *
+     * `$grossAmount` — total uang cash yang diterima Referrer dari
+     * pelanggan (snapshot `sell_price` paket saat Perpanjang, lihat
+     * `SubscriptionRenewalService`). Disimpan di
+     * `commission_ledger.gross_amount` + `deposit_status = belum_setor` —
+     * dipakai admin di "Titip Masuk" untuk tahu berapa yang harus ditagih
+     * balik ke Referrer.
+     *
      * @throws \RuntimeException kalau Titip tidak (lagi) tersedia untuk pelanggan ini
      */
-    public function recordForRenewal(Referrer $referrer, Customer $customer): CommissionLedger
+    public function recordForRenewal(Referrer $referrer, Customer $customer, ?float $grossAmount = null): CommissionLedger
     {
         $now = CarbonImmutable::now();
 
@@ -130,11 +138,16 @@ class ReferrerTitipService
             $referrer,
             $customer,
             "perpanjang-daftar-pelanggan: komisi Titip dari aksi Perpanjang di Daftar Pelanggan (OTP WhatsApp terverifikasi) {$now->toDateTimeString()}.",
+            $grossAmount,
         );
     }
 
-    private function createEligibleTitipRow(Referrer $referrer, Customer $customer, string $notes): CommissionLedger
-    {
+    private function createEligibleTitipRow(
+        Referrer $referrer,
+        Customer $customer,
+        string $notes,
+        ?float $grossAmount = null,
+    ): CommissionLedger {
         $availability = $this->availabilityFor($customer);
 
         if (! $availability['available']) {
@@ -149,7 +162,9 @@ class ReferrerTitipService
             'scheme' => CommissionScheme::Titip->value,
             'payment_period' => CarbonImmutable::now()->startOfMonth()->toDateString(),
             'amount' => $availability['amount'],
+            'gross_amount' => $grossAmount,
             'status' => CommissionStatus::Eligible,
+            'deposit_status' => TitipDepositStatus::BelumSetor,
             'notes' => $notes,
         ]);
     }

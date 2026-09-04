@@ -4,6 +4,7 @@ namespace Tests\Feature\Commission;
 
 use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
+use App\Enums\TitipDepositStatus;
 use App\Livewire\ReferrerPortal\Dashboard;
 use App\Models\CommissionLedger;
 use App\Models\Customer;
@@ -75,6 +76,41 @@ class ReferrerPortalDashboardTest extends TestCase
             ->test(Dashboard::class)
             ->assertViewHas('commissionEntries', fn ($c) => $c->count() === 1 && $c->first()->scheme->value === 'recurring')
             ->assertViewHas('titipEntries', fn ($t) => $t->count() === 1 && $t->first()->scheme->value === 'titip');
+    }
+
+    public function test_summary_numbers_are_computed(): void
+    {
+        $customer = Customer::factory()->create(['tenant_id' => $this->tenant->id, 'reseller_id' => null]);
+
+        // Komisi referral: eligible dihitung, pending tidak.
+        CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id, 'referrer_id' => $this->referrer->id, 'customer_id' => $customer->id,
+            'scheme' => CommissionScheme::Recurring->value, 'status' => CommissionStatus::Eligible, 'amount' => 5000,
+        ]);
+        CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id, 'referrer_id' => $this->referrer->id, 'customer_id' => $customer->id,
+            'scheme' => CommissionScheme::Recurring->value, 'status' => CommissionStatus::Pending, 'amount' => 9999,
+        ]);
+
+        // Titip: gross terkumpul semua, sisa disetor hanya yang belum_setor.
+        CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id, 'referrer_id' => $this->referrer->id, 'customer_id' => $customer->id,
+            'scheme' => CommissionScheme::Titip->value, 'status' => CommissionStatus::Eligible, 'amount' => 3000,
+            'gross_amount' => 100000, 'deposit_status' => TitipDepositStatus::BelumSetor,
+            'payment_period' => now()->startOfMonth()->toDateString(),
+        ]);
+        CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id, 'referrer_id' => $this->referrer->id, 'customer_id' => $customer->id,
+            'scheme' => CommissionScheme::Titip->value, 'status' => CommissionStatus::Eligible, 'amount' => 3000,
+            'gross_amount' => 250000, 'deposit_status' => TitipDepositStatus::SudahSetor,
+            'payment_period' => now()->startOfMonth()->toDateString(),
+        ]);
+
+        Livewire::actingAs($this->referrer->user)
+            ->test(Dashboard::class)
+            ->assertViewHas('totalKomisi', 5000.0)
+            ->assertViewHas('totalTitipTerkumpul', 350000.0)
+            ->assertViewHas('sisaPerluDisetor', 100000.0);
     }
 
     public function test_referrer_can_update_their_own_name(): void

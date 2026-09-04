@@ -4,6 +4,7 @@ namespace Tests\Feature\Commission;
 
 use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
+use App\Enums\TitipDepositStatus;
 use App\Livewire\Commission\TitipMasukIndex;
 use App\Models\CommissionLedger;
 use App\Models\Customer;
@@ -13,6 +14,7 @@ use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
+use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
 
 class TitipMasukIndexLivewireTest extends TestCase
@@ -33,9 +35,16 @@ class TitipMasukIndexLivewireTest extends TestCase
         return $user;
     }
 
-    private function titipRow(Tenant $tenant, string $customerName, CommissionStatus $status = CommissionStatus::Eligible): CommissionLedger
-    {
-        $referrer = Referrer::factory()->create(['tenant_id' => $tenant->id]);
+    private function titipRow(
+        Tenant $tenant,
+        string $customerName,
+        CommissionStatus $status = CommissionStatus::Eligible,
+        ?Referrer $referrer = null,
+        float $amount = 3000,
+        ?float $gross = 150000,
+        TitipDepositStatus $deposit = TitipDepositStatus::BelumSetor,
+    ): CommissionLedger {
+        $referrer ??= Referrer::factory()->create(['tenant_id' => $tenant->id]);
         $customer = Customer::factory()->create([
             'tenant_id' => $tenant->id,
             'reseller_id' => null,
@@ -49,7 +58,9 @@ class TitipMasukIndexLivewireTest extends TestCase
             'customer_id' => $customer->id,
             'scheme' => CommissionScheme::Titip->value,
             'status' => $status,
-            'amount' => 3000,
+            'amount' => $amount,
+            'gross_amount' => $gross,
+            'deposit_status' => $deposit,
             'payment_period' => now()->startOfMonth()->toDateString(),
         ]);
     }
@@ -119,5 +130,103 @@ class TitipMasukIndexLivewireTest extends TestCase
         $this->actingAs($admin)->get('/dashboard')
             ->assertOk()
             ->assertSee(route('web.titip-masuk.index'));
+    }
+
+    public function test_summary_cards_compute_total_commission_and_total_undeposited(): void
+    {
+        $tenant = Tenant::factory()->create();
+        // Eligible + belum setor: dihitung di kedua kartu.
+        $this->titipRow($tenant, 'A', CommissionStatus::Eligible, amount: 3000, gross: 100000, deposit: TitipDepositStatus::BelumSetor);
+        // Eligible tapi sudah setor: hitung komisi, TIDAK hitung setoran belum masuk.
+        $this->titipRow($tenant, 'B', CommissionStatus::Eligible, amount: 5000, gross: 200000, deposit: TitipDepositStatus::SudahSetor);
+        // Paid + belum setor: TIDAK hitung komisi (bukan eligible), hitung setoran belum masuk.
+        $this->titipRow($tenant, 'C', CommissionStatus::Paid, amount: 7000, gross: 50000, deposit: TitipDepositStatus::BelumSetor);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->assertViewHas('totalKomisiHarusDibayar', 8000.0)      // 3000 + 5000
+            ->assertViewHas('totalSetoranBelumMasuk', 150000.0);    // 100000 + 50000
+    }
+
+    public function test_rows_are_grouped_per_referrer_with_a_correct_undeposited_total(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $refA = Referrer::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Referrer Alpha']);
+        $refB = Referrer::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Referrer Beta']);
+
+        $this->titipRow($tenant, 'A1', referrer: $refA, gross: 100000, deposit: TitipDepositStatus::BelumSetor);
+        $this->titipRow($tenant, 'A2', referrer: $refA, gross: 50000, deposit: TitipDepositStatus::BelumSetor);
+        $this->titipRow($tenant, 'A3', referrer: $refA, gross: 999999, deposit: TitipDepositStatus::SudahSetor);
+        $this->titipRow($tenant, 'B1', referrer: $refB, gross: 70000, deposit: TitipDepositStatus::BelumSetor);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->assertViewHas('groups', function ($groups) use ($refA, $refB) {
+                $a = $groups->firstWhere('referrer.id', $refA->id);
+                $b = $groups->firstWhere('referrer.id', $refB->id);
+
+                return $groups->count() === 2
+                    && $a['tx_count'] === 3
+                    && $a['total_belum_setor'] === 150000.0   // 100k + 50k, NOT the sudah-setor 999999
+                    && $a['belum_setor_count'] === 2
+                    && $b['total_belum_setor'] === 70000.0;
+            });
+    }
+
+    public function test_mark_deposited_for_referrer_updates_only_that_referrers_belum_setor_rows(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $refA = Referrer::factory()->create(['tenant_id' => $tenant->id]);
+        $refB = Referrer::factory()->create(['tenant_id' => $tenant->id]);
+
+        $a1 = $this->titipRow($tenant, 'A1', referrer: $refA, deposit: TitipDepositStatus::BelumSetor);
+        $a2 = $this->titipRow($tenant, 'A2', referrer: $refA, deposit: TitipDepositStatus::SudahSetor);
+        $b1 = $this->titipRow($tenant, 'B1', referrer: $refB, deposit: TitipDepositStatus::BelumSetor);
+
+        $admin = $this->admin($tenant);
+
+        Livewire::actingAs($admin)
+            ->test(TitipMasukIndex::class)
+            ->call('markDepositedForReferrer', $refA->id)
+            ->assertSet('flash', fn ($m) => str_contains($m, '1 transaksi'));
+
+        $a1->refresh();
+        $this->assertSame(TitipDepositStatus::SudahSetor, $a1->deposit_status);
+        $this->assertNotNull($a1->deposited_at);
+        $this->assertSame($admin->id, $a1->deposited_by);
+
+        // Sudah-setor row untouched; other referrer's row untouched.
+        $this->assertNull($a2->refresh()->deposited_by);
+        $this->assertSame(TitipDepositStatus::BelumSetor, $b1->refresh()->deposit_status);
+    }
+
+    public function test_mark_deposited_requires_the_manage_permission(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $ref = Referrer::factory()->create(['tenant_id' => $tenant->id]);
+        $this->titipRow($tenant, 'A1', referrer: $ref, deposit: TitipDepositStatus::BelumSetor);
+
+        // View-only user: can open the page, cannot mark deposited.
+        $viewer = User::factory()->create(['tenant_id' => $tenant->id]);
+        $viewer->givePermissionTo(Permission::firstOrCreate(['name' => 'commission_ledger.view', 'guard_name' => 'web']));
+
+        Livewire::actingAs($viewer)
+            ->test(TitipMasukIndex::class)
+            ->assertOk()
+            ->call('markDepositedForReferrer', $ref->id)
+            ->assertForbidden();
+    }
+
+    public function test_deposit_status_filter_narrows_the_list(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->titipRow($tenant, 'Belum Bayar Ke Kantor', deposit: TitipDepositStatus::BelumSetor);
+        $this->titipRow($tenant, 'Sudah Lunas Ke Kantor', deposit: TitipDepositStatus::SudahSetor);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->set('depositFilter', TitipDepositStatus::SudahSetor->value)
+            ->assertSee('Sudah Lunas Ke Kantor')
+            ->assertDontSee('Belum Bayar Ke Kantor');
     }
 }

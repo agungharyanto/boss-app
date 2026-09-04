@@ -3,6 +3,8 @@
 namespace App\Livewire\ReferrerPortal;
 
 use App\Enums\CommissionScheme;
+use App\Enums\CommissionStatus;
+use App\Enums\TitipDepositStatus;
 use App\Models\Referrer;
 use Illuminate\Contracts\View\View;
 use Livewire\Attributes\Layout;
@@ -83,9 +85,21 @@ class Dashboard extends Component
 
         $isTitip = fn ($e) => $e->scheme?->value === CommissionScheme::Titip->value;
 
+        $commissionEntries = $ledger->reject($isTitip)->values();
+        $titipEntries = $ledger->filter($isTitip)->values();
+
         return view('livewire.referrer-portal.dashboard', [
-            'commissionEntries' => $ledger->reject($isTitip)->values(),
-            'titipEntries' => $ledger->filter($isTitip)->values(),
+            'commissionEntries' => $commissionEntries,
+            'titipEntries' => $titipEntries,
+            // Ringkasan angka (LANGKAH 4).
+            'totalKomisi' => (float) $commissionEntries
+                ->where('status', CommissionStatus::Eligible)
+                ->sum(fn ($e) => (float) ($e->amount ?? 0)),
+            'totalTitipTerkumpul' => (float) $titipEntries
+                ->sum(fn ($e) => (float) ($e->gross_amount ?? 0)),
+            'sisaPerluDisetor' => (float) $titipEntries
+                ->where('deposit_status', TitipDepositStatus::BelumSetor)
+                ->sum(fn ($e) => (float) ($e->gross_amount ?? 0)),
         ]);
     }
 }

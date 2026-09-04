@@ -6264,6 +6264,54 @@ tersisa). **`tests/Feature/Commission/ReferrerTitipPortalTest.php` DIHAPUS** (me
 Dashboard yang kini tidak ada) — cakupannya pindah ke test di atas. **Tidak ada endpoint REST baru**
 (akun Portal Referrer tidak punya Sanctum token — sama v0.9.6). Belum di-merge/tag.
 
+### Tracking Setoran Titip + Ringkasan Total (lanjutan, sama branch)
+
+**Gap: `commission_ledger` cuma simpan nominal KOMISI (`amount`), bukan TOTAL uang cash yang dipegang
+Referrer.** Model default (dikonfirmasi Agung): Referrer pegang uang PENUH dari pelanggan → setor semuanya
+ke admin → komisi dibayar balik terpisah (BUKAN Referrer potong komisi sendiri di tempat).
+
+**Migration `2026_09_04_120000_add_titip_deposit_tracking_to_commission_ledger_table`** — 4 kolom, semua
+khusus relevan `scheme=titip` (NULL untuk skema lain): `gross_amount` (decimal 12,2), `deposit_status`
+(`App\Enums\TitipDepositStatus`: `belum_setor`/`sudah_setor`), `deposited_at`, `deposited_by` (FK users
+`nullOnDelete`). `CommissionLedger` `$fillable`/casts + relasi `depositedBy()`. **DB dev sudah
+di-`migrate` + `db:seed --class=RolesAndPermissionsSeeder` ulang** — closure (merge/tag) harus segera
+menyusul (pelajaran v0.14.5.1: DB dev lebih maju dari `main`).
+
+**`gross_amount` diisi saat Perpanjang** — `SubscriptionRenewalService::renew()`: nilai =
+`sell_price` `PppPackage` **EFEKTIF** (paket BARU kalau ganti paket, paket saat ini kalau tidak) —
+**snapshot**, bukan harga sekarang kalau berubah nanti. `deposit_status` default `belum_setor`. Diteruskan
+lewat `ReferrerTitipService::recordForRenewal($ref, $cust, ?float $grossAmount)`. `record()` (jalur portal
+lama, tidak dipakai UI lagi) tetap `gross_amount` NULL. Hasil `renew()` dapat key
+`commission_gross_amount`.
+
+**`/titip-masuk` (admin) dirombak** — `App\Livewire\Commission\TitipMasukIndex`:
+- **`WithPagination` DIHAPUS** — load semua baris titip tenant-scoped (operasional, volume rendah — sama
+  posture `ReferrerPortal\Dashboard`) lalu group di PHP by `referrer_id`, sort desc by total belum setor.
+- 2 kartu ringkasan **GLOBAL** (tenant-scoped, **independen dari filter**): "Total Komisi Harus Dibayar"
+  (`sum(amount)` titip status=eligible), "Total Setoran Belum Masuk" (`sum(gross_amount)` titip
+  `deposit_status=belum_setor`).
+- Per grup Referrer: nama, total belum setor, jumlah transaksi, tombol **"Tandai Sudah Setor Semua"**
+  (`markDepositedForReferrer($referrerId)` → bulk `update` `deposit_status=sudah_setor` +
+  `deposited_at=now()` + `deposited_by=auth()->id()` untuk SEMUA baris `belum_setor` Referrer itu; hanya
+  yang `belum_setor` disentuh). Detail expand/collapse (Alpine `x-data="{ open: false }"` — object-literal,
+  aman dari `FrontendBuildTest`), baris individual + kolom "Setoran" (badge + siapa/kapan).
+- Filter baru: status setoran (Semua / Belum Setor / Sudah Setor).
+- **Permission baru `commission_ledger.manage`** (`giveToAdminTier`, tier-admin) +
+  `CommissionLedgerPolicy::markDeposit()`. Docblock policy lama ("v0.9.7 akan menambah aksi + permission")
+  kini terpenuhi.
+
+**Portal Referrer ringkasan** — `ReferrerPortal\Dashboard::render()`: `totalKomisi` (`sum(amount)`
+scheme!=titip status=eligible), `totalTitipTerkumpul` (`sum(gross_amount)` semua titip),
+`sisaPerluDisetor` (`sum(gross_amount)` titip `deposit_status=belum_setor`). View: angka di atas
+Rekap Komisi / Rekap Titip; kolom **Status Setor** + kolom Uang Diterima / Komisi terpisah di tabel Rekap
+Titip.
+
+**`ReferrerReferralResource`** (`GET /api/v1/referrals`) `commissions[]` dapat `gross_amount` /
+`deposit_status` / `deposit_status_label` / `deposited_at` — additive, hanya terisi untuk `scheme=titip`.
+
+**Test**: `SubscriptionRenewalServiceTest` +2, `TitipMasukIndexLivewireTest` +5, `ReferrerPortalDashboardTest`
++1. Full regression suite hijau. Pint clean.
+
 ## Commission Rate Settings (v0.9.3)
 
 **`commission_rates` — konfigurasi rate komisi per `PppPackage` (v0.14.5), admin-editable.** FK ke

@@ -5,7 +5,9 @@ namespace Tests\Feature\Commission;
 use App\Enums\CommissionScheme;
 use App\Enums\NetworkProfileGroupType;
 use App\Enums\ReferrerType;
+use App\Enums\TitipDepositStatus;
 use App\Models\BandwidthProfile;
+use App\Models\CommissionLedger;
 use App\Models\CommissionRate;
 use App\Models\Customer;
 use App\Models\NetworkProfileGroup;
@@ -32,7 +34,7 @@ class SubscriptionRenewalServiceTest extends TestCase
         $this->service = app(SubscriptionRenewalService::class);
     }
 
-    private function package(?float $titip, string $name = 'Paket'): PppPackage
+    private function package(?float $titip, string $name = 'Paket', float $sellPrice = 150000): PppPackage
     {
         $group = NetworkProfileGroup::factory()->create([
             'tenant_id' => $this->tenant->id,
@@ -43,6 +45,7 @@ class SubscriptionRenewalServiceTest extends TestCase
             'tenant_id' => $this->tenant->id,
             'name' => $name,
             'is_active' => true,
+            'sell_price' => $sellPrice,
             'network_profile_group_id' => $group->id,
             'bandwidth_profile_id' => BandwidthProfile::factory()->create(['tenant_id' => $this->tenant->id])->id,
         ]);
@@ -154,6 +157,62 @@ class SubscriptionRenewalServiceTest extends TestCase
 
         $this->expectException(\RuntimeException::class);
         $this->service->renew($user, $customer, $foreignPackage->id);
+    }
+
+    public function test_titip_row_snapshots_gross_amount_from_the_current_package_sell_price(): void
+    {
+        $user = $this->actingUser();
+        Referrer::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'user_id' => $user->id,
+            'type' => ReferrerType::Sales,
+            'is_active' => true,
+        ]);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'reseller_id' => null,
+            'ppp_package_id' => $this->package(3000, 'Paket', 175000)->id,
+        ]);
+
+        $this->service->renew($user, $customer, null);
+
+        $row = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)
+            ->where('scheme', CommissionScheme::Titip->value)
+            ->sole();
+
+        $this->assertSame('175000.00', $row->gross_amount);
+        $this->assertSame('3000.00', $row->amount);
+        $this->assertSame(TitipDepositStatus::BelumSetor, $row->deposit_status);
+    }
+
+    public function test_gross_amount_uses_the_new_package_sell_price_when_the_package_is_changed(): void
+    {
+        $user = $this->actingUser();
+        Referrer::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'user_id' => $user->id,
+            'type' => ReferrerType::Freelance,
+            'is_active' => true,
+        ]);
+        $from = $this->package(3000, 'Lama', 100000);
+        $to = $this->package(4000, 'Baru', 250000);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'reseller_id' => null,
+            'ppp_package_id' => $from->id,
+        ]);
+
+        $result = $this->service->renew($user, $customer, $to->id);
+
+        $row = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)
+            ->where('scheme', CommissionScheme::Titip->value)
+            ->sole();
+
+        $this->assertSame('250000.00', $row->gross_amount);
+        $this->assertSame('4000.00', $row->amount);
+        $this->assertSame(250000.0, $result['commission_gross_amount']);
     }
 
     public function test_the_service_has_no_network_gateway_dependency(): void

@@ -95,7 +95,12 @@ ke acting Referrer + komisi Titip untuk Referrer Sales/Freelance. **Sengaja
 tidak diekspos sebagai REST** — akun Portal Referrer tidak punya Sanctum token
 (sama posture v0.9.6). Business logic di
 `App\Services\Commission\SubscriptionRenewalService::renew()`, callable dari
-mana pun kalau nanti dibutuhkan. **Nol panggilan NAS/RouterOS/RADIUS/MixRadius**
+mana pun kalau nanti dibutuhkan. Baris `commission_ledger` scheme=titip yang
+lahir dari sini juga menyimpan `gross_amount` (snapshot `sell_price` paket
+efektif = total uang cash yang dipegang Referrer) + `deposit_status`
+(`belum_setor`/`sudah_setor`) — dikelola admin di halaman web "Titip Masuk"
+(`/titip-masuk`, tombol "Tandai Sudah Setor Semua" per Referrer,
+`commission_ledger.manage`). Tidak ada endpoint REST untuk aksi itu juga. **Nol panggilan NAS/RouterOS/RADIUS/MixRadius**
 — hanya data BOSS App; `subscriptions`/`SubscriptionService`/`GenerateDueInvoices`
 tidak disentuh.
 
@@ -203,6 +208,12 @@ murni lewat link `referrers.user_id`, bukan kode.
 > punya N baris komisi, jadi sekarang ada array `commissions[]` + ringkasan
 > `commission_total_earned` (jumlah `amount` untuk status
 > Eligible/Approved/Paid).
+>
+> **Tambahan (sprint `perpanjang-daftar-pelanggan`, additive)** — tiap item
+> `commissions[]` dapat `gross_amount` / `deposit_status`
+> (`belum_setor`/`sudah_setor`) / `deposit_status_label` / `deposited_at` —
+> **hanya terisi untuk `scheme=titip`** (total uang cash yang dipegang
+> Referrer + status setorannya), `null` untuk skema lain.
 
 ```json
 {
@@ -232,6 +243,10 @@ murni lewat link `referrers.user_id`, bukan kode.
           "scheme": "titip",
           "scheme_label": "Titip",
           "amount": "3000.00",
+          "gross_amount": "150000.00",
+          "deposit_status": "belum_setor",
+          "deposit_status_label": "Belum Setor",
+          "deposited_at": null,
           "status": "eligible",
           "payment_period": "2026-09-01",
           "invoice_id": null,

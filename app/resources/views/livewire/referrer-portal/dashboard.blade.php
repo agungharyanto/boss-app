@@ -1,5 +1,8 @@
 @php
     use App\Enums\CommissionStatus;
+    use App\Enums\TitipDepositStatus;
+
+    $rupiah = fn ($n) => 'Rp '.number_format((float) $n, 0, ',', '.');
 
     $statusBadge = function (CommissionStatus $status): array {
         return match ($status) {
@@ -56,7 +59,11 @@
     {{-- ---------- Rekap Komisi (referral resmi, scheme != titip) ---------- --}}
     <div class="p-4 bg-white border border-gray-200 rounded-md">
         <h2 class="text-lg font-semibold text-gray-800 mb-1">{{ __('Rekap Komisi') }}</h2>
-        <p class="text-xs text-gray-500 mb-3">{{ __('Komisi dari pelanggan yang Anda referensikan (Per Bulan / X-Kali).') }}</p>
+        <p class="text-xs text-gray-500 mb-2">{{ __('Komisi dari pelanggan yang Anda referensikan (Per Bulan / X-Kali).') }}</p>
+        <p class="mb-3 text-sm">
+            <span class="text-gray-500">{{ __('Total Komisi (layak dibayar)') }}:</span>
+            <span class="font-semibold text-blue-700">{{ $rupiah($totalKomisi) }}</span>
+        </p>
 
         <div class="overflow-x-auto border border-gray-200 rounded-md">
             <table class="min-w-full divide-y divide-gray-200">
@@ -100,7 +107,17 @@
     {{-- ---------- Rekap Titip (scheme = titip, milik Referrer ini) ---------- --}}
     <div class="p-4 bg-white border border-gray-200 rounded-md">
         <h2 class="text-lg font-semibold text-gray-800 mb-1">{{ __('Rekap Titip') }}</h2>
-        <p class="text-xs text-gray-500 mb-3">{{ __('Titip pembayaran cash yang Anda catat (pelanggan mana pun).') }}</p>
+        <p class="text-xs text-gray-500 mb-2">{{ __('Titip pembayaran cash yang Anda catat (pelanggan mana pun).') }}</p>
+        <div class="mb-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+            <p>
+                <span class="text-gray-500">{{ __('Total Titip Terkumpul') }}:</span>
+                <span class="font-semibold text-gray-800">{{ $rupiah($totalTitipTerkumpul) }}</span>
+            </p>
+            <p>
+                <span class="text-gray-500">{{ __('Sisa Perlu Disetor') }}:</span>
+                <span class="font-semibold text-orange-700">{{ $rupiah($sisaPerluDisetor) }}</span>
+            </p>
+        </div>
 
         <div class="overflow-x-auto border border-gray-200 rounded-md">
             <table class="min-w-full divide-y divide-gray-200">
@@ -108,28 +125,41 @@
                     <tr>
                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pelanggan') }}</th>
                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Periode') }}</th>
-                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">{{ __('Nominal') }}</th>
+                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">{{ __('Uang Diterima') }}</th>
+                        <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">{{ __('Komisi') }}</th>
                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status') }}</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status Setor') }}</th>
                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Dicatat') }}</th>
                     </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     @forelse ($titipEntries as $entry)
-                        @php [$badgeClass, $badgeLabel] = $statusBadge($entry->status); @endphp
+                        @php
+                            [$badgeClass, $badgeLabel] = $statusBadge($entry->status);
+                            $sudahSetor = $entry->deposit_status === TitipDepositStatus::SudahSetor;
+                        @endphp
                         <tr wire:key="titip-{{ $entry->id }}">
                             <td class="px-4 py-2 text-sm text-gray-800">{{ $entry->customer?->name ?? '—' }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $entry->payment_period?->translatedFormat('F Y') ?? '—' }}</td>
                             <td class="px-4 py-2 text-sm text-right text-gray-800">
-                                {{ $entry->amount !== null ? 'Rp '.number_format((float) $entry->amount, 0, ',', '.') : '—' }}
+                                {{ $entry->gross_amount !== null ? $rupiah($entry->gross_amount) : '—' }}
+                            </td>
+                            <td class="px-4 py-2 text-sm text-right text-gray-600">
+                                {{ $entry->amount !== null ? $rupiah($entry->amount) : '—' }}
                             </td>
                             <td class="px-4 py-2 text-sm">
                                 <span class="inline-block px-2 py-0.5 text-xs font-medium rounded {{ $badgeClass }}">{{ $badgeLabel }}</span>
+                            </td>
+                            <td class="px-4 py-2 text-sm">
+                                <span class="inline-block px-2 py-0.5 text-xs font-medium rounded {{ $sudahSetor ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800' }}">
+                                    {{ $sudahSetor ? __('Sudah Setor') : __('Belum Setor') }}
+                                </span>
                             </td>
                             <td class="px-4 py-2 text-sm text-gray-500">{{ $entry->created_at->format('d/m/Y') }}</td>
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="5" class="px-4 py-6 text-center text-sm text-gray-500">
+                            <td colspan="7" class="px-4 py-6 text-center text-sm text-gray-500">
                                 {{ __('Belum ada titip tercatat.') }}
                             </td>
                         </tr>

@@ -43,6 +43,7 @@ class SubscriptionRenewalService
      *     package_to: ?string,
      *     commission_created: bool,
      *     commission_amount: ?float,
+     *     commission_gross_amount: ?float,
      *     commission_skipped_reason: ?string,
      * }
      *
@@ -77,6 +78,7 @@ class SubscriptionRenewalService
             'package_to' => $fromName,
             'commission_created' => false,
             'commission_amount' => null,
+            'commission_gross_amount' => null,
             'commission_skipped_reason' => null,
         ];
 
@@ -102,9 +104,18 @@ class SubscriptionRenewalService
                 if (! $availability['available']) {
                     $result['commission_skipped_reason'] = $availability['reason'] ?? 'Rate komisi Titip tidak tersedia untuk paket ini.';
                 } else {
-                    $ledger = $this->titip->recordForRenewal($referrer, $customer);
+                    // gross_amount = total uang cash dari pelanggan = sell_price
+                    // paket EFEKTIF (paket baru kalau ganti, paket saat ini
+                    // kalau tidak). Snapshot — bukan harga sekarang kalau
+                    // berubah nanti.
+                    $effectivePackage = $newPackage
+                        ?? PppPackage::withoutGlobalScopes()->find($customer->ppp_package_id);
+                    $grossAmount = $effectivePackage !== null ? (float) $effectivePackage->sell_price : null;
+
+                    $ledger = $this->titip->recordForRenewal($referrer, $customer, $grossAmount);
                     $result['commission_created'] = true;
                     $result['commission_amount'] = (float) $ledger->amount;
+                    $result['commission_gross_amount'] = $ledger->gross_amount !== null ? (float) $ledger->gross_amount : null;
                 }
             }
 

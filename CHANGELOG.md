@@ -3,6 +3,58 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## Tracking Setoran Titip + Ringkasan Total (branch `perpanjang-daftar-pelanggan`, belum di-merge/tag)
+
+Gap: `commission_ledger` cuma menyimpan nominal KOMISI, bukan TOTAL uang yang dipegang Referrer dari
+pelanggan saat Titip. Model (dikonfirmasi Agung): Referrer pegang uang PENUH, setor semuanya ke admin,
+komisi dibayar balik terpisah (BUKAN potong komisi sendiri di tempat).
+
+**LANGKAH 1 — migration** `2026_09_04_120000_add_titip_deposit_tracking_to_commission_ledger_table`:
+`gross_amount` (decimal 12,2, nullable), `deposit_status` (`belum_setor`/`sudah_setor`, nullable —
+`App\Enums\TitipDepositStatus`), `deposited_at` (timestamp), `deposited_by` (FK users, `nullOnDelete`).
+Semua khusus relevan `scheme=titip`, NULL untuk skema lain. `CommissionLedger` `$fillable`/casts +
+relasi `depositedBy()`.
+
+**LANGKAH 2 — isi `gross_amount` saat Perpanjang.** `SubscriptionRenewalService::renew()` → saat buat
+baris `commission_ledger` scheme=titip, isi `gross_amount` dari `sell_price` `PppPackage` EFEKTIF (paket
+BARU kalau ganti paket, paket saat ini kalau tidak) — snapshot, bukan harga sekarang kalau berubah
+nanti. `deposit_status` default `belum_setor`. `ReferrerTitipService::recordForRenewal($ref, $cust,
+?float $grossAmount)` diperluas; `record()` (jalur portal lama, tidak dipakai UI lagi) tetap
+`gross_amount` NULL.
+
+**LANGKAH 3 — ringkasan + pengelompokan di `/titip-masuk` (admin).**
+- 2 kartu ringkasan (GLOBAL tenant, independen filter): "Total Komisi Harus Dibayar"
+  (`sum(amount)` titip status=eligible), "Total Setoran Belum Masuk"
+  (`sum(gross_amount)` titip `deposit_status=belum_setor`).
+- List **dikelompokkan per Referrer** (bukan flat lagi — `WithPagination` dihapus, load semua titip
+  tenant-scoped lalu group di PHP, di-sort desc by total belum setor). Header grup: nama Referrer,
+  total belum setor, jumlah transaksi, tombol **"Tandai Sudah Setor Semua"** (`commission_ledger.manage`
+  → bulk `deposit_status=sudah_setor` + `deposited_at=now()` + `deposited_by=auth()->id()` untuk SEMUA
+  baris `belum_setor` Referrer itu). Detail per grup expand/collapse (Alpine `x-data="{ open: false }"`),
+  menampilkan baris individual (pelanggan, periode, uang diterima, komisi, status, status setor + siapa/
+  kapan).
+- Filter baru: **status setoran** (Semua / Belum Setor / Sudah Setor).
+- **Permission baru `commission_ledger.manage`** (tier-admin, `giveToAdminTier`) +
+  `CommissionLedgerPolicy::markDeposit()`. **DB dev sudah di-`db:seed --class=RolesAndPermissionsSeeder`
+  ulang** (insiden berulang di CLAUDE.md — migration/kode saja tidak cukup).
+
+**LANGKAH 4 — ringkasan di Portal Referrer.** `ReferrerPortal\Dashboard`: "Total Komisi (layak dibayar)"
+(`sum(amount)` scheme!=titip status=eligible) di atas Rekap Komisi; "Total Titip Terkumpul"
+(`sum(gross_amount)`) + "Sisa Perlu Disetor" (`sum(gross_amount)` `deposit_status=belum_setor`) di atas
+Rekap Titip. Kolom **Status Setor** (+ kolom Uang Diterima / Komisi terpisah) ditambahkan di tabel Rekap
+Titip.
+
+`ReferrerReferralResource` (`GET /api/v1/referrals`) `commissions[]` dapat `gross_amount` /
+`deposit_status` / `deposit_status_label` / `deposited_at` (additive).
+
+**Test**: `SubscriptionRenewalServiceTest` +2 (gross dari sell_price paket saat ini / paket baru),
+`TitipMasukIndexLivewireTest` +5 (kartu ringkasan, pengelompokan per Referrer, "Tandai Sudah Setor Semua"
+bulk-update yang benar, `.manage` wajib, filter setoran), `ReferrerPortalDashboardTest` +1 (3 angka
+ringkasan). Full regression suite hijau. Pint clean. **DB dev sudah di-`migrate` + `db:seed`** — closure
+(merge/tag) harus segera menyusul (pelajaran v0.14.5.1). Belum di-merge/tag.
+
+---
+
 ## Perpanjang di Daftar Pelanggan + Akses Terbatas Referrer (branch `perpanjang-daftar-pelanggan`, belum di-merge/tag)
 
 Redesain dari Portal Referrer terpisah → terintegrasi ke **Daftar Pelanggan** (halaman admin

@@ -3,6 +3,88 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## WhatsApp Gateway Reliability — fix race condition + Kode Pairing + evaluasi WAHA (branch `whatsapp-gateway-reliability`, dari `main`, belum di-merge/tag)
+
+Investigasi keluhan Agung: WhatsApp Gateway sering putus koneksi, scan QR lambat, sering perlu refresh
+berkali-kali untuk connect.
+
+**LANGKAH 1 — investigasi pola disconnect (log riil ~20 jam container, bukan tebakan).** Statistik dari
+`docker compose logs whatsapp-gateway`: 9× `session disconnected` (statusCode 515/428/503, transient,
+semua reconnect otomatis sukses attempt-1), **3× `logged_out` (conflict `device_removed`, statusCode 401)
+dalam <1.5 jam** pada satu window, 4× QR baru ter-generate (butuh re-pairing penuh, bukan cuma reconnect).
+Backoff eksponensial (5s→60s, dari fix v0.9.6 sebelumnya) dikonfirmasi BEKERJA SESUAI DESAIN — pola
+"attempt selalu 1" bukan bug, itu karena tiap rantai kegagalan pendek (reset begitu `connection:open`
+tercapai), bukan backoff gagal eskalasi.
+
+**Root cause `device_removed` — DITEMUKAN via pembacaan source Baileys langsung (`lib/Socket/socket.js`),
+BUKAN kebocoran socket lama** (Baileys sendiri sudah memanggil `end()`/`ws.close()` internal di setiap
+disconnect, dikonfirmasi dari source — bukan hipotesis). **RACE CONDITION nyata**: `connect()` versi lama
+punya 2 `await` (`useMultiFileAuthState`, `fetchLatestBaileysVersion`) SEBELUM `this.sessions.set(...)` —
+kalau `connect()` terpanggil dua kali nyaris bersamaan untuk `sessionKey` yang sama (mis. `index.js`
+`app.listen()` mulai menerima request SEBELUM `restoreAll()` selesai, race UI-refresh vs auto-reconnect
+timer), KEDUANYA lolos cek `!existing.sock` di `ensureConnected()` dan KEDUANYA memanggil `makeWASocket()`
+— dua socket hidup sekaligus mengautentikasi sebagai perangkat yang SAMA, dideteksi server WhatsApp
+sebagai konflik → `device_removed`.
+
+**Baileys version**: sudah di versi stabil TERBARU (`6.7.24`, resolusi dari range `^6.7.9`) — dikonfirmasi
+via `npm view`. Versi lebih baru (`7.0.0-rc14`) masih RILIS RC (release candidate), belum stabil — TIDAK
+direkomendasikan upgrade sekarang.
+
+**FIX (`whatsapp-gateway/src/sessionManager.js`)**:
+1. **`connectLocks` (Map<sessionKey, Promise>)** — `connect()` untuk key yang sudah punya panggilan
+   in-flight tidak lagi memulai `makeWASocket()` baru, melainkan `await` Promise yang SAMA. Menutup race
+   secara struktural, di titik manapun ia bisa terjadi.
+2. **`getOrRefreshQr()` pada status `disconnected`** sekarang membatalkan timer backoff yang masih
+   menunggu (`entry.reconnectTimer`) lalu reconnect SEKARANG (aman berkat lock #1) — sebelumnya tombol
+   refresh di UI adalah NO-OP total selama window backoff (kemungkinan besar akar "harus refresh
+   berkali-kali, kelihatannya tidak ngaruh").
+
+**Verifikasi**:
+- **Isolasi murni** (`whatsapp-gateway/test-connect-lock-race.js`, Baileys di-stub via `require.cache`
+  substitution — dijalankan manual, disimpan di repo): 2 panggilan `connect()` bersamaan untuk key sama →
+  `makeWASocket` cuma 1x; key beda → tetap 2x independen; panggilan berurutan (bukan bersamaan) → tetap 2x
+  (lock cuma untuk yang BENAR-BENAR bersamaan). Semua 3 skenario LULUS.
+- **REAL, terhadap container `whatsapp-gateway` yang sudah di-rebuild+redeploy** (`docker compose up -d
+  --build`): 2 request `GET /sessions/direct/qr` yang genuinely bersamaan (`Http::pool()`) → tepat **1**
+  baris log `"new QR code generated"` (sebelum fix, ini berpotensi 2 socket). Round-trip penuh terverifikasi:
+  QR ter-generate → webhook ke Laravel → `whatsapp_sessions.qr_code_data` ter-update (6554 bytes).
+
+**Status live saat investigasi ini ditulis**: sesi "direct" (nomor `6281389014113`) sedang **`logged_out`,
+belum terpasang** — event `logged_out` TERAKHIR di log terjadi ~19:20 WIB (sebelum fix di-deploy), auth_state
+kosong. **Perlu Agung scan QR baru ATAU pakai Kode Pairing (LANGKAH 2) untuk menghubungkan ulang.**
+
+**LANGKAH 2 — Kode Pairing (native Baileys `requestPairingCode`, BUKAN ganti backend).**
+- `whatsapp-gateway`: endpoint baru `POST /sessions/:key/pair` (`{phone_number}`) →
+  `SessionManager::requestPairingCode()` — wipe + mulai sesi baru dari nol (sama seperti alur refresh-QR
+  pada sesi logged_out), lalu `sock.requestPairingCode(digits)`. Ditolak (500) kalau sesi sudah `connected`.
+- Laravel: `WhatsappSessionService::requestPairingCode()` (pola HMAC POST sama seperti
+  `SendWhatsappMessageJob`), `WhatsappGatewayIndex` dapat toggle "Pakai Kode Pairing" per sesi
+  (`togglePairingMode`/`requestPairingCode`), partial Blade baru `partials/pairing-connect-panel.blade.php`
+  dipakai identik untuk sesi reseller maupun sesi direct/ISP — kode besar ditampilkan begitu diterbitkan.
+- **Test**: 6 test baru (`WhatsappPairingCodeTest`) — service POST ke endpoint benar + HMAC tertanda,
+  gagal-gateway ditangani, alur Livewire lengkap, validasi nomor HP, akses ditolak untuk user tanpa
+  permission, toggle membersihkan hasil sebelumnya.
+- **Yang sudah bisa dites**: alur penuh SAMPAI kode diterbitkan (dikonfirmasi service + Livewire test +
+  live terhadap gateway yang genuinely berjalan). **Yang BUTUH Agung coba manual**: memasukkan kode di HP
+  sungguhan (Perangkat Tertaut → Tautkan dengan nomor telepon) — tidak ada akses device fisik di
+  environment ini, sama seperti keterbatasan verifikasi "scan QR sungguhan" yang sudah tercatat sejak
+  v0.4.0.
+
+**LANGKAH 3 — evaluasi WAHA, MURNI DOKUMEN** (`docs/whatsapp-gateway-alternatif-evaluasi.md`), riset
+langsung ke GitHub issue WAHA (bukan asumsi): NOWEB (engine JS WAHA) berbagi kelas masalah instabilitas
+yang SAMA dengan Baileys (reverse-engineered, `statusCode 408` storms — persis pola di log kita sendiri);
+GOWS (whatsmeow, Go) dilaporkan lebih stabil TAPI itu library yang BERBEDA total, bukan "WAHA vs Baileys".
+**Risiko paling relevan buat Agung — kehilangan sesi massal saat redeploy — TERKONFIRMASI NYATA**: issue
+GitHub WAHA [#1591](https://github.com/devlikeapro/waha/issues/1591), ditutup maintainer sebagai
+**"not planned"** (bukan bug yang akan diperbaiki). **Rekomendasi: TETAP Baileys custom** dengan perbaikan
+Langkah 1-2 — biaya migrasi (seluruh `App\Services\Whatsapp\*` ditulis ulang + infrastruktur tambahan)
+tidak sepadan, dan risiko WAHA yang paling relevan justru LEBIH BESAR, bukan lebih kecil, dari yang sedang
+diperbaiki.
+
+Full regression suite dijalankan, Pint clean. Belum di-merge/tag.
+
+---
+
 ## v0.9.7 — Login Terpadu (Admin + Referrer, 1 pintu di `/login`) (branch `login-terpadu`, merged + tagged `v0.9.7`)
 
 Gabung 2 halaman login terpisah (`/login` Fortify email, `/referrer/login` custom HP) jadi **SATU pintu

@@ -432,13 +432,49 @@ func (m *Manager) RequestPairingCode(key, phoneNumber string) (string, error) {
 	m.registerHandlers(e)
 	m.sessions.Store(key, e)
 
+	qrCtx, cancel := context.WithCancel(m.ctx)
+	defer cancel()
+
+	// GetQRChannel HARUS dibuka sebelum Connect() (persis pola
+	// startFreshQR) walau QR-nya sendiri TIDAK dipakai di alur Kode
+	// Pairing — whatsmeow's PairPhone() docblock (pair-code.go) mewajibkan
+	// menunggu event PERTAMA dari kanal ini dulu supaya handshake koneksi
+	// genuinely selesai. BUG NYATA ditemukan sebelum fix ini: tanpa
+	// menunggu, PairPhone() 100% gagal "info query returned status 400:
+	// bad-request" — dikonfirmasi lewat pengujian langsung terhadap
+	// server WhatsApp asli, bukan cuma dugaan dari membaca dokumentasi.
+	qrChan, err := e.client.GetQRChannel(qrCtx)
+	if err != nil {
+		return "", fmt.Errorf("failed to open QR channel: %w", err)
+	}
+
 	if err := e.client.Connect(); err != nil {
 		return "", fmt.Errorf("connect failed: %w", err)
 	}
 
+	select {
+	case <-qrChan:
+	case <-time.After(10 * time.Second):
+		return "", errors.New("timed out waiting for connection to establish before requesting pairing code")
+	}
+
+	// Sisa event di kanal (QR berikutnya, kalau ada) tidak relevan untuk
+	// alur Kode Pairing — dibuang di goroutine terpisah supaya tidak bocor
+	// dan tidak menghambat panggilan PairPhone di bawah.
+	go func() {
+		for range qrChan { //nolint:revive // sengaja membuang semua item
+		}
+	}()
+
 	normalized := jidnorm.NormalizeIndonesian(phoneNumber)
 
-	code, err := e.client.PairPhone(m.ctx, normalized, true, whatsmeow.PairClientChrome, "BOSS App")
+	// clientDisplayName WAJIB format "Browser (OS)" dan divalidasi SERVER
+	// WhatsApp sendiri (menolak 400 kalau tidak cocok pola browser/OS yang
+	// dikenal) — dikonfirmasi lewat bug NYATA: "BOSS App" (nama bebas)
+	// ditolak 400 "info query returned status 400: bad-request" walau
+	// timing/handshake sudah benar. "Chrome (Linux)" dipilih karena cocok
+	// dengan whatsmeow.PairClientChrome di parameter sebelumnya.
+	code, err := e.client.PairPhone(m.ctx, normalized, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
 	if err != nil {
 		return "", fmt.Errorf("pairing code request failed: %w", err)
 	}

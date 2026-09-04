@@ -57,7 +57,8 @@
                 // "Referrer" + "Rate Komisi" dipindah ke sini dari
                 // "Operasional" (komisi/keuangan).
                 || request()->routeIs('web.referrers.*')
-                || request()->routeIs('web.commission-rates.*'),
+                || request()->routeIs('web.commission-rates.*')
+                || request()->routeIs('web.titip-masuk.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\TaxComponent::class)
                     ? ['route' => 'web.tax-components.index', 'label' => __('Tax Components')]
@@ -114,6 +115,11 @@
                     : null,
                 auth()->user()->can('viewAny', \App\Models\CommissionRate::class)
                     ? ['route' => 'web.commission-rates.index', 'label' => __('Rate Komisi')]
+                    : null,
+                // v0.9.6 — daftar kerja "Titip Masuk" (entri komisi Titip
+                // dari Portal Referrer). Read-only, permission terpisah.
+                auth()->user()->can('viewAny', \App\Models\CommissionLedger::class)
+                    ? ['route' => 'web.titip-masuk.index', 'label' => __('Titip Masuk')]
                     : null,
             ]),
         ],

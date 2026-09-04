@@ -46,6 +46,10 @@
                     {{ __('Masuk') }}
                 </button>
             </form>
+
+            <div class="mt-4 text-sm text-center">
+                <a href="{{ route('referrer.password.request') }}" class="text-blue-600 hover:underline">{{ __('Lupa password?') }}</a>
+            </div>
         </div>
     </body>
 </html>

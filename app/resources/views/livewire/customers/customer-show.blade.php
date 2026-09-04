@@ -157,9 +157,9 @@
                 <dd class="text-gray-800">{{ $cpeDevice->status->label() }}</dd>
             </dl>
             <p class="text-xs text-gray-500">
-                Sudah ter-bind ke device ini. Mau ganti perangkat? Pakai
-                <a href="{{ route('web.cpe-devices.index') }}" class="text-primary hover:underline">"Ganti Modem" di Perangkat CPE</a>,
-                bukan form di halaman ini — supaya tidak ada dua jalur yang bisa saling tabrakan untuk customer yang sudah punya device.
+                Sudah ter-bind ke device ini. Mau ganti perangkat? Buka
+                <a href="{{ route('web.cpe-devices.show', $cpeDevice) }}" class="text-primary hover:underline">halaman detail device ini</a>
+                dan pakai aksi "Ganti Modem" di sana — bukan form di halaman ini, supaya tidak ada dua jalur yang bisa saling tabrakan untuk customer yang sudah punya device.
             </p>
         @else
             <p class="text-sm text-gray-500 mb-3">Customer ini belum punya device CPE ter-bind.</p>

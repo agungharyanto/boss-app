@@ -3,6 +3,182 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.9.7 — Login Terpadu (Admin + Referrer, 1 pintu di `/login`) (branch `login-terpadu`, merged + tagged `v0.9.7`)
+
+Gabung 2 halaman login terpisah (`/login` Fortify email, `/referrer/login` custom HP) jadi **SATU pintu
+di `/login`** — field pertama **"Email atau Nomor HP"** (bukan 2 field terpisah).
+
+- `config/fortify.php` `'username' => 'login'` (dulu `email`), `'home' => '/'` (dulu `/dashboard`).
+- `Fortify::authenticateUsing()` — deteksi email vs HP saat submit; email → jalur staff (`users`), HP →
+  jalur Referrer (reuse `App\Support\LoginIdentifierResolver`, dipakai bareng `ReferrerLoginController`
+  jalur compat). Verifikasi password di pemanggil, bukan resolver.
+- Pesan gagal **identik** kedua jalur: `lang/id/auth.php` + `lang/en/auth.php` (baru) `failed` →
+  "Email/nomor HP atau password salah." — tidak bocorkan identitas terdaftar / jalur mana.
+- `App\Http\Responses\LoginResponse` (bind di `FortifyServiceProvider::register()`) → `redirect()->
+  intended('/')`, biarkan route `/` yang branch (satu sumber kebenaran, `EnsureAdminPanelAccess::
+  userHasAccess()`). Tidak hardcode redirect.
+- Rate limit: `config('fortify.limiters.login')` diset → route middleware `throttle:login` (HTTP 429,
+  5/menit per identifier+IP) untuk kedua jalur. `/referrer/login` POST compat tetap `throttle:6,1`.
+- `/referrer/login` GET → 302 ke `/login`; POST tetap berfungsi (kompat link/bookmark lama).
+  `ReferrerLoginController::logout()` redirect ke `route('login')`.
+- Test: `UnifiedLoginTest` (13) + `ReferrerPortalLoginTest` disesuaikan. Diverifikasi live (staff email →
+  `/dashboard`, Kamisem HP → `/referrer-portal`, wrong pw/unknown email → pesan generik sama).
+- Merge v0.9.6: link **"Lupa password?"** (dibangun di v0.9.6, `/referrer/forgot-password`) dipindah ke
+  form login terpadu `/login` (dulu cuma di halaman `/referrer/login` yang sekarang redirect).
+
+---
+
+## Portal Referrer diperluas + CPE offline-palsu + link "Ganti Modem" (bagian dari tag `v0.9.6`)
+
+**BAGIAN A — Portal Referrer: daftar SEMUA pelanggan (keputusan Agung).** "Pelanggan yang Saya
+Referensikan" → **"Daftar Pelanggan"** (semua, tenant-scoped) — titip cash bisa dikumpulkan siapa saja,
+tidak harus Referrer resmi.
+- `ReferrerTitipService::availabilityFor(Customer)` — syarat "direferensikan Referrer ini" **DIHAPUS**;
+  sisa: `ppp_package_id` + `CommissionRate` aktif dengan `titip_amount`. `existingForMonth(Customer)` cek
+  per-pelanggan (siapa pun), bukan per-acting-referrer.
+- `Dashboard` Livewire: query `Customer::query()` (bukan `$referrer->referrals()`) + paginasi + search
+  (nama/CID/HP). Kolom: Nama, **CID** (`customers.cid`, sudah ada), Alamat, Paket, **Referensi**
+  (Referrer resmi — konteks, bukan filter).
+- **Rekap dipecah 2 tabel**: "Rekap Komisi" (`scheme != titip`) dan "Rekap Titip" (`scheme = titip`).
+- Komisi Titip tetap diatribusi ke Referrer yang **MENCATAT** (acting), bukan Referrer resmi.
+
+**BAGIAN B — CPE "offline palsu".** Root cause: `CpeDeviceStatusSyncService` ambang online cuma 5 menit +
+probe gagal langsung = Offline → ONT dengan `PeriodicInformInterval` panjang (1-12 jam) + `connection_request`
+gagal salah dicap Offline tiap siklus. "Ganti Modem" (re-input SN sama) set Online tanpa cek kesegaran →
+itu yang "memperbaiki".
+- Fix: ambang online → `config('services.cpe.online_threshold_minutes')` default **180 (3 jam)**; probe
+  gagal HANYA set Offline kalau Inform terakhir > `offline_hard_cutoff_minutes` default **1440 (24 jam)**
+  atau tidak pernah ada — di antara: status TIDAK diubah.
+- Fix scheduler drift: `->runInBackground()->withoutOverlapping()` pada `SyncCpeDeviceStatus`/
+  `SyncCpeSignalHistory`/`SyncContainerStats` — entrypoint `while true; schedule:run; sleep 60` diblokir
+  command foreground lama → `cpe:sync-device-status` jalan ~tiap jam bukan 15 menit, `cpe:reconcile`
+  ~tiap 20 menit bukan 5.
+- **Diverifikasi live**: sync ulang → Offline `26 → 13` (13 device pulih dari false-offline).
+
+**BAGIAN C — link "Ganti Modem".** `customer-show.blade.php` link dari `route('web.cpe-devices.index')`
+(daftar umum) → `route('web.cpe-devices.show', $cpeDevice)` (detail device yang ter-bind).
+
+**BAGIAN D — ROADMAP v0.23.0 OMCI** dikoreksi: hapus SmartOLT-sebagai-pendekatan; tegaskan integrasi
+LANGSUNG ke OLT (API/CLI native vendor), 3 jalur provisioning ke depan (TR-069/OMCI/DHCP Option 43).
+
+Test: `ReferrerTitipPortalTest` (13, disesuaikan+baru), `CpeDeviceStatusSyncServiceTest` (+2 baru),
+`CustomerShowAddDeviceTest` (+1 baru).
+
+---
+
+## v0.9.6 — Fitur Titip (Self-Service + OTP WhatsApp) (branch `v0.9.6-fitur-titip`, belum di-merge/tag)
+
+**Referrer mencatat sendiri pembayaran cash "titip" dari pelanggan yang ia referensikan → dapat komisi
+Titip.** Desain final dikonfirmasi Agung: langsung `Eligible` setelah OTP (bukan approval admin), nominal
+dikunci ke `CommissionRate.titip_amount`, CREATE-ONLY, tidak ada otomasi NAS/RADIUS/MixRadius (perpanjangan
+tetap manual admin).
+
+**Langkah 1 — perbaikan fondasi:**
+- `App\Enums\CommissionScheme::Titip` ditambahkan. BEDA sifat dari `Recurring`/`LimitedCount`: bukan skema
+  *atribusi* pelanggan (tidak dipilih admin saat registrasi), murni dari Portal Referrer.
+  `CommissionRate::amountForScheme('titip')` + `CommissionRate::titipAmount()` di-wire; `schemeOptions()`
+  **tetap tidak** menawarkan Titip (itu form registrasi/edit pelanggan).
+- `CommissionLedgerMaturityService::matureForPaidInvoice()` mengecualikan baris `scheme=titip` dari lookup
+  "template" — baris Titip tidak pernah jadi template, tidak pernah di-append per invoice lunas.
+- `ReferrerReferralResource` (`GET /api/v1/referrals`): field tunggal `commission_status`/`commission_amount`
+  **dihapus** (breaking), diganti `commissions[]` (SEMUA baris) + `commission_total_earned`. `->first()`
+  sudah salah sejak v0.9.5.
+- Migration `2026_09_02_140000_add_payment_period_to_commission_ledger_table.php`: `commission_ledger.
+  payment_period` (date, nullable — tanggal 1 bulan pembayaran) + indeks `(referrer_id, customer_id,
+  payment_period)`. Alasan: baris Titip `invoice_id` NULL, indeks unik parsial v0.9.5 tidak melindunginya
+  dari duplikat; `payment_period` memberi dimensi "bulan apa" untuk guard duplikat app-layer.
+
+**Langkah 2 — OTP WhatsApp untuk Referrer:**
+- `App\Enums\WhatsappEventType::ReferrerActionOtp` (`referrer_action_otp`) — **event type ke-5**, explicit
+  permission Agung. Penerima = **Referrer** (`referrers.phone`), bukan pelanggan.
+- `WhatsappGatewayService::buildAndQueueForReferrer()` — jalur terpisah dari `buildAndQueue()` (yang wajib
+  `Customer`): template di-resolve di level ISP (reseller_id null), pesan selalu diantre lewat sesi
+  "direct". Variabel: `{referrer_name}`, `{otp_code}`, `{otp_minutes}`, `{customer_name}`, `{company_name}`.
+  Default template di-seed `WhatsappMessageTemplateSeeder`.
+- `App\Services\Commission\ReferrerActionOtpService` — kode 6-digit, cache 5 menit (plaintext, Redis
+  internal, sama posture `ScriptDownloadTokenService`), maks 5 salah → kode dihapus, single-use.
+  `RateLimiter` kirim ulang 3×/10 menit per `(referrer, scope)`. `$scope` menyertakan `customer_id`
+  spesifik. `ReferrerOtpException` (pesan user-facing Indonesia).
+
+**Langkah 3 — form Titip di Portal Referrer:**
+- `App\Livewire\ReferrerPortal\Dashboard` diperluas: tombol "Catat Titip" hanya untuk pelanggan yang
+  punya `ppp_package_id` + `CommissionRate` aktif dengan `titip_amount` (via
+  `App\Services\Commission\ReferrerTitipService::availabilityFor()`). Alur modal: konfirmasi detail
+  (nama/alamat/paket/nominal) → `sendTitipOtp()` → input kode → `submitTitip()` (verifikasi OTP → `record()`).
+  Guard duplikat bulan berjalan = checkbox konfirmasi (bukan hard block). Rekap Komisi diisi (SEMUA baris
+  `commission_ledger` milik referrer). Tidak ada aksi edit/hapus (CREATE-ONLY).
+- `ReferrerTitipService::record()` → `commission_ledger` baris baru `scheme=titip status=eligible`,
+  `amount` dari rate, `payment_period` = tanggal 1 bulan berjalan, `invoice_id` NULL. Tenant-eksplisit.
+- **Belum ada padanan REST** — akun portal referrer tidak punya Sanctum token; menambah penerbitan token
+  untuk akun referrer = keputusan tersendiri. Business logic ada di service layer, bisa dipanggil dari mana
+  pun nanti.
+
+**Langkah 4 — dashboard admin "Titip Masuk":**
+- `App\Livewire\Commission\TitipMasukIndex` (`/titip-masuk`) — daftar read-only semua `commission_ledger`
+  `scheme=titip`, filter status + cari nama pelanggan/referrer, paginasi. **Murni daftar kerja
+  operasional** (admin perpanjang layanan manual di MixRadius) — TIDAK ada tombol approve/reject.
+- Permission baru `commission_ledger.view` (`seedCommissionLedgerPermissions()`, tier-admin-only) +
+  `CommissionLedgerPolicy` (auto-discovered). Benih untuk UI admin komisi v0.9.7.
+- Link sidebar di cluster "Billing & Finance" setelah "Rate Komisi". Diverifikasi HTTP nyata (login
+  superadmin → `/titip-masuk` 200, link ada di `/dashboard`).
+
+**Test:** `ReferrerTitipPortalTest` (9), `CommissionSchemeTitipTest` (5), `TitipMasukIndexLivewireTest` (6).
+`RegistrationApiTest` disesuaikan ke bentuk `commissions[]`.
+
+**Lupa Password Portal Referrer (digabung ke sprint ini — reuse infra OTP Langkah 2):**
+- `App\Livewire\Auth\ReferrerForgotPassword` (`GET /referrer/forgot-password`, `guest` middleware, link
+  "Lupa password?" di `/referrer/login`) — multi-tahap: Nomor HP → OTP WhatsApp → password baru (2×,
+  `Password::defaults()` + `confirmed`). Reuse `ReferrerActionOtpService` dengan scope
+  `"password_reset:{referrerId}"` — **beda cache key** dari scope `"titip:{customerId}"`, jadi kode reset
+  password ↔ kode Titip terisolasi penuh (ditest 2 arah).
+- **Anti-enumerasi**: nomor HP tidak terdaftar / Referrer non-aktif → pesan generik yang SAMA ("Kalau nomor
+  ini terdaftar, kode ... telah dikirim"), selalu maju ke tahap OTP, tidak ada WA log, tidak ada error
+  spesifik. Referrer id yang cocok disimpan di **session** (server-side), bukan properti Livewire.
+- Rate limit kirim ulang = 3×/10 menit (sama `ReferrerActionOtpService`, sama fitur Titip).
+- Password baru → `User::forceFill(['password' => Hash::make()])->save()`. Session verifikasi kedaluwarsa
+  10 menit setelah OTP benar.
+- **Belum ada padanan REST** (login portal Referrer sendiri belum ada REST).
+- Layout baru `layouts/referrer-guest.blade.php` (halaman guest portal Referrer, sebelumnya login pakai
+  blade standalone).
+
+**Reset password Kamisem (id=4)** dilakukan manual via tinker (belum ada aksi admin regenerate password
+untuk Referrer yang sudah punya akun — hanya ada saat create / `generateLoginAccount` untuk yang
+`user_id` null). Fitur "Lupa Password" di atas menutup kebutuhan ini ke depan untuk sisi Referrer.
+
+**Test:** `ReferrerForgotPasswordTest` (6) — reset+login berhasil, nomor tak terdaftar tidak bocor,
+isolasi scope password_reset↔titip, kode salah ditolak, rate limit.
+
+**Amendment (setelah investigasi OTP gagal kirim, 2026-09-02):**
+- `whatsapp_message_logs` id=2 (OTP ke Kamisem) `failed` karena sesi WhatsApp **"direct" belum connected**
+  (`HTTP 502: session "direct" is not connected (status=qr_pending)`) — BUKAN bug kode. Sesi "direct"
+  wajib di-scan QR dulu sebelum alur OTP Referrer jalan.
+- Bug kecil ditemukan & diperbaiki: template default `referrer_action_otp` awal meng-hardcode frasa
+  Titip + `*{customer_name}*`, jadi pesan Lupa Password (yang `$relatedCustomer`-nya null) berbunyi
+  "...pelanggan **. Berlaku...". Diganti pakai variabel baru **`{action_label}`** —
+  `ReferrerActionOtpService::issue()` sekarang wajib param `$actionLabel` (Titip: "mencatat titip
+  pembayaran untuk {nama}"; Lupa Password: "reset password akun Portal Referrer"). `WhatsappMessageTemplateSeeder`
+  + 15 baris template di DB dev sudah di-update.
+- Merge `main` ke branch ini (hotfix `WhatsappMessageLog::scopeKnownEventType()` + lainnya) — bersih,
+  tanpa konflik.
+
+**Amendment kedua (investigasi timeout kirim WhatsApp, 2026-09-02 → dikoreksi 2026-09-03):**
+- Gejala: OTP `failed` dengan `cURL error 28: timed out`, `sock.sendMessage()` hang 60s.
+- **Diagnosis 2026-09-02 (KELIRU): "nomor di-restrict WhatsApp".** SALAH.
+- **Akar masalah SEBENARNYA (2026-09-03): FORMAT NOMOR.** Bug laten sejak v0.4.0:
+  `whatsapp-gateway/src/sessionManager.js` `toJid()` cuma strip non-digit — nomor lokal `087884374939`
+  jadi `087884374939@s.whatsapp.net` (JID tidak sah) → Baileys hang resolve → timeout. Dibuktikan:
+  `onWhatsApp("6287884374939")` → `exists:true` 380ms; kirim ke `6287884374939@s.whatsapp.net` **SUKSES
+  ~0.3s**; full jalur Laravel `SendWhatsappMessageJob::handle()` → `status=sent`.
+- **Fix format** (2 tempat): `toJid()` normalisasi Indonesia (`0xxx`→`62xxx` dst); `App\Support\
+  WhatsappPhone::normalize()` dipakai `WhatsappGatewayService` saat isi `whatsapp_message_logs.
+  phone_number`. `WhatsappPhoneTest` unit.
+- **Fix robustness tetap dipertahankan** (hardening yang benar, bukan akar masalah): `sendMessage`
+  fast-fail 20s + cek `sock.user.id`; reconnect exponential backoff; `DisconnectReason.badSession`
+  di-handle; `markOnlineOnConnect:false`; `SendWhatsappMessageJob` timeout 30→35s.
+- OTP ke Kamisem **sekarang benar-benar terkirim** — tidak ada aksi manual yang diperlukan lagi.
+
+---
+
 ## v0.9.5 — Commission Ledger Auto-Maturity, APPEND per invoice (branch `v0.9.5-commission-auto-maturity`, redesain 2026-09-02, belum di-merge/tag)
 
 **Redesain (dikonfirmasi Agung): komisi diperoleh PER INVOICE LUNAS, bukan sekali flip.**

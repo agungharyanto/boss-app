@@ -48,15 +48,7 @@
                 </p>
 
                 @if ($mySession->status->value !== 'connected')
-                    @if ($mySession->qr_code_data)
-                        <img src="{{ $mySession->qr_code_data }}" alt="QR WhatsApp" class="w-48 h-48">
-                        <p class="text-xs text-gray-400">Scan QR ini pakai WhatsApp di HP Anda. Halaman ini otomatis update setiap 3 detik.</p>
-                    @else
-                        <p class="text-sm text-gray-400">Menunggu QR code dari server...</p>
-                    @endif
-                    <button wire:click="refreshQr({{ $mySession->id }})" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">
-                        Refresh QR Code
-                    </button>
+                    @include('livewire.whatsapp.partials.pairing-connect-panel', ['session' => $mySession, 'labelPrefix' => 'Anda'])
                 @endif
             @endif
         </div>
@@ -87,15 +79,7 @@
                 </p>
 
                 @if ($directSession->status->value !== 'connected')
-                    @if ($directSession->qr_code_data)
-                        <img src="{{ $directSession->qr_code_data }}" alt="QR WhatsApp" class="w-48 h-48">
-                        <p class="text-xs text-gray-400">Scan QR ini pakai WhatsApp di HP. Halaman ini otomatis update setiap 3 detik.</p>
-                    @else
-                        <p class="text-sm text-gray-400">Menunggu QR code dari server...</p>
-                    @endif
-                    <button wire:click="refreshQr({{ $directSession->id }})" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">
-                        Refresh QR Code
-                    </button>
+                    @include('livewire.whatsapp.partials.pairing-connect-panel', ['session' => $directSession, 'labelPrefix' => 'ISP A'])
                 @endif
             @endif
         </div>

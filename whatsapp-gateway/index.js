@@ -62,6 +62,24 @@ app.get('/sessions/:sessionKey/qr', verifyHmac, async (req, res) => {
   }
 });
 
+// Sprint "whatsapp-gateway-reliability" — alternatif "Kode Pairing" (native
+// Baileys requestPairingCode), untuk sesi yang belum pernah dipasangkan.
+app.post('/sessions/:sessionKey/pair', verifyHmac, async (req, res) => {
+  const { phone_number: phoneNumber } = req.body || {};
+
+  if (!phoneNumber) {
+    return res.status(422).json({ success: false, message: 'phone_number is required', data: null, meta: {} });
+  }
+
+  try {
+    const pairingCode = await sessionManager.requestPairingCode(req.params.sessionKey, phoneNumber);
+    res.json({ success: true, message: 'OK', data: null, meta: {}, pairing_code: pairingCode });
+  } catch (err) {
+    logger.error({ err: err.message, sessionKey: req.params.sessionKey }, 'failed to request pairing code');
+    res.status(500).json({ success: false, message: err.message, data: null, meta: {} });
+  }
+});
+
 app.post('/sessions/:sessionKey/send', verifyHmac, async (req, res) => {
   const { phone_number: phoneNumber, message } = req.body || {};
 

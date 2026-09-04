@@ -309,10 +309,17 @@ class WhatsappGatewayIndex extends Component
         // (poll/tombol lain di halaman ini) tidak menghajar kedua gateway
         // di setiap request. Boleh disederhanakan/dihapus lagi setelah
         // cutover selesai (lihat CLAUDE.md).
+        $goGatewayPaused = (bool) config('services.whatsapp_gateway_go.paused');
+
         [$legacyGatewayHealth, $goGatewayHealth] = $isAdmin && $directSession !== null
             ? [
                 Cache::remember('whatsapp-gateway-health:legacy:direct', 5, fn () => app(WhatsappSessionService::class)->checkGatewayHealth('legacy', 'direct')),
-                Cache::remember('whatsapp-gateway-health:go:direct', 5, fn () => app(WhatsappSessionService::class)->checkGatewayHealth('go', 'direct')),
+                // Sengaja TIDAK mencoba menghubungi gateway Go sama sekali
+                // kalau memang lagi dimatikan (container di-stop) — bukan
+                // cuma soal menghindari timeout percuma, tapi supaya panel
+                // bisa membedakan "sengaja dimatikan" dari "sedang down
+                // tak terduga" (lihat Blade view).
+                $goGatewayPaused ? null : Cache::remember('whatsapp-gateway-health:go:direct', 5, fn () => app(WhatsappSessionService::class)->checkGatewayHealth('go', 'direct')),
             ]
             : [null, null];
 
@@ -359,6 +366,7 @@ class WhatsappGatewayIndex extends Component
             'directSession' => $directSession,
             'legacyGatewayHealth' => $legacyGatewayHealth,
             'goGatewayHealth' => $goGatewayHealth,
+            'goGatewayPaused' => $goGatewayPaused,
             'resellerSessions' => $resellerSessions,
             'templates' => $templates,
             'logs' => $logs,

@@ -184,6 +184,31 @@ class WhatsappGatewayLogoutTest extends TestCase
             ->assertSee('Status Migrasi Gateway');
     }
 
+    public function test_go_gateway_shows_a_deliberate_paused_message_and_hides_logout_when_stopped(): void
+    {
+        config(['services.whatsapp_gateway_go.paused' => true]);
+
+        Http::fake([
+            'whatsapp-gateway-test/sessions/direct/health' => Http::response(['success' => true, 'data' => ['status' => 'logged_out']], 200),
+        ]);
+
+        $tenant = Tenant::factory()->create();
+        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
+        $admin->assignRole('superadmin');
+        $session = $this->directSession($tenant->id, WhatsappSessionStatus::LoggedOut);
+
+        Livewire::actingAs($admin)
+            ->test(WhatsappGatewayIndex::class)
+            ->call('setTab', 'overview')
+            ->assertSee('Dimatikan sementara (uji stabilitas Node dulu)')
+            ->assertDontSeeHtml("logoutFromGateway({$session->id}, 'go')");
+
+        // Sengaja TIDAK memanggil gateway Go sama sekali saat paused — bukan
+        // hanya soal menghindari timeout percuma, tapi bukti nyata "sengaja
+        // dimatikan" dibedakan dari "gagal dihubungi".
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-go-test'));
+    }
+
     public function test_a_reseller_cannot_logout_the_direct_session(): void
     {
         $tenant = Tenant::factory()->create();

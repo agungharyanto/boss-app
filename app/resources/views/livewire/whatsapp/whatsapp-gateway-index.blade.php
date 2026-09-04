@@ -115,7 +115,9 @@
                     <div class="flex items-center justify-between text-sm">
                         <span>
                             Gateway Baru (Go, port 3001):
-                            @if ($goGatewayHealth['reachable'] ?? false)
+                            @if ($goGatewayPaused)
+                                <span class="font-medium text-blue-600">Dimatikan sementara (uji stabilitas Node dulu)</span>
+                            @elseif ($goGatewayHealth['reachable'] ?? false)
                                 <span class="font-medium {{ ($goGatewayHealth['status'] ?? null) === 'connected' ? 'text-green-600' : 'text-amber-600' }}">
                                     {{ $goGatewayHealth['status'] ?? 'tidak diketahui' }}
                                 </span>
@@ -126,13 +128,15 @@
                                 <span class="font-medium text-gray-400">tidak terhubung ({{ $goGatewayHealth['error'] ?? 'unknown' }})</span>
                             @endif
                         </span>
-                        <button
-                            wire:click="logoutFromGateway({{ $directSession->id }}, 'go')"
-                            wire:confirm="Logout dari Gateway Baru (Go)? Sesi akan diputus dari server WhatsApp dan perlu dipasangkan ulang."
-                            class="text-red-600 hover:underline text-xs shrink-0 ml-2"
-                        >
-                            Logout
-                        </button>
+                        @unless ($goGatewayPaused)
+                            <button
+                                wire:click="logoutFromGateway({{ $directSession->id }}, 'go')"
+                                wire:confirm="Logout dari Gateway Baru (Go)? Sesi akan diputus dari server WhatsApp dan perlu dipasangkan ulang."
+                                class="text-red-600 hover:underline text-xs shrink-0 ml-2"
+                            >
+                                Logout
+                            </button>
+                        @endunless
                     </div>
                 </div>
 

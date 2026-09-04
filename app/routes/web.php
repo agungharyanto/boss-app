@@ -121,6 +121,16 @@ Route::middleware('guest')->group(function () {
 // Administrator/superadmin-only list, which would have locked out every
 // other existing staff role (noc/customer_service/teknisi/billing/
 // sales_internal/sales_freelance/finance).
+// Sprint "perpanjang-daftar-pelanggan" — Daftar Pelanggan (customers.index
+// ONLY) is the single admin route a pure Referrer account may reach, so it
+// can record renewals for any customer of its tenant. `customers.list`
+// admits admin-panel users AND linked-active-Referrer users; CustomerIndex
+// itself renders a stripped-down, sidebar-less view for a Referrer-only
+// user. Every OTHER /customers/* route stays admin.panel-only, below.
+Route::middleware(['auth', 'customers.list', 'reseller.context'])->name('web.')->group(function () {
+    Route::get('/customers', CustomerIndex::class)->name('customers.index');
+});
+
 Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     Route::get('/dashboard', Dashboard::class)->name('dashboard');
 
@@ -128,7 +138,6 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // Customer/ResellerPackagePricing listings need "which reseller am I"
     // resolved before rendering.
     Route::middleware('reseller.context')->group(function () {
-        Route::get('/customers', CustomerIndex::class)->name('customers.index');
         Route::get('/customers/register', RegisterCustomer::class)->name('customers.register');
         // v0.16.0 Langkah 12 — manual coordinate bind. BEFORE the
         // /customers/{customer} wildcard so the literal segment isn't swallowed.

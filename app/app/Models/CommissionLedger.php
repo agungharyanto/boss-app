@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
+use App\Enums\TitipDepositStatus;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CommissionLedgerFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -23,9 +24,13 @@ class CommissionLedger extends Model
         'customer_id',
         'invoice_id',
         'amount',
+        'gross_amount',
         'scheme',
         'payment_period',
         'status',
+        'deposit_status',
+        'deposited_at',
+        'deposited_by',
         'notes',
     ];
 
@@ -33,9 +38,12 @@ class CommissionLedger extends Model
     {
         return [
             'amount' => 'decimal:2',
+            'gross_amount' => 'decimal:2',
             'scheme' => CommissionScheme::class,
             'payment_period' => 'date',
             'status' => CommissionStatus::class,
+            'deposit_status' => TitipDepositStatus::class,
+            'deposited_at' => 'datetime',
         ];
     }
 
@@ -57,5 +65,14 @@ class CommissionLedger extends Model
     public function invoice(): BelongsTo
     {
         return $this->belongsTo(Invoice::class);
+    }
+
+    /**
+     * Admin yang menandai baris Titip ini "sudah setor" (NULL selama masih
+     * `belum_setor` / untuk skema non-titip).
+     */
+    public function depositedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'deposited_by');
     }
 }

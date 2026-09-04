@@ -2,25 +2,40 @@
     <div class="flex items-center justify-between mb-6">
         <h1 class="text-2xl font-semibold text-gray-800">{{ __('Data Pelanggan') }}</h1>
 
-        <div class="flex gap-2">
-            @if ($canRegister)
-                <a href="{{ route('web.customers.register') }}" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
-                    Registrasi Pelanggan
-                </a>
-            @endif
+        @unless ($referrerView)
+            <div class="flex gap-2">
+                @if ($canRegister)
+                    <a href="{{ route('web.customers.register') }}" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+                        Registrasi Pelanggan
+                    </a>
+                @endif
 
-            @if ($canCreate)
-                <button
-                    wire:click="$set('showCreateForm', {{ $showCreateForm ? 'false' : 'true' }})"
-                    class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90"
-                >
-                    {{ $showCreateForm ? 'Batal' : __('+ Pelanggan Baru') }}
-                </button>
-            @endif
-        </div>
+                @if ($canCreate)
+                    <button
+                        wire:click="$set('showCreateForm', {{ $showCreateForm ? 'false' : 'true' }})"
+                        class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90"
+                    >
+                        {{ $showCreateForm ? 'Batal' : __('+ Pelanggan Baru') }}
+                    </button>
+                @endif
+            </div>
+        @endunless
     </div>
 
-    @if ($showCreateForm)
+    @if ($referrerView)
+        <p class="mb-4 text-sm text-gray-500">
+            {{ __('Anda masuk sebagai Referral. Gunakan tombol Perpanjang untuk mencatat perpanjangan langganan pelanggan.') }}
+        </p>
+    @endif
+
+    @if ($renewFlash)
+        <p class="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2">{{ $renewFlash }}</p>
+    @endif
+    @if ($renewError)
+        <p class="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{{ $renewError }}</p>
+    @endif
+
+    @if (! $referrerView && $showCreateForm)
         <form wire:submit="createCustomer" class="mb-6 p-4 border border-gray-200 rounded-md bg-gray-50 space-y-3">
             <div>
                 <label class="block text-sm font-medium text-gray-700">Nama</label>
@@ -46,7 +61,7 @@
     <div class="flex gap-3 mb-4">
         <input
             type="text" wire:model.live.debounce.300ms="search"
-            placeholder="{{ __('Cari nama atau nomor telepon...') }}"
+            placeholder="{{ __('Cari nama, CID, atau nomor telepon...') }}"
             class="flex-1 rounded-md border-gray-300 shadow-sm"
         >
         <select wire:model.live="statusFilter" class="rounded-md border-gray-300 shadow-sm">
@@ -77,10 +92,17 @@
                         <td class="px-4 py-2">
                             <span class="px-2 py-1 text-xs rounded-full bg-gray-100">{{ $customer->status->label() }}</span>
                         </td>
-                        <td class="px-4 py-2 text-right">
-                            <a href="{{ route('web.customers.show', $customer) }}" class="text-primary hover:underline">
-                                {{ __('Detail') }}
-                            </a>
+                        <td class="px-4 py-2 text-right whitespace-nowrap">
+                            <button type="button" wire:click="openRenew({{ $customer->id }})"
+                                title="{{ __('Perpanjang Langganan') }}"
+                                class="inline-flex items-center gap-1 text-amber-600 hover:underline">
+                                <span aria-hidden="true">⚡</span> {{ __('Perpanjang') }}
+                            </button>
+                            @unless ($referrerView)
+                                <a href="{{ route('web.customers.show', $customer) }}" class="ml-3 text-primary hover:underline">
+                                    {{ __('Detail') }}
+                                </a>
+                            @endunless
                         </td>
                     </tr>
                 @empty
@@ -95,4 +117,131 @@
     <div class="mt-4">
         {{ $customers->links() }}
     </div>
+
+    {{-- ---------- Modal Perpanjang Langganan ---------- --}}
+    @if ($renewModalOpen && $renewCustomer)
+        <div class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" wire:click.self="closeRenew">
+            <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5 space-y-4">
+                <h3 class="text-base font-semibold text-gray-800">{{ __('Perpanjang Langganan') }}</h3>
+
+                <div class="text-sm text-gray-700 space-y-1 bg-gray-50 border border-gray-200 rounded-md p-3">
+                    <p><span class="text-gray-500">{{ __('Pelanggan') }}:</span> <span class="font-medium">{{ $renewCustomer->name }}</span></p>
+                    <p><span class="text-gray-500">{{ __('CID') }}:</span> <span class="font-mono">{{ $renewCustomer->cid ?? '—' }}</span></p>
+                    <p><span class="text-gray-500">{{ __('Paket saat ini') }}:</span> {{ $renewCustomer->pppPackage?->name ?? '—' }}</p>
+                </div>
+
+                @if ($renewError && ! $renewAlreadyPaidThisMonth)
+                    <p class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{{ $renewError }}</p>
+                @endif
+
+                @if ($renewAlreadyPaidThisMonth)
+                    <div class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+                        <p class="font-medium">{{ __('Periode ini sudah dibayar.') }}</p>
+                        <p class="mt-1">{{ __('Pelanggan ini sudah tercatat bayar untuk periode bulan ini. Hubungi admin kalau ada kebutuhan koreksi.') }}</p>
+                    </div>
+
+                    <div class="flex justify-end pt-1">
+                        <button type="button" wire:click="closeRenew"
+                            class="px-3 py-2 text-sm text-gray-600 hover:underline">{{ __('Tutup') }}</button>
+                    </div>
+                @else
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">{{ __('Ubah Paket (Opsional)') }}</label>
+                    <select wire:model="renewNewPackageId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                        <option value="">{{ __('— Tidak ganti paket —') }}</option>
+                        @foreach ($packages as $pkg)
+                            <option value="{{ $pkg->id }}" @disabled($pkg->id === $renewCustomer->ppp_package_id)>
+                                {{ $pkg->name }}{{ $pkg->id === $renewCustomer->ppp_package_id ? ' ('.__('paket saat ini').')' : '' }}
+                            </option>
+                        @endforeach
+                    </select>
+                    <p class="text-xs text-gray-500 mt-1">{{ __('Kosongkan kalau paket tidak berubah. Hanya mengubah data BOSS App — tidak menyentuh router/RADIUS.') }}</p>
+                </div>
+
+                {{-- Multi-bulan — ADMIN ONLY. Tidak dirender sama sekali untuk
+                     Referrer self-service (selalu implisit 1 bulan, periode
+                     berjalan). --}}
+                @unless ($referrerView)
+                    <div class="border-t border-gray-100 pt-3 space-y-3">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">{{ __('Jumlah Bulan') }}</label>
+                            <div class="mt-1 flex flex-wrap items-center gap-2">
+                                @foreach ([1, 3, 6, 12] as $preset)
+                                    <button type="button" wire:click="$set('renewMonths', {{ $preset }})"
+                                        class="px-3 py-1 text-sm rounded-md border {{ $renewMonths === $preset ? 'bg-primary text-white border-primary' : 'border-gray-300 hover:bg-gray-50' }}">
+                                        {{ $preset }}
+                                    </button>
+                                @endforeach
+                                <input type="number" min="1" max="60" wire:model.live="renewMonths"
+                                    class="w-20 rounded-md border-gray-300 shadow-sm text-sm">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">{{ __('Mulai dari Periode') }}</label>
+                            <input type="month" wire:model="renewStartPeriod"
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                            <p class="text-xs text-gray-500 mt-1">{{ __('Default: periode belum-terbayar paling awal. Semua periode dalam rentang dicek — kalau ada yang sudah dibayar, transaksi ditolak.') }}</p>
+                        </div>
+                        @if ($renewMonths > 1)
+                            <p class="text-xs text-amber-700">{{ __('Untuk :n bulan, Referrer eligible mendapat komisi Titip :n×.', ['n' => $renewMonths]) }}</p>
+                        @endif
+                    </div>
+                @endunless
+
+                @if ($actingReferrer)
+                    {{-- OTP wajib untuk acting Referrer --}}
+                    <div class="border-t border-gray-100 pt-3 space-y-3">
+                        @if (! $renewOtpSent)
+                            <p class="text-xs text-gray-500">
+                                {{ __('Kode verifikasi 6 digit akan dikirim ke WhatsApp Anda') }} ({{ $actingReferrer->phone }}).
+                            </p>
+                            <button type="button" wire:click="sendRenewOtp" wire:loading.attr="disabled"
+                                class="px-3 py-2 text-sm bg-primary text-white rounded-md hover:opacity-90 disabled:opacity-50">
+                                {{ __('Kirim Kode Verifikasi') }}
+                            </button>
+                        @else
+                            <p class="text-xs text-gray-500">{{ __('Kode 6 digit dikirim ke WhatsApp Anda. Berlaku 5 menit.') }}</p>
+                            @if ($renewOtpResent)
+                                <p class="text-xs text-green-600">{{ __('Kode baru telah dikirim ulang.') }}</p>
+                            @endif
+                            <div class="flex items-center gap-2">
+                                <input type="text" inputmode="numeric" maxlength="6" wire:model="renewOtp"
+                                    placeholder="______" @disabled($renewOtpVerified)
+                                    class="w-32 text-center tracking-[0.4em] rounded-md border-gray-300 shadow-sm disabled:bg-gray-100">
+                                @if ($renewOtpVerified)
+                                    <span class="text-sm text-green-700">✓ {{ __('Terverifikasi') }}</span>
+                                @else
+                                    <button type="button" wire:click="verifyRenewOtp" wire:loading.attr="disabled"
+                                        class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50">
+                                        {{ __('Verifikasi') }}
+                                    </button>
+                                    <button type="button" wire:click="resendRenewOtp" wire:loading.attr="disabled"
+                                        class="text-xs text-primary hover:underline disabled:opacity-50">{{ __('Kirim ulang') }}</button>
+                                @endif
+                            </div>
+                        @endif
+                        @error('renewOtp') <p class="text-sm text-red-600">{{ $message }}</p> @enderror
+                    </div>
+                @else
+                    <div class="border-t border-gray-100 pt-3">
+                        <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                            {{ __('Akun Anda tidak tertaut ke Referral — verifikasi OTP tidak berlaku. Perpanjangan dicatat atas otoritas admin Anda, tanpa komisi.') }}
+                        </p>
+                    </div>
+                @endif
+
+                <div class="flex justify-end gap-2 pt-1">
+                    <button type="button" wire:click="closeRenew"
+                        class="px-3 py-2 text-sm text-gray-600 hover:underline">{{ __('Batal') }}</button>
+                    <button type="button" wire:click="submitRenew" wire:loading.attr="disabled"
+                        @disabled($actingReferrer && ! $renewOtpVerified)
+                        class="px-4 py-2 text-sm bg-primary text-white rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed">
+                        {{ __('Perpanjang') }}
+                    </button>
+                </div>
+                @endif
+            </div>
+        </div>
+    @endif
 </div>

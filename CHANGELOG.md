@@ -85,6 +85,224 @@ Full regression suite dijalankan, Pint clean. Belum di-merge/tag.
 
 ---
 
+## Perpanjang Multi-Bulan (Admin Only) (branch `perpanjang-daftar-pelanggan`, merged + tagged `v0.9.8`)
+
+Kasus nyata: pelanggan instansi (mis. sekolah, dana pemerintah per-3/6 bulan) bayar SEKALIGUS untuk
+beberapa bulan ke depan. Opsi ini **HANYA untuk admin** (staff dengan admin panel access) — TIDAK PERNAH
+muncul di form self-service Referrer (Kamisem dkk tetap 1 periode/bulan berjalan, implisit, seperti
+sebelumnya).
+
+**Perubahan skema — `commission_ledger.referrer_id` jadi NULLABLE** (migration
+`2026_09_04_130000_make_referrer_id_nullable_on_commission_ledger_table`). Diperlukan karena admin
+back-office yang TIDAK tertaut Referrer manapun tetap perlu membuat baris "periode X sudah dibayar" (buat
+proteksi anti-duplikat) — sebelumnya mustahil karena FK NOT NULL. FK sendiri tidak diubah (FK memang
+mengizinkan NULL secara default).
+
+**Perubahan perilaku (konsisten, disengaja) — renew() SEKARANG SELALU membuat baris `commission_ledger`
+scheme=titip, bahkan untuk aktor tidak-eligible/tanpa-Referrer** (sebelumnya hanya menulis
+`customer_timeline_entries`, tanpa baris titip sama sekali). Alasan: baris ini WAJIB ada supaya proteksi
+anti-duplikat (per-periode) bisa bekerja untuk renewal yang direkam admin. Bentuk baris untuk kasus
+tidak-eligible: `amount = NULL` (murni penanda "periode ini dibayar", bukan komisi), `gross_amount =
+sell_price` paket. `deposit_status`: ada Referrer terkait (misal Teknisi) → `belum_setor` (field person
+memegang cash); tidak ada Referrer → `sudah_setor` + `deposited_by` = admin (uang masuk langsung ke
+perusahaan). **3 test lama disesuaikan** (dulu `assertDatabaseMissing`, sekarang mengecek bentuk baris
+`amount=null` yang benar).
+
+**`SubscriptionRenewalService::renew()` — signature diperluas**: `renew($actor, $customer,
+$newPppPackageId, int $months = 1, ?Carbon $startPeriod = null)`.
+- `$months > 1` ditolak keras (`\RuntimeException`, pesan "hanya untuk admin") kalau
+  `! EnsureAdminPanelAccess::userHasAccess($actor)` — di-enforce DI SERVICE, bukan cuma UI.
+- Validasi SEBELUM proses apa pun: cek SETIAP periode dalam rentang (`$startPeriod` s/d
+  `$startPeriod + ($months-1)` bulan) lewat `ReferrerTitipService::existingForMonth()` — kalau ADA SATU
+  SAJA yang bentrok, TOLAK SELURUH transaksi dengan pesan jelas menyebut nama bulan yang bentrok.
+- Kalau valid: ganti paket **SEKALI** (bukan per bulan) → loop N periode →
+  `ReferrerTitipService::recordTitipForPeriod()` sekali per bulan (`gross_amount` sama tiap baris —
+  representasi 1 bulan, bukan dikali/dibagi; `amount` = `titip_amount` PER baris kalau eligible — N bulan
+  = N × `titip_amount` total) → **SATU** `customer_timeline_entries` ringkas ("Perpanjangan N bulan
+  dicatat, periode X–Y").
+- Referrer self-service tetap memanggil `renew(..., months: 1, startPeriod: null)` — perilaku byte-sama
+  seperti sebelumnya (implisit bulan berjalan).
+
+**`ReferrerTitipService::recordTitipForPeriod()`** (baru) — satu baris per panggilan, dipakai dalam loop.
+`record()`/`recordForRenewal()` (lama) sekarang delegasi ke method ini (kompatibel, tidak ada test lain
+yang rusak).
+
+**UI (`CustomerIndex`, modal Perpanjang)** — field baru HANYA dirender `@unless ($referrerView)`:
+- **"Jumlah Bulan"**: 4 tombol preset (1/3/6/12) + input angka manual bebas.
+- **"Mulai dari Periode"**: `<input type="month">`, default dihitung di `openRenew()` — `payment_period`
+  titip terakhir pelanggan + 1 bulan, atau bulan berjalan kalau belum ada riwayat sama sekali (tidak
+  pernah mundur ke belakang bulan berjalan).
+- **Perubahan perilaku modal admin**: `openRenew()` untuk admin TIDAK LAGI mengecek/memblokir di "bulan
+  berjalan" (`renewAlreadyPaidThisMonth` selalu `false` untuk admin) — modal langsung default ke periode
+  belum-terbayar berikutnya. Blokir keras hanya terpicu kalau admin secara eksplisit memilih periode yang
+  sudah dibayar. Jalur Referrer TIDAK berubah (`renewAlreadyPaidThisMonth` tetap dicek di awal seperti
+  sebelumnya).
+- OTP tetap SATU KALI verifikasi untuk seluruh transaksi multi-bulan (mekanisme OTP tidak diubah sama
+  sekali — cuma dipanggil sebelum `submitRenew()` yang sekarang membawa `renewMonths`/`renewStartPeriod`).
+
+**Test baru**: `SubscriptionRenewalServiceTest` (+3: N baris + 1 timeline, ditolak non-admin, konflik
+menolak seluruh rentang), `CustomerRenewalLivewireTest` (+5: admin default ke periode berikutnya bukan
+blokir, admin pilih periode yang sudah dibayar → blokir, multi-bulan 3 baris berurutan, konflik multi-
+bulan menolak semua, field tidak ada di form Referrer, komisi N× untuk Referrer admin-tertaut-eligible).
+
+Full regression suite hijau. Pint clean. Belum di-merge/tag.
+
+---
+
+## Revisi Fee Komisi + Anti Duplikat Pembayaran (branch `perpanjang-daftar-pelanggan`, merged + tagged `v0.9.8`)
+
+**1. Rename "Titip Masuk" → "Fee Komisi"** — **label tampilan saja**. Route name (`web.titip-masuk.index`)
+dan URL (`/titip-masuk`) SENGAJA tidak diubah (hindari break bookmark Agung); yang berubah cuma teks di
+sidebar + `<h1>` halaman + pesan kosong.
+
+**2. Sidebar grup "Komisi" (toggle-murni)** — "Rate Komisi" + "Fee Komisi" dikelompokkan jadi 1 grup
+collapsible `id=komisi` — **reuse PERSIS pola toggle-murni "Profil Paket"** (v0.14.4.1: parent tanpa key
+`route`, klik header cuma expand/collapse). Gate grup: `viewAny(CommissionRate)` (kedua permission selalu
+`giveToAdminTier` bersamaan); tiap child tetap punya check sendiri. "Referrer" tetap link standalone (bukan
+konsep komisi). +1 test `SidebarNavigationTest`.
+
+**3. Fix filter "Semua Status Komisi"** — investigasi: data Agung **semua `status=eligible`**, jadi filter
+"Eligible" menampilkan semuanya = tampak "tidak memfilter" (query-nya sebenarnya benar, terbukti lolos
+`test_status_filter_narrows_the_list` sejak awal). Tetap dikeraskan:
+- `render()` — kondisi `->when($x !== '' && Enum::tryFrom($x), ...)` diganti `if (Enum::tryFrom($x) !==
+  null) { $query->where(...) }` — perlakuan identik & tak ambigu untuk KEDUA filter (AND, bukan OR).
+- `wire:key` ditambahkan ke `search`/`statusFilter`/`depositFilter` — dua `<select>` berstruktur nyaris
+  identik tanpa key rawan tertukar identitas saat Livewire morph DOM (penyebab paling mungkin gejala
+  "filter status tidak jalan" di browser). +1 test AND-kombinasi.
+
+**4. Checkbox selektif per baris** — alasan: ada kasus Titip sudah dicatat (layanan diperpanjang) TAPI
+uang cash belum benar-benar diambil dari pelanggan. Admin perlu pilih transaksi SPESIFIK.
+- Checkbox per baris (`wire:model.live="selected"`, hanya baris `deposit_status=belum_setor`).
+- Checkbox "pilih semua di grup" per Referrer (`toggleGroupSelection($referrerId)` — toggle semua id
+  `belum_setor` Referrer itu).
+- Tombol lama "Tandai Sudah Setor Semua" per grup **DIGANTI** satu tombol global **"Tandai Sudah Setor
+  (Terpilih)"** (`markSelectedDeposited()` — hanya `whereIn('id', $selected)` yang `belum_setor`).
+  `@disabled` saat 0 terpilih. `commission_ledger.manage`. +3 test.
+- Baris `deposit_status` NULL lama (dibuat sebelum migration) di-backfill ke `belum_setor` di DB dev.
+
+**5. Cegah bayar dobel periode yang sama — BLOKIR KERAS** (bug nyata: "test-daftar" ke-Perpanjang 2x utk
+September 2026).
+- `SubscriptionRenewalService::renew()` — CEK PERTAMA, sebelum apa pun: kalau
+  `ReferrerTitipService::existingForMonth($customer) !== null` (apapun statusnya) → `throw
+  \RuntimeException("Pelanggan ini sudah tercatat bayar untuk periode {bulan} — hubungi admin kalau ada
+  kebutuhan koreksi.")`. Berlaku SEMUA pemanggil (Referrer self-service + staff admin), **tidak ada
+  override lewat aplikasi** (koreksi data salah = operasi DB langsung, di luar scope).
+- `CustomerIndex::openRenew()` — cek di AWAL saat modal dibuka → set `$renewAlreadyPaidThisMonth`; modal
+  langsung menampilkan banner merah "Periode ini sudah dibayar" + sembunyikan form paket/OTP/Perpanjang
+  (cuma tombol Tutup). `sendRenewOtp`/`submitRenew` jadi no-op di state itu. +2 test (jalur Referrer +
+  jalur admin) di `CustomerRenewalLivewireTest`, +2 di `SubscriptionRenewalServiceTest`.
+
+Full regression suite hijau. Pint clean. Belum di-merge/tag.
+
+---
+
+## Tracking Setoran Titip + Ringkasan Total (branch `perpanjang-daftar-pelanggan`, merged + tagged `v0.9.8`)
+
+Gap: `commission_ledger` cuma menyimpan nominal KOMISI, bukan TOTAL uang yang dipegang Referrer dari
+pelanggan saat Titip. Model (dikonfirmasi Agung): Referrer pegang uang PENUH, setor semuanya ke admin,
+komisi dibayar balik terpisah (BUKAN potong komisi sendiri di tempat).
+
+**LANGKAH 1 — migration** `2026_09_04_120000_add_titip_deposit_tracking_to_commission_ledger_table`:
+`gross_amount` (decimal 12,2, nullable), `deposit_status` (`belum_setor`/`sudah_setor`, nullable —
+`App\Enums\TitipDepositStatus`), `deposited_at` (timestamp), `deposited_by` (FK users, `nullOnDelete`).
+Semua khusus relevan `scheme=titip`, NULL untuk skema lain. `CommissionLedger` `$fillable`/casts +
+relasi `depositedBy()`.
+
+**LANGKAH 2 — isi `gross_amount` saat Perpanjang.** `SubscriptionRenewalService::renew()` → saat buat
+baris `commission_ledger` scheme=titip, isi `gross_amount` dari `sell_price` `PppPackage` EFEKTIF (paket
+BARU kalau ganti paket, paket saat ini kalau tidak) — snapshot, bukan harga sekarang kalau berubah
+nanti. `deposit_status` default `belum_setor`. `ReferrerTitipService::recordForRenewal($ref, $cust,
+?float $grossAmount)` diperluas; `record()` (jalur portal lama, tidak dipakai UI lagi) tetap
+`gross_amount` NULL.
+
+**LANGKAH 3 — ringkasan + pengelompokan di `/titip-masuk` (admin).**
+- 2 kartu ringkasan (GLOBAL tenant, independen filter): "Total Komisi Harus Dibayar"
+  (`sum(amount)` titip status=eligible), "Total Setoran Belum Masuk"
+  (`sum(gross_amount)` titip `deposit_status=belum_setor`).
+- List **dikelompokkan per Referrer** (bukan flat lagi — `WithPagination` dihapus, load semua titip
+  tenant-scoped lalu group di PHP, di-sort desc by total belum setor). Header grup: nama Referrer,
+  total belum setor, jumlah transaksi, tombol **"Tandai Sudah Setor Semua"** (`commission_ledger.manage`
+  → bulk `deposit_status=sudah_setor` + `deposited_at=now()` + `deposited_by=auth()->id()` untuk SEMUA
+  baris `belum_setor` Referrer itu). Detail per grup expand/collapse (Alpine `x-data="{ open: false }"`),
+  menampilkan baris individual (pelanggan, periode, uang diterima, komisi, status, status setor + siapa/
+  kapan).
+- Filter baru: **status setoran** (Semua / Belum Setor / Sudah Setor).
+- **Permission baru `commission_ledger.manage`** (tier-admin, `giveToAdminTier`) +
+  `CommissionLedgerPolicy::markDeposit()`. **DB dev sudah di-`db:seed --class=RolesAndPermissionsSeeder`
+  ulang** (insiden berulang di CLAUDE.md — migration/kode saja tidak cukup).
+
+**LANGKAH 4 — ringkasan di Portal Referrer.** `ReferrerPortal\Dashboard`: "Total Komisi (layak dibayar)"
+(`sum(amount)` scheme!=titip status=eligible) di atas Rekap Komisi; "Total Titip Terkumpul"
+(`sum(gross_amount)`) + "Sisa Perlu Disetor" (`sum(gross_amount)` `deposit_status=belum_setor`) di atas
+Rekap Titip. Kolom **Status Setor** (+ kolom Uang Diterima / Komisi terpisah) ditambahkan di tabel Rekap
+Titip.
+
+`ReferrerReferralResource` (`GET /api/v1/referrals`) `commissions[]` dapat `gross_amount` /
+`deposit_status` / `deposit_status_label` / `deposited_at` (additive).
+
+**Test**: `SubscriptionRenewalServiceTest` +2 (gross dari sell_price paket saat ini / paket baru),
+`TitipMasukIndexLivewireTest` +5 (kartu ringkasan, pengelompokan per Referrer, "Tandai Sudah Setor Semua"
+bulk-update yang benar, `.manage` wajib, filter setoran), `ReferrerPortalDashboardTest` +1 (3 angka
+ringkasan). Full regression suite hijau. Pint clean. **DB dev sudah di-`migrate` + `db:seed`** — closure
+(merge/tag) harus segera menyusul (pelajaran v0.14.5.1). Belum di-merge/tag.
+
+---
+
+## Perpanjang di Daftar Pelanggan + Akses Terbatas Referrer (branch `perpanjang-daftar-pelanggan`, merged + tagged `v0.9.8`)
+
+Redesain dari Portal Referrer terpisah → terintegrasi ke **Daftar Pelanggan** (halaman admin
+`customers.index` yang sudah ada), dengan akses terbatas untuk Referrer murni.
+
+**LANGKAH 1 — akses terbatas Referrer murni.** Middleware baru `EnsureCustomerListAccess`
+(alias `customers.list`): lolos kalau user punya akses panel admin (`EnsureAdminPanelAccess::userHasAccess`)
+**ATAU** tertaut ke `Referrer` aktif (`referrers.user_id`, `is_active`). `customers.index` dipindah keluar
+dari grup `admin.panel` ke grup sendiri (`['auth','customers.list','reseller.context']`) — **route
+`/customers` saja**, semua route `/customers/*` lain (register, koordinat, `{customer}` detail) tetap
+`admin.panel`-only. `CustomerIndex` menderive mode admin vs Referrer ULANG tiap request dari
+`auth()->user()` (bukan properti persisted). Untuk Referrer murni: layout `layouts.referrer-portal` (tanpa
+sidebar admin), tabel list saja (CID/Nama/Telepon/Status/Perpanjang), tanpa tombol buat/registrasi
+pelanggan, tanpa link Detail. Untuk admin: halaman penuh seperti biasa + tombol Perpanjang baru.
+
+**LANGKAH 2 — tombol "⚡ Perpanjang" + form.** Modal per baris pelanggan: paket saat ini + dropdown "Ubah
+Paket (Opsional)" (kosong = tidak ganti, TANPA field diskon). Tombol "Kirim Kode Verifikasi" →
+`ReferrerActionOtpService` (reuse **persis** dari v0.9.6, scope `renewal:{customerId}`, kirim ke WhatsApp
+acting Referrer) → input OTP + tombol "Verifikasi" → tombol "Perpanjang" disabled sampai OTP terverifikasi.
+`App\Services\Commission\SubscriptionRenewalService::renew($actor, $customer, ?$newPackageId)`:
+- Ganti paket = update `customers.ppp_package_id` **SAJA** (validasi paket milik tenant + `is_active`).
+  **NOL panggilan NAS/RouterOS/FreeRADIUS/MixRadius** — dijamin struktural (service tidak inject gateway
+  apa pun; ada test reflection). `subscriptions`/`SubscriptionService`/`GenerateDueInvoices` tidak
+  disentuh.
+- Komisi: acting Referrer tipe **Sales/Freelance** → baris `commission_ledger` scheme=titip
+  status=eligible, nominal dari `CommissionRate.titip_amount` paket customer **SAAT INI** (setelah ganti
+  paket), `payment_period` bulan berjalan — lewat `ReferrerTitipService::recordForRenewal()`.
+  **Teknisi/Admin** atau tidak tertaut Referrer → tidak ada komisi.
+- Selalu tulis `customer_timeline_entries` `event_type=subscription_renewed` (aktor, dari/ke paket,
+  komisi tercipta atau tidak).
+- Pesan sukses beda: "Perpanjangan … dicatat, komisi Titip Rp X berhasil ditambahkan." vs "Perpanjangan …
+  dicatat."
+- **Admin tanpa Referrer terikat**: tombol Perpanjang tetap muncul; modal tidak menampilkan OTP (nomor HP
+  Referral tidak ada), perpanjangan dicatat atas otoritas panel admin, tanpa komisi. Keputusan desain
+  eksplisit — `ReferrerActionOtpService` di-reuse "persis" (Referrer-bound), jadi jalur OTP hanya berlaku
+  saat acting user memang tertaut Referrer aktif.
+
+**LANGKAH 3 — Portal Referrer disederhanakan.** `ReferrerPortal\Dashboard` + view-nya: **HAPUS** section
+"Daftar Pelanggan" + seluruh alur "Catat Titip" (semua method/properti titip). **Sisakan**: Profil Saya,
+Rekap Komisi (`scheme != titip`), Rekap Titip (`scheme = titip`). Komponen tidak lagi membuat baris
+`commission_ledger` apa pun. Nav kecil (Beranda / Daftar Pelanggan) ditambahkan di header
+`layouts.referrer-portal` karena Referrer tidak punya sidebar.
+
+**Tidak ada endpoint REST baru** — akun Portal Referrer tidak punya Sanctum token (sama seperti v0.9.6);
+business logic ada di `SubscriptionRenewalService` (callable dari mana pun nanti). `docs/API.md` diberi
+catatan.
+
+**Test**: `CustomerListReferrerAccessTest` (6), `CustomerRenewalLivewireTest` (8),
+`SubscriptionRenewalServiceTest` (5), `ReferrerPortalDashboardTest` (4). `ReferrerTitipPortalTest.php`
+(v0.9.6, menguji alur titip di portal Dashboard yang kini dihapus) **dihapus** — cakupannya pindah ke test
+di atas. Full regression suite hijau. Pint clean.
+
+
+---
+
 ## v0.9.7 — Login Terpadu (Admin + Referrer, 1 pintu di `/login`) (branch `login-terpadu`, merged + tagged `v0.9.7`)
 
 Gabung 2 halaman login terpisah (`/login` Fortify email, `/referrer/login` custom HP) jadi **SATU pintu

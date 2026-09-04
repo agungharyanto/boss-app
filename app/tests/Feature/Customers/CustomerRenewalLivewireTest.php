@@ -6,12 +6,14 @@ use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
 use App\Enums\NetworkProfileGroupType;
 use App\Enums\ReferrerType;
+use App\Enums\TitipDepositStatus;
 use App\Enums\WhatsappEventType;
 use App\Livewire\Customers\CustomerIndex;
 use App\Models\BandwidthProfile;
 use App\Models\CommissionLedger;
 use App\Models\CommissionRate;
 use App\Models\Customer;
+use App\Models\CustomerTimelineEntry;
 use App\Models\NetworkProfileGroup;
 use App\Models\PppPackage;
 use App\Models\Referrer;
@@ -74,7 +76,7 @@ class CustomerRenewalLivewireTest extends TestCase
         return $user;
     }
 
-    private function packageWithTitipRate(?float $titip, string $name = 'Paket Uji'): PppPackage
+    private function packageWithTitipRate(?float $titip, string $name = 'Paket Uji', float $sellPrice = 150000): PppPackage
     {
         $group = NetworkProfileGroup::factory()->create([
             'tenant_id' => $this->tenant->id,
@@ -85,6 +87,7 @@ class CustomerRenewalLivewireTest extends TestCase
             'tenant_id' => $this->tenant->id,
             'name' => $name,
             'is_active' => true,
+            'sell_price' => $sellPrice,
             'network_profile_group_id' => $group->id,
             'bandwidth_profile_id' => BandwidthProfile::factory()->create(['tenant_id' => $this->tenant->id])->id,
         ]);
@@ -146,7 +149,7 @@ class CustomerRenewalLivewireTest extends TestCase
         ]);
     }
 
-    public function test_renew_by_a_teknisi_referrer_records_the_renewal_but_no_commission(): void
+    public function test_renew_by_a_teknisi_referrer_records_a_paid_period_row_without_a_commission(): void
     {
         $referrer = $this->referrerUser(ReferrerType::Teknisi);
         $customer = $this->customer($this->packageWithTitipRate(3000));
@@ -159,17 +162,21 @@ class CustomerRenewalLivewireTest extends TestCase
             ->call('submitRenew')
             ->assertSet('renewFlash', fn ($m) => str_contains($m, 'dicatat') && ! str_contains($m, 'komisi'));
 
-        $this->assertDatabaseMissing('commission_ledger', [
-            'customer_id' => $customer->id,
-            'scheme' => CommissionScheme::Titip->value,
-        ]);
+        // Baris titip DIBUAT sebagai penanda "periode ini sudah dibayar",
+        // amount NULL (tidak ada komisi), Teknisi memegang cash -> belum_setor.
+        $row = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->sole();
+        $this->assertNull($row->amount);
+        $this->assertSame($referrer->id, $row->referrer_id);
+        $this->assertSame(TitipDepositStatus::BelumSetor, $row->deposit_status);
+
         $this->assertDatabaseHas('customer_timeline_entries', [
             'customer_id' => $customer->id,
             'event_type' => 'subscription_renewed',
         ]);
     }
 
-    public function test_admin_without_a_linked_referrer_renews_with_no_otp_and_no_commission(): void
+    public function test_admin_without_a_linked_referrer_records_a_paid_period_row_marked_deposited(): void
     {
         $admin = $this->adminUser();
         $customer = $this->customer($this->packageWithTitipRate(3000));
@@ -180,10 +187,15 @@ class CustomerRenewalLivewireTest extends TestCase
             ->assertSet('renewModalOpen', false)
             ->assertSet('renewFlash', fn ($m) => str_contains($m, 'dicatat'));
 
-        $this->assertDatabaseMissing('commission_ledger', [
-            'customer_id' => $customer->id,
-            'scheme' => CommissionScheme::Titip->value,
-        ]);
+        // Dicatat admin langsung: referrer_id NULL, amount NULL,
+        // deposit_status sudah_setor (tidak ada Referrer yang pegang cash).
+        $row = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->sole();
+        $this->assertNull($row->amount);
+        $this->assertNull($row->referrer_id);
+        $this->assertSame(TitipDepositStatus::SudahSetor, $row->deposit_status);
+        $this->assertSame($admin->id, $row->deposited_by);
+
         $this->assertDatabaseHas('customer_timeline_entries', [
             'customer_id' => $customer->id,
             'event_type' => 'subscription_renewed',
@@ -298,12 +310,12 @@ class CustomerRenewalLivewireTest extends TestCase
             ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->count());
     }
 
-    public function test_a_second_renewal_is_hard_blocked_for_an_admin_too(): void
+    public function test_admin_opening_renew_defaults_to_the_next_unpaid_period_not_a_block(): void
     {
         $admin = $this->adminUser();
         $customer = $this->customer($this->packageWithTitipRate(3000));
 
-        // Seed an existing titip row for this month (as if a referrer recorded it).
+        // September is already paid.
         $referrer = Referrer::factory()->create(['tenant_id' => $this->tenant->id]);
         CommissionLedger::factory()->create([
             'tenant_id' => $this->tenant->id,
@@ -317,13 +329,142 @@ class CustomerRenewalLivewireTest extends TestCase
 
         Livewire::actingAs($admin)->test(CustomerIndex::class)
             ->call('openRenew', $customer->id)
-            ->assertSet('renewAlreadyPaidThisMonth', true)
+            // Admin: tidak diblok — modal default ke periode belum-terbayar.
+            ->assertSet('renewAlreadyPaidThisMonth', false)
+            ->assertSet('renewStartPeriod', now()->startOfMonth()->addMonth()->format('Y-m'))
+            ->call('submitRenew')
+            ->assertSet('renewFlash', fn ($m) => str_contains($m, 'dicatat'));
+
+        // Baris baru untuk BULAN DEPAN, September tidak diganggu.
+        $this->assertSame(2, CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->count());
+    }
+
+    public function test_admin_explicitly_picking_an_already_paid_period_is_hard_blocked(): void
+    {
+        $admin = $this->adminUser();
+        $customer = $this->customer($this->packageWithTitipRate(3000));
+
+        $paidPeriod = now()->startOfMonth();
+        $referrer = Referrer::factory()->create(['tenant_id' => $this->tenant->id]);
+        CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'referrer_id' => $referrer->id,
+            'customer_id' => $customer->id,
+            'scheme' => CommissionScheme::Titip->value,
+            'status' => CommissionStatus::Eligible,
+            'amount' => 3000,
+            'payment_period' => $paidPeriod->toDateString(),
+        ]);
+
+        Livewire::actingAs($admin)->test(CustomerIndex::class)
+            ->call('openRenew', $customer->id)
+            ->set('renewStartPeriod', $paidPeriod->format('Y-m'))
+            ->set('renewMonths', 1)
             ->call('submitRenew')
             ->assertSet('renewError', fn ($m) => str_contains($m, 'sudah tercatat bayar'));
 
-        $this->assertDatabaseMissing('customer_timeline_entries', [
+        $this->assertSame(1, CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->count());
+    }
+
+    public function test_admin_multi_month_creates_one_row_per_consecutive_period(): void
+    {
+        $admin = $this->adminUser();
+        $customer = $this->customer($this->packageWithTitipRate(3000, sellPrice: 200000));
+
+        Livewire::actingAs($admin)->test(CustomerIndex::class)
+            ->call('openRenew', $customer->id)
+            ->set('renewMonths', 3)
+            ->set('renewStartPeriod', now()->startOfMonth()->format('Y-m'))
+            ->call('submitRenew')
+            ->assertSet('renewFlash', fn ($m) => str_contains($m, '3 bulan'));
+
+        $rows = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)
+            ->orderBy('payment_period')->get();
+
+        $this->assertCount(3, $rows);
+        $expected = collect([0, 1, 2])->map(fn ($i) => now()->startOfMonth()->addMonths($i)->toDateString());
+        $this->assertSame($expected->all(), $rows->pluck('payment_period')->map(fn ($p) => $p->toDateString())->all());
+        // gross_amount sama tiap baris (bukan dikali/dibagi).
+        $rows->each(fn ($r) => $this->assertSame('200000.00', $r->gross_amount));
+
+        // Satu entri timeline saja untuk 3 bulan.
+        $this->assertSame(1, CustomerTimelineEntry::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('event_type', 'subscription_renewed')->count());
+    }
+
+    public function test_admin_multi_month_with_one_conflicting_period_rejects_the_whole_transaction(): void
+    {
+        $admin = $this->adminUser();
+        $customer = $this->customer($this->packageWithTitipRate(3000));
+
+        // Bulan ke-2 dari rentang sudah dibayar.
+        $conflict = now()->startOfMonth()->addMonth();
+        $referrer = Referrer::factory()->create(['tenant_id' => $this->tenant->id]);
+        CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'referrer_id' => $referrer->id,
             'customer_id' => $customer->id,
-            'event_type' => 'subscription_renewed',
+            'scheme' => CommissionScheme::Titip->value,
+            'status' => CommissionStatus::Eligible,
+            'amount' => 3000,
+            'payment_period' => $conflict->toDateString(),
         ]);
+
+        Livewire::actingAs($admin)->test(CustomerIndex::class)
+            ->call('openRenew', $customer->id)
+            ->set('renewMonths', 3)
+            ->set('renewStartPeriod', now()->startOfMonth()->format('Y-m'))
+            ->call('submitRenew')
+            ->assertSet('renewError', fn ($m) => str_contains($m, $conflict->translatedFormat('F Y')));
+
+        // Cuma baris konflik yang ada — tidak ada baris baru sama sekali.
+        $this->assertSame(1, CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->count());
+    }
+
+    public function test_referrer_self_service_has_no_multi_month_fields(): void
+    {
+        $referrer = $this->referrerUser(ReferrerType::Sales);
+        $customer = $this->customer($this->packageWithTitipRate(3000));
+
+        $html = Livewire::actingAs($referrer->user)->test(CustomerIndex::class)
+            ->call('openRenew', $customer->id)
+            ->html();
+
+        $this->assertStringNotContainsString('Jumlah Bulan', $html);
+        $this->assertStringNotContainsString('Mulai dari Periode', $html);
+        $this->assertStringNotContainsString('renewMonths', $html);
+    }
+
+    public function test_admin_multi_month_referrer_gets_commission_per_month(): void
+    {
+        // Admin user yang JUGA Referrer Sales (skenario v0.22 "staff + referral").
+        $user = User::factory()->create(['tenant_id' => $this->tenant->id]);
+        $user->givePermissionTo(Permission::firstOrCreate(['name' => 'customers.view', 'guard_name' => 'web']));
+        $referrer = Referrer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'user_id' => $user->id,
+            'type' => ReferrerType::Sales, 'phone' => '081299900011', 'is_active' => true,
+        ]);
+        $customer = $this->customer($this->packageWithTitipRate(3000));
+
+        $scope = "renewal:{$customer->id}";
+
+        Livewire::actingAs($user)->test(CustomerIndex::class)
+            ->call('openRenew', $customer->id)
+            ->set('renewMonths', 3)
+            ->set('renewStartPeriod', now()->startOfMonth()->format('Y-m'))
+            ->call('sendRenewOtp')
+            ->set('renewOtp', Cache::get("referrer-otp:{$referrer->id}:{$scope}")['code'])
+            ->call('verifyRenewOtp')
+            ->call('submitRenew')
+            ->assertSet('renewFlash', fn ($m) => str_contains($m, 'komisi Titip Rp 9.000')); // 3000 x 3
+
+        $rows = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->get();
+        $this->assertCount(3, $rows);
+        $rows->each(fn ($r) => $this->assertSame('3000.00', $r->amount));
     }
 }

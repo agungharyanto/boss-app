@@ -159,6 +159,36 @@
                     <p class="text-xs text-gray-500 mt-1">{{ __('Kosongkan kalau paket tidak berubah. Hanya mengubah data BOSS App — tidak menyentuh router/RADIUS.') }}</p>
                 </div>
 
+                {{-- Multi-bulan — ADMIN ONLY. Tidak dirender sama sekali untuk
+                     Referrer self-service (selalu implisit 1 bulan, periode
+                     berjalan). --}}
+                @unless ($referrerView)
+                    <div class="border-t border-gray-100 pt-3 space-y-3">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">{{ __('Jumlah Bulan') }}</label>
+                            <div class="mt-1 flex flex-wrap items-center gap-2">
+                                @foreach ([1, 3, 6, 12] as $preset)
+                                    <button type="button" wire:click="$set('renewMonths', {{ $preset }})"
+                                        class="px-3 py-1 text-sm rounded-md border {{ $renewMonths === $preset ? 'bg-primary text-white border-primary' : 'border-gray-300 hover:bg-gray-50' }}">
+                                        {{ $preset }}
+                                    </button>
+                                @endforeach
+                                <input type="number" min="1" max="60" wire:model.live="renewMonths"
+                                    class="w-20 rounded-md border-gray-300 shadow-sm text-sm">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">{{ __('Mulai dari Periode') }}</label>
+                            <input type="month" wire:model="renewStartPeriod"
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                            <p class="text-xs text-gray-500 mt-1">{{ __('Default: periode belum-terbayar paling awal. Semua periode dalam rentang dicek — kalau ada yang sudah dibayar, transaksi ditolak.') }}</p>
+                        </div>
+                        @if ($renewMonths > 1)
+                            <p class="text-xs text-amber-700">{{ __('Untuk :n bulan, Referrer eligible mendapat komisi Titip :n×.', ['n' => $renewMonths]) }}</p>
+                        @endif
+                    </div>
+                @endunless
+
                 @if ($actingReferrer)
                     {{-- OTP wajib untuk acting Referrer --}}
                     <div class="border-t border-gray-100 pt-3 space-y-3">

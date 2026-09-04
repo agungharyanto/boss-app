@@ -105,7 +105,32 @@ efektif = total uang cash yang dipegang Referrer) + `deposit_status`
 **BLOKIR KERAS anti-duplikat**: `renew()` melempar `\RuntimeException` (tidak
 ada override lewat aplikasi) kalau pelanggan sudah punya baris
 `commission_ledger` scheme=titip untuk `payment_period` bulan berjalan —
-berlaku untuk semua pemanggil (Referrer maupun staff admin). **Nol panggilan NAS/RouterOS/RADIUS/MixRadius**
+berlaku untuk semua pemanggil (Referrer maupun staff admin).
+
+**Perpanjang Multi-Bulan — ADMIN ONLY, masih tanpa endpoint REST.**
+`renew()` menerima `int $months = 1` + `?Carbon $startPeriod = null`. Referrer
+self-service selalu memanggilnya dengan `months=1, startPeriod=null` (implisit
+bulan berjalan) — field ini TIDAK ADA di form self-service Referrer sama
+sekali. `$months > 1` ditolak (`\RuntimeException`) kalau acting user bukan
+admin (`EnsureAdminPanelAccess::userHasAccess()`), di-enforce di service, bukan
+cuma UI. Validasi memeriksa SETIAP periode dalam rentang — satu saja bentrok
+(sudah ada baris titip scheme=titip untuk periode itu, status apa pun) menolak
+SELURUH transaksi dengan pesan yang menyebut nama bulan yang bentrok. Kalau
+valid: `customers.ppp_package_id` diubah SEKALI (bukan per bulan), N baris
+`commission_ledger` dibuat (satu per bulan, `gross_amount` = `sell_price`
+paket per baris, `amount` = `titip_amount` PER baris kalau acting Referrer
+eligible Sales/Freelance — N bulan = N × `titip_amount` total), dan SATU
+`customer_timeline_entries` ringkas untuk seluruh rentang.
+
+**Perubahan skema**: `commission_ledger.referrer_id` sekarang NULLABLE.
+`renew()` SEKARANG SELALU membuat baris titip, bahkan untuk aktor tidak-
+eligible/tanpa Referrer terkait — baris itu `amount=NULL` (penanda "periode
+ini dibayar", bukan komisi), `deposit_status=sudah_setor` kalau tidak ada
+Referrer (uang masuk langsung ke perusahaan) atau `belum_setor` kalau ada
+Referrer (mis. Teknisi) yang memegang cash. Ini perubahan perilaku dari
+sebelumnya (yang hanya menulis entri timeline tanpa baris `commission_ledger`
+sama sekali untuk aktor tidak-eligible) — diperlukan supaya proteksi
+anti-duplikat per-periode bekerja untuk renewal yang dicatat admin. **Nol panggilan NAS/RouterOS/RADIUS/MixRadius**
 — hanya data BOSS App; `subscriptions`/`SubscriptionService`/`GenerateDueInvoices`
 tidak disentuh.
 

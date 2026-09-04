@@ -3,7 +3,9 @@
 namespace App\Livewire\Customers;
 
 use App\Actions\Customers\CreateCustomerAction;
+use App\Enums\CommissionScheme;
 use App\Http\Middleware\EnsureAdminPanelAccess;
+use App\Models\CommissionLedger;
 use App\Models\Customer;
 use App\Models\PppPackage;
 use App\Models\Referrer;
@@ -12,6 +14,7 @@ use App\Services\Commission\ReferrerOtpException;
 use App\Services\Commission\ReferrerTitipService;
 use App\Services\Commission\SubscriptionRenewalService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Carbon;
 use Livewire\Attributes\Validate;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -62,6 +65,12 @@ class CustomerIndex extends Component
 
     /** '' = tidak ganti paket. */
     public string $renewNewPackageId = '';
+
+    /** Multi-bulan (ADMIN ONLY). Referrer self-service selalu implisit 1. */
+    public int $renewMonths = 1;
+
+    /** Bulan awal rentang, format `Y-m` (ADMIN ONLY). '' = bulan berjalan. */
+    public string $renewStartPeriod = '';
 
     public string $renewOtp = '';
 
@@ -129,10 +138,44 @@ class CustomerIndex extends Component
 
         $this->renewCustomerId = $customer->id;
         $this->renewNewPackageId = '';
+        $this->renewMonths = 1;
         $this->renewModalOpen = true;
-        // Cek di AWAL — jangan biarkan user proses OTP dulu baru ketahuan
-        // ditolak di akhir (BLOKIR KERAS di SubscriptionRenewalService).
-        $this->renewAlreadyPaidThisMonth = $titip->existingForMonth($customer) !== null;
+
+        if ($this->isAdmin()) {
+            // Default "Mulai dari Periode" = periode belum-terbayar paling
+            // awal (payment_period titip terakhir + 1 bulan, atau bulan
+            // berjalan kalau belum ada riwayat).
+            $this->renewStartPeriod = $this->earliestUnpaidPeriodFor($customer);
+            // Admin bisa memilih periode masa depan — cek per-periode
+            // dilakukan saat submit, bukan blokir modal di awal.
+            $this->renewAlreadyPaidThisMonth = false;
+        } else {
+            // Referrer self-service: implisit 1 bulan, periode berjalan.
+            // Cek di AWAL — jangan biarkan proses OTP dulu baru ditolak.
+            $this->renewStartPeriod = '';
+            $this->renewAlreadyPaidThisMonth = $titip->existingForMonth($customer) !== null;
+        }
+    }
+
+    private function earliestUnpaidPeriodFor(Customer $customer): string
+    {
+        $last = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)
+            ->where('scheme', CommissionScheme::Titip->value)
+            ->whereNotNull('payment_period')
+            ->orderByDesc('payment_period')
+            ->value('payment_period');
+
+        $base = $last !== null
+            ? Carbon::parse($last)->startOfMonth()->addMonth()
+            : Carbon::now()->startOfMonth();
+
+        // Jangan pernah mundur ke belakang bulan berjalan.
+        $now = Carbon::now()->startOfMonth();
+
+        return $base->lessThan($now)
+            ? $now->format('Y-m')
+            : $base->format('Y-m');
     }
 
     public function closeRenew(): void
@@ -254,8 +297,25 @@ class CustomerIndex extends Component
 
         $newPackageId = $this->renewNewPackageId !== '' ? (int) $this->renewNewPackageId : null;
 
+        // Multi-bulan HANYA dari jalur admin. Referrer self-service selalu
+        // 1 bulan, periode berjalan (field-nya memang tidak ada di form-nya).
+        $months = 1;
+        $startPeriod = null;
+        if ($this->isAdmin()) {
+            $months = max(1, $this->renewMonths);
+            if ($this->renewStartPeriod !== '') {
+                try {
+                    $startPeriod = Carbon::createFromFormat('Y-m', $this->renewStartPeriod)->startOfMonth();
+                } catch (\Throwable) {
+                    $this->renewError = 'Format "Mulai dari Periode" tidak valid.';
+
+                    return;
+                }
+            }
+        }
+
         try {
-            $result = $service->renew(auth()->user(), $customer, $newPackageId);
+            $result = $service->renew(auth()->user(), $customer, $newPackageId, $months, $startPeriod);
         } catch (\RuntimeException $e) {
             $this->renewError = $e->getMessage();
 
@@ -264,11 +324,12 @@ class CustomerIndex extends Component
 
         $this->resetRenewFlow();
 
+        $monthsText = $result['months'] > 1 ? " {$result['months']} bulan" : '';
         if ($result['commission_created']) {
-            $amount = number_format((float) $result['commission_amount'], 0, ',', '.');
-            $this->renewFlash = "Perpanjangan {$customer->name} dicatat, komisi Titip Rp {$amount} berhasil ditambahkan.";
+            $total = number_format((float) $result['commission_total'], 0, ',', '.');
+            $this->renewFlash = "Perpanjangan {$customer->name}{$monthsText} dicatat, komisi Titip Rp {$total} berhasil ditambahkan.";
         } else {
-            $this->renewFlash = "Perpanjangan {$customer->name} dicatat.";
+            $this->renewFlash = "Perpanjangan {$customer->name}{$monthsText} dicatat.";
         }
     }
 
@@ -279,6 +340,8 @@ class CustomerIndex extends Component
         $this->renewCustomerId = null;
         $this->renewModalOpen = false;
         $this->renewNewPackageId = '';
+        $this->renewMonths = 1;
+        $this->renewStartPeriod = '';
         $this->renewOtp = '';
         $this->renewOtpSent = false;
         $this->renewOtpResent = false;

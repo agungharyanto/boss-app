@@ -19,6 +19,8 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Services\Commission\SubscriptionRenewalService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
 
 class SubscriptionRenewalServiceTest extends TestCase
@@ -70,7 +72,7 @@ class SubscriptionRenewalServiceTest extends TestCase
         return $user;
     }
 
-    public function test_renewal_by_a_user_with_no_linked_referrer_records_the_renewal_without_a_commission(): void
+    public function test_renewal_by_a_user_with_no_linked_referrer_records_a_paid_period_row_without_a_commission(): void
     {
         $user = $this->actingUser();
         $customer = Customer::factory()->create([
@@ -83,20 +85,24 @@ class SubscriptionRenewalServiceTest extends TestCase
 
         $this->assertFalse($result['commission_created']);
         $this->assertNotNull($result['commission_skipped_reason']);
-        $this->assertDatabaseMissing('commission_ledger', [
-            'customer_id' => $customer->id,
-            'scheme' => CommissionScheme::Titip->value,
-        ]);
+        $this->assertSame(1, $result['rows_created']);
+
+        $row = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->sole();
+        $this->assertNull($row->amount);
+        $this->assertNull($row->referrer_id);
+        $this->assertSame(TitipDepositStatus::SudahSetor, $row->deposit_status);
+
         $this->assertDatabaseHas('customer_timeline_entries', [
             'customer_id' => $customer->id,
             'event_type' => 'subscription_renewed',
         ]);
     }
 
-    public function test_a_sales_referrer_without_a_titip_rate_on_the_package_still_renews_without_a_commission(): void
+    public function test_a_sales_referrer_without_a_titip_rate_on_the_package_records_a_null_amount_row(): void
     {
         $user = $this->actingUser();
-        Referrer::factory()->create([
+        $referrer = Referrer::factory()->create([
             'tenant_id' => $this->tenant->id,
             'user_id' => $user->id,
             'type' => ReferrerType::Sales,
@@ -111,10 +117,99 @@ class SubscriptionRenewalServiceTest extends TestCase
         $result = $this->service->renew($user, $customer, null);
 
         $this->assertFalse($result['commission_created']);
-        $this->assertDatabaseMissing('commission_ledger', [
-            'customer_id' => $customer->id,
-            'scheme' => CommissionScheme::Titip->value,
+        $row = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->sole();
+        $this->assertNull($row->amount);
+        $this->assertSame($referrer->id, $row->referrer_id);
+    }
+
+    public function test_multi_month_creates_one_row_per_period_and_a_single_timeline_entry(): void
+    {
+        $user = $this->actingUser();
+        $user->givePermissionTo(Permission::firstOrCreate(['name' => 'customers.view', 'guard_name' => 'web']));
+        $referrer = Referrer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'user_id' => $user->id,
+            'type' => ReferrerType::Sales, 'is_active' => true,
         ]);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'reseller_id' => null,
+            'ppp_package_id' => $this->package(3000, 'Paket', 200000)->id,
+        ]);
+
+        $start = Carbon::now()->startOfMonth();
+        $result = $this->service->renew($user, $customer, null, 3, $start->copy());
+
+        $this->assertSame(3, $result['rows_created']);
+        $this->assertSame(3, $result['months']);
+        $this->assertSame(9000.0, $result['commission_total']); // 3000 x 3
+        $this->assertSame(3000.0, $result['commission_amount']);
+
+        $rows = CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)
+            ->orderBy('payment_period')->get();
+        $this->assertCount(3, $rows);
+        $rows->each(fn ($r) => $this->assertSame('200000.00', $r->gross_amount));
+        $rows->each(fn ($r) => $this->assertSame('3000.00', $r->amount));
+
+        $expectedPeriods = collect([0, 1, 2])
+            ->map(fn ($i) => $start->copy()->addMonths($i)->toDateString())
+            ->all();
+        $this->assertSame(
+            $expectedPeriods,
+            $rows->pluck('payment_period')->map(fn ($p) => $p->toDateString())->all()
+        );
+
+        $this->assertSame(1, CustomerTimelineEntry::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('event_type', 'subscription_renewed')->count());
+    }
+
+    public function test_multi_month_is_rejected_for_a_non_admin_actor(): void
+    {
+        $user = $this->actingUser(); // no permissions, no admin access
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'reseller_id' => null,
+            'ppp_package_id' => $this->package(3000)->id,
+        ]);
+
+        try {
+            $this->service->renew($user, $customer, null, 3);
+            $this->fail('Expected multi-month renewal by a non-admin to be rejected.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('hanya untuk admin', $e->getMessage());
+        }
+
+        $this->assertSame(0, CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->count());
+    }
+
+    public function test_multi_month_with_a_single_conflicting_period_rejects_the_whole_range(): void
+    {
+        $user = $this->actingUser();
+        $user->givePermissionTo(Permission::firstOrCreate(['name' => 'customers.view', 'guard_name' => 'web']));
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'reseller_id' => null,
+            'ppp_package_id' => $this->package(3000)->id,
+        ]);
+
+        $start = Carbon::now()->startOfMonth();
+        $conflict = $start->copy()->addMonth();
+        $ref = Referrer::factory()->create(['tenant_id' => $this->tenant->id]);
+        CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id, 'referrer_id' => $ref->id, 'customer_id' => $customer->id,
+            'scheme' => CommissionScheme::Titip->value, 'status' => CommissionStatus::Eligible,
+            'payment_period' => $conflict->toDateString(),
+        ]);
+
+        try {
+            $this->service->renew($user, $customer, null, 3, $start->copy());
+            $this->fail('Expected the conflicting range to be rejected.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString($conflict->translatedFormat('F Y'), $e->getMessage());
+        }
+
+        // Hanya baris konflik yang ada.
+        $this->assertSame(1, CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->count());
     }
 
     public function test_changing_the_package_updates_only_ppp_package_id(): void

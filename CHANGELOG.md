@@ -3,6 +3,70 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## Perpanjang Multi-Bulan (Admin Only) (branch `perpanjang-daftar-pelanggan`, belum di-merge/tag)
+
+Kasus nyata: pelanggan instansi (mis. sekolah, dana pemerintah per-3/6 bulan) bayar SEKALIGUS untuk
+beberapa bulan ke depan. Opsi ini **HANYA untuk admin** (staff dengan admin panel access) — TIDAK PERNAH
+muncul di form self-service Referrer (Kamisem dkk tetap 1 periode/bulan berjalan, implisit, seperti
+sebelumnya).
+
+**Perubahan skema — `commission_ledger.referrer_id` jadi NULLABLE** (migration
+`2026_09_04_130000_make_referrer_id_nullable_on_commission_ledger_table`). Diperlukan karena admin
+back-office yang TIDAK tertaut Referrer manapun tetap perlu membuat baris "periode X sudah dibayar" (buat
+proteksi anti-duplikat) — sebelumnya mustahil karena FK NOT NULL. FK sendiri tidak diubah (FK memang
+mengizinkan NULL secara default).
+
+**Perubahan perilaku (konsisten, disengaja) — renew() SEKARANG SELALU membuat baris `commission_ledger`
+scheme=titip, bahkan untuk aktor tidak-eligible/tanpa-Referrer** (sebelumnya hanya menulis
+`customer_timeline_entries`, tanpa baris titip sama sekali). Alasan: baris ini WAJIB ada supaya proteksi
+anti-duplikat (per-periode) bisa bekerja untuk renewal yang direkam admin. Bentuk baris untuk kasus
+tidak-eligible: `amount = NULL` (murni penanda "periode ini dibayar", bukan komisi), `gross_amount =
+sell_price` paket. `deposit_status`: ada Referrer terkait (misal Teknisi) → `belum_setor` (field person
+memegang cash); tidak ada Referrer → `sudah_setor` + `deposited_by` = admin (uang masuk langsung ke
+perusahaan). **3 test lama disesuaikan** (dulu `assertDatabaseMissing`, sekarang mengecek bentuk baris
+`amount=null` yang benar).
+
+**`SubscriptionRenewalService::renew()` — signature diperluas**: `renew($actor, $customer,
+$newPppPackageId, int $months = 1, ?Carbon $startPeriod = null)`.
+- `$months > 1` ditolak keras (`\RuntimeException`, pesan "hanya untuk admin") kalau
+  `! EnsureAdminPanelAccess::userHasAccess($actor)` — di-enforce DI SERVICE, bukan cuma UI.
+- Validasi SEBELUM proses apa pun: cek SETIAP periode dalam rentang (`$startPeriod` s/d
+  `$startPeriod + ($months-1)` bulan) lewat `ReferrerTitipService::existingForMonth()` — kalau ADA SATU
+  SAJA yang bentrok, TOLAK SELURUH transaksi dengan pesan jelas menyebut nama bulan yang bentrok.
+- Kalau valid: ganti paket **SEKALI** (bukan per bulan) → loop N periode →
+  `ReferrerTitipService::recordTitipForPeriod()` sekali per bulan (`gross_amount` sama tiap baris —
+  representasi 1 bulan, bukan dikali/dibagi; `amount` = `titip_amount` PER baris kalau eligible — N bulan
+  = N × `titip_amount` total) → **SATU** `customer_timeline_entries` ringkas ("Perpanjangan N bulan
+  dicatat, periode X–Y").
+- Referrer self-service tetap memanggil `renew(..., months: 1, startPeriod: null)` — perilaku byte-sama
+  seperti sebelumnya (implisit bulan berjalan).
+
+**`ReferrerTitipService::recordTitipForPeriod()`** (baru) — satu baris per panggilan, dipakai dalam loop.
+`record()`/`recordForRenewal()` (lama) sekarang delegasi ke method ini (kompatibel, tidak ada test lain
+yang rusak).
+
+**UI (`CustomerIndex`, modal Perpanjang)** — field baru HANYA dirender `@unless ($referrerView)`:
+- **"Jumlah Bulan"**: 4 tombol preset (1/3/6/12) + input angka manual bebas.
+- **"Mulai dari Periode"**: `<input type="month">`, default dihitung di `openRenew()` — `payment_period`
+  titip terakhir pelanggan + 1 bulan, atau bulan berjalan kalau belum ada riwayat sama sekali (tidak
+  pernah mundur ke belakang bulan berjalan).
+- **Perubahan perilaku modal admin**: `openRenew()` untuk admin TIDAK LAGI mengecek/memblokir di "bulan
+  berjalan" (`renewAlreadyPaidThisMonth` selalu `false` untuk admin) — modal langsung default ke periode
+  belum-terbayar berikutnya. Blokir keras hanya terpicu kalau admin secara eksplisit memilih periode yang
+  sudah dibayar. Jalur Referrer TIDAK berubah (`renewAlreadyPaidThisMonth` tetap dicek di awal seperti
+  sebelumnya).
+- OTP tetap SATU KALI verifikasi untuk seluruh transaksi multi-bulan (mekanisme OTP tidak diubah sama
+  sekali — cuma dipanggil sebelum `submitRenew()` yang sekarang membawa `renewMonths`/`renewStartPeriod`).
+
+**Test baru**: `SubscriptionRenewalServiceTest` (+3: N baris + 1 timeline, ditolak non-admin, konflik
+menolak seluruh rentang), `CustomerRenewalLivewireTest` (+5: admin default ke periode berikutnya bukan
+blokir, admin pilih periode yang sudah dibayar → blokir, multi-bulan 3 baris berurutan, konflik multi-
+bulan menolak semua, field tidak ada di form Referrer, komisi N× untuk Referrer admin-tertaut-eligible).
+
+Full regression suite hijau. Pint clean. Belum di-merge/tag.
+
+---
+
 ## Revisi Fee Komisi + Anti Duplikat Pembayaran (branch `perpanjang-daftar-pelanggan`, belum di-merge/tag)
 
 **1. Rename "Titip Masuk" → "Fee Komisi"** — **label tampilan saja**. Route name (`web.titip-masuk.index`)

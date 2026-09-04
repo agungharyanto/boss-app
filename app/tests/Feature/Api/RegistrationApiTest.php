@@ -272,7 +272,10 @@ class RegistrationApiTest extends TestCase
         $response->assertOk();
         $response->assertJsonCount(1, 'data');
         $response->assertJsonPath('data.0.customer_name', 'Rina Kusuma');
-        $response->assertJsonPath('data.0.commission_status', CommissionStatus::Pending->value);
+        // v0.9.6 — resource sekarang mengembalikan SEMUA baris komisi
+        // (commissions[]), bukan satu commission_status tunggal.
+        $response->assertJsonCount(1, 'data.0.commissions');
+        $response->assertJsonPath('data.0.commissions.0.status', CommissionStatus::Pending->value);
     }
 
     public function test_a_caller_with_permission_but_no_linked_referrer_gets_not_found(): void

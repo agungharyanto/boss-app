@@ -95,6 +95,33 @@ to the next — no jumping ahead. `docs/ROADMAP.md` also carries forward cross-s
 what a later sprint's migrations/contracts must include because an earlier sprint deferred them) — check
 it, not just this file, before starting a new sprint.
 
+## ATURAN WAJIB — CLOSURE DISIPLIN (governance note permanen, insiden ke-4)
+
+**Sebelum memulai branch/sprint BARU, WAJIB jalankan `git log --oneline main..<branch aktif sebelumnya>`.**
+Kalau ada commit yang belum masuk `main`:
+- **SELESAIKAN dulu** — merge (`--no-ff` → develop → main → tag sesuai BOSS-002/BOSS-013), ATAU
+- **tandai eksplisit** di CLAUDE.md + laporan: "menunggu verifikasi Agung — JANGAN ditinggalkan lebih
+  dari 1 sesi".
+
+**JANGAN pindah kerjaan ke branch/sprint lain sebelum branch sebelumnya jelas statusnya.**
+
+**Kalau di tengah sesi ada instruksi pindah ke topik/branch lain padahal branch sebelumnya masih
+uncommitted / belum di-review** — WAJIB:
+1. `git commit` dulu ke branch itu (jangan pernah `git checkout` ke branch lain dengan working tree kotor
+   — perubahan ikut terbawa dan mengotori branch tujuan; ini persis yang hampir terjadi di v0.9.6).
+2. Ingatkan eksplisit ke Agung di laporan sebelum lanjut — sebutkan hash commit-nya (contoh sesi
+   2026-09-02: v0.9.6 di-commit `b2ad70d` sebelum branch `manajemen-user` dibuat).
+
+**Preseden insiden "kerja selesai tapi lupa merge" (jangan tambah nomor 5):**
+- `v0.14.5.1` — checkpoint dibiarkan uncommitted lintas branch switch, berakhir di `git stash` yang nyaris
+  hilang (lihat section "Branch Consolidation" di bawah).
+- `hotfix/wireguard-node-ip-race` — commit `a75f608` selesai, tidak pernah di-merge ke main; catatan
+  insiden node-IP-race jadi tidak ada di main sampai lama kemudian.
+- Cluster v0.8.x — beberapa sub-sprint dibiarkan uncommitted "menunggu verifikasi Agung" berhari-hari.
+- **v0.9.6 (2026-09-02)** — hampir terjadi lagi: seluruh Fitur Titip + Lupa Password masih uncommitted di
+  working tree saat instruksi pindah ke `manajemen-user` masuk. Dicegah dengan commit `b2ad70d` +
+  peringatan eksplisit di laporan sebelum lanjut.
+
 ## Sprint-based development — read this before doing anything
 
 This repo is built strictly one versioned sprint at a time per `docs/ROADMAP.md` above, and the following
@@ -416,6 +443,30 @@ disconnect instead reconnects on its own using the same saved creds.
 **Outbound-only this sprint** — no inbound/2-way handling at all (planned future integration point:
 Chatwoot, one shared number for all CS, tracked as backlog in `docs/ROADMAP.md`, not started).
 
+**AKAR MASALAH OTP timeout = FORMAT NOMOR, bukan restriction akun (v0.9.6, dikoreksi 2026-09-03)** —
+BUG NYATA laten sejak v0.4.0: `whatsapp-gateway/src/sessionManager.js` `toJid()` cuma
+`replace(/[^0-9]/g, '')` — nomor lokal Indonesia `087884374939` jadi `087884374939@s.whatsapp.net` (JID
+TIDAK SAH). `sock.sendMessage()` ke JID bogus meng-hang saat Baileys resolve device-list-nya → timeout
+60s. **Sempat SALAH didiagnosis (2026-09-02) sebagai "nomor di-restrict WhatsApp"** — dugaan itu KELIRU.
+Dibantah 2026-09-03: `sock.onWhatsApp("6287884374939")` balas `exists:true` dalam 380ms, dan kirim ke
+`6287884374939@s.whatsapp.net` **SUKSES ~0.3 detik** (`{"success":true,"message":"Sent"}`), full jalur
+Laravel `buildAndQueueForReferrer()` + `SendWhatsappMessageJob::handle()` → `status=sent`. Sesi tidak
+pernah di-restrict — cuma JID-nya salah. (`fetchProps`/`init queries` timeout tiap ~60s memang tetap
+muncul tapi TERBUKTI tidak memblokir kirim — noise Baileys, bukan blocker.) **Message delivery memang
+belum pernah diverifikasi end-to-end sebelum ini** (lihat catatan v0.4.0 "A real WhatsApp-app phone scan
+was never performed").
+**Fix format (2 tempat, defense-in-depth):**
+- `whatsapp-gateway/src/sessionManager.js` `toJid()` — normalisasi Indonesia: `0xxx`→`62xxx`,
+  `62xxx`→tetap, `+62xxx`→`62xxx`, `8xxx`→`62 8xxx`. Chokepoint terakhir semua kirim.
+- `App\Support\WhatsappPhone::normalize()` — dipakai `WhatsappGatewayService` saat isi
+  `whatsapp_message_logs.phone_number` → nilai tersimpan + payload ke gateway sama-sama sudah `62...`.
+  `WhatsappPhoneTest` unit.
+**Fix robustness yang tetap dipertahankan** (`whatsapp-gateway/src/sessionManager.js` — benar sebagai
+hardening, bukan akar masalah): `sendMessage()` `Promise.race` `SEND_TIMEOUT_MS = 20000` + cek
+`sock.user?.id`; reconnect exponential backoff 5s→60s; `DisconnectReason.badSession` (500) di-wipe + tunggu
+re-pair; `markOnlineOnConnect:false` + `syncFullHistory:false`; Laravel `SendWhatsappMessageJob` timeout
+30→35s.
+
 **Template resolution**: `App\Services\Whatsapp\WhatsappTemplateService::resolve()` — a reseller's own
 active override (`whatsapp_message_templates.reseller_id` = that reseller) wins; otherwise falls back to
 the tenant's default ISP-level template (`reseller_id` null) for the same `event_type`. Both `resolve()`
@@ -423,7 +474,16 @@ and every query in this module use `withoutGlobalScopes()` explicitly and pass `
 runs from queued jobs and scheduled commands with no authenticated user, where `BelongsToTenant`'s
 `TenantScope` (which only filters `if (Auth::check())`) wouldn't help anyway.
 
-**Four fixed trigger types** (`App\Enums\WhatsappEventType`) — **no fifth type without asking first**:
+**Fixed trigger types** (`App\Enums\WhatsappEventType`) — **no new type without asking first**. The
+original four (below); plus **`referrer_action_otp` (v0.9.6, explicit permission from Agung)** — the first
+type whose recipient is NOT a customer. It sends a 6-digit OTP to a **Referrer's own** phone
+(`referrers.phone`) to verify a portal self-service action (currently only "Catat Titip"). It does NOT go
+through `buildAndQueue()` (Customer-bound) — a separate `WhatsappGatewayService::buildAndQueueForReferrer()`
+resolves the template at ISP level (`reseller_id` null — a Referrer has no reseller) and always queues on
+the `"direct"` session. Variables: `{referrer_name}`, `{otp_code}`, `{otp_minutes}`, `{customer_name}`,
+`{company_name}`. See the "Fitur Titip (v0.9.6)" section below.
+
+The original four:
 `invoice_due_reminder` (H-5 and H-0 only — **explicitly no overdue reminder**, once an invoice passes
 H-0 unpaid there is no further WhatsApp nudge for it, enforced almost for free by
 `whatsapp:send-due-reminders` only ever querying `InvoiceStatus::Pending`, never `Overdue`),
@@ -1801,6 +1861,36 @@ one run (the old router-ping approach was under-counting real online
 devices), and `nas.last_ping_at` for the vantage-point NAS stayed
 completely unchanged across the run — zero ping traffic left the server,
 confirming the architectural goal.
+
+**Amendment (2026-09-04) — "offline palsu", investigasi + fix.** Agung
+melihat banyak CPE dicap Offline yang sebenarnya online — "cukup input ulang
+SN yang SAMA lewat 'Ganti Modem', langsung Online lagi". Root cause:
+1. **Ambang `_lastInform` cuma 5 menit + probe gagal LANGSUNG = Offline.**
+   ONT nyata banyak yang `PeriodicInformInterval`-nya 1-12 jam, DAN
+   `connection_request`-nya gagal (mismatch `cwmp.connectionRequestAuth` /
+   batasan routing tunnel — sudah didokumentasikan di v0.7.7 di atas). Jadi
+   device online tapi Inform-nya "stale" per 5-menit-window + probe gagal →
+   salah dicap Offline TIAP siklus sync. "Ganti Modem" (`CpeBindingService::
+   bindFromLegacyImport()` → `findByStoredSerial()`) set Online begitu
+   GenieACS cuma KENAL serial-nya (tanpa cek kesegaran Inform) → itu yang
+   bikin re-input SN "memperbaiki".
+   **Fix**: ambang online → `config('services.cpe.online_threshold_minutes')`
+   default **180 (3 jam)**; probe gagal HANYA set Offline kalau Inform
+   terakhir > `offline_hard_cutoff_minutes` default **1440 (24 jam)** atau
+   tidak pernah ada — di antara dua ambang, probe gagal **tidak mengubah
+   status** ("jangan bohong offline kalau belum yakin").
+2. **Scheduler drift.** `boss-scheduler` entrypoint = `while true; do
+   schedule:run; sleep 60; done` — command foreground yang lama (`cpe:sync-
+   device-status` ~2.5min, `cpe:sync-signal-history` ~10min) **memblokir
+   seluruh loop**, jadi `schedule:run` berikutnya telat menit-an dan
+   MELEWATI slot cron-nya. Observasi nyata: `cpe:sync-device-status` jalan
+   ~tiap JAM (bukan 15 menit), `cpe:reconcile` ~tiap 20 menit (bukan 5).
+   **Fix**: `->runInBackground()->withoutOverlapping()` pada `SyncCpeDeviceStatus`,
+   `SyncCpeSignalHistory`, `SyncContainerStats` — fork biar loop bebas hit
+   tiap slot tepat waktu. (Entrypoint loop-nya sendiri tidak disentuh — di
+   luar scope.)
+Selebihnya command-nya SENDIRI berfungsi (run manual: `Synced: 350 | Online:
+324 | Offline: 26`) — bukan job mati diam-diam.
 
 **Real-customer end-to-end verification of v0.7.4/v0.7.5, done deliberately
 against production data (Agung's explicit call, with a documented revert
@@ -6210,6 +6300,93 @@ verifikasi HTTP nyata. **DB dev sudah di-`migrate`** (2 kolom); kalau branch dib
 
 **DB dev BELUM di-`migrate`** (0 invoice, 1 `commission_ledger`, 1 `commission_rate` — tidak ada yang
 terdampak). Kalau branch dibatalkan `migrate:rollback --step=1`.
+
+## Fitur Titip (v0.9.6, branch `v0.9.6-fitur-titip`, belum di-merge/tag)
+
+**Referrer mencatat sendiri pembayaran cash "titip" dari pelanggan yang ia referensikan → dapat komisi
+Titip.** Desain final dikonfirmasi Agung — **PENCATATAN pembayaran + komisi SAJA, BUKAN otomasi
+perpanjangan layanan** (billing masih manual/MixRadius, `subscriptions`/`SubscriptionService`/
+`GenerateDueInvoices` tidak disentuh; tidak ada satu pun panggilan ke NAS/RADIUS/RouterOS).
+
+- **`App\Enums\CommissionScheme::Titip`** — BEDA sifat dari `Recurring`/`LimitedCount`. Dua skema itu
+  adalah skema *atribusi pelanggan* (dipilih admin saat registrasi, lalu dimatangkan
+  `CommissionLedgerMaturityService` tiap invoice lunas). **`Titip` TIDAK PERNAH lewat jalur itu** — baris
+  `commission_ledger` scheme=titip HANYA dibuat lewat Portal Referrer. `CommissionLedgerMaturityService::
+  matureForPaidInvoice()` mengecualikan baris scheme=titip dari lookup "template" (`whereNull('scheme')
+  ->orWhere('scheme','!=','titip')`) — baris Titip tidak pernah jadi template, tidak pernah di-append per
+  invoice. `CommissionRate::amountForScheme('titip')`/`titipAmount()` di-wire, TAPI `schemeOptions()`
+  (form registrasi/edit pelanggan) **tetap tidak** menawarkan Titip.
+- **`commission_ledger.payment_period`** (date, nullable — tanggal 1 bulan pembayaran, mis. `2026-09-01`).
+  Migration `2026_09_02_140000`. Alasan: baris Titip `invoice_id` NULL → indeks unik parsial v0.9.5
+  (`WHERE invoice_id IS NOT NULL`) tidak melindunginya dari duplikat. Guard duplikat = app-layer
+  (`ReferrerTitipService::existingForMonth()`), **peringatan yang bisa di-override**, bukan hard block —
+  admin/kasus sah tetap boleh 2 entri per bulan.
+- **`App\Services\Commission\ReferrerTitipService`** — `availabilityFor(Customer)` (tombol "Catat Titip"
+  muncul untuk pelanggan MANA PUN — tenant yang sama — yang punya `ppp_package_id` + `CommissionRate`
+  aktif dengan `titip_amount`). **Perluasan 2026-09-04 (keputusan Agung)**: syarat "direferensikan
+  Referrer ini" DIHAPUS — cash titip bisa dikumpulkan Sales/Teknisi/Agent mana pun, komisi diatribusi ke
+  yang MENCATAT lewat `record($actingReferrer, $customer)`. Portal `Dashboard` sekarang list
+  `Customer::query()` (paginasi + search nama/CID/HP), kolom Nama/CID/Alamat/Paket/Referensi(resmi), dan
+  Rekap dipecah 2 tabel: "Rekap Komisi" (`scheme != titip`) + "Rekap Titip" (`scheme = titip`).
+  `existingForMonth(Customer)` cek per-pelanggan (siapa pun), bukan per-acting-referrer.
+  `record()` → `commission_ledger` baris baru `scheme=titip status=eligible`
+  (langsung Eligible — OTP = jaring pengaman, bukan approval admin), `amount` dari
+  `CommissionRate.titip_amount` (**tidak pernah diketik manual**), `payment_period` bulan berjalan.
+  Tenant-eksplisit.
+- **OTP: `App\Services\Commission\ReferrerActionOtpService`** — kode 6-digit, cache 5 menit (plaintext,
+  Redis internal-only, sama posture `ScriptDownloadTokenService`), maks 5 salah → kode dihapus,
+  single-use. `RateLimiter` kirim ulang **3×/10 menit** per `(referrer, scope)`. `$scope` =
+  `"titip:{$customerId}"` — kode untuk pelanggan A tidak bisa dipakai untuk pelanggan B. `ReferrerOtpException`
+  pesan user-facing Indonesia (komponen Livewire teruskan ke `addError()`).
+  `issue(Referrer, string $scope, string $actionLabel, ?Customer)` — **`$actionLabel`** dirender ke
+  variabel template `{action_label}` (Titip: `"mencatat titip pembayaran untuk {nama}"`; Lupa Password:
+  `"reset password akun Portal Referrer"`). SATU event type `referrer_action_otp` dipakai kedua alur —
+  label yang membedakan konteks, bukan template terpisah. Template default v0.9.6 AWAL keliru
+  meng-hardcode frasa Titip + `*{customer_name}*` (jadi `"...pelanggan **."` untuk Lupa Password yang
+  `$relatedCustomer`-nya null) — diganti pakai `{action_label}` (`WhatsappMessageTemplateSeeder` + 15
+  baris di DB dev sudah di-update).
+- **OTP gagal kirim = sesi WhatsApp "direct" belum connected, BUKAN bug kode** (diinvestigasi
+  2026-09-02): `whatsapp_message_logs` id=2 `failed_reason` = `HTTP 502: session "direct" is not
+  connected (status=qr_pending)`. `buildAndQueueForReferrer()` selalu antre lewat sesi "direct"; kalau
+  sesi itu belum di-scan QR / logged_out / qr_pending → Node gateway balas 502, job retry 3× lalu
+  `failed`. Sesi "direct" (`whatsapp_sessions` `reseller_id IS NULL`) HARUS `connected` dulu (scan QR di
+  `/whatsapp-gateway`) sebelum alur OTP Referrer apa pun bisa jalan.
+- **Portal**: `App\Livewire\ReferrerPortal\Dashboard` diperluas — alur modal `startTitip()` → konfirmasi
+  detail → `sendTitipOtp()` → `submitTitip()` (verify OTP → `record()`). Rekap Komisi diisi (SEMUA baris
+  `commission_ledger` milik referrer — bukan `->first()`; `mount()` fallback resolve Referrer dari
+  `auth()->id()` supaya testable tanpa middleware). **CREATE-ONLY** — tidak ada method
+  edit/hapus/void di komponen (di-assert oleh test). `ReferrerReferralResource` (`GET /api/v1/referrals`):
+  field tunggal `commission_status`/`commission_amount` **dihapus** (breaking), diganti `commissions[]` +
+  `commission_total_earned`.
+- **Admin**: `App\Livewire\Commission\TitipMasukIndex` (`/titip-masuk`, permission baru
+  `commission_ledger.view` + `CommissionLedgerPolicy` auto-discovered, tier-admin-only). Daftar read-only
+  semua `commission_ledger` scheme=titip — **daftar kerja operasional** (perpanjang layanan manual di
+  MixRadius), TIDAK ada approve/reject. Benih UI admin komisi v0.9.7. Link sidebar di cluster "Billing &
+  Finance". Permission **wajib di-`db:seed --class=RolesAndPermissionsSeeder` ulang** terhadap DB dev
+  (sudah dilakukan; insiden berulang di file ini).
+- **Belum ada REST untuk alur Titip** — akun portal Referrer tidak punya Sanctum token; menambah
+  penerbitan token untuk akun Referrer = keputusan tersendiri (belum dilakukan). Business logic ada di
+  service layer, callable dari mana pun nanti.
+- **DB dev sudah di-`migrate`** (`payment_period`) + `db:seed` (permission + WA template). Kalau branch
+  dibatalkan: `migrate:rollback --step=1`.
+
+**Lupa Password Portal Referrer (digabung ke branch v0.9.6 — reuse infra OTP di atas)**:
+`App\Livewire\Auth\ReferrerForgotPassword` (`GET /referrer/forgot-password`, `guest`, link di
+`/referrer/login`). Multi-tahap Nomor HP → OTP WhatsApp → password baru. Reuse `ReferrerActionOtpService`
+dengan **scope `"password_reset:{referrerId}"`** — cache key beda dari scope `"titip:{customerId}"`, jadi
+kode reset password dan kode Titip **terisolasi penuh** (ditest 2 arah). **Anti-enumerasi**: nomor HP tak
+terdaftar / Referrer non-aktif → pesan generik yang SAMA, selalu maju ke tahap OTP, nol WA log, nol error
+spesifik; Referrer id disimpan di **session** server-side (bukan properti Livewire yang bocor ke browser).
+Rate limit kirim ulang 3×/10 menit (sama `ReferrerActionOtpService`). Password baru:
+`User::forceFill(['password' => Hash::make()])->save()`; sesi verifikasi kedaluwarsa 10 menit setelah OTP
+benar. Layout baru `layouts/referrer-guest.blade.php`.
+
+**Tidak ada aksi admin "regenerate password" untuk Referrer yang SUDAH punya akun** — `ReferrerService::
+generateLoginAccount()` hanya untuk `user_id` null, `linkExistingUser()` tidak menyentuh password. Reset
+password Kamisem (id=4) untuk verifikasi manual v0.9.6 dilakukan manual via `tinker`
+(`User::forceFill(['password' => Hash::make(Str::password(16))])->save()`). Fitur "Lupa Password" di atas
+menutup kebutuhan ini dari sisi Referrer; aksi admin regenerate (kalau nanti diperlukan) = scope
+tersendiri.
 
 ## Cluster Profil Paket (v0.14.x) — Konstrain NAS Produksi
 

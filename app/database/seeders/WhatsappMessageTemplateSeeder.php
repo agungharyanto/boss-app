@@ -23,6 +23,7 @@ class WhatsappMessageTemplateSeeder extends Seeder
             WhatsappEventType::PaymentReceived->value => 'Halo {customer_name}, pembayaran invoice {invoice_number} sebesar {total_amount} telah kami terima. Terima kasih atas kepercayaan Anda — {company_name}.',
             WhatsappEventType::CustomerRegistered->value => 'Halo {customer_name}, terima kasih telah mendaftar layanan {package_name} di {company_name}. Tim kami akan segera menghubungi Anda untuk proses instalasi.',
             WhatsappEventType::CustomerSuspendedReminder->value => 'Halo {customer_name}, layanan Anda saat ini berstatus suspend. Segera lakukan pembayaran tertunggak agar layanan dapat diaktifkan kembali. Hubungi {company_name} untuk bantuan.',
+            WhatsappEventType::ReferrerActionOtp->value => 'Halo {referrer_name}, kode verifikasi Anda: *{otp_code}*. Digunakan untuk: {action_label}. Berlaku {otp_minutes} menit. JANGAN bagikan kode ini ke siapa pun — {company_name}.',
         ];
 
         Tenant::all()->each(function (Tenant $tenant) use ($defaults) {

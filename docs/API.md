@@ -175,10 +175,17 @@ Response `201` berisi `CustomerResource` seperti `POST /customers`.
 ### `GET /referrals`
 
 Daftar customer yang direferensikan oleh referrer milik user yang login, plus
-status commission masing-masing. `404` kalau user yang login tidak terhubung
-ke `Referrer` manapun (`referrers.user_id`). Tidak ada konsep kode referral
-yang di-generate/divalidasi di codebase ini — atribusi referrer murni lewat
-link `referrers.user_id`, bukan kode.
+SEMUA baris `commission_ledger` masing-masing. `404` kalau user yang login
+tidak terhubung ke `Referrer` manapun (`referrers.user_id`). Tidak ada konsep
+kode referral yang di-generate/divalidasi di codebase ini — atribusi referrer
+murni lewat link `referrers.user_id`, bukan kode.
+
+> **Perubahan bentuk respons (breaking, v0.9.6)** — field tunggal
+> `commission_status`/`commission_status_label`/`commission_amount` dihapus.
+> Sejak v0.9.5 (append per invoice) dan v0.9.6 (Titip) satu pelanggan bisa
+> punya N baris komisi, jadi sekarang ada array `commissions[]` + ringkasan
+> `commission_total_earned` (jumlah `amount` untuk status
+> Eligible/Approved/Paid).
 
 ```json
 {
@@ -190,10 +197,31 @@ link `referrers.user_id`, bukan kode.
       "customer_name": "Rina Kusuma",
       "registration_status": "registered",
       "registration_status_label": "Registered",
-      "commission_status": "pending",
-      "commission_status_label": "Pending",
-      "commission_amount": null,
-      "registered_at": "2026-08-02T16:10:00+00:00"
+      "registered_at": "2026-08-02T16:10:00+00:00",
+      "commissions": [
+        {
+          "id": 12,
+          "scheme": "recurring",
+          "scheme_label": "Per Bulan",
+          "amount": "3000.00",
+          "status": "eligible",
+          "status_label": "Eligible",
+          "payment_period": null,
+          "invoice_id": 88,
+          "created_at": "2026-09-01T02:00:00+00:00"
+        },
+        {
+          "id": 40,
+          "scheme": "titip",
+          "scheme_label": "Titip",
+          "amount": "3000.00",
+          "status": "eligible",
+          "payment_period": "2026-09-01",
+          "invoice_id": null,
+          "created_at": "2026-09-02T09:15:00+00:00"
+        }
+      ],
+      "commission_total_earned": "6000"
     }
   ],
   "meta": []
@@ -385,10 +413,41 @@ logout portal) sekarang redirect ke `/login`.
 
 ### Portal Referrer (`/referrer-portal`)
 
-Halaman self-service minimal untuk referrer yang login: profil (nama bisa diubah sendiri, nomor HP
-read-only karena itu kredensial login), daftar pelanggan yang direferensikan
-(`Referrer::referrals()`, dari v0.9.1), dan placeholder "Rekap Komisi — Akan tersedia di update
-berikutnya" (logic komisi belum dibangun, menunggu v0.9.3-v0.9.6).
+Halaman self-service untuk referrer yang login: profil (nama bisa diubah sendiri, nomor HP
+read-only karena itu kredensial login + tujuan OTP), daftar pelanggan yang direferensikan
+(`Referrer::referrals()`, dari v0.9.1), **Rekap Komisi** (SEMUA baris `commission_ledger` milik referrer —
+v0.9.6, bukan lagi placeholder), dan alur **"Catat Titip"** (v0.9.6).
+
+**Catat Titip (v0.9.6)** — self-service, session-based (di bawah middleware `referrer.portal`), **belum
+ada padanan REST**. Referrer menandai bahwa pelanggan yang ia referensikan membayar cash "titip":
+tombol "Catat Titip" hanya muncul untuk pelanggan yang punya `ppp_package_id` + `CommissionRate` aktif
+dengan `titip_amount` terisi. Alur: layar konfirmasi detail (nama/alamat/paket/nominal) → kode OTP
+6-digit dikirim ke **WhatsApp referrer sendiri** (event type `referrer_action_otp`, penerima
+`referrers.phone`, kode di cache 5 menit, maks 5 salah, kirim ulang di-rate-limit 3×/10 menit) →
+verifikasi → baris `commission_ledger` **langsung `scheme=titip status=eligible`**, `amount` dari
+`CommissionRate.titip_amount` (tidak pernah diketik manual), `payment_period` = tanggal 1 bulan berjalan.
+Guard duplikat bulan berjalan = peringatan yang bisa di-override, bukan hard block. **CREATE-ONLY** —
+referrer tidak bisa edit/hapus baris Titip-nya sendiri (koreksi = ranah admin). **Tidak ada REST endpoint
+untuk alur ini** — akun portal referrer tidak punya Sanctum token; menambah penerbitan token untuk akun
+referrer adalah keputusan tersendiri (belum dilakukan). Business logic ada di
+`App\Services\Commission\ReferrerTitipService` + `ReferrerActionOtpService` (bisa dipanggil dari mana pun
+nanti).
+
+**Titip Masuk (admin, `/titip-masuk`, permission `commission_ledger.view`)** — daftar read-only semua
+baris `commission_ledger` `scheme=titip`, filter status + cari nama pelanggan/referrer. **Murni daftar
+kerja operasional** (admin perlu memperpanjang layanan pelanggan secara manual di MixRadius) — TIDAK ada
+tombol approve/reject; OTP WhatsApp + nominal terkunci ke rate sudah jadi jaring pengaman. Belum ada REST
+endpoint (bagian dari UI admin komisi lebih lengkap, v0.9.7).
+
+### Lupa Password Referrer (`GET /referrer/forgot-password`, v0.9.6)
+
+Livewire multi-tahap (`guest` middleware, link "Lupa password?" di `/referrer/login`), **tidak ada REST**.
+Tahap: Nomor HP → kode OTP 6-digit ke WhatsApp Referrer (reuse `ReferrerActionOtpService`, event type
+`referrer_action_otp`, scope `"password_reset:{referrerId}"` — beda cache key dari scope Titip, kode tidak
+saling bisa dipakai) → password baru (2×, `Password::defaults()` + `confirmed`). **Anti-enumerasi**: nomor
+tidak terdaftar / Referrer non-aktif → pesan generik yang sama, selalu maju ke tahap OTP, tidak ada pesan
+"nomor tidak ditemukan". Rate limit kirim ulang = 3×/10 menit (sama seperti alur Titip). Referrer id yang
+cocok disimpan di session server-side, bukan properti Livewire.
 
 ### Middleware pemisah akses
 
@@ -876,10 +935,10 @@ Node, HMAC-signed). Kalau sesi berstatus `logged_out`, Node menghapus
 ### `GET /whatsapp/templates` · `PUT /whatsapp/templates/{eventType}` · `DELETE /whatsapp/templates/{eventType}`
 
 `{eventType}`: salah satu dari `invoice_due_reminder`/`payment_received`/
-`customer_registered`/`customer_suspended_reminder`. `PUT` meng-upsert
-template milik scope acting user (reseller override kalau ada context,
-default ISP-level kalau admin tanpa context). `DELETE` (reseller-only)
-mereset ke default ISP-level (hapus baris override).
+`customer_registered`/`customer_suspended_reminder`/`referrer_action_otp`.
+`PUT` meng-upsert template milik scope acting user (reseller override kalau
+ada context, default ISP-level kalau admin tanpa context). `DELETE`
+(reseller-only) mereset ke default ISP-level (hapus baris override).
 
 Variabel template: `{customer_name}`, `{customer_id}`, `{invoice_number}`,
 `{due_date}`, `{total_amount}`, `{package_name}`, `{company_name}`,
@@ -887,6 +946,15 @@ Variabel template: `{customer_name}`, `{customer_id}`, `{invoice_number}`,
 lewat `PaymentService::createPaymentFor()` channel `XENDIT_INVOICE` — bisa
 kosong kalau channel itu belum aktif). Variabel yang tidak berlaku untuk
 suatu `event_type` dikosongkan, bukan dibiarkan sebagai placeholder mentah.
+
+**`referrer_action_otp` (event type ke-5, v0.9.6)** — beda dari 4 event
+lain: penerimanya **Referrer** (`referrers.phone`), bukan pelanggan. Dikirim
+lewat jalur `WhatsappGatewayService::buildAndQueueForReferrer()` (selalu sesi
+"direct", template di-resolve di level ISP saja — Referrer tidak punya
+reseller). Variabelnya: `{referrer_name}`, `{otp_code}`, `{otp_minutes}`,
+`{customer_name}` (pelanggan yang aksinya dikonfirmasi), `{company_name}`.
+Dipakai hanya oleh alur "Catat Titip" di Portal Referrer (lihat bagian
+Portal Referrer di atas).
 
 ### `GET /whatsapp/message-logs` · `POST /whatsapp/message-logs/{log}/retry`
 

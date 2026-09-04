@@ -7,9 +7,11 @@ use App\Enums\WhatsappMessageStatus;
 use App\Jobs\SendWhatsappMessageJob;
 use App\Models\Customer;
 use App\Models\Invoice;
+use App\Models\Referrer;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappSession;
 use App\Services\Payment\PaymentService;
+use App\Support\WhatsappPhone;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -51,7 +53,7 @@ class WhatsappGatewayService
             'reseller_id' => $customer->reseller_id,
             'customer_id' => $customer->id,
             'invoice_id' => $invoice?->id,
-            'phone_number' => $customer->phone_number,
+            'phone_number' => WhatsappPhone::normalize($customer->phone_number),
             'event_type' => $eventType,
             'template_id' => $template->id,
             'rendered_content' => $rendered,
@@ -60,6 +62,63 @@ class WhatsappGatewayService
         ]);
 
         $sessionKey = WhatsappSession::sessionKeyFor($customer->reseller_id);
+
+        SendWhatsappMessageJob::dispatch($log->id)->onQueue('whatsapp-'.$sessionKey);
+
+        return $log;
+    }
+
+    /**
+     * v0.9.6 — jalur terpisah untuk pesan yang penerimanya REFERRER, bukan
+     * pelanggan (satu-satunya pemakai sekarang: WhatsappEventType::
+     * ReferrerActionOtp). Referrer tidak punya reseller, jadi template
+     * di-resolve di level ISP (reseller_id null) dan pesan selalu diantre
+     * lewat sesi "direct". `$relatedCustomer` opsional dipakai hanya untuk
+     * jejak (`whatsapp_message_logs.customer_id`) + variabel {customer_name}
+     * — pesan tetap dikirim ke `referrer->phone`.
+     *
+     * Returns null (tanpa exception) kalau template ReferrerActionOtp belum
+     * di-seed untuk tenant ini — pemanggil (ReferrerActionOtpService) harus
+     * memperlakukan itu sebagai "OTP gagal dikirim", bukan menelannya diam.
+     *
+     * @param  array<string, string|int|null>  $extraVariables
+     */
+    public function buildAndQueueForReferrer(
+        WhatsappEventType $eventType,
+        Referrer $referrer,
+        array $extraVariables = [],
+        ?Customer $relatedCustomer = null,
+    ): ?WhatsappMessageLog {
+        $template = $this->templateService->resolve($eventType, $referrer->tenant_id, null);
+
+        if ($template === null) {
+            Log::warning("WhatsappGatewayService: no active template resolved for {$eventType->value} (tenant_id={$referrer->tenant_id}, referrer path) — skipping send.");
+
+            return null;
+        }
+
+        $variables = array_merge([
+            'referrer_name' => $referrer->name,
+            'company_name' => $referrer->tenant?->name,
+            'customer_name' => $relatedCustomer?->name,
+        ], $extraVariables);
+
+        $rendered = $this->templateService->render($template->content, $variables);
+
+        $log = WhatsappMessageLog::create([
+            'tenant_id' => $referrer->tenant_id,
+            'reseller_id' => null,
+            'customer_id' => $relatedCustomer?->id,
+            'invoice_id' => null,
+            'phone_number' => WhatsappPhone::normalize($referrer->phone),
+            'event_type' => $eventType,
+            'template_id' => $template->id,
+            'rendered_content' => $rendered,
+            'status' => WhatsappMessageStatus::Queued,
+            'queued_at' => now(),
+        ]);
+
+        $sessionKey = WhatsappSession::sessionKeyFor(null);
 
         SendWhatsappMessageJob::dispatch($log->id)->onQueue('whatsapp-'.$sessionKey);
 

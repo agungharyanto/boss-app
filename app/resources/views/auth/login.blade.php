@@ -51,6 +51,13 @@
                     Masuk
                 </button>
             </form>
+
+            <div class="mt-4 text-sm text-center">
+                {{-- Alur reset password via OTP WhatsApp (v0.9.6). Untuk akun
+                     Referral (input nomor HP); akun staff yang lupa password
+                     hubungi admin. --}}
+                <a href="{{ route('referrer.password.request') }}" class="text-blue-600 hover:underline">{{ __('Lupa password?') }}</a>
+            </div>
         </div>
     </body>
 </html>

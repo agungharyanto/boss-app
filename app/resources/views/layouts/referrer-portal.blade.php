@@ -19,6 +19,16 @@
                     <div>
                         <p class="text-sm text-gray-500">{{ __('Portal Referrer') }}</p>
                         <p class="font-semibold text-gray-800">{{ config('app.name') }}</p>
+                        <nav class="mt-1 flex gap-4 text-sm">
+                            <a href="{{ route('web.referrer-portal.dashboard') }}"
+                                class="{{ request()->routeIs('web.referrer-portal.dashboard') ? 'text-primary font-medium' : 'text-gray-500 hover:text-gray-700' }}">
+                                {{ __('Beranda') }}
+                            </a>
+                            <a href="{{ route('web.customers.index') }}"
+                                class="{{ request()->routeIs('web.customers.index') ? 'text-primary font-medium' : 'text-gray-500 hover:text-gray-700' }}">
+                                {{ __('Daftar Pelanggan') }}
+                            </a>
+                        </nav>
                     </div>
                     <div class="flex items-center gap-4">
                         <x-language-switcher />

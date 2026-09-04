@@ -3,6 +3,60 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## Perpanjang di Daftar Pelanggan + Akses Terbatas Referrer (branch `perpanjang-daftar-pelanggan`, belum di-merge/tag)
+
+Redesain dari Portal Referrer terpisah → terintegrasi ke **Daftar Pelanggan** (halaman admin
+`customers.index` yang sudah ada), dengan akses terbatas untuk Referrer murni.
+
+**LANGKAH 1 — akses terbatas Referrer murni.** Middleware baru `EnsureCustomerListAccess`
+(alias `customers.list`): lolos kalau user punya akses panel admin (`EnsureAdminPanelAccess::userHasAccess`)
+**ATAU** tertaut ke `Referrer` aktif (`referrers.user_id`, `is_active`). `customers.index` dipindah keluar
+dari grup `admin.panel` ke grup sendiri (`['auth','customers.list','reseller.context']`) — **route
+`/customers` saja**, semua route `/customers/*` lain (register, koordinat, `{customer}` detail) tetap
+`admin.panel`-only. `CustomerIndex` menderive mode admin vs Referrer ULANG tiap request dari
+`auth()->user()` (bukan properti persisted). Untuk Referrer murni: layout `layouts.referrer-portal` (tanpa
+sidebar admin), tabel list saja (CID/Nama/Telepon/Status/Perpanjang), tanpa tombol buat/registrasi
+pelanggan, tanpa link Detail. Untuk admin: halaman penuh seperti biasa + tombol Perpanjang baru.
+
+**LANGKAH 2 — tombol "⚡ Perpanjang" + form.** Modal per baris pelanggan: paket saat ini + dropdown "Ubah
+Paket (Opsional)" (kosong = tidak ganti, TANPA field diskon). Tombol "Kirim Kode Verifikasi" →
+`ReferrerActionOtpService` (reuse **persis** dari v0.9.6, scope `renewal:{customerId}`, kirim ke WhatsApp
+acting Referrer) → input OTP + tombol "Verifikasi" → tombol "Perpanjang" disabled sampai OTP terverifikasi.
+`App\Services\Commission\SubscriptionRenewalService::renew($actor, $customer, ?$newPackageId)`:
+- Ganti paket = update `customers.ppp_package_id` **SAJA** (validasi paket milik tenant + `is_active`).
+  **NOL panggilan NAS/RouterOS/FreeRADIUS/MixRadius** — dijamin struktural (service tidak inject gateway
+  apa pun; ada test reflection). `subscriptions`/`SubscriptionService`/`GenerateDueInvoices` tidak
+  disentuh.
+- Komisi: acting Referrer tipe **Sales/Freelance** → baris `commission_ledger` scheme=titip
+  status=eligible, nominal dari `CommissionRate.titip_amount` paket customer **SAAT INI** (setelah ganti
+  paket), `payment_period` bulan berjalan — lewat `ReferrerTitipService::recordForRenewal()`.
+  **Teknisi/Admin** atau tidak tertaut Referrer → tidak ada komisi.
+- Selalu tulis `customer_timeline_entries` `event_type=subscription_renewed` (aktor, dari/ke paket,
+  komisi tercipta atau tidak).
+- Pesan sukses beda: "Perpanjangan … dicatat, komisi Titip Rp X berhasil ditambahkan." vs "Perpanjangan …
+  dicatat."
+- **Admin tanpa Referrer terikat**: tombol Perpanjang tetap muncul; modal tidak menampilkan OTP (nomor HP
+  Referral tidak ada), perpanjangan dicatat atas otoritas panel admin, tanpa komisi. Keputusan desain
+  eksplisit — `ReferrerActionOtpService` di-reuse "persis" (Referrer-bound), jadi jalur OTP hanya berlaku
+  saat acting user memang tertaut Referrer aktif.
+
+**LANGKAH 3 — Portal Referrer disederhanakan.** `ReferrerPortal\Dashboard` + view-nya: **HAPUS** section
+"Daftar Pelanggan" + seluruh alur "Catat Titip" (semua method/properti titip). **Sisakan**: Profil Saya,
+Rekap Komisi (`scheme != titip`), Rekap Titip (`scheme = titip`). Komponen tidak lagi membuat baris
+`commission_ledger` apa pun. Nav kecil (Beranda / Daftar Pelanggan) ditambahkan di header
+`layouts.referrer-portal` karena Referrer tidak punya sidebar.
+
+**Tidak ada endpoint REST baru** — akun Portal Referrer tidak punya Sanctum token (sama seperti v0.9.6);
+business logic ada di `SubscriptionRenewalService` (callable dari mana pun nanti). `docs/API.md` diberi
+catatan.
+
+**Test**: `CustomerListReferrerAccessTest` (6), `CustomerRenewalLivewireTest` (8),
+`SubscriptionRenewalServiceTest` (5), `ReferrerPortalDashboardTest` (4). `ReferrerTitipPortalTest.php`
+(v0.9.6, menguji alur titip di portal Dashboard yang kini dihapus) **dihapus** — cakupannya pindah ke test
+di atas. Full regression suite hijau. Pint clean.
+
+---
+
 ## v0.9.7 — Login Terpadu (Admin + Referrer, 1 pintu di `/login`) (branch `login-terpadu`, merged + tagged `v0.9.7`)
 
 Gabung 2 halaman login terpisah (`/login` Fortify email, `/referrer/login` custom HP) jadi **SATU pintu

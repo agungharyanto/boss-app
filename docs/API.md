@@ -86,6 +86,23 @@ Aturan transisi (`App\Enums\CustomerStatus::canTransitionTo`):
 
 Transisi yang tidak valid → `422` dengan pesan di bawah field `status`.
 
+### Perpanjang Langganan — **tidak ada endpoint REST**
+
+Aksi "⚡ Perpanjang" di Daftar Pelanggan (halaman web `GET /customers`, komponen
+`App\Livewire\Customers\CustomerIndex`, sprint `perpanjang-daftar-pelanggan`)
+mencatat perpanjangan (opsional ganti `customers.ppp_package_id`) + OTP WhatsApp
+ke acting Referrer + komisi Titip untuk Referrer Sales/Freelance. **Sengaja
+tidak diekspos sebagai REST** — akun Portal Referrer tidak punya Sanctum token
+(sama posture v0.9.6). Business logic di
+`App\Services\Commission\SubscriptionRenewalService::renew()`, callable dari
+mana pun kalau nanti dibutuhkan. **Nol panggilan NAS/RouterOS/RADIUS/MixRadius**
+— hanya data BOSS App; `subscriptions`/`SubscriptionService`/`GenerateDueInvoices`
+tidak disentuh.
+
+Halaman `GET /customers` sendiri kini bisa dibuka akun Referrer murni (middleware
+`customers.list`, bukan `admin.panel`) dengan tampilan disederhanakan; route
+`/customers/*` lain tetap `admin.panel`-only.
+
 ---
 
 ## Customer Contacts (kontak keluarga)

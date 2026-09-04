@@ -105,14 +105,41 @@ class ReferrerTitipService
      */
     public function record(Referrer $referrer, Customer $customer): CommissionLedger
     {
+        $now = CarbonImmutable::now();
+
+        return $this->createEligibleTitipRow(
+            $referrer,
+            $customer,
+            "v0.9.6: titip dicatat Referrer via Portal (OTP WhatsApp terverifikasi) {$now->toDateTimeString()}.",
+        );
+    }
+
+    /**
+     * Sprint "perpanjang-daftar-pelanggan" — komisi Titip yang tercipta
+     * sebagai efek samping aksi "Perpanjang" di Daftar Pelanggan (OTP
+     * WhatsApp ke acting Referrer sudah diverifikasi oleh pemanggil).
+     * Sama bentuknya dengan `record()`, hanya beda catatan konteks.
+     *
+     * @throws \RuntimeException kalau Titip tidak (lagi) tersedia untuk pelanggan ini
+     */
+    public function recordForRenewal(Referrer $referrer, Customer $customer): CommissionLedger
+    {
+        $now = CarbonImmutable::now();
+
+        return $this->createEligibleTitipRow(
+            $referrer,
+            $customer,
+            "perpanjang-daftar-pelanggan: komisi Titip dari aksi Perpanjang di Daftar Pelanggan (OTP WhatsApp terverifikasi) {$now->toDateTimeString()}.",
+        );
+    }
+
+    private function createEligibleTitipRow(Referrer $referrer, Customer $customer, string $notes): CommissionLedger
+    {
         $availability = $this->availabilityFor($customer);
 
         if (! $availability['available']) {
             throw new \RuntimeException($availability['reason'] ?? 'Titip tidak tersedia untuk pelanggan ini.');
         }
-
-        $now = CarbonImmutable::now();
-        $period = $now->startOfMonth()->toDateString();
 
         return CommissionLedger::create([
             'tenant_id' => $customer->tenant_id,
@@ -120,10 +147,10 @@ class ReferrerTitipService
             'customer_id' => $customer->id,
             'invoice_id' => null,
             'scheme' => CommissionScheme::Titip->value,
-            'payment_period' => $period,
+            'payment_period' => CarbonImmutable::now()->startOfMonth()->toDateString(),
             'amount' => $availability['amount'],
             'status' => CommissionStatus::Eligible,
-            'notes' => "v0.9.6: titip dicatat Referrer via Portal (OTP WhatsApp terverifikasi) {$now->toDateTimeString()}.",
+            'notes' => $notes,
         ]);
     }
 }

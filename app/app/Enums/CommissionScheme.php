@@ -14,9 +14,11 @@ namespace App\Enums;
  * LimitedCount adalah skema *atribusi* pelanggan (dipilih admin saat
  * registrasi / set referrer, lalu dimatangkan otomatis oleh
  * `CommissionLedgerMaturityService` setiap invoice lunas). `Titip` TIDAK
- * pernah lewat jalur itu — baris `commission_ledger` scheme=titip HANYA
- * dibuat lewat Portal Referrer (self-service + verifikasi OTP WhatsApp,
- * lihat `App\Services\Commission\ReferrerTitipService`). Karena itu
+ * pernah lewat jalur itu — baris `commission_ledger` scheme=titip dibuat
+ * lewat aksi "Perpanjang" di Daftar Pelanggan (verifikasi OTP WhatsApp ke
+ * acting Referrer, hanya untuk Referrer Sales/Freelance — lihat
+ * `App\Services\Commission\SubscriptionRenewalService` +
+ * `App\Services\Commission\ReferrerTitipService`). Karena itu
  * `CommissionLedgerMaturityService` secara eksplisit mengabaikan baris
  * scheme=titip (tidak pernah jadi "template", tidak pernah di-append per
  * invoice).

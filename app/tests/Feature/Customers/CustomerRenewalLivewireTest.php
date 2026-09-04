@@ -264,4 +264,66 @@ class CustomerRenewalLivewireTest extends TestCase
             $this->assertNotContains($forbidden, $methods);
         }
     }
+
+    public function test_a_second_renewal_for_the_same_customer_and_month_is_hard_blocked_for_a_referrer(): void
+    {
+        $referrer = $this->referrerUser(ReferrerType::Sales);
+        $customer = $this->customer($this->packageWithTitipRate(3000));
+
+        // First renewal — succeeds, creates the titip row.
+        Livewire::actingAs($referrer->user)->test(CustomerIndex::class)
+            ->call('openRenew', $customer->id)
+            ->call('sendRenewOtp')
+            ->set('renewOtp', $this->otpCodeFor($referrer, $customer))
+            ->call('verifyRenewOtp')
+            ->call('submitRenew')
+            ->assertSet('renewFlash', fn ($m) => str_contains($m, 'dicatat'));
+
+        $this->assertSame(1, CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->count());
+
+        // Second — modal opens straight into the "already paid" state, no OTP.
+        $second = Livewire::actingAs($referrer->user)->test(CustomerIndex::class)
+            ->call('openRenew', $customer->id)
+            ->assertSet('renewAlreadyPaidThisMonth', true);
+
+        // sendRenewOtp is a no-op in this state.
+        $second->call('sendRenewOtp')->assertSet('renewOtpSent', false);
+
+        // Even a forced submit is rejected with a clear message, no 2nd row.
+        $second->call('submitRenew')
+            ->assertSet('renewError', fn ($m) => str_contains($m, 'sudah tercatat bayar'));
+
+        $this->assertSame(1, CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->count());
+    }
+
+    public function test_a_second_renewal_is_hard_blocked_for_an_admin_too(): void
+    {
+        $admin = $this->adminUser();
+        $customer = $this->customer($this->packageWithTitipRate(3000));
+
+        // Seed an existing titip row for this month (as if a referrer recorded it).
+        $referrer = Referrer::factory()->create(['tenant_id' => $this->tenant->id]);
+        CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'referrer_id' => $referrer->id,
+            'customer_id' => $customer->id,
+            'scheme' => CommissionScheme::Titip->value,
+            'status' => CommissionStatus::Eligible,
+            'amount' => 3000,
+            'payment_period' => now()->startOfMonth()->toDateString(),
+        ]);
+
+        Livewire::actingAs($admin)->test(CustomerIndex::class)
+            ->call('openRenew', $customer->id)
+            ->assertSet('renewAlreadyPaidThisMonth', true)
+            ->call('submitRenew')
+            ->assertSet('renewError', fn ($m) => str_contains($m, 'sudah tercatat bayar'));
+
+        $this->assertDatabaseMissing('customer_timeline_entries', [
+            'customer_id' => $customer->id,
+            'event_type' => 'subscription_renewed',
+        ]);
+    }
 }

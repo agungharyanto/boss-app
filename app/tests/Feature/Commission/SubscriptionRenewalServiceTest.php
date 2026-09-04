@@ -3,6 +3,7 @@
 namespace Tests\Feature\Commission;
 
 use App\Enums\CommissionScheme;
+use App\Enums\CommissionStatus;
 use App\Enums\NetworkProfileGroupType;
 use App\Enums\ReferrerType;
 use App\Enums\TitipDepositStatus;
@@ -10,6 +11,7 @@ use App\Models\BandwidthProfile;
 use App\Models\CommissionLedger;
 use App\Models\CommissionRate;
 use App\Models\Customer;
+use App\Models\CustomerTimelineEntry;
 use App\Models\NetworkProfileGroup;
 use App\Models\PppPackage;
 use App\Models\Referrer;
@@ -213,6 +215,64 @@ class SubscriptionRenewalServiceTest extends TestCase
         $this->assertSame('250000.00', $row->gross_amount);
         $this->assertSame('4000.00', $row->amount);
         $this->assertSame(250000.0, $result['commission_gross_amount']);
+    }
+
+    public function test_renew_is_hard_blocked_when_a_titip_row_already_exists_for_the_month(): void
+    {
+        $user = $this->actingUser();
+        Referrer::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'user_id' => $user->id,
+            'type' => ReferrerType::Sales,
+            'is_active' => true,
+        ]);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'reseller_id' => null,
+            'ppp_package_id' => $this->package(3000)->id,
+        ]);
+
+        // First renewal succeeds.
+        $this->service->renew($user, $customer, null);
+        $this->assertSame(1, CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->count());
+
+        // Second — hard block, regardless of actor.
+        try {
+            $this->service->renew($user, $customer, null);
+            $this->fail('Expected the second renewal to be rejected.');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('sudah tercatat bayar', $e->getMessage());
+        }
+
+        $this->assertSame(1, CommissionLedger::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('scheme', CommissionScheme::Titip->value)->count());
+        // No extra timeline entry from the rejected attempt.
+        $this->assertSame(1, CustomerTimelineEntry::withoutGlobalScopes()
+            ->where('customer_id', $customer->id)->where('event_type', 'subscription_renewed')->count());
+    }
+
+    public function test_hard_block_applies_even_to_an_actor_with_no_linked_referrer(): void
+    {
+        $user = $this->actingUser(); // no linked referrer
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'reseller_id' => null,
+            'ppp_package_id' => $this->package(3000)->id,
+        ]);
+
+        $ref = Referrer::factory()->create(['tenant_id' => $this->tenant->id]);
+        CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'referrer_id' => $ref->id,
+            'customer_id' => $customer->id,
+            'scheme' => CommissionScheme::Titip->value,
+            'status' => CommissionStatus::Eligible,
+            'payment_period' => now()->startOfMonth()->toDateString(),
+        ]);
+
+        $this->expectException(\RuntimeException::class);
+        $this->service->renew($user, $customer, null);
     }
 
     public function test_the_service_has_no_network_gateway_dependency(): void

@@ -130,6 +130,22 @@
                     <p><span class="text-gray-500">{{ __('Paket saat ini') }}:</span> {{ $renewCustomer->pppPackage?->name ?? '—' }}</p>
                 </div>
 
+                @if ($renewError && ! $renewAlreadyPaidThisMonth)
+                    <p class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{{ $renewError }}</p>
+                @endif
+
+                @if ($renewAlreadyPaidThisMonth)
+                    <div class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+                        <p class="font-medium">{{ __('Periode ini sudah dibayar.') }}</p>
+                        <p class="mt-1">{{ __('Pelanggan ini sudah tercatat bayar untuk periode bulan ini. Hubungi admin kalau ada kebutuhan koreksi.') }}</p>
+                    </div>
+
+                    <div class="flex justify-end pt-1">
+                        <button type="button" wire:click="closeRenew"
+                            class="px-3 py-2 text-sm text-gray-600 hover:underline">{{ __('Tutup') }}</button>
+                    </div>
+                @else
+
                 <div>
                     <label class="block text-sm font-medium text-gray-700">{{ __('Ubah Paket (Opsional)') }}</label>
                     <select wire:model="renewNewPackageId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm">
@@ -194,6 +210,7 @@
                         {{ __('Perpanjang') }}
                     </button>
                 </div>
+                @endif
             </div>
         </div>
     @endif

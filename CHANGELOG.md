@@ -3,6 +3,53 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## Revisi Fee Komisi + Anti Duplikat Pembayaran (branch `perpanjang-daftar-pelanggan`, belum di-merge/tag)
+
+**1. Rename "Titip Masuk" → "Fee Komisi"** — **label tampilan saja**. Route name (`web.titip-masuk.index`)
+dan URL (`/titip-masuk`) SENGAJA tidak diubah (hindari break bookmark Agung); yang berubah cuma teks di
+sidebar + `<h1>` halaman + pesan kosong.
+
+**2. Sidebar grup "Komisi" (toggle-murni)** — "Rate Komisi" + "Fee Komisi" dikelompokkan jadi 1 grup
+collapsible `id=komisi` — **reuse PERSIS pola toggle-murni "Profil Paket"** (v0.14.4.1: parent tanpa key
+`route`, klik header cuma expand/collapse). Gate grup: `viewAny(CommissionRate)` (kedua permission selalu
+`giveToAdminTier` bersamaan); tiap child tetap punya check sendiri. "Referrer" tetap link standalone (bukan
+konsep komisi). +1 test `SidebarNavigationTest`.
+
+**3. Fix filter "Semua Status Komisi"** — investigasi: data Agung **semua `status=eligible`**, jadi filter
+"Eligible" menampilkan semuanya = tampak "tidak memfilter" (query-nya sebenarnya benar, terbukti lolos
+`test_status_filter_narrows_the_list` sejak awal). Tetap dikeraskan:
+- `render()` — kondisi `->when($x !== '' && Enum::tryFrom($x), ...)` diganti `if (Enum::tryFrom($x) !==
+  null) { $query->where(...) }` — perlakuan identik & tak ambigu untuk KEDUA filter (AND, bukan OR).
+- `wire:key` ditambahkan ke `search`/`statusFilter`/`depositFilter` — dua `<select>` berstruktur nyaris
+  identik tanpa key rawan tertukar identitas saat Livewire morph DOM (penyebab paling mungkin gejala
+  "filter status tidak jalan" di browser). +1 test AND-kombinasi.
+
+**4. Checkbox selektif per baris** — alasan: ada kasus Titip sudah dicatat (layanan diperpanjang) TAPI
+uang cash belum benar-benar diambil dari pelanggan. Admin perlu pilih transaksi SPESIFIK.
+- Checkbox per baris (`wire:model.live="selected"`, hanya baris `deposit_status=belum_setor`).
+- Checkbox "pilih semua di grup" per Referrer (`toggleGroupSelection($referrerId)` — toggle semua id
+  `belum_setor` Referrer itu).
+- Tombol lama "Tandai Sudah Setor Semua" per grup **DIGANTI** satu tombol global **"Tandai Sudah Setor
+  (Terpilih)"** (`markSelectedDeposited()` — hanya `whereIn('id', $selected)` yang `belum_setor`).
+  `@disabled` saat 0 terpilih. `commission_ledger.manage`. +3 test.
+- Baris `deposit_status` NULL lama (dibuat sebelum migration) di-backfill ke `belum_setor` di DB dev.
+
+**5. Cegah bayar dobel periode yang sama — BLOKIR KERAS** (bug nyata: "test-daftar" ke-Perpanjang 2x utk
+September 2026).
+- `SubscriptionRenewalService::renew()` — CEK PERTAMA, sebelum apa pun: kalau
+  `ReferrerTitipService::existingForMonth($customer) !== null` (apapun statusnya) → `throw
+  \RuntimeException("Pelanggan ini sudah tercatat bayar untuk periode {bulan} — hubungi admin kalau ada
+  kebutuhan koreksi.")`. Berlaku SEMUA pemanggil (Referrer self-service + staff admin), **tidak ada
+  override lewat aplikasi** (koreksi data salah = operasi DB langsung, di luar scope).
+- `CustomerIndex::openRenew()` — cek di AWAL saat modal dibuka → set `$renewAlreadyPaidThisMonth`; modal
+  langsung menampilkan banner merah "Periode ini sudah dibayar" + sembunyikan form paket/OTP/Perpanjang
+  (cuma tombol Tutup). `sendRenewOtp`/`submitRenew` jadi no-op di state itu. +2 test (jalur Referrer +
+  jalur admin) di `CustomerRenewalLivewireTest`, +2 di `SubscriptionRenewalServiceTest`.
+
+Full regression suite hijau. Pint clean. Belum di-merge/tag.
+
+---
+
 ## Tracking Setoran Titip + Ringkasan Total (branch `perpanjang-daftar-pelanggan`, belum di-merge/tag)
 
 Gap: `commission_ledger` cuma menyimpan nominal KOMISI, bukan TOTAL uang yang dipegang Referrer dari

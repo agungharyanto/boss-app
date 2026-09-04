@@ -9,6 +9,7 @@ use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Services\Commission\ReferrerActionOtpService;
 use App\Services\Commission\ReferrerOtpException;
+use App\Services\Commission\ReferrerTitipService;
 use App\Services\Commission\SubscriptionRenewalService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Attributes\Validate;
@@ -70,6 +71,9 @@ class CustomerIndex extends Component
 
     public bool $renewOtpVerified = false;
 
+    /** True kalau pelanggan sudah punya baris titip untuk periode bulan ini. */
+    public bool $renewAlreadyPaidThisMonth = false;
+
     public ?string $renewFlash = null;
 
     public ?string $renewError = null;
@@ -115,7 +119,7 @@ class CustomerIndex extends Component
 
     // --- Perpanjang: buka modal -----------------------------------------
 
-    public function openRenew(int $customerId): void
+    public function openRenew(int $customerId, ReferrerTitipService $titip): void
     {
         $this->resetRenewFlow();
         $this->renewFlash = null;
@@ -126,6 +130,9 @@ class CustomerIndex extends Component
         $this->renewCustomerId = $customer->id;
         $this->renewNewPackageId = '';
         $this->renewModalOpen = true;
+        // Cek di AWAL — jangan biarkan user proses OTP dulu baru ketahuan
+        // ditolak di akhir (BLOKIR KERAS di SubscriptionRenewalService).
+        $this->renewAlreadyPaidThisMonth = $titip->existingForMonth($customer) !== null;
     }
 
     public function closeRenew(): void
@@ -137,7 +144,7 @@ class CustomerIndex extends Component
 
     public function sendRenewOtp(ReferrerActionOtpService $otp): void
     {
-        if (! $this->renewModalOpen || $this->renewCustomerId === null) {
+        if (! $this->renewModalOpen || $this->renewCustomerId === null || $this->renewAlreadyPaidThisMonth) {
             return;
         }
 
@@ -224,6 +231,12 @@ class CustomerIndex extends Component
             return;
         }
 
+        if ($this->renewAlreadyPaidThisMonth) {
+            $this->renewError = 'Pelanggan ini sudah tercatat bayar untuk periode bulan ini — hubungi admin kalau ada kebutuhan koreksi.';
+
+            return;
+        }
+
         $customer = $this->resolveCustomer($this->renewCustomerId);
         $referrer = $this->actingReferrer();
 
@@ -270,6 +283,7 @@ class CustomerIndex extends Component
         $this->renewOtpSent = false;
         $this->renewOtpResent = false;
         $this->renewOtpVerified = false;
+        $this->renewAlreadyPaidThisMonth = false;
         $this->resetErrorBag('renewOtp');
     }
 

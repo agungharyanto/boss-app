@@ -8,6 +8,7 @@ use App\Models\CustomerTimelineEntry;
 use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Models\User;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -47,10 +48,25 @@ class SubscriptionRenewalService
      *     commission_skipped_reason: ?string,
      * }
      *
-     * @throws \RuntimeException kalau paket baru tidak valid untuk tenant customer
+     * @throws \RuntimeException kalau paket baru tidak valid ATAU pelanggan
+     *                           sudah tercatat bayar untuk periode bulan ini
+     *                           (BLOKIR KERAS — tidak ada override lewat
+     *                           aplikasi; koreksi data salah = operasi DB
+     *                           langsung, di luar scope).
      */
     public function renew(User $actor, Customer $customer, ?int $newPppPackageId): array
     {
+        // Cegah bayar dobel untuk periode yang sama — berlaku untuk SEMUA
+        // pemanggil (Referrer self-service maupun staff admin). Apapun
+        // status baris titip yang sudah ada, transaksi baru ditolak.
+        if ($this->titip->existingForMonth($customer) !== null) {
+            $bulan = Carbon::now()->translatedFormat('F Y');
+
+            throw new \RuntimeException(
+                "Pelanggan ini sudah tercatat bayar untuk periode {$bulan} — hubungi admin kalau ada kebutuhan koreksi."
+            );
+        }
+
         $originalPackageId = $customer->ppp_package_id;
         $fromName = $customer->pppPackage?->name;
 

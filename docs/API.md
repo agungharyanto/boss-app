@@ -98,9 +98,14 @@ tidak diekspos sebagai REST** — akun Portal Referrer tidak punya Sanctum token
 mana pun kalau nanti dibutuhkan. Baris `commission_ledger` scheme=titip yang
 lahir dari sini juga menyimpan `gross_amount` (snapshot `sell_price` paket
 efektif = total uang cash yang dipegang Referrer) + `deposit_status`
-(`belum_setor`/`sudah_setor`) — dikelola admin di halaman web "Titip Masuk"
-(`/titip-masuk`, tombol "Tandai Sudah Setor Semua" per Referrer,
-`commission_ledger.manage`). Tidak ada endpoint REST untuk aksi itu juga. **Nol panggilan NAS/RouterOS/RADIUS/MixRadius**
+(`belum_setor`/`sudah_setor`) — dikelola admin di halaman web "Fee Komisi"
+(`/titip-masuk`, checkbox selektif per baris → "Tandai Sudah Setor (Terpilih)",
+`commission_ledger.manage`). Tidak ada endpoint REST untuk aksi itu juga.
+
+**BLOKIR KERAS anti-duplikat**: `renew()` melempar `\RuntimeException` (tidak
+ada override lewat aplikasi) kalau pelanggan sudah punya baris
+`commission_ledger` scheme=titip untuk `payment_period` bulan berjalan —
+berlaku untuk semua pemanggil (Referrer maupun staff admin). **Nol panggilan NAS/RouterOS/RADIUS/MixRadius**
 — hanya data BOSS App; `subscriptions`/`SubscriptionService`/`GenerateDueInvoices`
 tidak disentuh.
 

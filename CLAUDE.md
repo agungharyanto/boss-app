@@ -6312,6 +6312,46 @@ Titip.
 **Test**: `SubscriptionRenewalServiceTest` +2, `TitipMasukIndexLivewireTest` +5, `ReferrerPortalDashboardTest`
 +1. Full regression suite hijau. Pint clean.
 
+### Revisi Fee Komisi + Anti Duplikat Pembayaran (lanjutan, sama branch)
+
+**Rename "Titip Masuk" → "Fee Komisi" — LABEL TAMPILAN SAJA.** Route name `web.titip-masuk.index` + URL
+`/titip-masuk` SENGAJA tidak diubah (hindari break bookmark) — komponen/route file/test tidak disentuh
+untuk itu, cuma teks sidebar + `<h1>`.
+
+**Sidebar grup "Komisi" (toggle-murni)** — "Rate Komisi" + "Fee Komisi" jadi 1 grup collapsible
+`id=komisi`, reuse PERSIS pola "Profil Paket" (parent tanpa key `route` → template render `<button>`
+toggle, bukan `<a>`). Gate: `viewAny(CommissionRate)` (kedua permission selalu `giveToAdminTier`
+bersamaan). "Referrer" tetap link standalone.
+
+**Filter "Semua Status Komisi" — investigasi: BUKAN bug query.** Data Agung semua `status=eligible` →
+filter "Eligible" tampilkan semua = tampak tidak memfilter (`test_status_filter_narrows_the_list` sudah
+lolos sejak awal, query benar). Tetap dikeraskan: `render()` pakai `if (Enum::tryFrom($x) !== null)` alih-
+alih `->when($x !== '' && Enum::tryFrom($x), ...)` (perlakuan identik & tak ambigu untuk KEDUA filter,
+AND); `wire:key` ditambahkan ke ketiga kontrol filter — **dua `<select>` berstruktur nyaris identik tanpa
+`wire:key` rawan tertukar identitas saat Livewire morph DOM** (penyebab paling mungkin gejala di browser).
+Pelajaran umum: kontrol form Livewire yang mirip strukturnya WAJIB `wire:key`.
+
+**Checkbox selektif per baris (`TitipMasukIndex`)** — kasus: Titip dicatat (layanan diperpanjang) tapi
+uang cash belum diambil dari pelanggan. `public array $selected` (id baris), checkbox per baris
+(`deposit_status=belum_setor` saja), checkbox "pilih semua di grup" (`toggleGroupSelection($referrerId)`),
+tombol GLOBAL **"Tandai Sudah Setor (Terpilih)"** (`markSelectedDeposited()` — `whereIn('id', $selected)`
+yang `belum_setor`, `@disabled` saat kosong). Tombol lama "Tandai Sudah Setor Semua" per grup +
+`markDepositedForReferrer()` **DIHAPUS/DIGANTI**. `WithPagination` sudah dihapus di lanjutan sebelumnya.
+Baris `deposit_status` NULL lama di-backfill `belum_setor` (DB dev).
+
+**BLOKIR KERAS anti bayar-dobel** — `SubscriptionRenewalService::renew()` CEK PERTAMA (sebelum validasi
+paket): `$this->titip->existingForMonth($customer) !== null` (apapun status baris) →
+`throw \RuntimeException("Pelanggan ini sudah tercatat bayar untuk periode {bulan} — hubungi admin...")`.
+Berlaku SEMUA pemanggil, **tidak ada override lewat aplikasi** (koreksi = operasi DB langsung, di luar
+scope). `CustomerIndex::openRenew()` cek di AWAL (saat modal dibuka, sebelum OTP) → `$renewAlreadyPaidThisMonth`
+→ blade tampilkan banner "Periode ini sudah dibayar" + sembunyikan form; `sendRenewOtp`/`submitRenew`
+no-op di state itu. `openRenew()` sekarang butuh DI `ReferrerTitipService` (Livewire method injection).
+
+**Test**: `TitipMasukIndexLivewireTest` (checkbox selektif ×3, filter AND ×1, grup toggle ×1),
+`SubscriptionRenewalServiceTest` (blokir keras ×2), `CustomerRenewalLivewireTest` (blokir keras jalur
+Referrer + admin ×2), `SidebarNavigationTest` (+1 grup Komisi toggle). Full regression suite hijau. Pint
+clean. Belum di-merge/tag.
+
 ## Commission Rate Settings (v0.9.3)
 
 **`commission_rates` — konfigurasi rate komisi per `PppPackage` (v0.14.5), admin-editable.** FK ke

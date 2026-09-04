@@ -173,38 +173,63 @@ class TitipMasukIndexLivewireTest extends TestCase
             });
     }
 
-    public function test_mark_deposited_for_referrer_updates_only_that_referrers_belum_setor_rows(): void
+    public function test_mark_selected_deposited_updates_only_the_checked_rows(): void
     {
         $tenant = Tenant::factory()->create();
-        $refA = Referrer::factory()->create(['tenant_id' => $tenant->id]);
-        $refB = Referrer::factory()->create(['tenant_id' => $tenant->id]);
+        $ref = Referrer::factory()->create(['tenant_id' => $tenant->id]);
 
-        $a1 = $this->titipRow($tenant, 'A1', referrer: $refA, deposit: TitipDepositStatus::BelumSetor);
-        $a2 = $this->titipRow($tenant, 'A2', referrer: $refA, deposit: TitipDepositStatus::SudahSetor);
-        $b1 = $this->titipRow($tenant, 'B1', referrer: $refB, deposit: TitipDepositStatus::BelumSetor);
+        // Skenario: Titip dicatat (layanan diperpanjang) TAPI uang cash A2
+        // belum benar-benar diambil dari pelanggan — admin cuma tandai A1.
+        $a1 = $this->titipRow($tenant, 'A1', referrer: $ref, deposit: TitipDepositStatus::BelumSetor);
+        $a2 = $this->titipRow($tenant, 'A2', referrer: $ref, deposit: TitipDepositStatus::BelumSetor);
 
         $admin = $this->admin($tenant);
 
         Livewire::actingAs($admin)
             ->test(TitipMasukIndex::class)
-            ->call('markDepositedForReferrer', $refA->id)
-            ->assertSet('flash', fn ($m) => str_contains($m, '1 transaksi'));
+            ->set('selected', [$a1->id])
+            ->call('markSelectedDeposited')
+            ->assertSet('flash', fn ($m) => str_contains($m, '1 transaksi'))
+            ->assertSet('selected', []);
 
         $a1->refresh();
         $this->assertSame(TitipDepositStatus::SudahSetor, $a1->deposit_status);
         $this->assertNotNull($a1->deposited_at);
         $this->assertSame($admin->id, $a1->deposited_by);
 
-        // Sudah-setor row untouched; other referrer's row untouched.
-        $this->assertNull($a2->refresh()->deposited_by);
-        $this->assertSame(TitipDepositStatus::BelumSetor, $b1->refresh()->deposit_status);
+        // A2 tidak dicentang -> tidak berubah.
+        $this->assertSame(TitipDepositStatus::BelumSetor, $a2->refresh()->deposit_status);
+        $this->assertNull($a2->deposited_by);
     }
 
-    public function test_mark_deposited_requires_the_manage_permission(): void
+    public function test_toggle_group_selection_checks_all_belum_setor_rows_of_that_referrer(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $refA = Referrer::factory()->create(['tenant_id' => $tenant->id]);
+        $refB = Referrer::factory()->create(['tenant_id' => $tenant->id]);
+
+        $a1 = $this->titipRow($tenant, 'A1', referrer: $refA, deposit: TitipDepositStatus::BelumSetor);
+        $a2 = $this->titipRow($tenant, 'A2', referrer: $refA, deposit: TitipDepositStatus::BelumSetor);
+        $this->titipRow($tenant, 'A3', referrer: $refA, deposit: TitipDepositStatus::SudahSetor); // excluded
+        $b1 = $this->titipRow($tenant, 'B1', referrer: $refB, deposit: TitipDepositStatus::BelumSetor);
+
+        $c = Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->call('toggleGroupSelection', $refA->id);
+
+        $selected = collect($c->get('selected'))->map(fn ($i) => (int) $i)->sort()->values()->all();
+        $this->assertSame([$a1->id, $a2->id], $selected);
+        $this->assertNotContains($b1->id, $selected);
+
+        // Toggle lagi -> uncheck semua.
+        $c->call('toggleGroupSelection', $refA->id)->assertSet('selected', []);
+    }
+
+    public function test_mark_selected_requires_the_manage_permission(): void
     {
         $tenant = Tenant::factory()->create();
         $ref = Referrer::factory()->create(['tenant_id' => $tenant->id]);
-        $this->titipRow($tenant, 'A1', referrer: $ref, deposit: TitipDepositStatus::BelumSetor);
+        $row = $this->titipRow($tenant, 'A1', referrer: $ref, deposit: TitipDepositStatus::BelumSetor);
 
         // View-only user: can open the page, cannot mark deposited.
         $viewer = User::factory()->create(['tenant_id' => $tenant->id]);
@@ -213,8 +238,30 @@ class TitipMasukIndexLivewireTest extends TestCase
         Livewire::actingAs($viewer)
             ->test(TitipMasukIndex::class)
             ->assertOk()
-            ->call('markDepositedForReferrer', $ref->id)
+            ->set('selected', [$row->id])
+            ->call('markSelectedDeposited')
             ->assertForbidden();
+
+        $this->assertSame(TitipDepositStatus::BelumSetor, $row->refresh()->deposit_status);
+    }
+
+    public function test_status_and_deposit_filters_are_independent_and_combine_with_and(): void
+    {
+        $tenant = Tenant::factory()->create();
+        // Match kedua filter.
+        $this->titipRow($tenant, 'Eligible Belum Setor', CommissionStatus::Eligible, deposit: TitipDepositStatus::BelumSetor);
+        // Match status saja.
+        $this->titipRow($tenant, 'Eligible Sudah Setor', CommissionStatus::Eligible, deposit: TitipDepositStatus::SudahSetor);
+        // Match deposit saja.
+        $this->titipRow($tenant, 'Paid Belum Setor', CommissionStatus::Paid, deposit: TitipDepositStatus::BelumSetor);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->set('statusFilter', CommissionStatus::Eligible->value)
+            ->set('depositFilter', TitipDepositStatus::BelumSetor->value)
+            ->assertSee('Eligible Belum Setor')
+            ->assertDontSee('Eligible Sudah Setor')
+            ->assertDontSee('Paid Belum Setor');
     }
 
     public function test_deposit_status_filter_narrows_the_list(): void

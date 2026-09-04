@@ -50,8 +50,11 @@ class ReferrerPortalLoginTest extends TestCase
             'password' => 'rahasia123',
         ]);
 
-        $response->assertRedirect(route('web.referrer-portal.dashboard'));
+        // v0.22.x login terpadu — jalur compat redirect ke `/`, yang lalu
+        // meneruskan Referrer murni ke portalnya.
+        $response->assertRedirect('/');
         $this->assertAuthenticatedAs($referrer->user);
+        $this->followRedirects($response)->assertOk();
     }
 
     public function test_login_fails_with_unregistered_phone(): void
@@ -137,13 +140,20 @@ class ReferrerPortalLoginTest extends TestCase
         $this->actingAs($referrer->user)->get('/referrer/login')->assertRedirect();
     }
 
-    public function test_referrer_logout_ends_the_session_and_redirects_to_the_referrer_login_page(): void
+    public function test_guest_visiting_the_old_referrer_login_url_is_redirected_to_the_unified_login(): void
+    {
+        // v0.22.x — `/referrer/login` dipertahankan cuma untuk kompatibilitas
+        // link lama; GET-nya redirect ke pintu terpadu `/login`.
+        $this->get('/referrer/login')->assertRedirect(route('login'));
+    }
+
+    public function test_referrer_logout_ends_the_session_and_redirects_to_the_unified_login(): void
     {
         $referrer = $this->referrerWithLoginAccount();
 
         $response = $this->actingAs($referrer->user)->post('/referrer/logout');
 
-        $response->assertRedirect(route('referrer.login'));
+        $response->assertRedirect(route('login'));
         $this->assertGuest();
     }
 

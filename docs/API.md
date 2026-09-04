@@ -393,14 +393,23 @@ DAN dijamin di level DB lewat unique constraint `referrers.user_id`). Menautkan 
 sebagai akun login referrer ini — tidak generate password baru, tidak menyentuh password `User` yang sudah
 ada. `422` kalau referrer sudah punya akun atau user sudah tertaut ke referrer lain.
 
-### `GET/POST /referrer/login`
+### `POST /login` — Login Terpadu (Admin + Referrer, 1 pintu)
 
-**Bukan bagian dari `/api/v1/*`** — endpoint web session (bukan Sanctum), sengaja terpisah dari `/login`
-bawaan Fortify (yang terikat ke `email` sebagai username). Body: `phone`, `password`. Berhasil login
-(`Auth::guard('web')->login()`, guard yang sama dengan panel admin) redirect ke `/referrer-portal`; gagal
-(HP tidak terdaftar, password salah, referrer nonaktif, atau belum punya akun login) menampilkan pesan
-generik "Nomor HP atau password salah." di form yang sama (tidak membocorkan bagian mana yang salah).
-Dibatasi `throttle:6,1`.
+**Bukan `/api/v1/*`** — web session (bukan Sanctum), rute Fortify. Field `login` = **"Email atau Nomor
+HP"** (`config('fortify.username')` = `login`), plus `password` + `remember`. `Fortify::authenticateUsing()`
+(lihat `FortifyServiceProvider`) deteksi otomatis: input berformat email → jalur staff (`users`); selain
+itu → jalur Referrer (cari `Referrer` aktif dengan nomor itu → user tertaut). **Pesan gagal identik untuk
+kedua jalur** — `trans('auth.failed')` = "Email/nomor HP atau password salah." (tidak membocorkan
+identitas terdaftar / jalur mana). Sukses → redirect ke `/` yang lalu meneruskan sesuai kelayakan
+(`EnsureAdminPanelAccess::userHasAccess()` → `/dashboard`, Referrer murni → `/referrer-portal`). Rate
+limit: `throttle:login` (HTTP 429, 5/menit per identifier+IP, `RateLimiter::for('login')`).
+
+### `GET/POST /referrer/login` — dipertahankan untuk kompatibilitas link lama
+
+`GET` → **302 ke `/login`** (pintu terpadu). `POST` masih berfungsi (body `phone` + `password`; field
+`phone` menerima email ATAU nomor HP), reuse `App\Support\LoginIdentifierResolver` yang sama, pesan &
+redirect identik dengan jalur `/login`. `throttle:6,1` sendiri. `POST /referrer/logout` (dipakai form
+logout portal) sekarang redirect ke `/login`.
 
 ### Portal Referrer (`/referrer-portal`)
 

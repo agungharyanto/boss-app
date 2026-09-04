@@ -107,6 +107,25 @@ class SidebarNavigationTest extends TestCase
         $response->assertSee(route('web.ppp-packages.index'), false);
     }
 
+    public function test_komisi_is_a_pure_toggle_group_holding_rate_komisi_and_fee_komisi(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $html = $this->actingAs($user)->get('/invoices')->getContent();
+
+        // Parent "Komisi" is a <button> toggle (no href), same pola as Profil Paket.
+        $this->assertMatchesRegularExpression(
+            '/<button[^>]*aria-controls="sidebar-subgroup-komisi"[^>]*>\s*<span>Komisi<\/span>/s',
+            $html
+        );
+        // Both pages reachable as child links.
+        $this->assertStringContainsString(route('web.commission-rates.index'), $html);
+        $this->assertStringContainsString(route('web.titip-masuk.index'), $html);
+        // Label renamed: "Fee Komisi", not "Titip Masuk".
+        $this->assertStringContainsString('Fee Komisi', $html);
+        $this->assertStringNotContainsString('Titip Masuk', $html);
+    }
+
     public function test_profil_paket_sits_in_billing_finance_not_network(): void
     {
         $user = $this->userWithRole('superadmin');

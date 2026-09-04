@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnsureAdminPanelAccess;
+use App\Http\Middleware\EnsureCustomerListAccess;
 use App\Http\Middleware\EnsureReferrerPortalAccess;
 use App\Http\Middleware\ResolveResellerContext;
 use App\Http\Middleware\SetLocale;
@@ -21,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'reseller.context' => ResolveResellerContext::class,
             'admin.panel' => EnsureAdminPanelAccess::class,
+            'customers.list' => EnsureCustomerListAccess::class,
             'referrer.portal' => EnsureReferrerPortalAccess::class,
         ]);
 

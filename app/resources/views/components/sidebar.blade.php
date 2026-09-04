@@ -107,19 +107,35 @@
                         ]),
                     ]
                     : null,
-                // Dipindah dari cluster "Operasional" — Referrer & rate
-                // komisinya adalah konsep komisi/keuangan. Tier-admin-only,
-                // gate sama dengan ReferrerPolicy / CommissionRatePolicy.
+                // Dipindah dari cluster "Operasional" — Referrer adalah
+                // konsep komisi/keuangan. Tier-admin-only, gate sama dengan
+                // ReferrerPolicy.
                 auth()->user()->can('viewAny', \App\Models\Referrer::class)
                     ? ['route' => 'web.referrers.index', 'label' => __('Referrer')]
                     : null,
+                // "Komisi" — grup collapsible TOGGLE-MURNI (tanpa key
+                // 'route'): klik parent HANYA expand/collapse. Pola persis
+                // "Profil Paket" di atas. `commission_rates.*` dan
+                // `commission_ledger.*` selalu diberikan bersamaan
+                // (giveToAdminTier), jadi meng-gate seluruh grup pada
+                // viewAny(CommissionRate) tidak pernah menyembunyikan
+                // halaman yang bisa dicapai user — tiap child tetap punya
+                // check sendiri (defense in depth).
                 auth()->user()->can('viewAny', \App\Models\CommissionRate::class)
-                    ? ['route' => 'web.commission-rates.index', 'label' => __('Rate Komisi')]
-                    : null,
-                // v0.9.6 — daftar kerja "Titip Masuk" (entri komisi Titip
-                // dari Portal Referrer). Read-only, permission terpisah.
-                auth()->user()->can('viewAny', \App\Models\CommissionLedger::class)
-                    ? ['route' => 'web.titip-masuk.index', 'label' => __('Titip Masuk')]
+                    ? [
+                        'id' => 'komisi',
+                        'toggle_only' => true,
+                        'label' => __('Komisi'),
+                        'children' => array_filter([
+                            ['route' => 'web.commission-rates.index', 'label' => __('Rate Komisi')],
+                            // Route/URL tetap `titip-masuk` (hindari break
+                            // bookmark) — hanya label tampilan yang berubah
+                            // jadi "Fee Komisi".
+                            auth()->user()->can('viewAny', \App\Models\CommissionLedger::class)
+                                ? ['route' => 'web.titip-masuk.index', 'label' => __('Fee Komisi')]
+                                : null,
+                        ]),
+                    ]
                     : null,
             ]),
         ],

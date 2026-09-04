@@ -4,85 +4,60 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ReferrerLoginRequest;
-use App\Models\Referrer;
-use App\Models\User;
+use App\Support\LoginIdentifierResolver;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
-use Illuminate\View\View;
 
 /**
- * Deliberately separate from Fortify's own /login (which is hard-wired to
- * email as the username field — see FortifyServiceProvider/config/
- * fortify.php's 'username' => 'email') — a Referrer logs in with phone +
- * password instead. Same 'web' guard/session as the admin panel, same
- * pattern already established by reseller_users (no separate guard exists
- * anywhere in this codebase — see CLAUDE.md's own v0.9.2 investigation
- * section for why this is the deliberate, consistent choice, not an
- * oversight).
+ * v0.9.2 — dulu halaman login terpisah untuk Referrer (HP + password).
+ *
+ * v0.22.x (login terpadu) — digabung ke SATU pintu di `/login` (field
+ * "Email atau Nomor HP", lihat FortifyServiceProvider::authenticateUsing()).
+ * Controller ini DIPERTAHANKAN hanya untuk kompatibilitas link/bookmark
+ * lama `/referrer/login`:
+ *  - `show()`  → redirect 302 ke `/login` (form terpadu).
+ *  - `login()` → tetap berfungsi (reuse LoginIdentifierResolver yang sama),
+ *    supaya form lama yang mungkin masih di-cache/di-bookmark & mem-POST ke
+ *    sini tidak rusak. Pesan gagal & redirect sukses identik dengan jalur
+ *    Fortify.
+ *  - `logout()` → tidak berubah (redirect eksplisit ke halaman login).
  */
 class ReferrerLoginController extends Controller
 {
-    public function show(): View
+    public function show(): RedirectResponse
     {
-        return view('auth.referrer-login');
+        return redirect()->route('login');
     }
 
-    public function login(ReferrerLoginRequest $request): RedirectResponse
+    public function login(ReferrerLoginRequest $request, LoginIdentifierResolver $resolver): RedirectResponse
     {
         $data = $request->validated();
 
-        // Referrer::phone is only unique WITHIN a tenant (tenant_id+phone
-        // composite, see the referrers table migration) — there is no
-        // "which tenant" selector on this login form. A guest request here
-        // is naturally NOT filtered by BelongsToTenant's TenantScope (it
-        // only applies when Auth::check() is true), so this searches every
-        // tenant already — correct by construction for this deployment's
-        // documented single-tenant-per-instance reality. If a future
-        // multi-tenant SaaS deployment ever has two tenants sharing the
-        // same phone digit string, this picks the first (by id) and logs a
-        // warning — same defensive "pick first + log" posture already
-        // established by ResolveResellerContext for its own 2+-membership
-        // case, not a silent wrong answer.
-        $candidates = Referrer::query()->where('phone', $data['phone'])->orderBy('id')->get();
-
-        if ($candidates->count() > 1) {
-            Log::warning('Multiple Referrer rows share the same phone number across tenants during a portal login attempt.', [
-                'phone' => $data['phone'],
-            ]);
-        }
-
-        $referrer = $candidates->first();
-
-        if ($referrer === null || ! $referrer->is_active || $referrer->user_id === null) {
-            throw ValidationException::withMessages(['phone' => 'Nomor HP atau password salah.']);
-        }
-
-        $user = User::find($referrer->user_id);
+        $user = $resolver->isEmail($data['phone'])
+            ? $resolver->resolveStaffUser($data['phone'])
+            : $resolver->resolveReferrerUser($data['phone']);
 
         if ($user === null || ! Hash::check($data['password'], $user->password)) {
-            throw ValidationException::withMessages(['phone' => 'Nomor HP atau password salah.']);
+            throw ValidationException::withMessages(['phone' => __('auth.failed')]);
         }
 
-        Auth::guard('web')->login($user);
+        Auth::guard('web')->login($user, (bool) $request->boolean('remember'));
         $request->session()->regenerate();
 
-        return redirect()->route('web.referrer-portal.dashboard');
+        return redirect()->intended('/');
     }
 
     /**
      * Deliberately NOT Fortify's shared POST /logout — that route's
      * LogoutResponse always redirects to a single global target ('/', by
      * Fortify's own default with no override registered in this codebase),
-     * which would land ANY logged-out user — admin or Referrer — back
-     * through the same root route, and a logged-out request has no
-     * authenticated user left to branch that redirect on. This mirrors
-     * Fortify's own AuthenticatedSessionController::destroy() mechanics
-     * exactly (guard logout + session invalidate/regenerate token) but
-     * redirects explicitly to /referrer/login instead.
+     * which a logged-out request has no authenticated user left to branch
+     * on. This mirrors Fortify's own AuthenticatedSessionController::destroy()
+     * mechanics exactly (guard logout + session invalidate/regenerate token)
+     * but redirects explicitly to /login instead.
      */
     public function logout(Request $request): RedirectResponse
     {
@@ -93,6 +68,6 @@ class ReferrerLoginController extends Controller
             $request->session()->regenerateToken();
         }
 
-        return redirect()->route('referrer.login');
+        return redirect()->route('login');
     }
 }

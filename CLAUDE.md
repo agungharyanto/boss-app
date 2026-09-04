@@ -6153,6 +6153,39 @@ added to `ReferrerPortalLoginTest`), Pint clean. **Merged and tagged** — Agung
 (all 8 demo accounts, root routing, both logout flows) before merge; `v0.9.2-referrer-crud-portal-rbac`
 merged `--no-ff` into `develop` then `main`, tagged `v0.9.2`, pushed to GitHub.
 
+## Login Terpadu — 1 pintu untuk Admin + Referrer (branch `login-terpadu`, belum di-merge/tag)
+
+**v0.9.2 punya 2 halaman login terpisah** (`/login` Fortify email+password, `/referrer/login` custom
+HP+password). Digabung jadi **SATU pintu di `/login`**, field pertama **"Email atau Nomor HP"** (bukan 2
+field terpisah).
+
+- **`config/fortify.php` `'username' => 'login'`** (dulu `'email'`). Field form: `name="login"`,
+  `type="text"`.
+- **`Fortify::authenticateUsing()`** (`FortifyServiceProvider::boot()`) — deteksi otomatis: input berformat
+  email (`filter_var(... FILTER_VALIDATE_EMAIL)`) → jalur staff (`users`, guard web); selain itu (nomor HP)
+  → jalur Referrer (cari `Referrer` aktif + `user_id` not null, ambil user tertaut). Reuse
+  **`App\Support\LoginIdentifierResolver`** (`isEmail`/`resolveStaffUser`/`resolveReferrerUser`) —
+  verifikasi password (`Hash::check`) di pemanggil, BUKAN di resolver, supaya "user tidak ada" dan
+  "password salah" menghasilkan hasil yang sama. Kembalikan `null` pada kegagalan APA PUN →
+  `trans('auth.failed')` **identik** untuk kedua jalur (`lang/id/auth.php` + `lang/en/auth.php` baru:
+  "Email/nomor HP atau password salah." — tidak membocorkan identitas terdaftar / jalur mana).
+- **Redirect pasca-login**: `App\Http\Responses\LoginResponse` (bind di
+  `FortifyServiceProvider::register()`) → `redirect()->intended('/')` — TIDAK hardcode tujuan, biarkan
+  route `/` yang branch (`EnsureAdminPanelAccess::userHasAccess()` → `/dashboard`, Referrer murni →
+  `/referrer-portal`, fallback aman). `config/fortify.php` `'home'` juga diubah `/dashboard` → `/` (dipakai
+  `RedirectIfAuthenticated`).
+- **Rate limit**: `config('fortify.limiters.login')` diset → Fortify pakai route middleware
+  `throttle:login` (**HTTP 429**, bukan validation error), limiter `RateLimiter::for('login')` di
+  `FortifyServiceProvider` (5/menit per identifier+IP) — berlaku untuk kedua jalur karena keyed on field
+  `login`. Jalur compat `/referrer/login` POST tetap punya `throttle:6,1` sendiri.
+- **`/referrer/login` dipertahankan untuk kompatibilitas link lama**: `ReferrerLoginController::show()` →
+  302 ke `/login`. `::login()` (POST) tetap berfungsi (reuse `LoginIdentifierResolver` yang sama, terima
+  email ATAU HP di field `phone`, pesan & redirect identik). `::logout()` sekarang redirect ke
+  `route('login')` (bukan `referrer.login`).
+- **Test**: `UnifiedLoginTest` (13) + `ReferrerPortalLoginTest` disesuaikan (redirect target compat path →
+  `/`, logout → `/login`). Diverifikasi live: staff email → `/dashboard`, Kamisem HP → `/referrer-portal`
+  (dashboard 403), wrong password/unknown email → pesan generik sama, `/referrer/login` → 302 `/login`.
+
 ## Commission Rate Settings (v0.9.3)
 
 **`commission_rates` — konfigurasi rate komisi per `PppPackage` (v0.14.5), admin-editable.** FK ke

@@ -87,11 +87,16 @@ class ReferrerForgotPasswordTest extends TestCase
 
         $this->assertTrue(Hash::check('BrandNewPass12345', $referrer->user->fresh()->password));
 
-        // The real login flow accepts the new password.
-        $this->post('/referrer/login', [
+        // The real login flow accepts the new password. v0.9.7 login terpadu:
+        // jalur compat `/referrer/login` redirect ke `/`, yang lalu
+        // meneruskan Referrer murni ke portalnya.
+        $response = $this->post('/referrer/login', [
             'phone' => '081299998888',
             'password' => 'BrandNewPass12345',
-        ])->assertRedirect(route('web.referrer-portal.dashboard'));
+        ]);
+        $response->assertRedirect('/');
+        $this->assertAuthenticatedAs($referrer->user);
+        $this->followRedirects($response)->assertOk();
     }
 
     public function test_unknown_phone_shows_the_same_generic_notice_and_leaks_nothing(): void

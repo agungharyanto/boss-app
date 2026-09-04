@@ -30,9 +30,11 @@
                 @csrf
 
                 <div>
-                    <label class="block text-sm font-medium text-gray-700">Email</label>
-                    <input type="email" name="email" value="{{ old('email') }}" required autofocus
+                    <label class="block text-sm font-medium text-gray-700">{{ __('Email atau Nomor HP') }}</label>
+                    <input type="text" name="login" value="{{ old('login') }}" required autofocus
+                        autocomplete="username" inputmode="text"
                         class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                    <p class="text-xs text-gray-500 mt-1">{{ __('Staff: email. Referral: nomor HP terdaftar.') }}</p>
                 </div>
 
                 <div>
@@ -49,6 +51,13 @@
                     Masuk
                 </button>
             </form>
+
+            <div class="mt-4 text-sm text-center">
+                {{-- Alur reset password via OTP WhatsApp (v0.9.6). Untuk akun
+                     Referral (input nomor HP); akun staff yang lupa password
+                     hubungi admin. --}}
+                <a href="{{ route('referrer.password.request') }}" class="text-blue-600 hover:underline">{{ __('Lupa password?') }}</a>
+            </div>
         </div>
     </body>
 </html>

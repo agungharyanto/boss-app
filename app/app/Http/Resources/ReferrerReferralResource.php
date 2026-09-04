@@ -43,6 +43,13 @@ class ReferrerReferralResource extends JsonResource
                 'scheme' => $c->scheme?->value,
                 'scheme_label' => $c->scheme?->label(),
                 'amount' => $c->amount,
+                // Sprint "perpanjang-daftar-pelanggan" — hanya terisi untuk
+                // scheme=titip: total uang cash yang dipegang Referrer +
+                // status setorannya.
+                'gross_amount' => $c->gross_amount,
+                'deposit_status' => $c->deposit_status?->value,
+                'deposit_status_label' => $c->deposit_status?->label(),
+                'deposited_at' => $c->deposited_at?->toIso8601String(),
                 'status' => $c->status->value,
                 'status_label' => $c->status->label(),
                 'payment_period' => $c->payment_period?->toDateString(),

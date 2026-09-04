@@ -4,11 +4,14 @@ namespace App\Services\Commission;
 
 use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
+use App\Enums\TitipDepositStatus;
 use App\Models\CommissionLedger;
 use App\Models\CommissionRate;
 use App\Models\Customer;
 use App\Models\Referrer;
+use App\Models\User;
 use Carbon\CarbonImmutable;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Carbon;
 
 /**
@@ -111,19 +114,92 @@ class ReferrerTitipService
             throw new \RuntimeException($availability['reason'] ?? 'Titip tidak tersedia untuk pelanggan ini.');
         }
 
+        return $this->recordTitipForPeriod(
+            customer: $customer,
+            referrer: $referrer,
+            period: CarbonImmutable::now(),
+            grossAmount: null,
+            withCommission: true,
+        );
+    }
+
+    /**
+     * Sprint "perpanjang-daftar-pelanggan" — komisi Titip yang tercipta
+     * sebagai efek samping aksi "Perpanjang" di Daftar Pelanggan (OTP
+     * WhatsApp ke acting Referrer sudah diverifikasi oleh pemanggil).
+     * Sama bentuknya dengan `record()`, hanya beda catatan konteks.
+     *
+     * `$grossAmount` — total uang cash yang diterima Referrer dari
+     * pelanggan (snapshot `sell_price` paket saat Perpanjang, lihat
+     * `SubscriptionRenewalService`). Disimpan di
+     * `commission_ledger.gross_amount` + `deposit_status = belum_setor` —
+     * dipakai admin di "Titip Masuk" untuk tahu berapa yang harus ditagih
+     * balik ke Referrer.
+     *
+     * @throws \RuntimeException kalau Titip tidak (lagi) tersedia untuk pelanggan ini
+     */
+    public function recordForRenewal(Referrer $referrer, Customer $customer, ?float $grossAmount = null): CommissionLedger
+    {
+        return $this->recordTitipForPeriod(
+            customer: $customer,
+            referrer: $referrer,
+            period: CarbonImmutable::now(),
+            grossAmount: $grossAmount,
+            withCommission: true,
+        );
+    }
+
+    /**
+     * Sprint "perpanjang-daftar-pelanggan" (Perpanjang Multi-Bulan) — SATU
+     * baris `commission_ledger` scheme=titip untuk SATU periode bulan.
+     * Dipakai `SubscriptionRenewalService` dalam loop (1 panggilan per
+     * bulan dalam rentang multi-bulan; untuk perpanjang 1 bulan biasa =
+     * 1 panggilan).
+     *
+     * - `$referrer` NULL → dicatat admin back-office langsung (tidak ada
+     *   Referrer yang memegang cash): `deposit_status = sudah_setor`,
+     *   `deposited_by = $directlyRecordedBy`.
+     * - `$referrer` ada → Referrer/field person memegang cash:
+     *   `deposit_status = belum_setor`.
+     * - `$withCommission` TRUE (acting Referrer eligible Sales/Freelance)
+     *   → `amount` dari `CommissionRate.titip_amount`. FALSE → `amount`
+     *   NULL (baris murni penanda "periode ini sudah dibayar").
+     *
+     * TIDAK melempar exception kalau rate tidak punya `titip_amount` —
+     * pemanggil (`SubscriptionRenewalService`) sudah memutuskan
+     * `$withCommission` dari `availabilityFor()`.
+     */
+    public function recordTitipForPeriod(
+        Customer $customer,
+        ?Referrer $referrer,
+        CarbonInterface $period,
+        ?float $grossAmount,
+        bool $withCommission,
+        ?User $directlyRecordedBy = null,
+    ): CommissionLedger {
+        $amount = null;
+        if ($withCommission) {
+            $availability = $this->availabilityFor($customer);
+            $amount = $availability['available'] ? $availability['amount'] : null;
+        }
+
+        $hasReferrer = $referrer !== null;
         $now = CarbonImmutable::now();
-        $period = $now->startOfMonth()->toDateString();
 
         return CommissionLedger::create([
             'tenant_id' => $customer->tenant_id,
-            'referrer_id' => $referrer->id,
+            'referrer_id' => $referrer?->id,
             'customer_id' => $customer->id,
             'invoice_id' => null,
             'scheme' => CommissionScheme::Titip->value,
-            'payment_period' => $period,
-            'amount' => $availability['amount'],
+            'payment_period' => $period->copy()->startOfMonth()->toDateString(),
+            'amount' => $amount,
+            'gross_amount' => $grossAmount,
             'status' => CommissionStatus::Eligible,
-            'notes' => "v0.9.6: titip dicatat Referrer via Portal (OTP WhatsApp terverifikasi) {$now->toDateTimeString()}.",
+            'deposit_status' => $hasReferrer ? TitipDepositStatus::BelumSetor : TitipDepositStatus::SudahSetor,
+            'deposited_at' => $hasReferrer ? null : $now->toDateTimeString(),
+            'deposited_by' => $hasReferrer ? null : $directlyRecordedBy?->id,
+            'notes' => "perpanjang-daftar-pelanggan: baris Titip periode {$period->copy()->startOfMonth()->format('Y-m')} dari aksi Perpanjang {$now->toDateTimeString()}.",
         ]);
     }
 }

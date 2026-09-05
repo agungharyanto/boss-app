@@ -55,7 +55,8 @@ class StorePppPackageRequest extends FormRequest
             'sell_price' => ['required', 'numeric', 'min:0', 'gte:cost_price'],
             'promo_price' => ['nullable', 'numeric', 'min:0'],
             'tax_percent' => ['required', 'numeric', 'min:0', 'max:100'],
-            'active_duration_value' => ['required', 'integer', 'min:1'],
+            // 0 = Unlimited / tanpa batas waktu (konvensi MixRadius).
+            'active_duration_value' => ['required', 'integer', 'min:0'],
             'active_duration_unit' => ['required', 'string', 'in:minute,hour,day,month'],
             'shared_users' => ['required', 'integer', 'min:1'],
             'priority' => ['nullable', 'integer', 'between:1,8'],

@@ -3,7 +3,44 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## v0.9.11 Amandemen — Backup + Hapus Data Test + Tanggal Payout Konfigurable per Rate (branch `payout-komisi-instan-batch`, belum di-merge/tag)
+## Revisi: Masa Aktif 0 = Unlimited (Profil PPP) (branch `masa-aktif-0-unlimited`, dari `main`, belum di-merge/tag)
+
+Ditemukan Agung saat testing: form Profil PPP (v0.14.5) menolak Masa Aktif = 0 ("Value must be greater
+than or equal to 1"). Referensi MixRadius mengizinkan 0 = "UNLIMITED" (paket gratis/tanpa batas waktu).
+
+**Investigasi** — dikonfirmasi `PppPackage::active_duration_value` cuma punya SATU downstream consumer:
+`PppPackage::routerOsSessionTimeout()` (dipakai `PushPppPackageToMikrotikJob` → `RouterOsGateway::syncPppProfile()`
+untuk `/ppp profile` `session-timeout`). **TIDAK ADA perhitungan tanggal expired pelanggan di mana pun** —
+billing masih manual/MixRadius, `subscriptions` tidak menghitung dari durasi paket. Jadi risiko "0 bulan =
+tanggal expired di masa lalu" tidak ada di codebase ini.
+
+**Fix:**
+- `PppPackage::routerOsSessionTimeout(): ?string` (dulu `string`) — return `null` kalau
+  `active_duration_value === 0`. `null` = parameter `session-timeout` tidak dikirim ke RouterOS sama
+  sekali (router pakai default = tanpa timeout). Sama posture `HotspotPackage::routerOsSessionTimeout()`
+  yang sudah `null` untuk Unlimited. Guard di cabang add/set `syncPppProfile()` sudah menangani null
+  (skip param) — nol perubahan gateway.
+- `PppPackage::isUnlimitedDuration(): bool` — helper untuk UI + resource.
+- Validasi `min:1` → `min:0` di 4 tempat: `StorePppPackageRequest`, `UpdatePppPackageRequest`,
+  `PppPackageIndex` (rules create + edit). Nilai negatif tetap ditolak.
+- Form Profil PPP: `min="0"` di input + hint "0 = Unlimited (tanpa batas waktu, mengikuti konvensi
+  MixRadius)". List: tampil "Unlimited" untuk paket bernilai 0.
+- `PppPackageResource` dapat field additive `is_unlimited_duration`. `PppPackageFactory::unlimitedDuration()`
+  state baru.
+- **Profil Hotspot (v0.14.4) — TIDAK diubah** (beda konteks): sudah punya toggle eksplisit
+  `profile_type=unlimited` untuk arti "tanpa batas" (bikin durasi null); `limit_type=time_base` yang
+  genuinely butuh durasi ≥ 1 (voucher "3 hari") tetap `min:1`. Menambah "0 = unlimited" di situ = 2 cara
+  bilang hal yang sama = membingungkan.
+- **Keterbatasan diketahui, di-flag** (sama seperti kasus session-timeout Profil Hotspot v0.14.4):
+  mengubah paket yang SUDAH ter-sync dari durasi nyata ke 0 lalu push ulang tidak aktif menghapus
+  `session-timeout` lama di router — cuma dibiarkan. Paket baru dibuat langsung sebagai Unlimited tidak
+  ada masalah.
+
+**Test**: `PppPackageTest` (unit — 0→null, isUnlimitedDuration), `PppPackageMikrotikSyncTest` (push job
+kirim null session-timeout untuk paket unlimited), `PppPackageApiTest` (+3), `PppPackageIndexLivewireTest`
+(+4 termasuk list tampil "Unlimited"). Full regression suite + Pint clean. Belum di-merge/tag.
+
+## v0.9.11 Amandemen — Backup + Hapus Data Test + Tanggal Payout Konfigurable per Rate (branch `payout-komisi-instan-batch`, merged + tagged `v0.9.11`)
 
 Lanjutan sprint v0.9.11 di branch yang sama.
 

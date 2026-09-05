@@ -20,16 +20,34 @@ use Tests\TestCase;
  * why this exists). The RouterOS command shape (session-timeout format)
  * was separately verified for real against ro-hotspot.bajastu.id — see
  * CLAUDE.md's v0.14.5 section.
+ *
+ * Revisi 2026-09-05 — `active_duration_value = 0` = Unlimited; test
+ * "never null" diganti dengan test yang membuktikan 0 -> null.
  */
 class PppPackageTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_session_timeout_always_reflects_masa_aktif_never_null(): void
+    public function test_session_timeout_reflects_masa_aktif_for_a_real_duration(): void
     {
         $package = new PppPackage(['active_duration_value' => 3, 'active_duration_unit' => 'hour']);
 
         $this->assertSame('3h', $package->routerOsSessionTimeout());
+    }
+
+    public function test_zero_masa_aktif_means_unlimited_and_session_timeout_is_null(): void
+    {
+        $package = new PppPackage(['active_duration_value' => 0, 'active_duration_unit' => 'month']);
+
+        $this->assertTrue($package->isUnlimitedDuration());
+        $this->assertNull($package->routerOsSessionTimeout());
+    }
+
+    public function test_non_zero_masa_aktif_is_not_unlimited(): void
+    {
+        $package = new PppPackage(['active_duration_value' => 1, 'active_duration_unit' => 'month']);
+
+        $this->assertFalse($package->isUnlimitedDuration());
     }
 
     public function test_session_timeout_converts_month_to_30_days(): void

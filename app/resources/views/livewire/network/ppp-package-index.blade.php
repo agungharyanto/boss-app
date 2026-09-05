@@ -76,7 +76,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700">{{ __('Masa Aktif') }}</label>
                     <div class="mt-1 flex gap-2">
-                        <input type="number" min="1" wire:model="activeDurationValue" class="block w-1/2 rounded-md border-gray-300 shadow-sm">
+                        <input type="number" min="0" wire:model="activeDurationValue" class="block w-1/2 rounded-md border-gray-300 shadow-sm">
                         <select wire:model="activeDurationUnit" class="block w-1/2 rounded-md border-gray-300 shadow-sm">
                             <option value="minute">{{ __('Menit') }}</option>
                             <option value="hour">{{ __('Jam') }}</option>
@@ -84,6 +84,7 @@
                             <option value="month">{{ __('Bulan') }}</option>
                         </select>
                     </div>
+                    <p class="mt-1 text-xs text-gray-400">{{ __('0 = Unlimited (tanpa batas waktu, mengikuti konvensi MixRadius)') }}</p>
                     @error('activeDurationValue') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                     @error('activeDurationUnit') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                 </div>
@@ -221,14 +222,17 @@
                                     @error('editTaxPercent') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
 
                                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                        <div class="flex gap-2">
-                                            <input type="number" min="1" wire:model="editActiveDurationValue" class="block w-1/2 rounded-md border-gray-300 shadow-sm text-sm">
-                                            <select wire:model="editActiveDurationUnit" class="block w-1/2 rounded-md border-gray-300 shadow-sm text-sm">
-                                                <option value="minute">{{ __('Menit') }}</option>
-                                                <option value="hour">{{ __('Jam') }}</option>
-                                                <option value="day">{{ __('Hari') }}</option>
-                                                <option value="month">{{ __('Bulan') }}</option>
-                                            </select>
+                                        <div>
+                                            <div class="flex gap-2">
+                                                <input type="number" min="0" wire:model="editActiveDurationValue" class="block w-1/2 rounded-md border-gray-300 shadow-sm text-sm">
+                                                <select wire:model="editActiveDurationUnit" class="block w-1/2 rounded-md border-gray-300 shadow-sm text-sm">
+                                                    <option value="minute">{{ __('Menit') }}</option>
+                                                    <option value="hour">{{ __('Jam') }}</option>
+                                                    <option value="day">{{ __('Hari') }}</option>
+                                                    <option value="month">{{ __('Bulan') }}</option>
+                                                </select>
+                                            </div>
+                                            <p class="mt-1 text-xs text-gray-400">{{ __('0 = Unlimited') }}</p>
                                         </div>
                                         <input type="number" min="1" wire:model="editSharedUsers" placeholder="{{ __('Shared Users') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                                         <select wire:model="editPriority" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
@@ -276,7 +280,13 @@
                             <td class="px-4 py-2 text-sm text-gray-800">{{ $package->name }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $package->networkProfileGroup->name ?? '-' }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $package->bandwidthProfile->name ?? '-' }}</td>
-                            <td class="px-4 py-2 text-sm text-gray-600">{{ $package->active_duration_value }} {{ $package->active_duration_unit->label() }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-600">
+                                @if ($package->isUnlimitedDuration())
+                                    <span class="text-gray-500">{{ __('Unlimited') }}</span>
+                                @else
+                                    {{ $package->active_duration_value }} {{ $package->active_duration_unit->label() }}
+                                @endif
+                            </td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ number_format((float) $package->sell_price, 2) }}</td>
                             <td class="px-4 py-2 text-sm">
                                 <span class="px-2 py-0.5 rounded-full text-xs {{ $package->is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700' }}">

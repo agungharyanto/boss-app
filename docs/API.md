@@ -848,8 +848,13 @@ parent Grup Profil and resolved LIVE on every single push** (never copied/cached
 so changing the Grup Profil's own pool/DNS/parent-queue later automatically flows through on the Profil
 PPP's next push). `rate-limit` comes from this package's own Bandwidth Profile (`"{upload_max}k/
 {download_max}k"`, same format as Profil Hotspot); `session-timeout` from this package's own Masa Aktif
-(`active_duration_value`/`active_duration_unit` — always required, unlike Profil Hotspot's optional
-Unlimited/Limited toggle, since a monthly subscription always has a real duration). `mikrotik_sync_status`/
+(`active_duration_value`/`active_duration_unit`). **Revisi 2026-09-05: `active_duration_value = 0` berarti
+Unlimited / tanpa batas waktu** (konvensi MixRadius "0 UNTUK MASA AKTIF UNLIMITED") — `session-timeout`
+TIDAK di-push ke `/ppp profile` sama sekali (RouterOS pakai default-nya sendiri, tanpa timeout), sama
+posture Profil Hotspot yang `null` untuk Unlimited. Nilai `0` disurfacekan lewat `is_unlimited_duration:
+true` di response + tampil "Unlimited" di UI. (Keterbatasan diketahui: mengubah paket yang SUDAH ter-sync
+dari durasi nyata ke 0 lalu push ulang tidak aktif menghapus `session-timeout` lama di router — sama
+seperti kasus Profil Hotspot, di-flag bukan di-workaround.) `mikrotik_sync_status`/
 `mikrotik_synced_at`/`mikrotik_sync_error` — same 3-state contract as every other live-pushed entity in
 this cluster.
 
@@ -875,7 +880,8 @@ Body: `network_profile_group_id` (required, **must be type `ppp`**), `bandwidth_
 sama, TAPI tidak boleh sama dengan Grup Profil Hotspot / Profil Hotspot di NAS yang sama — lihat aturan
 nama di atas), `visible_to_reseller` (optional, default `false`), `cost_price`/`sell_price` (required,
 `sell_price >= cost_price`), `promo_price` (optional), `tax_percent` (required), `active_duration_value`
-(required integer), `active_duration_unit` (required, `minute`/`hour`/`day`/`month`), `shared_users`
+(required integer **≥ 0** — `0` = Unlimited/tanpa batas waktu), `active_duration_unit` (required,
+`minute`/`hour`/`day`/`month`), `shared_users`
 (required, default `1`), `priority` (optional, default `"Default"`), `login_days` (optional array of
 English day names), `login_start_time`/`login_end_time` (optional, `H:i`), `is_active` (optional, default
 `true`).

@@ -99,8 +99,39 @@ class PppPackageApiTest extends TestCase
         $response->assertCreated();
         $response->assertJsonPath('data.name', 'Paket PPP Bulanan');
         $response->assertJsonPath('data.active_duration_unit', 'month');
+        $response->assertJsonPath('data.is_unlimited_duration', false);
         $this->assertDatabaseHas('ppp_packages', ['network_profile_group_id' => $f['group']->id, 'name' => 'Paket PPP Bulanan']);
         Bus::assertDispatched(PushPppPackageToMikrotikJob::class);
+    }
+
+    public function test_admin_can_create_an_unlimited_duration_package_with_masa_aktif_zero(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+
+        $response = $this->actingAs($this->admin($f['tenant']))->postJson(
+            '/api/v1/ppp-packages',
+            $this->payload($f['group']->id, $f['bandwidth']->id, [
+                'name' => 'Paket Gratis Unlimited',
+                'active_duration_value' => 0,
+            ])
+        );
+
+        $response->assertCreated();
+        $response->assertJsonPath('data.active_duration_value', 0);
+        $response->assertJsonPath('data.is_unlimited_duration', true);
+        $this->assertDatabaseHas('ppp_packages', ['name' => 'Paket Gratis Unlimited', 'active_duration_value' => 0]);
+    }
+
+    public function test_negative_masa_aktif_is_still_rejected(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+
+        $this->actingAs($this->admin($f['tenant']))->postJson(
+            '/api/v1/ppp-packages',
+            $this->payload($f['group']->id, $f['bandwidth']->id, ['active_duration_value' => -1])
+        )->assertUnprocessable()->assertJsonValidationErrors('active_duration_value');
     }
 
     public function test_a_role_without_ppp_packages_permission_cannot_list(): void

@@ -261,6 +261,23 @@ class PppPackageMikrotikSyncTest extends TestCase
         $this->assertSame('2d', $this->recordedCalls[0]['args']['sessionTimeout']);
     }
 
+    public function test_push_job_sends_null_session_timeout_for_an_unlimited_duration_package(): void
+    {
+        $this->bindGateway();
+        // Masa Aktif = 0 -> Unlimited: session-timeout tidak dikirim ke
+        // RouterOS sama sekali (bukan "0d"/"0m"), jadi router memakai
+        // default-nya sendiri (tanpa timeout).
+        $package = $this->package(['active_duration_value' => 0, 'active_duration_unit' => 'month']);
+
+        $job = new PushPppPackageToMikrotikJob($package->id);
+        $job->withFakeQueueInteractions();
+        $job->handle(app(RouterOsGateway::class));
+
+        $package->refresh();
+        $this->assertSame(MikrotikSyncStatus::Synced, $package->mikrotik_sync_status);
+        $this->assertNull($this->recordedCalls[0]['args']['sessionTimeout']);
+    }
+
     public function test_push_job_reflects_a_live_update_to_the_parent_groups_pool_not_a_stale_snapshot(): void
     {
         $this->bindGateway();

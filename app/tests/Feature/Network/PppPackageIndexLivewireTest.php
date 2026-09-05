@@ -71,6 +71,59 @@ class PppPackageIndexLivewireTest extends TestCase
         $this->assertDatabaseHas('ppp_packages', ['network_profile_group_id' => $f['group']->id, 'name' => 'Paket Bulanan Baru']);
     }
 
+    public function test_creating_an_unlimited_duration_package_with_masa_aktif_zero(): void
+    {
+        $f = $this->fixtures();
+
+        Livewire::actingAs($this->admin($f['tenant']))
+            ->test(PppPackageIndex::class)
+            ->set('networkProfileGroupId', (string) $f['group']->id)
+            ->set('bandwidthProfileId', (string) $f['bandwidth']->id)
+            ->set('name', 'Paket Unlimited')
+            ->set('costPrice', '0')
+            ->set('sellPrice', '0')
+            ->set('activeDurationValue', '0')
+            ->set('activeDurationUnit', 'month')
+            ->call('createPackage')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('ppp_packages', ['name' => 'Paket Unlimited', 'active_duration_value' => 0]);
+    }
+
+    public function test_negative_masa_aktif_is_still_rejected_in_the_form(): void
+    {
+        $f = $this->fixtures();
+
+        Livewire::actingAs($this->admin($f['tenant']))
+            ->test(PppPackageIndex::class)
+            ->set('networkProfileGroupId', (string) $f['group']->id)
+            ->set('bandwidthProfileId', (string) $f['bandwidth']->id)
+            ->set('name', 'Paket Negatif')
+            ->set('costPrice', '50000')
+            ->set('sellPrice', '100000')
+            ->set('activeDurationValue', '-1')
+            ->set('activeDurationUnit', 'month')
+            ->call('createPackage')
+            ->assertHasErrors('activeDurationValue');
+
+        $this->assertDatabaseMissing('ppp_packages', ['name' => 'Paket Negatif']);
+    }
+
+    public function test_the_list_shows_unlimited_for_a_zero_duration_package(): void
+    {
+        $f = $this->fixtures();
+        PppPackage::factory()->unlimitedDuration()->create([
+            'tenant_id' => $f['tenant']->id,
+            'network_profile_group_id' => $f['group']->id,
+            'bandwidth_profile_id' => $f['bandwidth']->id,
+            'name' => 'Paket Nol',
+        ]);
+
+        Livewire::actingAs($this->admin($f['tenant']))
+            ->test(PppPackageIndex::class)
+            ->assertSee('Unlimited');
+    }
+
     public function test_submitting_without_selecting_a_group_is_rejected(): void
     {
         $f = $this->fixtures();

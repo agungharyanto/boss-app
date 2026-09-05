@@ -109,15 +109,41 @@ class PppPackage extends Model
     }
 
     /**
-     * RouterOS session-timeout string for this package's Masa Aktif —
-     * ALWAYS computed (unlike HotspotPackage::routerOsSessionTimeout(),
-     * which returns null for Unlimited/QuotaBase) since active_duration_value/
-     * unit are required, non-nullable fields for every Profil PPP — a plain
-     * monthly subscription always has a real duration, there is no
-     * "Unlimited" concept here.
+     * `active_duration_value = 0` berarti **Unlimited / tanpa batas waktu**
+     * (konvensi MixRadius: "0 UNTUK MASA AKTIF UNLIMITED"). Revisi
+     * 2026-09-05 — sebelumnya field ini dipaksa `>= 1` dengan asumsi "paket
+     * bulanan selalu punya durasi nyata"; ternyata ada kebutuhan paket
+     * gratis/tanpa batas.
      */
-    public function routerOsSessionTimeout(): string
+    public function isUnlimitedDuration(): bool
     {
+        return (int) $this->active_duration_value === 0;
+    }
+
+    /**
+     * RouterOS session-timeout string untuk Masa Aktif paket ini, atau
+     * `null` kalau Unlimited (`active_duration_value = 0`) — sama posture
+     * `HotspotPackage::routerOsSessionTimeout()` yang juga `null` untuk
+     * Unlimited/QuotaBase. `null` = parameter `session-timeout` TIDAK
+     * dikirim ke `/ppp profile` sama sekali, jadi RouterOS memakai
+     * default-nya sendiri ("none" = tanpa timeout). Lihat
+     * `RouterOsApiGateway::syncPppProfile()` — cabang add/set sama-sama
+     * meng-skip `session-timeout` saat argumennya null (RouterOS menolak
+     * '' / 'none' sebagai nilai eksplisit, lihat catatan di sana).
+     *
+     * KETERBATASAN DIKETAHUI (sama persis dengan kasus HotspotPackage di
+     * v0.14.4): mengubah paket yang SUDAH ter-sync dari durasi nyata ke
+     * Unlimited (0) lalu push ulang TIDAK aktif menghapus `session-timeout`
+     * lama di router — field-nya cuma dibiarkan. Di-flag, bukan
+     * di-workaround diam-diam. Untuk paket yang baru dibuat sebagai
+     * Unlimited, tidak ada masalah (parameter memang tidak pernah dikirim).
+     */
+    public function routerOsSessionTimeout(): ?string
+    {
+        if ($this->isUnlimitedDuration()) {
+            return null;
+        }
+
         $unit = $this->active_duration_unit;
 
         return $unit->routerOsValue($this->active_duration_value).$unit->routerOsSuffix();

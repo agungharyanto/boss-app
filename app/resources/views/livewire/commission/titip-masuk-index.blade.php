@@ -27,16 +27,23 @@
     @endif
 
     {{-- ---------- Kartu ringkasan ---------- --}}
+    <p class="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2 mb-3">
+        {{ __('2 kartu di bawah melacak 2 arus uang yang BERBEDA dan SALING TIDAK MEMPENGARUHI — menandai sebuah transaksi "Sudah Setor" tidak mengubah angka "Total Komisi Harus Dibayar", karena itu bukan hal yang sama.') }}
+    </p>
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
         <div class="p-4 bg-white border border-gray-200 rounded-md">
             <p class="text-xs text-gray-500 uppercase">{{ __('Total Komisi Harus Dibayar') }}</p>
             <p class="mt-1 text-2xl font-semibold text-blue-700">{{ $rupiah($totalKomisiHarusDibayar) }}</p>
-            <p class="text-xs text-gray-400 mt-1">{{ __('Semua fee komisi status "Layak Dibayar" (belum ada payout).') }}</p>
+            <p class="text-xs text-gray-400 mt-1">
+                {{ __('Arah: perusahaan → Referrer. Uang komisi yang harus dibayar BALIK ke Referrer (status "Layak Dibayar"). Belum ada fitur payout — angka ini TIDAK berubah oleh status Setoran di kartu sebelah.') }}
+            </p>
         </div>
         <div class="p-4 bg-white border border-gray-200 rounded-md">
             <p class="text-xs text-gray-500 uppercase">{{ __('Total Setoran Belum Masuk') }}</p>
             <p class="mt-1 text-2xl font-semibold text-orange-700">{{ $rupiah($totalSetoranBelumMasuk) }}</p>
-            <p class="text-xs text-gray-400 mt-1">{{ __('Uang yang masih dipegang para Referrer.') }}</p>
+            <p class="text-xs text-gray-400 mt-1">
+                {{ __('Arah: Referrer → perusahaan. Uang CASH pelanggan yang masih dipegang Referrer, belum disetor. Independen dari kartu Komisi di atas.') }}
+            </p>
         </div>
     </div>
 

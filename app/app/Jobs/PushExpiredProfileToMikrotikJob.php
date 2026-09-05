@@ -27,6 +27,13 @@ use Throwable;
  * CustomerIpPool's own name, no dns-server/parent-queue (Agung's own
  * real Winbox pattern: an expired-customer fallback profile has no
  * rate-limit at all, only a restricted pool).
+ *
+ * FIX 2 (2026-09-06) — sama seperti PushNetworkProfileGroupToMikrotikJob/
+ * PushPppPackageToMikrotikJob: pastikan `/ip pool` yang dipakai sebagai
+ * `local-address=<nama pool>` genuinely ADA di router dulu. Kalau admin
+ * hapus pool-nya manual, `/ppp/profile/add local-address=<nama pool>`
+ * ditolak ("invalid value for argument local-address:") dan push ini
+ * gagal permanen. `syncIpPool()` idempoten (lookup by-comment).
  */
 class PushExpiredProfileToMikrotikJob implements ShouldQueue
 {
@@ -46,6 +53,25 @@ class PushExpiredProfileToMikrotikJob implements ShouldQueue
             return;
         }
 
+        $pool = $nas->expiredIpPool;
+
+        $poolResult = $gateway->syncIpPool(
+            $nas,
+            $pool->mikrotikComment(),
+            $pool->name,
+            "{$pool->range_start}-{$pool->range_end}",
+        );
+
+        if (! $poolResult['success']) {
+            $poolMessage = 'IP Pool gagal disinkronkan dulu: '.($poolResult['message'] ?? 'Unknown failure');
+            $pool->markSyncFailed($poolMessage);
+            $this->recordFailure($nas, $poolMessage);
+
+            return;
+        }
+
+        $pool->markSynced();
+
         $result = $gateway->syncPppProfile(
             $nas,
             $nas->expiredProfileMikrotikComment(),
@@ -53,7 +79,7 @@ class PushExpiredProfileToMikrotikJob implements ShouldQueue
             null,
             null,
             null,
-            $nas->expiredIpPool->name,
+            $pool->name,
         );
 
         if ($result['success']) {

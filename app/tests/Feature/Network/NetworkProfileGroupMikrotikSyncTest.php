@@ -60,18 +60,20 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
      * @param  array{success: bool, message: ?string}  $pppResult
      * @param  array{success: bool, message: ?string}  $hotspotResult
      * @param  array{success: bool, message: ?string}  $pppoeServerResult
+     * @param  array{success: bool, message: ?string}  $poolResult
      */
-    private function bindGateway(array $pppResult = ['success' => true, 'message' => null], array $hotspotResult = ['success' => true, 'message' => null], array $pppoeServerResult = ['success' => true, 'message' => null]): void
+    private function bindGateway(array $pppResult = ['success' => true, 'message' => null], array $hotspotResult = ['success' => true, 'message' => null], array $pppoeServerResult = ['success' => true, 'message' => null], array $poolResult = ['success' => true, 'message' => null]): void
     {
         $recorder = &$this->recordedCalls;
 
-        $this->app->bind(RouterOsGateway::class, function () use ($pppResult, $hotspotResult, $pppoeServerResult, &$recorder) {
-            return new class($pppResult, $hotspotResult, $pppoeServerResult, $recorder) implements RouterOsGateway
+        $this->app->bind(RouterOsGateway::class, function () use ($pppResult, $hotspotResult, $pppoeServerResult, $poolResult, &$recorder) {
+            return new class($pppResult, $hotspotResult, $pppoeServerResult, $poolResult, $recorder) implements RouterOsGateway
             {
                 public function __construct(
                     private readonly array $pppResult,
                     private readonly array $hotspotResult,
                     private readonly array $pppoeServerResult,
+                    private readonly array $poolResult,
                     private array &$recorder,
                 ) {}
 
@@ -97,7 +99,9 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
 
                 public function syncIpPool(Nas $nas, string $comment, string $name, string $ranges): array
                 {
-                    return ['success' => true, 'message' => null];
+                    $this->recorder[] = ['method' => 'syncIpPool', 'args' => compact('comment', 'name', 'ranges')];
+
+                    return $this->poolResult;
                 }
 
                 public function removeIpPool(Nas $nas, string $comment): array
@@ -165,7 +169,10 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
-        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Pool-Sync']);
+        $pool = CustomerIpPool::factory()->create([
+            'nas_id' => $nas->id, 'name' => 'Pool-Sync',
+            'gateway_ip' => '10.9.9.1', 'range_start' => '10.9.9.10', 'range_end' => '10.9.9.200',
+        ]);
 
         return NetworkProfileGroup::factory()->create([
             'nas_id' => $nas->id,
@@ -192,12 +199,60 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
         $this->assertSame(MikrotikSyncStatus::Synced, $group->mikrotik_sync_status);
         $this->assertNotNull($group->mikrotik_synced_at);
 
-        $call = $this->recordedCalls[0];
+        // FIX 2 — /ip pool dipastikan ADA dulu, BARU /ppp profile.
+        $this->assertSame('syncIpPool', $this->recordedCalls[0]['method']);
+        $this->assertSame('Pool-Sync', $this->recordedCalls[0]['args']['name']);
+        $this->assertSame('10.9.9.10-10.9.9.200', $this->recordedCalls[0]['args']['ranges']);
+
+        $call = $this->recordedCalls[1];
         $this->assertSame('syncPppProfile', $call['method']);
         $this->assertSame($group->mikrotikComment(), $call['args']['comment']);
         $this->assertSame('Pool-Sync', $call['args']['remoteAddress']);
+        // FIX 1 — local-address = gateway_ip pool.
+        $this->assertSame('10.9.9.1', $call['args']['localAddress']);
         $this->assertSame('8.8.8.8,8.8.4.4', $call['args']['dnsServer']);
         $this->assertSame('my-queue', $call['args']['parentQueue']);
+    }
+
+    public function test_push_job_does_not_push_the_profile_when_the_pool_ensure_fails(): void
+    {
+        $this->bindGateway(poolResult: ['success' => false, 'message' => 'router unreachable']);
+        $group = $this->group(NetworkProfileGroupType::Ppp);
+
+        $job = new PushNetworkProfileGroupToMikrotikJob($group->id);
+        $job->withFakeQueueInteractions();
+        $job->job->attempts = 3; // percobaan terakhir → langsung Failed, bukan release+retry
+        $job->handle(app(RouterOsGateway::class));
+
+        $group->refresh();
+        $this->assertSame(MikrotikSyncStatus::Failed, $group->mikrotik_sync_status);
+        $this->assertStringContainsString('IP Pool gagal disinkronkan dulu', $group->mikrotik_sync_error);
+        // /ppp profile TIDAK pernah dipush kalau pool-nya sendiri gagal.
+        $methods = array_column($this->recordedCalls, 'method');
+        $this->assertContains('syncIpPool', $methods);
+        $this->assertNotContains('syncPppProfile', $methods);
+        // Pool ikut ditandai gagal.
+        $this->assertSame(MikrotikSyncStatus::Failed, $group->customerIpPool->fresh()->mikrotik_sync_status);
+    }
+
+    public function test_pool_that_drifted_away_is_recreated_by_the_group_resync_then_the_profile_succeeds(): void
+    {
+        // Skenario nyata Agung: admin hapus /ip pool + /ppp profile manual
+        // di router. BOSS App masih menyimpan datanya. "Sync Ulang" harus
+        // membangun ulang keduanya, urutan benar, tidak gagal permanen.
+        $this->bindGateway(); // fake: syncIpPool sukses (re-create), syncPppProfile sukses
+        $group = $this->group(NetworkProfileGroupType::Ppp);
+        $group->customerIpPool->markSyncFailed('drift — dihapus manual di router');
+
+        $job = new PushNetworkProfileGroupToMikrotikJob($group->id);
+        $job->withFakeQueueInteractions();
+        $job->handle(app(RouterOsGateway::class));
+
+        $group->refresh();
+        $this->assertSame(MikrotikSyncStatus::Synced, $group->mikrotik_sync_status);
+        // Status pool yang tadinya "failed"/basi ikut diperbaiki jadi synced.
+        $this->assertSame(MikrotikSyncStatus::Synced, $group->customerIpPool->fresh()->mikrotik_sync_status);
+        $this->assertSame(['syncIpPool', 'syncPppProfile'], array_column($this->recordedCalls, 'method'));
     }
 
     public function test_push_job_omits_dns_server_argument_when_both_dns_fields_are_null(): void
@@ -215,7 +270,8 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
         $job->withFakeQueueInteractions();
         $job->handle(app(RouterOsGateway::class));
 
-        $this->assertNull($this->recordedCalls[0]['args']['dnsServer']);
+        // [0] = syncIpPool (FIX 2), [1] = syncPppProfile.
+        $this->assertNull($this->recordedCalls[1]['args']['dnsServer']);
     }
 
     public function test_remove_job_removes_ppp_profile(): void
@@ -256,9 +312,11 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
         $group->refresh();
         $this->assertSame(MikrotikSyncStatus::Synced, $group->mikrotik_sync_status);
 
-        $this->assertSame('syncPppProfile', $this->recordedCalls[0]['method']);
-        $this->assertSame('syncPppoeServer', $this->recordedCalls[1]['method']);
-        $call = $this->recordedCalls[1]['args'];
+        // [0] = syncIpPool (FIX 2), [1] = syncPppProfile, [2] = syncPppoeServer.
+        $this->assertSame('syncIpPool', $this->recordedCalls[0]['method']);
+        $this->assertSame('syncPppProfile', $this->recordedCalls[1]['method']);
+        $this->assertSame('syncPppoeServer', $this->recordedCalls[2]['method']);
+        $call = $this->recordedCalls[2]['args'];
         $this->assertSame($group->mikrotikComment(), $call['comment']);
         $this->assertSame('PPPoE-Vlan110-10Mbps', $call['serviceName']);
         $this->assertSame('vlan110-PPPoE-10Mbps', $call['interfaceName']);
@@ -285,8 +343,9 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
 
         $group->refresh();
         $this->assertSame(MikrotikSyncStatus::Synced, $group->mikrotik_sync_status);
-        $this->assertCount(1, $this->recordedCalls);
-        $this->assertSame('syncPppProfile', $this->recordedCalls[0]['method']);
+        $this->assertCount(2, $this->recordedCalls);
+        $this->assertSame('syncIpPool', $this->recordedCalls[0]['method']);
+        $this->assertSame('syncPppProfile', $this->recordedCalls[1]['method']);
     }
 
     public function test_push_job_skips_pppoe_server_sync_when_service_name_is_null(): void
@@ -309,8 +368,9 @@ class NetworkProfileGroupMikrotikSyncTest extends TestCase
 
         $group->refresh();
         $this->assertSame(MikrotikSyncStatus::Synced, $group->mikrotik_sync_status);
-        $this->assertCount(1, $this->recordedCalls);
-        $this->assertSame('syncPppProfile', $this->recordedCalls[0]['method']);
+        $this->assertCount(2, $this->recordedCalls);
+        $this->assertSame('syncIpPool', $this->recordedCalls[0]['method']);
+        $this->assertSame('syncPppProfile', $this->recordedCalls[1]['method']);
     }
 
     public function test_push_job_marks_failed_with_combined_message_when_pppoe_server_sync_fails_on_final_attempt(): void

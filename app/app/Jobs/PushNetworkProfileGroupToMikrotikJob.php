@@ -89,10 +89,40 @@ class PushNetworkProfileGroupToMikrotikJob implements ShouldQueue
      * PPPoE Server failed) is still a real, actionable failure state, not
      * silently reported as synced.
      *
+     * FIX 2 (ketahanan drift, 2026-09-06) — SEBELUM push `/ppp profile`,
+     * pastikan `/ip pool` yang direferensikannya (`remote-address=<nama pool>`)
+     * genuinely ADA di router. Admin sering hapus objek langsung di
+     * MikroTik tanpa update BOSS App; kalau `/ip pool` sudah hilang,
+     * `/ppp/profile/add remote-address=<nama pool>` ditolak RouterOS
+     * ("invalid value for argument remote-address:") dan Grup Profil
+     * "Sync Ulang" gagal PERMANEN. `syncIpPool()` idempoten (lookup
+     * by-comment: create kalau hilang, update kalau ada) — satu klik
+     * "Sync Ulang" jadi membangun ulang pool + profile dalam urutan benar.
+     * Status `mikrotik_sync_*` pool ikut diperbaiki di sini kalau tadinya
+     * "synced" padahal sebenarnya sudah drift.
+     *
      * @return array{success: bool, message: ?string}
      */
     private function syncPpp(RouterOsGateway $gateway, NetworkProfileGroup $group): array
     {
+        $pool = $group->customerIpPool;
+
+        $poolResult = $gateway->syncIpPool(
+            $group->nas,
+            $pool->mikrotikComment(),
+            $pool->name,
+            "{$pool->range_start}-{$pool->range_end}",
+        );
+
+        if (! $poolResult['success']) {
+            $poolMessage = 'IP Pool gagal disinkronkan dulu: '.($poolResult['message'] ?? 'Unknown failure');
+            $pool->markSyncFailed($poolMessage);
+
+            return ['success' => false, 'message' => $poolMessage];
+        }
+
+        $pool->markSynced();
+
         $dnsServers = array_values(array_filter([$group->dns_primary, $group->dns_secondary]));
         $dnsServer = $dnsServers === [] ? null : implode(',', $dnsServers);
 
@@ -100,9 +130,15 @@ class PushNetworkProfileGroupToMikrotikJob implements ShouldQueue
             $group->nas,
             $group->mikrotikComment(),
             $group->name,
-            $group->customerIpPool->name,
+            $pool->name,
             $dnsServer,
             $group->parent_queue,
+            // FIX 1 — local-address = gateway_ip pool (kolom yang memang
+            // disimpan sejak v0.14.2 KHUSUS untuk ini, tapi wiring-nya
+            // kelewat di v0.14.3/v0.14.5). Tanpa local-address, PPP
+            // interface klien tidak punya gateway di sisi router →
+            // pelanggan connect tapi tidak dapat routing.
+            $pool->gateway_ip,
         );
 
         if (! $profileResult['success']) {

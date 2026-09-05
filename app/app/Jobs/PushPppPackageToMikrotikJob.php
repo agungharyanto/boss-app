@@ -23,12 +23,19 @@ use Throwable;
  * architecture (per the sprint brief, matching the already-established
  * "Grup Profil's own bare /ppp profile is the PPPoE Server's Default
  * Profile" finding — see CLAUDE.md's "Revisi Grup Profil" section):
- * local-address/dns-server/parent-queue are INHERITED from the parent Grup
- * Profil and resolved LIVE on every single push (never copied/cached onto
- * PppPackage itself) — same "resolve the live current value, don't snapshot
- * it" discipline HotspotPackage already established for its own
- * address-pool inheritance. rate-limit comes from this package's own
- * BandwidthProfile; session-timeout from this package's own Masa Aktif.
+ * local-address (= IP Pool induk `gateway_ip`, FIX 1 2026-09-06 — sebelum
+ * itu tidak pernah benar-benar dikirim)/dns-server/parent-queue INHERITED
+ * dari parent Grup Profil + IP Pool-nya, resolved LIVE tiap push (never
+ * copied/cached onto PppPackage itself) — same "resolve the live current
+ * value, don't snapshot it" discipline HotspotPackage already established
+ * for its own address-pool inheritance. rate-limit comes from this
+ * package's own BandwidthProfile; session-timeout from this package's own
+ * Masa Aktif.
+ *
+ * FIX 2 (2026-09-06) — memastikan `/ip pool` induk ADA di router SEBELUM
+ * push `/ppp profile` yang mereferensikannya (ketahanan terhadap admin
+ * yang hapus objek langsung di MikroTik), sama seperti
+ * PushNetworkProfileGroupToMikrotikJob::syncPpp().
  *
  * Lookup is by PppPackage::mikrotikComment() (a stable comment, like
  * NetworkProfileGroup's own PPP push) — NOT the mikrotikLookupName()/
@@ -65,6 +72,31 @@ class PushPppPackageToMikrotikJob implements ShouldQueue
         $group = $package->networkProfileGroup;
         $nas = $group->nas;
         $bandwidth = $package->bandwidthProfile;
+        $pool = $group->customerIpPool;
+
+        // FIX 2 (ketahanan drift, 2026-09-06) — sama seperti
+        // PushNetworkProfileGroupToMikrotikJob::syncPpp(): pastikan `/ip
+        // pool` yang direferensikan (`remote-address=<nama pool>`) ADA di
+        // router dulu. Kalau admin sudah hapus pool-nya manual,
+        // `/ppp/profile/add` ditolak "invalid value for argument
+        // remote-address:" dan push ini gagal permanen. `syncIpPool()`
+        // idempoten (lookup by-comment). Status pool ikut diperbaiki.
+        $poolResult = $gateway->syncIpPool(
+            $nas,
+            $pool->mikrotikComment(),
+            $pool->name,
+            "{$pool->range_start}-{$pool->range_end}",
+        );
+
+        if (! $poolResult['success']) {
+            $poolMessage = 'IP Pool gagal disinkronkan dulu: '.($poolResult['message'] ?? 'Unknown failure');
+            $pool->markSyncFailed($poolMessage);
+            $this->recordFailure($package, $poolMessage);
+
+            return;
+        }
+
+        $pool->markSynced();
 
         // Same dns-server combination logic as PushNetworkProfileGroupToMikrotikJob's
         // own syncPpp() — reused, not reinvented. Inherited from the parent
@@ -87,10 +119,15 @@ class PushPppPackageToMikrotikJob implements ShouldQueue
             // Profil ppp / Profil PPP lain di NAS yang sama, pakai suffix
             // " (pkg #{id})". Nama tampilan di BOSS App tidak berubah.
             $package->routerOsProfileName(),
-            $group->customerIpPool->name,
+            $pool->name,
             $dnsServer,
             $group->parent_queue,
-            null,
+            // FIX 1 — local-address = gateway_ip pool induk (di-resolve
+            // live dari Grup Profil, sama pola dns/parent-queue). Kolom
+            // yang memang disimpan sejak v0.14.2 KHUSUS untuk ini tapi
+            // wiring-nya kelewat. Tanpa ini pelanggan connect tak dapat
+            // routing.
+            $pool->gateway_ip,
             $rateLimit,
             $package->routerOsSessionTimeout(),
         );

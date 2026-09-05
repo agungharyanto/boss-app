@@ -801,6 +801,12 @@ nothing to the router (see the section above for why).
 
 Manual retry for a `Gagal` group — same shape as `customer-ip-pools`' own resync endpoint.
 
+Sejak v0.14.5.4 push `/ppp profile` untuk grup tipe `ppp` (a) memastikan `/ip pool` yang direferensikan
+genuinely ada di router dulu (dibuat ulang otomatis kalau admin sudah hapus manual di WinBox), lalu (b)
+mengirim `local-address` = `gateway_ip` IP Pool induk. Kalau langkah (a) gagal, status jadi `Gagal`
+dengan pesan "IP Pool gagal disinkronkan dulu: ..." dan `/ppp profile` tidak di-push. Berlaku sama untuk
+`POST /ppp-packages/{ppp_package}/resync`.
+
 ```json
 {
   "success": true,

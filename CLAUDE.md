@@ -8007,6 +8007,62 @@ tetap di-enforce):
 string `rate-limit`), jadi nol namespace collision — nama boleh sama dengan Grup Profil/Profil PPP/Profil
 Hotspot apa pun.
 
+## RouterOS Live-Push — `local-address` + Ensure IP Pool Sebelum Push Profil (v0.14.5.4, branch `investigasi-local-address-drift`)
+
+**Dua bug nyata di jalur push `/ppp profile` (Grup Profil tipe ppp, Profil PPP, Profil Expired), ditemukan
+lewat investigasi read-only terhadap `ro-hotspot.bajastu.id` (NAS uji coba — BUKAN `test-x86-bajastu`,
+tidak disentuh sama sekali) setelah Agung menghapus semua `/ip pool` langsung di WinBox.**
+
+**BUG #1 — `local-address` `/ppp profile` tidak pernah dikirim.** `customer_ip_pools.gateway_ip` disimpan
+sejak v0.14.2 KHUSUS untuk jadi `local-address` di `/ppp profile` yang dipush Grup Profil/Profil PPP (lihat
+section "IP Pool Pelanggan (v0.14.2)" + "RouterOS Live-Push (v0.14.2.1)" di atas — design intent-nya
+eksplisit di situ). Tapi wiring-nya kelewat: `PushNetworkProfileGroupToMikrotikJob::syncPpp()` dan
+`PushPppPackageToMikrotikJob` sama-sama memanggil `syncPppProfile()` tanpa argumen `$localAddress` (default
+`null`) sejak v0.14.3/v0.14.5. `PppPackageMikrotikSyncTest` bahkan meng-assert `localAddress` null —
+mengunci bug ini sebagai "perilaku yang diharapkan". Akibat nyata di produksi: PPP interface klien tidak
+punya gateway di sisi router → pelanggan connect tapi tidak dapat routing / "active connection gagal".
+**Fix**: `$pool->gateway_ip` di-resolve LIVE tiap push (sama pola `dns-server`/`parent-queue` yang
+diwariskan dari Grup Profil, bukan disnapshot ke kolom `ppp_packages`) dan diteruskan sebagai `$localAddress`.
+
+**BUG #2 — resync gagal PERMANEN setelah admin hapus `/ip pool` manual di router.**
+`PushNetworkProfileGroupToMikrotikJob`/`PushPppPackageToMikrotikJob`/`PushExpiredProfileToMikrotikJob`
+mem-push `/ppp profile` yang mereferensikan sebuah `/ip pool` lewat `remote-address=<nama pool>` (dan, sejak
+FIX 1, `local-address=<gateway_ip>`) TANPA memastikan `/ip pool`-nya ada di router dulu. Admin sering hapus
+objek langsung di MikroTik tanpa update BOSS App; kalau `/ip pool` sudah hilang,
+`/ppp/profile/add remote-address=<nama pool>` ditolak RouterOS (`"invalid value for argument
+remote-address:"`) dan status entity jadi `Gagal` SELAMANYA — klik "Sync Ulang" berapa kali pun tetap gagal
+(status kolom `mikrotik_sync_*` pool masih bilang `synced` padahal sudah drift). **Fix**: ketiga Job
+sekarang memanggil `$gateway->syncIpPool($nas, $pool->mikrotikComment(), $pool->name,
+"{$pool->range_start}-{$pool->range_end}")` DULU sebelum `syncPppProfile()`. `syncIpPool()` idempoten
+(lookup by-comment: create kalau hilang, update kalau ada). Sukses → `$pool->markSynced()`. Gagal →
+`$pool->markSyncFailed()` + entity induk `markSyncFailed()`/`recordFailure()` dengan pesan
+`"IP Pool gagal disinkronkan dulu: ..."`, dan `/ppp profile` TIDAK di-push. Satu klik "Sync Ulang" jadi
+membangun ulang pool + profile dalam urutan yang benar.
+
+**Pola umum yang ditegakkan (governance note untuk push job RouterOS baru mana pun ke depan)**: sebuah
+`/ppp profile` (atau objek RouterOS apa pun) yang mereferensikan objek RouterOS LAIN by-name — `/ip pool`,
+`/queue`, interface, dll. — WAJIB memastikan objek yang direferensikan itu ada dulu di push job yang sama
+(via method `sync*()` idempoten by-comment), BUKAN mengandalkan urutan dispatch antar-job atau asumsi
+"pasti sudah pernah dipush". Drift manual di router adalah kondisi normal, bukan edge case.
+
+**`PushExpiredProfileToMikrotikJob` — FIX 1 TIDAK berlaku (pola berbeda, konfirmasi Agung terpisah).**
+Profil Expired mengirim NAMA pool sebagai `local-address` (bukan `gateway_ip`) — `remote-address` null,
+tanpa rate-limit, hanya pool terbatas. FIX 2 (ensure-pool) tetap berlaku di situ karena kelas bug-nya
+identik.
+
+**Diverifikasi NYATA end-to-end terhadap `ro-hotspot.bajastu.id`** (`test-x86-bajastu` tidak disentuh):
+Grup Profil #26 `PPPoE-Remote` (type ppp, status `failed`, error persis `"invalid value for argument
+remote-address:"`, Pool #33 `PPPoE-Remote` `gateway_ip=10.0.1.1` salah-`synced`) → 1× resync lewat jalur
+`NetworkProfileGroupService::resync()` yang sama dengan tombol UI → `synced`. Query read-only router
+setelahnya: `/ip pool PPPoE-Remote` (comment `BOSS App - Customer IP Pool #33`, ranges
+`10.0.0.10-10.0.3.254`) dibuat ulang otomatis; `/ppp profile PPPoE-Remote` kini `local-address=10.0.1.1`
+(sebelumnya kosong), `remote-address=PPPoE-Remote`, `dns-server=1.1.1.1,8.8.8.8`, comment `BOSS App -
+Network Profile Group #26`; `/interface pppoe-server server PPPoE-Remote` (interface `vlan10-PPPoE`,
+default-profile `PPPoE-Remote`) ikut dibuat. Resync ke-2 idempoten (tetap 1 pool / 1 profile / 1
+pppoe-server). Profil PPP throwaway di Grup #26 juga diverifikasi live (`local-address=10.0.1.1`,
+`rate-limit=... 5` priority di slot ke-5) lalu dihapus bersih. `boss-worker` di-restart lebih dulu (Job
+class dimuat sekali saat proses start — gotcha yang sudah berulang di file ini).
+
 ## OSRM Self-Hosted Routing (v0.16.0 Langkah 11)
 
 **First real routing engine in this codebase** — the "Cek Jalur ke ODP" sales feature needs the actual

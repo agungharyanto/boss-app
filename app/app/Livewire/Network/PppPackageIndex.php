@@ -190,13 +190,15 @@ class PppPackageIndex extends Component
 
     /**
      * Mirrors StorePppPackageRequest/UpdatePppPackageRequest's own
-     * validateNoNameCollisionOnNas() — see PppPackage::
-     * collidesWithExistingName()'s own docblock for the shared query logic.
+     * validateNoNameCollisionOnNas() — aturan nama final (2026-09-05):
+     * hanya blokir bentrok dengan dunia HOTSPOT (Grup Profil tipe hotspot /
+     * Profil Hotspot) di NAS yang sama; dunia PPP bebas senama. Lihat
+     * PppPackage::collidesWithExistingName()'s own docblock.
      */
-    private function validateNoNameCollisionOnNas(NetworkProfileGroup $group, string $name, string $errorField, ?int $ignorePackageId): bool
+    private function validateNoNameCollisionOnNas(NetworkProfileGroup $group, string $name, string $errorField): bool
     {
-        if (PppPackage::collidesWithExistingName($group->nas_id, $name, $ignorePackageId)) {
-            $this->addError($errorField, 'Nama ini sudah dipakai Grup Profil atau Profil PPP lain di NAS yang sama — nama /ppp profile harus unik per NAS di router.');
+        if (PppPackage::collidesWithExistingName($group->nas_id, $name)) {
+            $this->addError($errorField, 'Nama ini sudah dipakai Grup Profil Hotspot atau Profil Hotspot di NAS yang sama — nama Paket/Profil PPP tidak boleh bentrok dengan dunia Hotspot.');
 
             return false;
         }
@@ -233,7 +235,7 @@ class PppPackageIndex extends Component
             return;
         }
 
-        if (! $this->validateNoNameCollisionOnNas($group, $this->name, 'name', null)) {
+        if (! $this->validateNoNameCollisionOnNas($group, $this->name, 'name')) {
             return;
         }
 
@@ -341,7 +343,7 @@ class PppPackageIndex extends Component
             return;
         }
 
-        if (! $this->validateNoNameCollisionOnNas($group, $this->editName, 'editName', $package->id)) {
+        if (! $this->validateNoNameCollisionOnNas($group, $this->editName, 'editName')) {
             return;
         }
 

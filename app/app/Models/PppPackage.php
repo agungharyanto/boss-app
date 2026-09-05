@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\HotspotDurationUnit;
 use App\Enums\MikrotikSyncStatus;
+use App\Enums\NetworkProfileGroupType;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\PppPackageFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -171,31 +172,79 @@ class PppPackage extends Model
     }
 
     /**
-     * The real collision risk this sub-version is built around (see the
-     * migration's own docblock): a Profil PPP's own `/ppp profile` push
-     * shares the SAME RouterOS `/ppp profile` name namespace, scoped
-     * per-NAS, as every Grup Profil's own bare `/ppp profile` AND every
-     * other Profil PPP under a DIFFERENT Grup Profil on that same NAS.
-     * Checks BOTH sources — `network_profile_groups.name` and
-     * `ppp_packages.name` — scoped to $nasId, excluding $ignorePackageId
-     * (the row being edited, so a no-op rename of itself isn't flagged as
-     * a collision with itself). Pure query logic, no HTTP/Livewire
-     * concerns — called identically from Store/UpdatePppPackageRequest's
-     * own withValidator() and PppPackageIndex's own mirrored check, same
-     * "shared validation logic lives on the model, callers just invoke it"
-     * pattern as CustomerIpPool::overlapsRange().
+     * ATURAN NAMA FINAL (2026-09-05, dikonfirmasi Agung — lihat CLAUDE.md
+     * "Aturan Nama Profil Paket"):
+     *
+     *  - DI DALAM dunia PPP (IP Pool Pelanggan, Grup Profil tipe ppp,
+     *    Profil PPP) nama BOLEH sama semua — sengaja, biar konsisten
+     *    dilihat di WinBox saat troubleshooting. Collision `/ppp profile`
+     *    di RouterOS (Grup Profil ppp + Profil PPP sama-sama push ke
+     *    namespace itu) di-handle otomatis via routerOsProfileName()
+     *    saat push, BUKAN dengan menolak di validasi.
+     *  - Hotspot vs PPP TETAP tidak boleh bentrok untuk nama Paket/Profil:
+     *    Profil PPP TIDAK BOLEH senama Grup Profil tipe HOTSPOT atau Profil
+     *    Hotspot di NAS yang sama. Aturan bisnis Agung — bukan sekadar soal
+     *    namespace RouterOS (`/ip hotspot user profile` memang namespace
+     *    beda dari `/ppp profile`), tetap di-enforce.
+     *
+     * Pure query logic, dipanggil identik dari Store/UpdatePppPackageRequest
+     * dan PppPackageIndex — pola sama CustomerIpPool::overlapsRange().
      */
-    public static function collidesWithExistingName(int $nasId, string $name, ?int $ignorePackageId = null): bool
+    public static function collidesWithExistingName(int $nasId, string $name): bool
     {
-        $groupCollision = NetworkProfileGroup::where('nas_id', $nasId)->where('name', $name)->exists();
+        $hotspotGroupCollision = NetworkProfileGroup::where('nas_id', $nasId)
+            ->where('type', NetworkProfileGroupType::Hotspot->value)
+            ->where('name', $name)
+            ->exists();
 
-        if ($groupCollision) {
+        if ($hotspotGroupCollision) {
             return true;
         }
 
-        return self::whereHas('networkProfileGroup', fn ($query) => $query->where('nas_id', $nasId))
+        return HotspotPackage::whereHas('networkProfileGroup', fn ($query) => $query->where('nas_id', $nasId))
             ->where('name', $name)
-            ->when($ignorePackageId, fn ($query, $id) => $query->whereKeyNot($id))
             ->exists();
+    }
+
+    /**
+     * Nama yang GENUINELY dikirim ke `/ppp/profile` di router — BUKAN
+     * selalu `$this->name` verbatim (FIX 2 aturan nama final).
+     *
+     * `/ppp profile` wajib unik nama-nya router-wide. Grup Profil (ppp)
+     * SELALU push nama verbatim (dia "anchor" — PPPoE Server Default
+     * Profile). Profil PPP push verbatim JUGA, KECUALI namanya bentrok
+     * dengan Grup Profil ppp / Profil PPP lain di NAS yang sama — lalu
+     * pakai suffix stabil " (pkg #{id})". Nama TAMPILAN (`$this->name`,
+     * yang diketik/dilihat Agung di form) tidak pernah berubah — hanya
+     * string yang dikirim ke RouterOS API. Lookup existing tetap by
+     * `comment` (`mikrotikComment()`), tidak terpengaruh nama.
+     *
+     * Dievaluasi saat push (PushPppPackageToMikrotikJob). Kasus umum
+     * (paket dibuat senama Grup Profil induknya) otomatis benar. Kasus
+     * Grup Profil DI-RENAME jadi bentrok dengan Profil PPP yang sudah
+     * ter-sync: NetworkProfileGroupService me-re-dispatch push Profil PPP
+     * yang senama supaya mereka geser ke suffix duluan.
+     */
+    public function routerOsProfileName(): string
+    {
+        $nasId = $this->networkProfileGroup?->nas_id;
+
+        if ($nasId === null) {
+            return $this->name;
+        }
+
+        $collidesWithPppGroup = NetworkProfileGroup::where('nas_id', $nasId)
+            ->where('type', NetworkProfileGroupType::Ppp->value)
+            ->where('name', $this->name)
+            ->exists();
+
+        $collidesWithLowerIdPackage = self::whereHas('networkProfileGroup', fn ($query) => $query->where('nas_id', $nasId))
+            ->where('name', $this->name)
+            ->where('id', '<', $this->id)
+            ->exists();
+
+        return $collidesWithPppGroup || $collidesWithLowerIdPackage
+            ? "{$this->name} (pkg #{$this->id})"
+            : $this->name;
     }
 }

@@ -2,7 +2,12 @@
 
 namespace Tests\Feature\Api;
 
+use App\Enums\NetworkProfileGroupType;
 use App\Models\BandwidthProfile;
+use App\Models\CustomerIpPool;
+use App\Models\Nas;
+use App\Models\NetworkProfileGroup;
+use App\Models\PppPackage;
 use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -101,6 +106,37 @@ class BandwidthProfileApiTest extends TestCase
 
         $response->assertUnprocessable();
         $response->assertJsonValidationErrors(['name']);
+    }
+
+    /**
+     * FIX 4 (aturan nama final 2026-09-05) — Bandwidth Profile BEBAS: nama
+     * boleh sama dengan Grup Profil / Profil PPP / Profil Hotspot apa pun.
+     * BandwidthProfile tidak pernah push objek RouterOS bernama (dia
+     * di-embed ke string rate-limit), jadi tidak ada namespace collision
+     * sama sekali — hanya keunikan antar-BandwidthProfile per-tenant yang
+     * berlaku (dites di atas).
+     */
+    public function test_bandwidth_profile_name_may_match_a_grup_profil_or_ppp_package_name(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $group = NetworkProfileGroup::factory()->create([
+            'nas_id' => $nas->id, 'customer_ip_pool_id' => $pool->id,
+            'type' => NetworkProfileGroupType::Ppp, 'name' => 'HomeFixed-10Mbps',
+        ]);
+        PppPackage::factory()->create(['network_profile_group_id' => $group->id, 'name' => 'HomeFixed-10Mbps']);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/bandwidth-profiles', [
+            'name' => 'HomeFixed-10Mbps',
+            'upload_min' => 5000,
+            'upload_max' => 10000,
+            'download_min' => 5000,
+            'download_max' => 10000,
+        ]);
+
+        $response->assertCreated();
+        $this->assertDatabaseHas('bandwidth_profiles', ['name' => 'HomeFixed-10Mbps', 'tenant_id' => $tenant->id]);
     }
 
     /**

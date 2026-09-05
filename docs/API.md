@@ -858,10 +858,15 @@ seperti kasus Profil Hotspot, di-flag bukan di-workaround.) `mikrotik_sync_statu
 `mikrotik_synced_at`/`mikrotik_sync_error` — same 3-state contract as every other live-pushed entity in
 this cluster.
 
-**Real collision risk this sub-version is built around**: a Profil PPP's own `/ppp profile` push shares the
-SAME RouterOS `/ppp profile` name namespace, scoped per-NAS, as every Grup Profil's own bare `/ppp profile`
-AND every other Profil PPP under a DIFFERENT Grup Profil on that same NAS. `POST`/`PUT` below reject a
-`name` that collides with either source on the resolved NAS — see `PppPackage::collidesWithExistingName()`.
+**Aturan nama (FINAL 2026-09-05 — meralat validasi awal v0.14.5, lihat CLAUDE.md "ATURAN NAMA PROFIL
+PAKET")**: **DI DALAM dunia PPP nama BOLEH sama** — sebuah Profil PPP boleh senama dengan Grup Profil ppp
+induknya, Profil PPP lain, atau IP Pool, di NAS yang sama (sengaja, biar konsisten di WinBox). Collision
+`/ppp profile` di RouterOS (Grup Profil ppp + Profil PPP sama-sama namespace itu) di-handle **otomatis
+saat push**, bukan dengan menolak input: `PppPackage::routerOsProfileName()` mengirim nama verbatim
+kecuali bentrok → lalu `"{nama} (pkg #{id})"`. Nama tampilan (`ppp_packages.name`) tidak pernah berubah.
+`POST`/`PUT` **HANYA** menolak `name` yang bentrok dengan **dunia HOTSPOT** di NAS yang sama (Grup Profil
+tipe `hotspot` ATAU Profil Hotspot) — aturan bisnis, bukan sekadar namespace. Baseline `name` unik
+per-Grup-Profil (`(network_profile_group_id, name)`) tetap ada.
 
 ### `GET /ppp-packages`
 
@@ -871,8 +876,9 @@ List Profil PPP belonging to the logged-in tenant. Query optional: `?network_pro
 ### `POST /ppp-packages`
 
 Body: `network_profile_group_id` (required, **must be type `ppp`**), `bandwidth_profile_id` (required),
-`name` (required — unique per Grup Profil AND must not collide with any Grup Profil/Profil PPP name on the
-same resolved NAS), `visible_to_reseller` (optional, default `false`), `cost_price`/`sell_price` (required,
+`name` (required — unique per Grup Profil; BOLEH sama dengan Grup Profil ppp / Profil PPP lain di NAS yang
+sama, TAPI tidak boleh sama dengan Grup Profil Hotspot / Profil Hotspot di NAS yang sama — lihat aturan
+nama di atas), `visible_to_reseller` (optional, default `false`), `cost_price`/`sell_price` (required,
 `sell_price >= cost_price`), `promo_price` (optional), `tax_percent` (required), `active_duration_value`
 (required integer **≥ 0** — `0` = Unlimited/tanpa batas waktu), `active_duration_unit` (required,
 `minute`/`hour`/`day`/`month`), `shared_users`

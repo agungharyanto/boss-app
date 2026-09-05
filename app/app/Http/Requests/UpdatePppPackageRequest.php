@@ -72,8 +72,37 @@ class UpdatePppPackageRequest extends FormRequest
     {
         $validator->after(function (Validator $validator) {
             $this->validateGroupIsPppType($validator);
+            $this->validateGroupNotAlreadyTaken($validator);
             $this->validateNoNameCollisionOnNas($validator);
         });
+    }
+
+    /**
+     * ATURAN KERAS 1:1 (v0.14.5.4) — lihat
+     * StorePppPackageRequest::validateGroupNotAlreadyTaken(). Di sini
+     * `$this->package->id` di-exclude (paket ini sendiri tidak dianggap
+     * "menghalangi dirinya") — dan hanya dicek kalau request memang
+     * mengubah `network_profile_group_id` (pindah grup).
+     */
+    private function validateGroupNotAlreadyTaken(Validator $validator): void
+    {
+        if ($validator->errors()->hasAny(['network_profile_group_id'])) {
+            return;
+        }
+
+        if (! $this->has('network_profile_group_id')) {
+            return;
+        }
+
+        $groupId = (int) $this->input('network_profile_group_id');
+        $taken = PppPackage::groupTakenByAnother($groupId, $this->package->id);
+
+        if ($taken !== null) {
+            $validator->errors()->add(
+                'network_profile_group_id',
+                "Grup Profil ini sudah dipakai paket \"{$taken->name}\" — 1 Grup Profil cuma bisa dipakai 1 Profil PPP.",
+            );
+        }
     }
 
     private function validateGroupIsPppType(Validator $validator): void

@@ -116,8 +116,8 @@ class UpdatePppPackageRequest extends FormRequest
 
         $name = (string) $this->input('name', $this->package->name);
 
-        if (PppPackage::collidesWithExistingName($group->nas_id, $name, $this->package->id)) {
-            $validator->errors()->add('name', 'Nama ini sudah dipakai Grup Profil atau Profil PPP lain di NAS yang sama — nama /ppp profile harus unik per NAS di router.');
+        if (PppPackage::collidesWithExistingName($group->nas_id, $name)) {
+            $validator->errors()->add('name', 'Nama ini sudah dipakai Grup Profil Hotspot atau Profil Hotspot di NAS yang sama — nama Paket/Profil PPP tidak boleh bentrok dengan dunia Hotspot.');
         }
     }
 

@@ -71,7 +71,7 @@ class StorePppPackageRequest extends FormRequest
     {
         $validator->after(function (Validator $validator) {
             $this->validateGroupIsPppType($validator);
-            $this->validateNoNameCollisionOnNas($validator, null);
+            $this->validateNoNameCollisionOnNas($validator);
         });
     }
 
@@ -99,17 +99,15 @@ class StorePppPackageRequest extends FormRequest
     }
 
     /**
-     * The whole reason this check exists: a Profil PPP's own `/ppp profile`
-     * push shares the SAME RouterOS `/ppp profile` name namespace, scoped
-     * per-NAS, as every Grup Profil's own bare `/ppp profile` AND every
-     * other Profil PPP under a DIFFERENT Grup Profil on the SAME NAS. The
-     * per-Grup-Profil `Rule::unique()` above only catches a duplicate name
-     * under the exact same Grup Profil — it says nothing about a sibling
-     * Grup Profil on the same NAS, or the parent Grup Profil's own name.
-     * See PppPackage::collidesWithExistingName()'s own docblock for the
-     * actual query logic — shared here and in Update.../PppPackageIndex.
+     * ATURAN NAMA FINAL (2026-09-05, dikonfirmasi Agung) — nama Profil PPP
+     * BOLEH sama dengan Grup Profil tipe ppp / Profil PPP lain (dunia PPP
+     * bebas, collision `/ppp profile` di router di-handle otomatis via
+     * PppPackage::routerOsProfileName() saat push). Yang TETAP diblokir di
+     * sini: nama sama dengan dunia HOTSPOT (Grup Profil tipe hotspot ATAU
+     * Profil Hotspot) di NAS yang sama. Lihat
+     * PppPackage::collidesWithExistingName()'s own docblock.
      */
-    private function validateNoNameCollisionOnNas(Validator $validator, ?int $ignorePackageId): void
+    private function validateNoNameCollisionOnNas(Validator $validator): void
     {
         if ($validator->errors()->hasAny(['network_profile_group_id', 'name'])) {
             return;
@@ -121,8 +119,8 @@ class StorePppPackageRequest extends FormRequest
             return;
         }
 
-        if (PppPackage::collidesWithExistingName($group->nas_id, (string) $this->input('name'), $ignorePackageId)) {
-            $validator->errors()->add('name', 'Nama ini sudah dipakai Grup Profil atau Profil PPP lain di NAS yang sama — nama /ppp profile harus unik per NAS di router.');
+        if (PppPackage::collidesWithExistingName($group->nas_id, (string) $this->input('name'))) {
+            $validator->errors()->add('name', 'Nama ini sudah dipakai Grup Profil Hotspot atau Profil Hotspot di NAS yang sama — nama Paket/Profil PPP tidak boleh bentrok dengan dunia Hotspot.');
         }
     }
 

@@ -6,6 +6,7 @@ use App\Enums\NetworkProfileGroupType;
 use App\Jobs\PushPppPackageToMikrotikJob;
 use App\Models\BandwidthProfile;
 use App\Models\CustomerIpPool;
+use App\Models\HotspotPackage;
 use App\Models\Nas;
 use App\Models\NetworkProfileGroup;
 use App\Models\PppPackage;
@@ -126,18 +127,20 @@ class PppPackageApiTest extends TestCase
         $response->assertJsonValidationErrors(['network_profile_group_id']);
     }
 
-    public function test_a_name_colliding_with_the_parent_grup_profils_own_name_is_rejected(): void
+    public function test_a_name_matching_the_parent_ppp_grup_profil_is_now_allowed(): void
     {
+        // Aturan nama final: dunia PPP bebas senama. Collision /ppp profile
+        // di router di-handle otomatis via PppPackage::routerOsProfileName().
         Bus::fake();
         $f = $this->fixtures();
 
         $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/ppp-packages', $this->payload($f['group']->id, $f['bandwidth']->id, ['name' => $f['group']->name]));
 
-        $response->assertUnprocessable();
-        $response->assertJsonValidationErrors(['name']);
+        $response->assertCreated();
+        $this->assertDatabaseHas('ppp_packages', ['network_profile_group_id' => $f['group']->id, 'name' => $f['group']->name]);
     }
 
-    public function test_a_name_colliding_with_another_ppp_package_on_a_sibling_group_same_nas_is_rejected(): void
+    public function test_a_name_matching_another_ppp_package_on_a_sibling_group_same_nas_is_now_allowed(): void
     {
         Bus::fake();
         $f = $this->fixtures();
@@ -148,6 +151,40 @@ class PppPackageApiTest extends TestCase
         PppPackage::factory()->create(['network_profile_group_id' => $siblingGroup->id, 'name' => 'Paket-Existing']);
 
         $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/ppp-packages', $this->payload($f['group']->id, $f['bandwidth']->id, ['name' => 'Paket-Existing']));
+
+        $response->assertCreated();
+    }
+
+    public function test_a_name_matching_a_hotspot_grup_profil_on_the_same_nas_is_rejected(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+        $hotspotPool = CustomerIpPool::factory()->create(['nas_id' => $f['nas']->id]);
+        $hotspotGroup = NetworkProfileGroup::factory()->create([
+            'nas_id' => $f['nas']->id, 'customer_ip_pool_id' => $hotspotPool->id,
+            'type' => NetworkProfileGroupType::Hotspot, 'name' => 'TOKEN-Harian',
+        ]);
+
+        $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/ppp-packages', $this->payload($f['group']->id, $f['bandwidth']->id, ['name' => 'TOKEN-Harian']));
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['name']);
+        $this->assertNotNull($hotspotGroup->id);
+    }
+
+    public function test_a_name_matching_a_hotspot_package_on_the_same_nas_is_rejected(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+        $hotspotPool = CustomerIpPool::factory()->create(['nas_id' => $f['nas']->id]);
+        $hotspotGroup = NetworkProfileGroup::factory()->create([
+            'nas_id' => $f['nas']->id, 'customer_ip_pool_id' => $hotspotPool->id, 'type' => NetworkProfileGroupType::Hotspot,
+        ]);
+        HotspotPackage::factory()->create([
+            'network_profile_group_id' => $hotspotGroup->id, 'name' => 'Voucher-6Jam',
+        ]);
+
+        $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/ppp-packages', $this->payload($f['group']->id, $f['bandwidth']->id, ['name' => 'Voucher-6Jam']));
 
         $response->assertUnprocessable();
         $response->assertJsonValidationErrors(['name']);

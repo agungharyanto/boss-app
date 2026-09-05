@@ -3,7 +3,46 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## v0.9.11 Amandemen — Backup + Hapus Data Test + Tanggal Payout Konfigurable per Rate (branch `payout-komisi-instan-batch`, belum di-merge/tag)
+## Aturan Nama Profil Paket — dunia PPP bebas senama, auto-differentiate di router (branch `investigasi-nama-paket-vs-grup`, dari `main`, belum di-merge/tag)
+
+Ralat aturan collision nama v0.14.5 — dikonfirmasi eksplisit Agung (lihat CLAUDE.md "ATURAN NAMA PROFIL
+PAKET — FINAL" untuk aturan lengkap permanen).
+
+**Investigasi (branch ini awalnya murni investigasi)**: dikonfirmasi dari kode langsung — Grup Profil (ppp)
+DAN Profil PPP sama-sama push `/ppp profile` dengan `name` VERBATIM (pembeda cuma di `comment`, lookup
+by-comment). Nama `/ppp profile` wajib unik router-wide → dua objek senama = RouterOS tolak yang kedua.
+Form Profil PPP TIDAK auto-prefill nama dari Grup Profil (Agung ketik sendiri). Data dev membuktikan:
+`PppPackage #2` bernama `test-10Mbps-HomeFixed-1` di bawah grup `#11` `test-10Mbps-HomeFixed` — pola
+"terpaksa tambah `-1`" karena diblokir validasi.
+
+**FIX 1 — longgarkan.** `PppPackage::collidesWithExistingName()` tidak lagi memblokir nama sama dengan Grup
+Profil tipe ppp / Profil PPP lain. Sekarang HANYA memblokir bentrok dengan dunia HOTSPOT (Grup Profil tipe
+hotspot / `HotspotPackage`) di NAS yang sama. Param `$ignorePackageId` (dead) dihapus dari signature + 3
+call site.
+
+**FIX 2 — auto-differentiate nama router.** `PppPackage::routerOsProfileName(): string` (baru) — dipakai
+`PushPppPackageToMikrotikJob` alih-alih `$package->name`. Verbatim kecuali bentrok dengan Grup Profil ppp
+di NAS yang sama ATAU Profil PPP ber-id lebih kecil di NAS yang sama → `"{nama} (pkg #{id})"`. Kolom DB
+`name` (yang dilihat/diedit Agung) tidak berubah. `NetworkProfileGroupService::create()/update()`
+me-re-dispatch push Profil PPP senama di NAS yang sama sebelum push Grup Profil-nya (FIFO single-worker →
+paket geser ke suffix duluan). Keterbatasan multi-worker / rename di luar service di-flag di CLAUDE.md.
+
+**FIX 3 — Hotspot vs PPP tetap terjaga.** IP Pool: `customer_ip_pools` unique `(nas_id, name)` sudah
+memblokir pool hotspot vs ppp senama — dikonfirmasi + dites (`test_a_ppp_pool_cannot_share_a_name_with_a_hotspot_pool_on_the_same_nas`).
+Profil PPP vs Profil/Grup Hotspot: FIX 1 sudah menegakkan arah PPP→Hotspot. Arah Hotspot→PPP belum
+simetris (di-flag).
+
+**FIX 4 — Bandwidth Profile bebas.** Dikonfirmasi tidak ada validasi nama lintas-entitas — hanya keunikan
+`(tenant_id, name)` antar-BandwidthProfile. Dites
+(`test_bandwidth_profile_name_may_match_a_grup_profil_or_ppp_package_name`).
+
+**Test**: `PppPackageTest` (rewrite collision section + 3 test `routerOsProfileName()`), `PppPackageApiTest`
+(rewrite 2 + 2 test hotspot-block baru), `PppPackageIndexLivewireTest` (rewrite 2 + 1 baru),
+`PppPackageMikrotikSyncTest` (+2 test verbatim vs suffix), `NetworkProfileGroupApiTest` (+1 test re-push),
+`CustomerIpPoolApiTest` (+1), `BandwidthProfileApiTest` (+1). Full regression suite hijau. Pint clean.
+Belum di-merge/tag.
+
+## v0.9.11 Amandemen — Backup + Hapus Data Test + Tanggal Payout Konfigurable per Rate (branch `payout-komisi-instan-batch`, merged + tagged `v0.9.11`)
 
 Lanjutan sprint v0.9.11 di branch yang sama.
 

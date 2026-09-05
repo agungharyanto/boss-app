@@ -35,6 +35,12 @@ use Throwable;
  * mikrotik_profile_name workaround HotspotPackage needed, since `/ppp
  * profile` genuinely supports `comment` (confirmed via a live test, see
  * RouterOsGateway::syncPppProfile()'s own docblock).
+ *
+ * Aturan nama final (2026-09-05) — nama Profil PPP BOLEH sama dengan Grup
+ * Profil ppp / Profil PPP lain (dunia PPP bebas). Yang dikirim ke router
+ * bukan $package->name verbatim tapi PppPackage::routerOsProfileName(),
+ * yang otomatis menambah suffix " (pkg #{id})" HANYA saat bentrok — supaya
+ * `/ppp profile` (namespace unik router-wide) tidak ditolak RouterOS.
  */
 class PushPppPackageToMikrotikJob implements ShouldQueue
 {
@@ -76,7 +82,11 @@ class PushPppPackageToMikrotikJob implements ShouldQueue
         $result = $gateway->syncPppProfile(
             $nas,
             $package->mikrotikComment(),
-            $package->name,
+            // Aturan nama final (FIX 2) — nama yang dikirim ke router BUKAN
+            // selalu $package->name verbatim: kalau bentrok dengan Grup
+            // Profil ppp / Profil PPP lain di NAS yang sama, pakai suffix
+            // " (pkg #{id})". Nama tampilan di BOSS App tidak berubah.
+            $package->routerOsProfileName(),
             $group->customerIpPool->name,
             $dnsServer,
             $group->parent_queue,

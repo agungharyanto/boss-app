@@ -314,15 +314,35 @@ class WhatsappSessionService
 
         $sessionKey = $session->sessionKey();
         $timestamp = time();
-        $signature = $this->hmac->sign('', $timestamp);
+        // BUG NYATA ditemukan+diperbaiki di sini (branch migrasi-whatsmeow,
+        // sesi debugging "masih gagal berkali-kali"): signature di-sign
+        // atas STRING KOSONG (''), tapi Http::post($url) TANPA argumen
+        // body kedua diam-diam mengirim body "[]" (default Laravel Http
+        // client, BUKAN string kosong) — signature yang diterima gateway
+        // TIDAK PERNAH cocok dengan apa yang benar-benar dikirim, jadi
+        // SETIAP klik tombol Logout dari UI ditolak 401 oleh verifyHmac
+        // (dikonfirmasi ulang: direproduksi langsung, gateway benar-benar
+        // log "rejected request with invalid/missing HMAC signature").
+        // Konsekuensi nyata yang lebih besar dari sekadar "tombol tidak
+        // jalan": karena logout tidak pernah benar-benar sampai ke server
+        // WhatsApp, sesi lama TETAP hidup di sisi WhatsApp setiap kali
+        // Agung mengira sudah logout lalu mencoba pairing/QR baru — pola
+        // ini match dengan device_removed/conflict yang sebelumnya diduga
+        // "Perangkat Tertaut lama di HP" tapi ternyata tidak ditemukan di
+        // sana. Fix: kirim body STRING KOSONG eksplisit (bukan default
+        // Laravel) dan sign STRING YANG SAMA PERSIS — pola identik
+        // requestPairingCode()/SendWhatsappMessageJob di atas.
+        $body = '';
+        $signature = $this->hmac->sign($body, $timestamp);
 
-        $response = Http::withHeaders([
-            'X-Whatsapp-Timestamp' => (string) $timestamp,
-            'X-Whatsapp-Signature' => $signature,
-        ])->post(rtrim($baseUrl, '/')."/sessions/{$sessionKey}/logout");
+        $response = Http::withBody($body, 'application/json')
+            ->withHeaders([
+                'X-Whatsapp-Timestamp' => (string) $timestamp,
+                'X-Whatsapp-Signature' => $signature,
+            ])->post(rtrim($baseUrl, '/')."/sessions/{$sessionKey}/logout");
 
         if (! $response->successful()) {
-            Log::error("WhatsappSessionService: logout failed for session_key={$sessionKey} target={$target}, HTTP {$response->status()}");
+            Log::error("WhatsappSessionService: logout failed for session_key={$sessionKey} target={$target}, HTTP {$response->status()}: {$response->body()}");
 
             return false;
         }

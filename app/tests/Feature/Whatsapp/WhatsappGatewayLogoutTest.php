@@ -12,6 +12,7 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Models\WhatsappSession;
 use App\Services\Whatsapp\WhatsappSessionService;
+use App\Support\WhatsappHmac;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\ConnectionException;
@@ -70,6 +71,40 @@ class WhatsappGatewayLogoutTest extends TestCase
             && $request->hasHeader('X-Whatsapp-Signature'));
 
         Http::assertNotSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-go-test'));
+    }
+
+    /**
+     * Regression guard untuk bug NYATA yang sempat lolos (branch
+     * migrasi-whatsmeow, sesi "masih gagal berkali-kali") — Http::fake()
+     * TIDAK memverifikasi kecocokan HMAC seperti gateway asli, jadi test
+     * lain di file ini yang cuma cek hasSent()/hasHeader() TIDAK PERNAH
+     * menangkap signature yang di-sign atas string SALAH. Test ini
+     * memverifikasi body yang BENAR-BENAR terkirim (bukan diasumsikan)
+     * genuinely string kosong DAN signature-nya genuinely
+     * WhatsappHmac::sign('', $timestamp) atas timestamp yang SAMA persis
+     * dengan header yang dikirim — persis apa yang verifyHmac Node/Go
+     * hitung ulang di sisi penerima.
+     */
+    public function test_logout_signs_the_exact_empty_body_it_actually_sends(): void
+    {
+        Http::fake([
+            'whatsapp-gateway-test/sessions/direct/logout' => Http::response(['success' => true], 200),
+        ]);
+
+        $tenant = Tenant::factory()->create();
+        $session = $this->directSession($tenant->id);
+
+        app(WhatsappSessionService::class)->logout($session, 'legacy');
+
+        $hmac = app(WhatsappHmac::class);
+
+        Http::assertSent(function ($request) use ($hmac) {
+            $timestamp = (int) $request->header('X-Whatsapp-Timestamp')[0];
+            $expectedSignature = $hmac->sign($request->body(), $timestamp);
+
+            return $request->body() === ''
+                && $request->header('X-Whatsapp-Signature')[0] === $expectedSignature;
+        });
     }
 
     public function test_logout_posts_to_the_go_gateway_url_when_target_is_go(): void

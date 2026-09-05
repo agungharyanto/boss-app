@@ -76,6 +76,29 @@
                                         </div>
                                     </fieldset>
 
+                                    <fieldset class="border border-gray-200 rounded-md p-3">
+                                        <legend class="text-xs font-medium text-gray-500 px-1">{{ __('Jendela Tanggal Payout (Opsional)') }}</legend>
+                                        <p class="text-xs text-gray-400 mb-2">
+                                            {{ __('Khusus komisi bulanan (Per Bulan / X-Kali) — kosongkan supaya bisa dibayar kapan saja (sama seperti Titip). Isi keduanya untuk membatasi payout hanya di rentang tanggal tertentu tiap bulan.') }}
+                                        </p>
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                            <div>
+                                                <label class="block text-sm font-medium text-gray-700">{{ __('Dari Tanggal') }}</label>
+                                                <input type="text" inputmode="numeric" wire:model="payoutWindowStartDay"
+                                                    placeholder="{{ __('mis. 5') }}"
+                                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                                @error('payoutWindowStartDay') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm font-medium text-gray-700">{{ __('Sampai Tanggal') }}</label>
+                                                <input type="text" inputmode="numeric" wire:model="payoutWindowEndDay"
+                                                    placeholder="{{ __('mis. 7') }}"
+                                                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                                @error('payoutWindowEndDay') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+                                            </div>
+                                        </div>
+                                    </fieldset>
+
                                     <label class="flex items-center gap-2 text-sm text-gray-700">
                                         <input type="checkbox" wire:model="rateIsActive"> {{ __('Rate aktif') }}
                                     </label>
@@ -110,6 +133,13 @@
                                     </span>
                                 @else
                                     <span class="px-2 py-0.5 rounded-full text-xs bg-yellow-100 text-yellow-800">{{ __('Belum diatur') }}</span>
+                                @endif
+                                @if ($rate && $rate->hasPayoutWindow())
+                                    <span class="block text-xs text-gray-400 mt-1">
+                                        {{ __('Payout tgl :start-:end', ['start' => $rate->payout_window_start_day, 'end' => $rate->payout_window_end_day]) }}
+                                    </span>
+                                @elseif ($rate)
+                                    <span class="block text-xs text-gray-400 mt-1">{{ __('Payout kapan saja') }}</span>
                                 @endif
                             </td>
                             <td class="px-4 py-2 text-sm text-right space-x-2 whitespace-nowrap">

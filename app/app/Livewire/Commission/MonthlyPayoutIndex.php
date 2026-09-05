@@ -8,22 +8,26 @@ use App\Models\CommissionLedger;
 use App\Services\Commission\CommissionPayoutService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Component;
-use RuntimeException;
 
 /**
  * v0.9.11 (Payout Komisi) — payout BATCH komisi bulanan (`recurring`/
  * `limited_count`), berbeda total dari payout Titip di `TitipMasukIndex`
- * (yang instan, kapan saja): halaman ini HANYA bisa memproses payout
- * tanggal 5-7 bulan berjalan.
+ * (yang instan, kapan saja).
  *
- * Guard jendela tanggal ditegakkan DI `CommissionPayoutService`
- * (`payMonthlyForReferrer()`), BUKAN di komponen ini — komponen ini cuma
- * membaca `isWithinMonthlyPayoutWindow()` untuk keputusan TAMPILAN (banner
- * + sembunyikan/nonaktifkan tombol), supaya panggilan langsung ke method
- * Livewire di luar jendela tetap ditolak oleh service, bukan cuma
- * disembunyikan di UI (sama disiplin "guard di server, bukan cuma UI"
- * yang sudah berkali-kali dipakai di codebase ini — mis. BLOKIR KERAS anti
- * bayar-dobel di `SubscriptionRenewalService`).
+ * AMANDEMEN (2026-09-05) — jendela tanggal BUKAN LAGI satu aturan global
+ * (dulu "tanggal 5-7" untuk semua Referrer) — sekarang dikonfigurasi PER
+ * `CommissionRate` (per paket, lihat `CommissionRate::payout_window_*`).
+ * Konsekuensi: Referrer dengan komisi dari beberapa paket berjendela
+ * berbeda punya campuran baris "bisa dibayar sekarang"/"belum" DALAM SATU
+ * grup — komponen ini menghitung status itu PER BARIS
+ * (`CommissionPayoutService::isRowPayableNow()`), bukan satu flag halaman.
+ * Tombol "Proses Payout" per grup selalu memanggil `payMonthlyForReferrer()`
+ * yang MEMBAYAR baris yang genuinely payable dan MELEWATI sisanya (sama
+ * semantik "bayar yang bisa, skip yang belum" seperti tombol Titip) —
+ * bukan lagi ditolak-total kalau ada satu saja di luar jendela.
+ *
+ * Guard sesungguhnya tetap DI `CommissionPayoutService`, bukan di sini —
+ * komponen ini cuma membaca `isRowPayableNow()` untuk keputusan TAMPILAN.
  *
  * Sama permission dengan `TitipMasukIndex`/`CommissionLedgerPolicy` —
  * tidak ada permission baru (`commission_ledger.view`/`.manage`).
@@ -43,49 +47,47 @@ class MonthlyPayoutIndex extends Component
     {
         $this->authorize('markPaid', CommissionLedger::class);
 
-        try {
-            $affected = $payoutService->payMonthlyForReferrer($referrerId, auth()->user());
-        } catch (RuntimeException $e) {
-            $this->flash = null;
-            $this->addError('window', $e->getMessage());
+        $affected = $payoutService->payMonthlyForReferrer($referrerId, auth()->user());
 
-            return;
-        }
-
-        $this->resetErrorBag();
         $this->flash = $affected > 0
             ? "{$affected} baris komisi bulanan ditandai dibayar."
-            : 'Tidak ada baris komisi yang memenuhi syarat untuk Referrer ini.';
+            : 'Tidak ada baris komisi yang memenuhi syarat untuk dibayar sekarang (harus Layak Dibayar dan jendela tanggal paketnya sedang terbuka).';
     }
 
     public function render()
     {
         $payoutService = app(CommissionPayoutService::class);
-        $isWithinWindow = $payoutService->isWithinMonthlyPayoutWindow();
 
         $rows = CommissionLedger::query()
             ->whereIn('scheme', [CommissionScheme::Recurring->value, CommissionScheme::LimitedCount->value])
             ->where('status', CommissionStatus::Eligible->value)
             ->whereNotNull('referrer_id')
-            ->with(['referrer:id,name,phone', 'customer:id,name'])
+            ->with(['referrer:id,name,phone', 'customer:id,name,ppp_package_id', 'customer.pppPackage.commissionRate'])
             ->orderByDesc('id')
             ->get();
 
         $groups = $rows->groupBy('referrer_id')
-            ->map(fn ($groupRows) => [
-                'referrer' => $groupRows->first()->referrer,
-                'rows' => $groupRows,
-                'tx_count' => $groupRows->count(),
-                'total' => (float) $groupRows->sum(fn ($r) => (float) ($r->amount ?? 0)),
-            ])
+            ->map(function ($groupRows) use ($payoutService) {
+                $withPayable = $groupRows->map(fn (CommissionLedger $row) => [
+                    'row' => $row,
+                    'payable_now' => $payoutService->isRowPayableNow($row),
+                ]);
+                $payable = $withPayable->where('payable_now', true);
+
+                return [
+                    'referrer' => $groupRows->first()->referrer,
+                    'rows' => $withPayable,
+                    'tx_count' => $groupRows->count(),
+                    'total' => (float) $groupRows->sum(fn ($r) => (float) ($r->amount ?? 0)),
+                    'payable_count' => $payable->count(),
+                    'payable_total' => (float) $payable->sum(fn ($p) => (float) ($p['row']->amount ?? 0)),
+                ];
+            })
             ->sortByDesc('total')
             ->values();
 
         return view('livewire.commission.monthly-payout-index', [
             'groups' => $groups,
-            'isWithinWindow' => $isWithinWindow,
-            'windowStartDay' => CommissionPayoutService::PAYOUT_WINDOW_START_DAY,
-            'windowEndDay' => CommissionPayoutService::PAYOUT_WINDOW_END_DAY,
             'canManage' => auth()->user()->can('markPaid', CommissionLedger::class),
         ]);
     }

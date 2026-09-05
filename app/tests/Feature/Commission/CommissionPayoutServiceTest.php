@@ -4,9 +4,14 @@ namespace Tests\Feature\Commission;
 
 use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
+use App\Enums\NetworkProfileGroupType;
 use App\Enums\TitipDepositStatus;
+use App\Models\BandwidthProfile;
 use App\Models\CommissionLedger;
+use App\Models\CommissionRate;
 use App\Models\Customer;
+use App\Models\NetworkProfileGroup;
+use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Models\Tenant;
 use App\Models\User;
@@ -19,12 +24,18 @@ use RuntimeException;
 use Tests\TestCase;
 
 /**
- * v0.9.11 — Payout Komisi: Instan (Titip) & Batch Bulanan (Tanggal 5-7).
- * Level service, tidak lewat Livewire — komponen UI (TitipMasukIndex/
- * MonthlyPayoutIndex) sudah punya test Livewire terpisah untuk memastikan
- * wiring-nya benar; file ini membuktikan LOGIC-nya sendiri, termasuk
- * bahwa guard tanggal & guard setoran tidak bisa dilewati dengan
- * memanggil service secara langsung (bukan cuma disembunyikan di UI).
+ * v0.9.11 — Payout Komisi: Instan (Titip) & Batch Bulanan. Level service,
+ * tidak lewat Livewire — komponen UI (TitipMasukIndex/MonthlyPayoutIndex)
+ * sudah punya test Livewire terpisah untuk memastikan wiring-nya benar;
+ * file ini membuktikan LOGIC-nya sendiri, termasuk bahwa guard setoran
+ * (Titip) & guard jendela tanggal per-rate (Bulanan) tidak bisa dilewati
+ * dengan memanggil service secara langsung (bukan cuma disembunyikan di
+ * UI).
+ *
+ * AMANDEMEN (2026-09-05) — jendela tanggal payout bulanan BUKAN LAGI
+ * hardcode global "5-7" — sekarang per `CommissionRate` (lihat
+ * `CommissionRate::payout_window_start_day`/`_end_day`). Bagian "Bulanan"
+ * di bawah ditulis ulang total untuk desain baru ini.
  */
 class CommissionPayoutServiceTest extends TestCase
 {
@@ -44,9 +55,14 @@ class CommissionPayoutServiceTest extends TestCase
         ?TitipDepositStatus $deposit = null,
         ?Referrer $referrer = null,
         float $amount = 3000,
+        ?PppPackage $package = null,
     ): CommissionLedger {
         $referrer ??= Referrer::factory()->create(['tenant_id' => $tenant->id]);
-        $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'ppp_package_id' => $package?->id,
+        ]);
 
         return CommissionLedger::factory()->create([
             'tenant_id' => $tenant->id,
@@ -57,6 +73,35 @@ class CommissionPayoutServiceTest extends TestCase
             'amount' => $amount,
             'deposit_status' => $deposit,
         ]);
+    }
+
+    /**
+     * PppPackage lengkap (Grup Profil + Bandwidth Profile) dengan
+     * CommissionRate ber-jendela tanggal tertentu (atau tanpa jendela sama
+     * sekali kalau kedua parameter null) — untuk menguji resolusi
+     * `isRowPayableNow()` yang membaca dari rate paket customer-nya.
+     */
+    private function packageWithWindow(Tenant $tenant, ?int $start, ?int $end): PppPackage
+    {
+        $group = NetworkProfileGroup::factory()->create([
+            'tenant_id' => $tenant->id,
+            'type' => NetworkProfileGroupType::Ppp,
+        ]);
+
+        $package = PppPackage::factory()->create([
+            'tenant_id' => $tenant->id,
+            'network_profile_group_id' => $group->id,
+            'bandwidth_profile_id' => BandwidthProfile::factory()->create(['tenant_id' => $tenant->id])->id,
+        ]);
+
+        CommissionRate::factory()->create([
+            'ppp_package_id' => $package->id,
+            'recurring_amount' => 5000,
+            'payout_window_start_day' => $start,
+            'payout_window_end_day' => $end,
+        ]);
+
+        return $package;
     }
 
     // ---------- Titip: instan ----------
@@ -184,50 +229,93 @@ class CommissionPayoutServiceTest extends TestCase
         $this->assertSame(0, $affected);
     }
 
-    // ---------- Bulanan: batch, jendela tanggal 5-7 ----------
+    // ---------- Bulanan: batch, jendela tanggal PER RATE ----------
 
-    public function test_is_within_monthly_payout_window_true_for_day_5_6_7(): void
+    public function test_is_row_payable_now_is_true_when_customer_has_no_package_at_all(): void
     {
-        $service = app(CommissionPayoutService::class);
+        $tenant = Tenant::factory()->create();
+        // ledgerRow() tanpa $package -> customer.ppp_package_id null.
+        $row = $this->ledgerRow($tenant, CommissionScheme::Recurring);
 
-        $this->assertTrue($service->isWithinMonthlyPayoutWindow(Carbon::parse('2026-09-05')));
-        $this->assertTrue($service->isWithinMonthlyPayoutWindow(Carbon::parse('2026-09-06')));
-        $this->assertTrue($service->isWithinMonthlyPayoutWindow(Carbon::parse('2026-09-07')));
+        $this->assertTrue(app(CommissionPayoutService::class)->isRowPayableNow($row));
     }
 
-    public function test_is_within_monthly_payout_window_false_outside_5_to_7(): void
+    public function test_is_row_payable_now_is_true_when_the_rate_has_no_window_configured(): void
     {
-        $service = app(CommissionPayoutService::class);
+        $tenant = Tenant::factory()->create();
+        $package = $this->packageWithWindow($tenant, null, null);
+        $row = $this->ledgerRow($tenant, CommissionScheme::Recurring, package: $package);
 
-        $this->assertFalse($service->isWithinMonthlyPayoutWindow(Carbon::parse('2026-09-04')));
-        $this->assertFalse($service->isWithinMonthlyPayoutWindow(Carbon::parse('2026-09-08')));
-        $this->assertFalse($service->isWithinMonthlyPayoutWindow(Carbon::parse('2026-09-01')));
-        $this->assertFalse($service->isWithinMonthlyPayoutWindow(Carbon::parse('2026-09-30')));
+        $this->assertTrue(app(CommissionPayoutService::class)->isRowPayableNow($row, Carbon::parse('2026-09-20')));
     }
 
-    public function test_pay_monthly_for_referrer_is_rejected_outside_the_window(): void
+    public function test_is_row_payable_now_respects_the_rates_own_window(): void
     {
-        Carbon::setTestNow(Carbon::parse('2026-09-08 10:00:00'));
+        $tenant = Tenant::factory()->create();
+        $package = $this->packageWithWindow($tenant, 5, 7);
+        $row = $this->ledgerRow($tenant, CommissionScheme::Recurring, package: $package);
+
+        $service = app(CommissionPayoutService::class);
+        $this->assertTrue($service->isRowPayableNow($row, Carbon::parse('2026-09-05')));
+        $this->assertTrue($service->isRowPayableNow($row, Carbon::parse('2026-09-07')));
+        $this->assertFalse($service->isRowPayableNow($row, Carbon::parse('2026-09-04')));
+        $this->assertFalse($service->isRowPayableNow($row, Carbon::parse('2026-09-08')));
+    }
+
+    public function test_pay_monthly_for_referrer_pays_only_rows_whose_own_rate_window_is_currently_open(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-09-06 10:00:00'));
 
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
         $referrer = Referrer::factory()->create(['tenant_id' => $tenant->id]);
-        $row = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('hanya bisa diproses tanggal 5-7');
+        // Referrer ini punya komisi dari 2 paket dengan jendela BERBEDA —
+        // satu terbuka (5-7, hari ini tanggal 6), satu tertutup (20-25).
+        $openPackage = $this->packageWithWindow($tenant, 5, 7);
+        $closedPackage = $this->packageWithWindow($tenant, 20, 25);
+        $unrestrictedPackage = $this->packageWithWindow($tenant, null, null);
 
-        try {
-            app(CommissionPayoutService::class)->payMonthlyForReferrer($referrer->id, $admin);
-        } finally {
-            // Baris tidak boleh berubah sama sekali.
-            $this->assertSame(CommissionStatus::Eligible, $row->fresh()->status);
-        }
+        $openRow = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer, package: $openPackage);
+        $closedRow = $this->ledgerRow($tenant, CommissionScheme::LimitedCount, CommissionStatus::Eligible, null, $referrer, package: $closedPackage);
+        $unrestrictedRow = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer, package: $unrestrictedPackage);
+        $titip = $this->ledgerRow($tenant, CommissionScheme::Titip, CommissionStatus::Eligible, TitipDepositStatus::SudahSetor, $referrer, package: $openPackage);
+
+        $affected = app(CommissionPayoutService::class)->payMonthlyForReferrer($referrer->id, $admin);
+
+        // Hanya 2 dari 3 baris bulanan yang genuinely payable sekarang —
+        // baris dari paket tertutup DILEWATI, bukan menggagalkan batch.
+        $this->assertSame(2, $affected);
+        $this->assertSame(CommissionStatus::Paid, $openRow->fresh()->status);
+        $this->assertSame(CommissionStatus::Paid, $unrestrictedRow->fresh()->status);
+        $this->assertSame(CommissionStatus::Eligible, $closedRow->fresh()->status);
+        $this->assertNotNull($openRow->fresh()->paid_at);
+        $this->assertSame($admin->id, $openRow->fresh()->paid_by);
+        // Titip TIDAK ikut terbayar lewat jalur bulanan (mekanisme beda total).
+        $this->assertSame(CommissionStatus::Eligible, $titip->fresh()->status);
+        // Payout bulanan tidak mensyaratkan bukti bayar.
+        $this->assertNull($openRow->fresh()->payment_proof_path);
     }
 
-    public function test_pay_monthly_for_referrer_succeeds_and_batches_correctly_inside_the_window(): void
+    public function test_pay_monthly_for_referrer_returns_zero_when_every_row_is_currently_closed(): void
     {
-        Carbon::setTestNow(Carbon::parse('2026-09-06 09:00:00'));
+        Carbon::setTestNow(Carbon::parse('2026-09-15 10:00:00'));
+
+        $tenant = Tenant::factory()->create();
+        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
+        $referrer = Referrer::factory()->create(['tenant_id' => $tenant->id]);
+        $closedPackage = $this->packageWithWindow($tenant, 5, 7);
+        $row = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer, package: $closedPackage);
+
+        $affected = app(CommissionPayoutService::class)->payMonthlyForReferrer($referrer->id, $admin);
+
+        $this->assertSame(0, $affected);
+        $this->assertSame(CommissionStatus::Eligible, $row->fresh()->status);
+    }
+
+    public function test_pay_monthly_for_referrer_ignores_other_referrers_and_non_eligible_rows(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-09-06 10:00:00'));
 
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
@@ -235,25 +323,16 @@ class CommissionPayoutServiceTest extends TestCase
         $otherReferrer = Referrer::factory()->create(['tenant_id' => $tenant->id]);
 
         $recurring = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer);
-        $limitedCount = $this->ledgerRow($tenant, CommissionScheme::LimitedCount, CommissionStatus::Eligible, null, $referrer);
-        $titip = $this->ledgerRow($tenant, CommissionScheme::Titip, CommissionStatus::Eligible, TitipDepositStatus::SudahSetor, $referrer);
         $otherReferrerRow = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $otherReferrer);
         $alreadyPending = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Pending, null, $referrer);
 
         $affected = app(CommissionPayoutService::class)->payMonthlyForReferrer($referrer->id, $admin);
 
-        $this->assertSame(2, $affected);
+        $this->assertSame(1, $affected);
         $this->assertSame(CommissionStatus::Paid, $recurring->fresh()->status);
-        $this->assertSame(CommissionStatus::Paid, $limitedCount->fresh()->status);
-        $this->assertNotNull($recurring->fresh()->paid_at);
-        $this->assertSame($admin->id, $recurring->fresh()->paid_by);
-        // Titip TIDAK ikut terbayar lewat jalur bulanan (mekanisme beda total).
-        $this->assertSame(CommissionStatus::Eligible, $titip->fresh()->status);
         // Referrer lain tidak ikut terpengaruh.
         $this->assertSame(CommissionStatus::Eligible, $otherReferrerRow->fresh()->status);
         // Baris yang belum Eligible tidak ikut dibayar.
         $this->assertSame(CommissionStatus::Pending, $alreadyPending->fresh()->status);
-        // Payout bulanan tidak mensyaratkan bukti bayar.
-        $this->assertNull($recurring->fresh()->payment_proof_path);
     }
 }

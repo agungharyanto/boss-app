@@ -3,6 +3,43 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.9.11 Amandemen — Backup + Hapus Data Test + Tanggal Payout Konfigurable per Rate (branch `payout-komisi-instan-batch`, belum di-merge/tag)
+
+Lanjutan sprint v0.9.11 di branch yang sama.
+
+**Backup + hapus data test.** `./scripts/backup.sh` (full pg_dump) + export JSON terpisah
+(`backups/exports/`) sebelum menghapus apa pun. Investigasi menemukan **4 baris `commission_ledger`** —
+3 dari customer test-daftar (id 560) + Referrer Kamisem (dugaan), **1 baris ANOMALI (id 10)** di tenant
+44 "Zemlak-Bergstrom" (customer/user/tenant semua Faker, dibuat di 1 detik yang sama 2026-09-04 —
+fixture testing, bukan data nyata; dikonfirmasi ekshaustif: tenant 44 cuma punya 4 baris di SELURUH
+skema). Agung konfirmasi hapus semua. Dihapus lewat cascade FK: `Customer::find(560)->delete()` (cascade
+ke 3 commission_ledger + timeline entries), `Tenant::find(44)->delete()` (cascade ke user 25, customer
+564, commission_ledger 10). **Referrer Kamisem, CommissionRate, PppPackage TIDAK disentuh** (konfigurasi).
+Verifikasi lewat render Livewire nyata: Fee Komisi / Payout Bulanan / Portal Referrer semua bersih.
+
+**Tanggal payout konfigurable per `CommissionRate`.** Generalisasi dari hardcode global "5-7" (yang
+sempat dibangun di sprint v0.9.11 utama) jadi field per paket:
+- Migration `2026_09_05_150000` — `commission_rates.payout_window_start_day`/`_end_day` (unsigned tinyint,
+  nullable, berpasangan). Data existing paket `HomeFixed-10Mbps` di-backfill 5/7 (by name, no-op di
+  instalasi baru) supaya perilaku existing tidak berubah.
+- KEDUANYA NULL (default) = komisi dari rate itu bisa dibayar KAPAN SAJA. Diisi = hanya di rentang itu.
+- `CommissionRate::hasPayoutWindow()`/`isWithinPayoutWindow(?Carbon)`/`payoutWindowErrors()` (validasi
+  lintas-field: berpasangan + `end >= start`, satu sumber kebenaran dipakai Store/UpdateCommissionRateRequest
+  + `CommissionRateIndex`).
+- `CommissionPayoutService` **dirombak**: konstanta `PAYOUT_WINDOW_*` + `isWithinMonthlyPayoutWindow()`
+  global DIHAPUS, diganti `isRowPayableNow(CommissionLedger, ?Carbon)` yang resolve rate LIVE dari
+  `customer->pppPackage->commissionRate` per baris. `payMonthlyForReferrer()` tidak lagi throw kalau di
+  luar jendela — sekarang membayar baris yang genuinely payable & MELEWATI sisanya (sama semantik
+  `payTitipForReferrer()`). Referrer dengan komisi dari beberapa paket berjendela beda → tiap baris dicek
+  independen.
+- Form Rate Komisi: fieldset baru "Jendela Tanggal Payout (Opsional)" (2 input angka). Halaman Payout
+  Bulanan: kolom "Jendela Payout" per baris (badge Buka/Tutup), tombol per grup dinonaktifkan saat 0
+  baris payable. `CommissionRateResource` + docs/API.md dapat 2 field baru.
+- **Test dirombak**: bagian "Bulanan" `CommissionPayoutServiceTest` + `MonthlyPayoutIndexLivewireTest`
+  ditulis ulang total untuk desain per-rate (termasuk skenario "2 paket, 1 jendela buka 1 tutup → cuma 1
+  dibayar"), +4 `CommissionRateIndexLivewireTest`, +4 `CommissionRateApiTest`. Full regression suite +
+  Pint clean.
+
 ## v0.9.11 — Payout Komisi: Instan (Titip) & Batch Bulanan (Tanggal 5-7) (branch `payout-komisi-instan-batch`, dari `main`, belum di-merge/tag)
 
 Menutup bagian "Payment" dari scope Commission (v0.9.0) yang belum pernah dibangun — v0.9.5 (Auto-Maturity)

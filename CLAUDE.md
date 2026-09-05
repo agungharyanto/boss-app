@@ -6480,6 +6480,30 @@ no-op di state itu. `openRenew()` sekarang butuh DI `ReferrerTitipService` (Live
 Referrer + admin ×2), `SidebarNavigationTest` (+1 grup Komisi toggle). Full regression suite hijau. Pint
 clean. Belum di-merge/tag.
 
+### Item Perlu Diperjelas — Belum Diperbaiki (ditemukan Agung via testing, dicatat dulu per instruksi eksplisit — TIDAK ada kode diubah untuk kedua poin ini)
+
+1. **"Total Komisi Harus Dibayar" di `/titip-masuk` TIDAK berubah setelah sebuah transaksi ditandai "Sudah
+   Setor"** (dikonfirmasi Agung via testing langsung). Kemungkinan besar ini SUDAH BENAR by design — dua
+   angka ini melacak dua arah uang yang berbeda: "Sudah Setor" (`deposit_status`) melacak uang **CASH**
+   yang mengalir dari Referrer **ke** perusahaan (setoran hasil Titip), sedangkan "Total Komisi Harus
+   Dibayar" melacak uang **KOMISI** yang mengalir dari perusahaan **ke** Referrer — dua arus kas yang
+   independen, belum ada mekanisme payout-komisi terpisah (itu scope v0.9.7, belum dibangun — lihat
+   `docs/ROADMAP.md`). **TAPI** ini membingungkan Agung di UI — perlu klarifikasi desain sebelum
+   diperbaiki: apakah memang harus tetap 2 hal terpisah (kalau ya, butuh label/penjelasan lebih jelas di
+   UI supaya tidak disalahartikan sebagai bug), ATAU "Sudah Setor" seharusnya juga otomatis menganggap
+   komisi terkait lunas dalam kasus tertentu. **JANGAN diputuskan sepihak** — tanya Agung dulu di sesi
+   berikutnya sebelum menyentuh kode ini.
+2. **Di Portal Referrer, "Rekap Komisi" (BUKAN "Rekap Titip") menampilkan status "Menunggu" untuk satu
+   entry skema X-Kali milik pelanggan `test-daftar`** — Agung sempat mengira ini terkait alur Setoran
+   Titip yang baru dibangun, padahal entry ini **genuinely terpisah**, dari alur registrasi lama (v0.9.4,
+   `CommissionAttributionService::createPendingLedger()`) — kebetulan pelanggan yang sama dipakai untuk
+   kedua jenis testing (Titip dan atribusi-skema-registrasi), jadi tercampur di layar yang sama. **Ini
+   BUKAN bug Setoran Titip** — perlu dicek TERPISAH kenapa entry ini masih `Pending`: kemungkinan besar
+   karena belum pernah ada invoice LUNAS untuk `test-daftar` yang memicu maturity
+   (`CommissionLedgerMaturityService::matureForPaidInvoice()`, v0.9.5) — tapi ini task verifikasi
+   tersendiri untuk alur Commission Auto-Maturity yang lama, bukan bagian dari pekerjaan Fee Komisi/Titip
+   yang baru saja dikerjakan.
+
 ## Commission Rate Settings (v0.9.3)
 
 **`commission_rates` — konfigurasi rate komisi per `PppPackage` (v0.14.5), admin-editable.** FK ke

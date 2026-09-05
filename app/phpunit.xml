@@ -36,5 +36,17 @@
         <env name="PULSE_ENABLED" value="false" force="true"/>
         <env name="TELESCOPE_ENABLED" value="false" force="true"/>
         <env name="NIGHTWATCH_ENABLED" value="false" force="true"/>
+        <!-- Insiden nyata (branch migrasi-whatsmeow): WhatsappSessionService
+             dialihkan ke services.whatsapp_gateway_go.url, tapi test lama
+             tidak pernah men-set config itu ke domain palsu (cuma
+             whatsapp_gateway.url yang selalu di-fake tiap test) - request
+             yang tidak match pola Http::fake() lolos APA ADANYA ke gateway
+             Go SUNGGUHAN, menghasilkan kode pairing asli berkali-kali
+             selama test run. Kosongkan KEDUA URL gateway secara default -
+             test yang genuinely perlu menguji pemanggilan HTTP tetap wajib
+             override eksplisit ke domain palsu di setUp()-nya sendiri
+             (sudah jadi kebiasaan semua test WhatsApp yang ada). -->
+        <env name="WHATSAPP_GATEWAY_URL" value="" force="true"/>
+        <env name="WHATSAPP_GATEWAY_GO_URL" value="" force="true"/>
     </php>
 </phpunit>

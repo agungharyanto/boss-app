@@ -87,16 +87,22 @@ class WhatsappSessionService
     }
 
     /**
-     * Pulls the latest QR code data for one session from the Node gateway
-     * (GET /sessions/{key}/qr) and stores it — used by the Konfigurasi tab's
-     * "refresh QR" button.
+     * Pulls the latest QR code data for one session — used by the
+     * Konfigurasi tab's "refresh QR" button.
+     *
+     * Branch migrasi-whatsmeow: dialihkan ke `services.whatsapp_gateway_go.url`
+     * (gateway Go/whatsmeow) — sesi UI "1 gateway" pasca investigasi
+     * "Pairing Kode ke Go baru saja gagal lagi" menemukan bug NYATA: tombol
+     * ini masih diam-diam mengarah ke gateway Node/Baileys lama meski
+     * Agung mengira sedang menguji Go, menjelaskan kegagalan berulang yang
+     * dilaporkan. Lihat CLAUDE.md untuk kronologi lengkap.
      */
     public function refreshQrCode(WhatsappSession $session): ?string
     {
-        $baseUrl = config('services.whatsapp_gateway.url');
+        $baseUrl = config('services.whatsapp_gateway_go.url');
 
         if (! $baseUrl) {
-            Log::warning('WhatsappSessionService: services.whatsapp_gateway.url not configured, cannot refresh QR.');
+            Log::warning('WhatsappSessionService: services.whatsapp_gateway_go.url not configured, cannot refresh QR.');
 
             return null;
         }
@@ -126,26 +132,25 @@ class WhatsappSessionService
     }
 
     /**
-     * Sprint "whatsapp-gateway-reliability" LANGKAH 2 — alternatif "Kode
-     * Pairing" (native Baileys `requestPairingCode`, lihat
-     * `whatsapp-gateway/src/sessionManager.js`) sebagai pengganti scan QR
-     * saat menghubungkan sesi. HANYA berlaku untuk sesi yang BELUM
-     * terhubung — Node gateway sendiri menolak (500) kalau dipanggil pada
-     * sesi yang statusnya `connected`, jadi tidak diulang di sini (defense
-     * di satu tempat, gateway, cukup — respons error-nya sudah jelas).
+     * "Kode Pairing" — alternatif scan QR saat menghubungkan sesi. HANYA
+     * berlaku untuk sesi yang BELUM terhubung — gateway sendiri menolak
+     * (500) kalau dipanggil pada sesi yang statusnya `connected`.
      *
-     * Sama seperti `refreshQrCode()`, ini me-wipe auth_state sesi (sisi
-     * Node) dan memulai pairing dari nol — nomor HP yang dimasukkan JADI
-     * nomor baru sesi ini begitu berhasil terhubung.
+     * Sama seperti `refreshQrCode()`, ini me-wipe state sesi dan memulai
+     * pairing dari nol — nomor HP yang dimasukkan JADI nomor baru sesi ini
+     * begitu berhasil terhubung.
+     *
+     * Branch migrasi-whatsmeow: dialihkan ke gateway Go/whatsmeow — lihat
+     * docblock `refreshQrCode()`.
      *
      * @return ?string kode 8 karakter (mis. "ABCD-1234"), atau null kalau gagal
      */
     public function requestPairingCode(WhatsappSession $session, string $phoneNumber): ?string
     {
-        $baseUrl = config('services.whatsapp_gateway.url');
+        $baseUrl = config('services.whatsapp_gateway_go.url');
 
         if (! $baseUrl) {
-            Log::warning('WhatsappSessionService: services.whatsapp_gateway.url not configured, cannot request pairing code.');
+            Log::warning('WhatsappSessionService: services.whatsapp_gateway_go.url not configured, cannot request pairing code.');
 
             return null;
         }
@@ -179,15 +184,18 @@ class WhatsappSessionService
 
     /**
      * whatsapp:check-session-health's hourly reconciliation — actively
-     * pulls GET /sessions from the Node gateway rather than only relying on
-     * connection.update webhooks, in case a webhook delivery was missed.
+     * pulls GET /sessions rather than only relying on connection.update
+     * webhooks, in case a webhook delivery was missed.
+     *
+     * Branch migrasi-whatsmeow: dialihkan ke gateway Go/whatsmeow — lihat
+     * docblock `refreshQrCode()`.
      */
     public function reconcileFromGateway(): void
     {
-        $baseUrl = config('services.whatsapp_gateway.url');
+        $baseUrl = config('services.whatsapp_gateway_go.url');
 
         if (! $baseUrl) {
-            Log::warning('WhatsappSessionService: services.whatsapp_gateway.url not configured, skipping health check.');
+            Log::warning('WhatsappSessionService: services.whatsapp_gateway_go.url not configured, skipping health check.');
 
             return;
         }

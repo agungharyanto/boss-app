@@ -28,7 +28,13 @@ class WhatsappPairingCodeTest extends TestCase
 
         $this->seed(RolesAndPermissionsSeeder::class);
 
-        config(['services.whatsapp_gateway.url' => 'http://whatsapp-gateway-test']);
+        // Branch migrasi-whatsmeow — WhatsappSessionService::requestPairingCode()
+        // dialihkan ke gateway Go/whatsmeow (whatsapp_gateway_go.url), lihat
+        // docblocknya. Domain palsu ini WAJIB tetap diset di setiap test —
+        // phpunit.xml mengosongkan kedua URL gateway secara default supaya
+        // test yang lupa men-fake tidak diam-diam menembak gateway asli
+        // (insiden nyata yang sudah terjadi sebelum pengaman ini ada).
+        config(['services.whatsapp_gateway_go.url' => 'http://whatsapp-gateway-test']);
     }
 
     private function directSession(int $tenantId): WhatsappSession

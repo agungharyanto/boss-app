@@ -2,12 +2,8 @@
 
 namespace Tests\Feature\Whatsapp;
 
-use App\Enums\ResellerUserRole;
-use App\Enums\ResellerUserStatus;
 use App\Enums\WhatsappSessionStatus;
 use App\Livewire\Whatsapp\WhatsappGatewayIndex;
-use App\Models\Reseller;
-use App\Models\ResellerUser;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Models\WhatsappSession;
@@ -21,10 +17,15 @@ use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
- * Branch migrasi-whatsmeow — tombol "Logout" per gateway (target EKSPLISIT
- * 'legacy'/'go', tidak pernah ambigu) + panel "Status Migrasi Gateway"
- * (baca live dari kedua gateway secara terpisah). Lihat
- * WhatsappSessionService::logout()/checkGatewayHealth() docblock.
+ * Branch migrasi-whatsmeow — `WhatsappSessionService::logout()`/
+ * `checkGatewayHealth()` (target EKSPLISIT 'legacy'/'go', tidak pernah
+ * ambigu) TETAP ADA di layer service untuk dipakai lagi nanti, TAPI
+ * panel "Status Migrasi Gateway" + tombol Logout per gateway di UI SUDAH
+ * DIHAPUS (investigasi "Pairing Kode ke Go baru saja gagal lagi"
+ * menemukan tombol Kode Pairing masih diam-diam mengarah ke gateway
+ * lama — UI disederhanakan kembali jadi 1 sesi, tidak ada lagi pilihan
+ * gateway, sampai gateway lama benar-benar dihapus). Test di file ini
+ * karena itu HANYA menguji layer service, bukan lagi Livewire/Blade.
  */
 class WhatsappGatewayLogoutTest extends TestCase
 {
@@ -179,87 +180,34 @@ class WhatsappGatewayLogoutTest extends TestCase
         $this->assertSame('URL gateway belum dikonfigurasi.', $result['error']);
     }
 
-    public function test_admin_can_logout_a_session_from_a_specific_gateway_via_livewire(): void
+    /**
+     * Regression guard — Blade view TIDAK BOLEH lagi menampilkan panel
+     * dual-gateway ("Status Migrasi Gateway") ataupun tombol Logout per
+     * gateway (`logoutFromGateway` Livewire method sudah dihapus total
+     * dari `WhatsappGatewayIndex` — panggilan ke method itu sekarang akan
+     * error "method not found" kalau UI diam-diam mengembalikannya).
+     * Halaman harus tampil sesederhana sebelum ada migrasi sama sekali:
+     * 1 baris status polos, tanpa pembedaan gateway.
+     */
+    public function test_overview_tab_no_longer_shows_the_dual_gateway_panel(): void
     {
-        Http::fake([
-            'whatsapp-gateway-go-test/sessions/direct/logout' => Http::response(['success' => true], 200),
-        ]);
-
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
         $admin->assignRole('superadmin');
-        $session = $this->directSession($tenant->id);
+        $this->directSession($tenant->id, WhatsappSessionStatus::LoggedOut);
 
-        Livewire::actingAs($admin)
-            ->test(WhatsappGatewayIndex::class)
-            ->call('logoutFromGateway', $session->id, 'go')
-            ->assertHasNoErrors();
-
-        $this->assertSame(WhatsappSessionStatus::LoggedOut, $session->fresh()->status);
-        Http::assertSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-go-test/sessions/direct/logout'));
-    }
-
-    public function test_overview_tab_shows_both_gateway_statuses_separately(): void
-    {
-        Http::fake([
-            'whatsapp-gateway-test/sessions/direct/health' => Http::response(['success' => true, 'data' => ['status' => 'qr_pending']], 200),
-            'whatsapp-gateway-go-test/sessions/direct/health' => Http::response(['success' => true, 'data' => null], 200),
-        ]);
-
-        $tenant = Tenant::factory()->create();
-        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->assignRole('superadmin');
-        $this->directSession($tenant->id);
-
-        Livewire::actingAs($admin)
+        $html = Livewire::actingAs($admin)
             ->test(WhatsappGatewayIndex::class)
             ->call('setTab', 'overview')
-            ->assertSee('Gateway Lama (Node, port 3000)')
-            ->assertSee('Gateway Baru (Go, port 3001)')
-            ->assertSee('Status Migrasi Gateway');
-    }
+            ->html();
 
-    public function test_go_gateway_shows_a_deliberate_paused_message_and_hides_logout_when_stopped(): void
-    {
-        config(['services.whatsapp_gateway_go.paused' => true]);
+        $this->assertStringNotContainsString('Status Migrasi Gateway', $html);
+        $this->assertStringNotContainsString('Gateway Lama', $html);
+        $this->assertStringNotContainsString('Gateway Baru', $html);
+        $this->assertStringNotContainsString('port 3000', $html);
+        $this->assertStringNotContainsString('port 3001', $html);
+        $this->assertStringNotContainsString('logoutFromGateway', $html);
 
-        Http::fake([
-            'whatsapp-gateway-test/sessions/direct/health' => Http::response(['success' => true, 'data' => ['status' => 'logged_out']], 200),
-        ]);
-
-        $tenant = Tenant::factory()->create();
-        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
-        $admin->assignRole('superadmin');
-        $session = $this->directSession($tenant->id, WhatsappSessionStatus::LoggedOut);
-
-        Livewire::actingAs($admin)
-            ->test(WhatsappGatewayIndex::class)
-            ->call('setTab', 'overview')
-            ->assertSee('Dimatikan sementara (uji stabilitas Node dulu)')
-            ->assertDontSeeHtml("logoutFromGateway({$session->id}, 'go')");
-
-        // Sengaja TIDAK memanggil gateway Go sama sekali saat paused — bukan
-        // hanya soal menghindari timeout percuma, tapi bukti nyata "sengaja
-        // dimatikan" dibedakan dari "gagal dihubungi".
-        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-go-test'));
-    }
-
-    public function test_a_reseller_cannot_logout_the_direct_session(): void
-    {
-        $tenant = Tenant::factory()->create();
-        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
-        $owner = User::factory()->create(['tenant_id' => $tenant->id]);
-        ResellerUser::create([
-            'reseller_id' => $reseller->id,
-            'user_id' => $owner->id,
-            'role' => ResellerUserRole::Owner,
-            'status' => ResellerUserStatus::Active,
-        ]);
-        $session = $this->directSession($tenant->id);
-
-        Livewire::actingAs($owner)
-            ->test(WhatsappGatewayIndex::class)
-            ->call('logoutFromGateway', $session->id, 'legacy')
-            ->assertForbidden();
+        $this->assertFalse(method_exists(WhatsappGatewayIndex::class, 'logoutFromGateway'));
     }
 }

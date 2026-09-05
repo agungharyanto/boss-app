@@ -86,7 +86,13 @@ class SendWhatsappMessageJob implements ShouldQueue
     private function sendToGateway(WhatsappHmac $hmac, WhatsappMessageLog $log)
     {
         $sessionKey = WhatsappSession::sessionKeyFor($log->reseller_id);
-        $baseUrl = config('services.whatsapp_gateway.url');
+        // Branch migrasi-whatsmeow — dialihkan ke gateway Go/whatsmeow,
+        // konsisten dengan WhatsappSessionService::refreshQrCode()/
+        // requestPairingCode()/reconcileFromGateway() (kalau tetap
+        // mengarah ke gateway lama, sesi yang di-pairing di Go tidak akan
+        // pernah bisa kirim pesan sama sekali — dua gateway punya state
+        // sesi yang sepenuhnya independen).
+        $baseUrl = config('services.whatsapp_gateway_go.url');
 
         $body = json_encode([
             'phone_number' => $log->phone_number,

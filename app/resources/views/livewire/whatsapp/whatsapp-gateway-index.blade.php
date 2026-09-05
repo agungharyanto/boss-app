@@ -78,68 +78,6 @@
                     @endif
                 </p>
 
-                {{-- Panel "Status Migrasi Gateway" — SEMENTARA selama branch
-                     migrasi-whatsmeow berjalan (2 gateway aktif bersamaan).
-                     Status di atas (whatsapp_sessions.status) cuma
-                     merefleksikan gateway mana pun yang TERAKHIR mengirim
-                     webhook — bisa membingungkan kalau tidak jelas gateway
-                     mana yang sedang dites. Dua baris di bawah ini membaca
-                     LANGSUNG dari masing-masing gateway, terpisah. Boleh
-                     disederhanakan/dihapus lagi setelah cutover selesai. --}}
-                <div class="border border-dashed border-gray-300 rounded-md p-3 space-y-2 bg-gray-50">
-                    <p class="text-xs font-medium text-gray-500 uppercase tracking-wide">Status Migrasi Gateway (sementara)</p>
-
-                    <div class="flex items-center justify-between text-sm">
-                        <span>
-                            Gateway Lama (Node, port 3000):
-                            @if ($legacyGatewayHealth['reachable'] ?? false)
-                                <span class="font-medium {{ ($legacyGatewayHealth['status'] ?? null) === 'connected' ? 'text-green-600' : 'text-amber-600' }}">
-                                    {{ $legacyGatewayHealth['status'] ?? 'tidak diketahui' }}
-                                </span>
-                                @if ($legacyGatewayHealth['phone_number'] ?? null)
-                                    — {{ $legacyGatewayHealth['phone_number'] }}
-                                @endif
-                            @else
-                                <span class="font-medium text-gray-400">tidak terhubung ({{ $legacyGatewayHealth['error'] ?? 'unknown' }})</span>
-                            @endif
-                        </span>
-                        <button
-                            wire:click="logoutFromGateway({{ $directSession->id }}, 'legacy')"
-                            wire:confirm="Logout dari Gateway Lama? Sesi akan diputus dari server WhatsApp dan perlu dipasangkan ulang."
-                            class="text-red-600 hover:underline text-xs shrink-0 ml-2"
-                        >
-                            Logout
-                        </button>
-                    </div>
-
-                    <div class="flex items-center justify-between text-sm">
-                        <span>
-                            Gateway Baru (Go, port 3001):
-                            @if ($goGatewayPaused)
-                                <span class="font-medium text-blue-600">Dimatikan sementara (uji stabilitas Node dulu)</span>
-                            @elseif ($goGatewayHealth['reachable'] ?? false)
-                                <span class="font-medium {{ ($goGatewayHealth['status'] ?? null) === 'connected' ? 'text-green-600' : 'text-amber-600' }}">
-                                    {{ $goGatewayHealth['status'] ?? 'tidak diketahui' }}
-                                </span>
-                                @if ($goGatewayHealth['phone_number'] ?? null)
-                                    — {{ $goGatewayHealth['phone_number'] }}
-                                @endif
-                            @else
-                                <span class="font-medium text-gray-400">tidak terhubung ({{ $goGatewayHealth['error'] ?? 'unknown' }})</span>
-                            @endif
-                        </span>
-                        @unless ($goGatewayPaused)
-                            <button
-                                wire:click="logoutFromGateway({{ $directSession->id }}, 'go')"
-                                wire:confirm="Logout dari Gateway Baru (Go)? Sesi akan diputus dari server WhatsApp dan perlu dipasangkan ulang."
-                                class="text-red-600 hover:underline text-xs shrink-0 ml-2"
-                            >
-                                Logout
-                            </button>
-                        @endunless
-                    </div>
-                </div>
-
                 @if ($directSession->status->value !== 'connected')
                     @include('livewire.whatsapp.partials.pairing-connect-panel', ['session' => $directSession, 'labelPrefix' => 'ISP A'])
                 @endif

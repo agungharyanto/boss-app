@@ -58,7 +58,8 @@
                 // "Operasional" (komisi/keuangan).
                 || request()->routeIs('web.referrers.*')
                 || request()->routeIs('web.commission-rates.*')
-                || request()->routeIs('web.titip-masuk.*'),
+                || request()->routeIs('web.titip-masuk.*')
+                || request()->routeIs('web.monthly-payout.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\TaxComponent::class)
                     ? ['route' => 'web.tax-components.index', 'label' => __('Tax Components')]
@@ -133,6 +134,12 @@
                             // jadi "Fee Komisi".
                             auth()->user()->can('viewAny', \App\Models\CommissionLedger::class)
                                 ? ['route' => 'web.titip-masuk.index', 'label' => __('Fee Komisi')]
+                                : null,
+                            // v0.9.11 — payout batch komisi bulanan (jendela
+                            // tanggal 5-7), beda halaman dari Fee Komisi
+                            // (yang khusus Titip, payout instan).
+                            auth()->user()->can('viewAny', \App\Models\CommissionLedger::class)
+                                ? ['route' => 'web.monthly-payout.index', 'label' => __('Payout Bulanan')]
                                 : null,
                         ]),
                     ]

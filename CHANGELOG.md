@@ -3,6 +3,95 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.9.11 Amandemen — Backup + Hapus Data Test + Tanggal Payout Konfigurable per Rate (branch `payout-komisi-instan-batch`, belum di-merge/tag)
+
+Lanjutan sprint v0.9.11 di branch yang sama.
+
+**Backup + hapus data test.** `./scripts/backup.sh` (full pg_dump) + export JSON terpisah
+(`backups/exports/`) sebelum menghapus apa pun. Investigasi menemukan **4 baris `commission_ledger`** —
+3 dari customer test-daftar (id 560) + Referrer Kamisem (dugaan), **1 baris ANOMALI (id 10)** di tenant
+44 "Zemlak-Bergstrom" (customer/user/tenant semua Faker, dibuat di 1 detik yang sama 2026-09-04 —
+fixture testing, bukan data nyata; dikonfirmasi ekshaustif: tenant 44 cuma punya 4 baris di SELURUH
+skema). Agung konfirmasi hapus semua. Dihapus lewat cascade FK: `Customer::find(560)->delete()` (cascade
+ke 3 commission_ledger + timeline entries), `Tenant::find(44)->delete()` (cascade ke user 25, customer
+564, commission_ledger 10). **Referrer Kamisem, CommissionRate, PppPackage TIDAK disentuh** (konfigurasi).
+Verifikasi lewat render Livewire nyata: Fee Komisi / Payout Bulanan / Portal Referrer semua bersih.
+
+**Tanggal payout konfigurable per `CommissionRate`.** Generalisasi dari hardcode global "5-7" (yang
+sempat dibangun di sprint v0.9.11 utama) jadi field per paket:
+- Migration `2026_09_05_150000` — `commission_rates.payout_window_start_day`/`_end_day` (unsigned tinyint,
+  nullable, berpasangan). Data existing paket `HomeFixed-10Mbps` di-backfill 5/7 (by name, no-op di
+  instalasi baru) supaya perilaku existing tidak berubah.
+- KEDUANYA NULL (default) = komisi dari rate itu bisa dibayar KAPAN SAJA. Diisi = hanya di rentang itu.
+- `CommissionRate::hasPayoutWindow()`/`isWithinPayoutWindow(?Carbon)`/`payoutWindowErrors()` (validasi
+  lintas-field: berpasangan + `end >= start`, satu sumber kebenaran dipakai Store/UpdateCommissionRateRequest
+  + `CommissionRateIndex`).
+- `CommissionPayoutService` **dirombak**: konstanta `PAYOUT_WINDOW_*` + `isWithinMonthlyPayoutWindow()`
+  global DIHAPUS, diganti `isRowPayableNow(CommissionLedger, ?Carbon)` yang resolve rate LIVE dari
+  `customer->pppPackage->commissionRate` per baris. `payMonthlyForReferrer()` tidak lagi throw kalau di
+  luar jendela — sekarang membayar baris yang genuinely payable & MELEWATI sisanya (sama semantik
+  `payTitipForReferrer()`). Referrer dengan komisi dari beberapa paket berjendela beda → tiap baris dicek
+  independen.
+- Form Rate Komisi: fieldset baru "Jendela Tanggal Payout (Opsional)" (2 input angka). Halaman Payout
+  Bulanan: kolom "Jendela Payout" per baris (badge Buka/Tutup), tombol per grup dinonaktifkan saat 0
+  baris payable. `CommissionRateResource` + docs/API.md dapat 2 field baru.
+- **Test dirombak**: bagian "Bulanan" `CommissionPayoutServiceTest` + `MonthlyPayoutIndexLivewireTest`
+  ditulis ulang total untuk desain per-rate (termasuk skenario "2 paket, 1 jendela buka 1 tutup → cuma 1
+  dibayar"), +4 `CommissionRateIndexLivewireTest`, +4 `CommissionRateApiTest`. Full regression suite +
+  Pint clean.
+
+## v0.9.11 — Payout Komisi: Instan (Titip) & Batch Bulanan (Tanggal 5-7) (branch `payout-komisi-instan-batch`, dari `main`, belum di-merge/tag)
+
+Menutup bagian "Payment" dari scope Commission (v0.9.0) yang belum pernah dibangun — v0.9.5 (Auto-Maturity)
+cuma menangani transisi Pending→Eligible, tidak pernah ada mekanisme pembayaran aktual.
+
+**Investigasi fondasi**: `commission_ledger` tidak punya kolom tracking pembayaran sama sekali sebelum
+sprint ini. `App\Enums\CommissionStatus` ternyata SUDAH punya case `Paid` (juga `Approved`/`Rejected`)
+sejak v0.3.0 — tapi grep menyeluruh membuktikan tidak ada satu baris kode pun yang pernah mentransisikan
+status ke situ (cuma dipakai sebagai daftar pilihan filter/badge warna). Konsep `commission_payouts`
+sebagai tabel terpisah (dari perencanaan sangat awal) **tidak pernah direalisasikan sama sekali** — grep
+migrations/models/CLAUDE.md/ROADMAP.md nol hasil. Mengikuti pola yang sama dengan tracking setoran Titip
+(v0.9.8): perluas `commission_ledger` itu sendiri (`paid_at`/`paid_by`/`payment_proof_path`), bukan tabel
+baru — dan reuse `status` enum yang sudah ada (`Eligible`→`Paid`), bukan boolean `is_paid` terpisah.
+
+**Dua mekanisme payout, sengaja berbeda, tidak disatukan** (`App\Services\Commission\CommissionPayoutService`):
+
+1. **Titip — instan, kapan saja.** "Bayar Komisi Sekarang" (per baris) & "Bayar Semua yang Bisa Dibayar"
+   (per grup Referrer) di halaman Fee Komisi (`/titip-masuk`). GUARD KERAS: hanya bisa dibayar kalau
+   `status=Eligible` DAN `deposit_status=SudahSetor` — tidak bisa bayar komisi sebelum setoran uang cash-nya
+   sendiri confirmed masuk dari Referrer. Wajib upload 1 foto bukti bayar (transfer/cash) per
+   transaksi/batch — disimpan privat di disk 'local' (`payment_proof_path`), ditampilkan lewat endpoint
+   ber-auth baru `GET /commission-payment-proofs/{id}` (`App\Http\Controllers\CommissionPaymentProofController`,
+   mirror `FiberNodePhotoController` v0.16.0 — termasuk bug type-hint `Illuminate\Http\Response` vs
+   `Symfony\Component\HttpFoundation\StreamedResponse` di bawah `Storage::fake()`, ditemukan & diperbaiki di
+   controller baru ini, kemungkinan besar juga ada di `FiberNodePhotoController` tapi tidak disentuh —
+   di luar scope, belum ada test yang mengetes controller itu).
+2. **Bulanan (recurring/limited_count) — batch, jendela tanggal 5-7 SAJA.** Halaman baru
+   `/payout-komisi-bulanan` (`App\Livewire\Commission\MonthlyPayoutIndex`) — list semua baris Eligible
+   dikelompokkan per Referrer, tombol "Proses Payout" membayar SEMUA baris Referrer itu sekaligus (batch).
+   GUARD di `CommissionPayoutService::isWithinMonthlyPayoutWindow()`/`payMonthlyForReferrer()` — bukan cuma
+   validasi UI, memanggil method Livewire-nya langsung di luar tanggal 5-7 tetap ditolak
+   (`RuntimeException`), tidak ada jalur bypass. Tidak mensyaratkan bukti bayar (beda dari Titip).
+
+**`CommissionLedgerPolicy::markPaid()`** — reuse permission `commission_ledger.manage` yang sudah ada
+(sama posture `markDeposit`, tidak ada permission baru). Sidebar: "Payout Bulanan" ditambahkan sebagai
+child baru grup "Komisi" (sejajar "Rate Komisi"/"Fee Komisi"). `ReferrerReferralResource` (`GET
+/api/v1/referrers/...`) dapat field additive `paid_at` per baris komisi.
+
+**Test**: `CommissionPayoutServiceTest` (11 — guard Titip lengkap: sudah-setor/belum-setor/sudah-
+dibayar/skema-salah, batch per-referrer skip yang tidak memenuhi syarat, jendela tanggal 5-7 true/false via
+`Carbon::setTestNow()`, batch bulanan berhasil/ditolak), `TitipMasukIndexPayoutLivewireTest` (7 — tombol
+hanya muncul untuk baris yang memenuhi syarat, upload wajib, guard server-side tidak bisa di-bypass lewat
+panggilan langsung, batch per grup, permission), `MonthlyPayoutIndexLivewireTest` (7 — banner+tombol
+reaktif terhadap tanggal, panggilan langsung di luar jendela tetap ditolak, batch berhasil di dalam
+jendela, permission), `CommissionPaymentProofControllerTest` (4 — akses sah, forbidden, cross-tenant 404,
+belum-ada-bukti 404). Full regression suite + Pint clean.
+
+Migration `2026_09_05_090000_add_payout_tracking_to_commission_ledger_table` (`paid_at`/`paid_by`/
+`payment_proof_path`, nullable, `paid_by` `nullOnDelete`). Belum di-merge/tag — menunggu verifikasi manual
+Agung, termasuk verifikasi guard tanggal 5-7 (lihat catatan di laporan sesi ini untuk cara mem-verifikasi
+tanpa perlu menunggu tanggal aslinya).
+
 ## WhatsApp Gateway Reliability — fix race condition + Kode Pairing + evaluasi WAHA (branch `whatsapp-gateway-reliability`, dari `main`, belum di-merge/tag)
 
 Investigasi keluhan Agung: WhatsApp Gateway sering putus koneksi, scan QR lambat, sering perlu refresh

@@ -542,8 +542,16 @@ bukan v0.9.3.
   `limited_count_times` fleksibel (integer ≥ 1, tidak fixed).
 - `titip_amount` — Komisi Titip (one-off).
 
+**Jendela tanggal payout (v0.9.11 lanjutan, opsional)**: `payout_window_start_day` + `payout_window_end_day`
+(integer 1-31, **berpasangan** — keduanya terisi atau keduanya kosong). Mengontrol payout komisi BULANAN
+(recurring/limited_count) dari rate ini di halaman `/payout-komisi-bulanan`: KEDUANYA NULL (default) =
+komisi bisa dibayar kapan saja; diisi (mis. 5 dan 7) = hanya bisa dibayar tanggal 5-7 tiap bulan. Titip
+tidak terpengaruh (selalu instan). Menggantikan hardcode global "tanggal 5-7" yang sempat ada di
+`CommissionPayoutService` — sekarang tiap paket bisa punya jendela sendiri, dicek independen per baris
+`commission_ledger`.
+
 Validasi: tiap amount kalau diisi ≥ 0 (angka 0 yang eksplisit sah); `limited_count_*` berpasangan;
-minimal 1 dari ketiga skema harus terisi.
+minimal 1 dari ketiga skema harus terisi; `payout_window_*` berpasangan + `end >= start` + tiap tanggal 1-31.
 
 ### `GET /commission-rates`
 
@@ -554,13 +562,14 @@ List rate komisi milik tenant yang login (dengan `ppp_package` ter-embed). Query
 
 Body: `ppp_package_id` (wajib — harus paket milik tenant, belum di-soft-delete, dan belum punya rate
 aktif), lalu salah satu/lebih dari `recurring_amount`, `limited_count_amount` + `limited_count_times`,
-`titip_amount`; `is_active` opsional (default `true`). Response `201`.
+`titip_amount`; `payout_window_start_day` + `payout_window_end_day` opsional (berpasangan);
+`is_active` opsional (default `true`). Response `201`.
 
 ### `GET /commission-rates/{commission_rate}` · `PUT /commission-rates/{commission_rate}`
 
-`PUT` menerima field amount + `is_active` — **`ppp_package_id` tidak bisa diubah** (rate terikat ke
-paketnya; untuk paket lain buat rate baru). Field yang tidak ikut dikirim di-fallback ke nilai tersimpan
-saat validasi lintas-field.
+`PUT` menerima field amount + `payout_window_*` + `is_active` — **`ppp_package_id` tidak bisa diubah**
+(rate terikat ke paketnya; untuk paket lain buat rate baru). Field yang tidak ikut dikirim di-fallback ke
+nilai tersimpan saat validasi lintas-field.
 
 ### `DELETE /commission-rates/{commission_rate}`
 
@@ -1866,3 +1875,40 @@ Body `POST`: **salah satu wajib** `fiber_cable_id` ATAU `splitter_id` (tidak bol
 **Belum ada di Langkah 3** (menyusul di Langkah 4): visual splice-diagram, link Google Maps direction,
 capacity report. Halaman web CRUD dasar (Livewire) + upload foto (GPS+kamera browser, draft offline
 localStorage) sudah ada di `/fiber-nodes` — lihat `docs/ROADMAP.md`'s bagian v0.16.0 untuk detail.
+
+## Payout Komisi (v0.9.11, halaman web, bukan REST API)
+
+Bagian "Payment" dari scope Commission (v0.9.0) — dua mekanisme pembayaran komisi, masing-masing halaman
+web sendiri, TIDAK ada endpoint REST JSON untuk keduanya (belum ada konsumen eksternal, akun Portal
+Referrer sendiri tidak pernah menulis ke sini — ini murni aksi admin).
+
+**`GET /titip-masuk`** (`App\Livewire\Commission\TitipMasukIndex`) — selain daftar kerja setoran Titip
+yang sudah ada sejak v0.9.6/v0.9.8, sekarang punya aksi payout INSTAN:
+- "Bayar Komisi Sekarang" (per baris) dan "Bayar Semua yang Bisa Dibayar" (per grup Referrer) — hanya
+  muncul untuk baris `status=Eligible` DAN `deposit_status=SudahSetor`. Klik membuka modal upload 1 foto
+  bukti bayar (wajib, `image|max:5120`) sebelum menandai `status=Paid` + `paid_at` + `paid_by`.
+- GUARD: tidak bisa bayar komisi sebelum setoran uang cash-nya sendiri "Sudah Setor" — ditegakkan di
+  `App\Services\Commission\CommissionPayoutService`, bukan cuma di form (memanggil method Livewire-nya
+  langsung untuk baris yang belum memenuhi syarat tetap ditolak).
+- Tidak ada jendela waktu — instan, kapan saja.
+
+**`GET /payout-komisi-bulanan`** (`App\Livewire\Commission\MonthlyPayoutIndex`, halaman baru) — list semua
+baris komisi bulanan (`scheme=recurring`/`limited_count`) `status=Eligible` dikelompokkan per Referrer.
+Tombol "Proses Payout" per grup membayar baris Referrer itu yang genuinely bisa dibayar SEKARANG (batch).
+**GUARD KERAS — jendela tanggal PER RATE, bukan global** (revisi dari desain awal yang hardcode "5-7"
+untuk semua): tiap baris `commission_ledger` dicek independen lewat `CommissionRate` milik PAKET
+customer-nya (`payout_window_start_day`/`_end_day` — lihat "Commission Rate Settings" di atas). Rate tanpa
+jendela / customer tanpa paket = payable kapan saja. `CommissionPayoutService::payMonthlyForReferrer()`
+hanya membayar baris yang jendela paketnya sedang terbuka dan MELEWATI sisanya (bukan menolak seluruh
+batch), sama semantik "Bayar Semua yang Bisa Dibayar" pada Titip. Guard di service, bukan cuma UI —
+tombol dinonaktifkan saat tidak ada baris payable, dan memanggil method Livewire-nya langsung tetap cuma
+membayar yang genuinely payable. Tidak mensyaratkan upload bukti bayar (beda dari Titip).
+
+**`GET /commission-payment-proofs/{commission_ledger}`** (`App\Http\Controllers\
+CommissionPaymentProofController`) — endpoint ber-auth untuk menampilkan foto bukti bayar yang diunggah
+(disimpan privat di disk `local`, tidak pernah publicly served). Gate: `commission_ledger.view` ATAU
+`.manage` — permission yang sama dengan halaman Fee Komisi itu sendiri, tidak ada permission baru untuk
+seluruh fitur payout ini (`CommissionLedgerPolicy::markPaid()` reuse `commission_ledger.manage`).
+
+`GET /api/v1/referrers/...` (`ReferrerReferralResource`) mendapat field additive `paid_at` per baris
+`commissions[]` — terisi begitu status ditransisikan ke Paid lewat salah satu mekanisme di atas.

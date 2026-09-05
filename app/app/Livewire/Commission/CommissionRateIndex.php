@@ -37,6 +37,11 @@ class CommissionRateIndex extends Component
 
     public ?string $titipAmount = null;
 
+    /** v0.9.11 lanjutan — jendela tanggal payout komisi bulanan, opsional. */
+    public ?string $payoutWindowStartDay = null;
+
+    public ?string $payoutWindowEndDay = null;
+
     public bool $rateIsActive = true;
 
     public function mount(): void
@@ -61,6 +66,8 @@ class CommissionRateIndex extends Component
         $this->limitedCountAmount = $rate?->limited_count_amount !== null ? (string) $rate->limited_count_amount : null;
         $this->limitedCountTimes = $rate?->limited_count_times !== null ? (string) $rate->limited_count_times : null;
         $this->titipAmount = $rate?->titip_amount !== null ? (string) $rate->titip_amount : null;
+        $this->payoutWindowStartDay = $rate?->payout_window_start_day !== null ? (string) $rate->payout_window_start_day : null;
+        $this->payoutWindowEndDay = $rate?->payout_window_end_day !== null ? (string) $rate->payout_window_end_day : null;
         $this->rateIsActive = $rate?->is_active ?? true;
     }
 
@@ -68,7 +75,7 @@ class CommissionRateIndex extends Component
     {
         $this->reset([
             'editingPackageId', 'recurringAmount', 'limitedCountAmount',
-            'limitedCountTimes', 'titipAmount', 'rateIsActive',
+            'limitedCountTimes', 'titipAmount', 'payoutWindowStartDay', 'payoutWindowEndDay', 'rateIsActive',
         ]);
         $this->rateIsActive = true;
         $this->resetErrorBag();
@@ -80,7 +87,10 @@ class CommissionRateIndex extends Component
 
         $package = PppPackage::with('commissionRate')->findOrFail($this->editingPackageId);
 
-        foreach (['recurringAmount', 'limitedCountAmount', 'limitedCountTimes', 'titipAmount'] as $field) {
+        foreach ([
+            'recurringAmount', 'limitedCountAmount', 'limitedCountTimes', 'titipAmount',
+            'payoutWindowStartDay', 'payoutWindowEndDay',
+        ] as $field) {
             if ($this->{$field} !== null && trim($this->{$field}) === '') {
                 $this->{$field} = null;
             }
@@ -91,6 +101,8 @@ class CommissionRateIndex extends Component
             'limitedCountAmount' => ['nullable', 'numeric', 'min:0'],
             'limitedCountTimes' => ['nullable', 'integer', 'min:1'],
             'titipAmount' => ['nullable', 'numeric', 'min:0'],
+            'payoutWindowStartDay' => ['nullable', 'integer', 'min:1', 'max:31'],
+            'payoutWindowEndDay' => ['nullable', 'integer', 'min:1', 'max:31'],
         ]);
 
         $map = [
@@ -98,6 +110,8 @@ class CommissionRateIndex extends Component
             'limited_count_amount' => 'limitedCountAmount',
             'limited_count_times' => 'limitedCountTimes',
             'titip_amount' => 'titipAmount',
+            'payout_window_start_day' => 'payoutWindowStartDay',
+            'payout_window_end_day' => 'payoutWindowEndDay',
         ];
         $schemeErrors = CommissionRate::schemeErrors(
             $this->recurringAmount,
@@ -105,10 +119,14 @@ class CommissionRateIndex extends Component
             $this->limitedCountTimes,
             $this->titipAmount,
         );
-        foreach ($schemeErrors as $field => $message) {
+        $windowErrors = CommissionRate::payoutWindowErrors(
+            $this->payoutWindowStartDay,
+            $this->payoutWindowEndDay,
+        );
+        foreach ([...$schemeErrors, ...$windowErrors] as $field => $message) {
             $this->addError($map[$field], $message);
         }
-        if ($schemeErrors !== []) {
+        if ($schemeErrors !== [] || $windowErrors !== []) {
             return;
         }
 
@@ -117,6 +135,8 @@ class CommissionRateIndex extends Component
             'limited_count_amount' => $this->limitedCountAmount,
             'limited_count_times' => $this->limitedCountTimes,
             'titip_amount' => $this->titipAmount,
+            'payout_window_start_day' => $this->payoutWindowStartDay,
+            'payout_window_end_day' => $this->payoutWindowEndDay,
             'is_active' => $this->rateIsActive,
         ];
 
@@ -168,6 +188,8 @@ class CommissionRateIndex extends Component
             'limitedCountAmount' => 'Komisi Skema X-Kali',
             'limitedCountTimes' => 'Jumlah Kali Pembayaran',
             'titipAmount' => 'Komisi Titip',
+            'payoutWindowStartDay' => 'Dari Tanggal',
+            'payoutWindowEndDay' => 'Sampai Tanggal',
         ];
     }
 }

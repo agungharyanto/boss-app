@@ -4,8 +4,10 @@ namespace App\Services\Network;
 
 use App\Enums\NetworkProfileGroupType;
 use App\Jobs\PushNetworkProfileGroupToMikrotikJob;
+use App\Jobs\PushPppPackageToMikrotikJob;
 use App\Jobs\RemoveNetworkProfileGroupFromMikrotikJob;
 use App\Models\NetworkProfileGroup;
+use App\Models\PppPackage;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -44,6 +46,7 @@ class NetworkProfileGroupService
         $group->refresh();
 
         $this->writeRadiusGroupReply($group);
+        $this->repushCollidingPppPackages($group);
         PushNetworkProfileGroupToMikrotikJob::dispatch($group->id);
 
         return $group;
@@ -58,9 +61,34 @@ class NetworkProfileGroupService
         $group->markSyncPending();
 
         $this->writeRadiusGroupReply($group->fresh());
+        $this->repushCollidingPppPackages($group->fresh());
         PushNetworkProfileGroupToMikrotikJob::dispatch($group->id);
 
         return $group->refresh();
+    }
+
+    /**
+     * FIX 2 (aturan nama final 2026-09-05) — Grup Profil (ppp) SELALU push
+     * nama `/ppp profile` verbatim (dia "anchor"). Kalau Grup Profil ini
+     * dibuat/di-rename jadi senama Profil PPP yang SUDAH ter-sync di NAS
+     * yang sama, Profil PPP itu harus geser duluan ke nama ber-suffix
+     * (`PppPackage::routerOsProfileName()` akan mengembalikan
+     * "{nama} (pkg #{id})" begitu Grup Profil senama muncul) — jadi
+     * re-dispatch push-nya SEBELUM push Grup Profil ini sendiri (FIFO di
+     * `boss-worker` single-worker: paket geser dulu, baru Grup Profil
+     * klaim nama verbatim). Idempoten — kalau paket sudah pakai suffix,
+     * re-push cuma menghasilkan `set` by-comment yang sama.
+     */
+    private function repushCollidingPppPackages(NetworkProfileGroup $group): void
+    {
+        if ($group->type !== NetworkProfileGroupType::Ppp) {
+            return;
+        }
+
+        PppPackage::whereHas('networkProfileGroup', fn ($query) => $query->where('nas_id', $group->nas_id))
+            ->where('name', $group->name)
+            ->pluck('id')
+            ->each(fn (int $id) => PushPppPackageToMikrotikJob::dispatch($id));
     }
 
     /**

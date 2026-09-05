@@ -2,10 +2,13 @@
 
 namespace Tests\Feature\Api;
 
+use App\Enums\NetworkProfileGroupType;
 use App\Jobs\PushNetworkProfileGroupToMikrotikJob;
+use App\Jobs\PushPppPackageToMikrotikJob;
 use App\Models\CustomerIpPool;
 use App\Models\Nas;
 use App\Models\NetworkProfileGroup;
+use App\Models\PppPackage;
 use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -431,6 +434,34 @@ class NetworkProfileGroupApiTest extends TestCase
         $response->assertCreated();
         $groupId = $response->json('data.id');
         Bus::assertDispatched(PushNetworkProfileGroupToMikrotikJob::class, fn ($job) => $job->networkProfileGroupId === $groupId);
+    }
+
+    /**
+     * FIX 2 (aturan nama final) — membuat Grup Profil ppp senama Profil PPP
+     * yang sudah ada di NAS yang sama harus me-re-dispatch push Profil PPP
+     * itu, supaya dia geser ke nama ber-suffix duluan sebelum Grup Profil
+     * mengklaim nama verbatim di router.
+     */
+    public function test_creating_a_ppp_group_repushes_colliding_ppp_packages_on_the_same_nas(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $existingPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $existingGroup = NetworkProfileGroup::factory()->create([
+            'nas_id' => $nas->id, 'customer_ip_pool_id' => $existingPool->id, 'type' => NetworkProfileGroupType::Ppp,
+        ]);
+        $package = PppPackage::factory()->create([
+            'network_profile_group_id' => $existingGroup->id, 'name' => 'Nama-Rebutan',
+        ]);
+
+        Bus::fake();
+        $newPool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+
+        $this->actingAs($this->admin($tenant))->postJson('/api/v1/network-profile-groups', $this->payload($nas->id, $newPool->id, [
+            'name' => 'Nama-Rebutan', 'type' => 'ppp',
+        ]))->assertCreated();
+
+        Bus::assertDispatched(PushPppPackageToMikrotikJob::class, fn ($job) => $job->pppPackageId === $package->id);
     }
 
     public function test_admin_can_trigger_a_manual_resync_for_a_failed_group(): void

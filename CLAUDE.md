@@ -95,7 +95,18 @@ to the next — no jumping ahead. `docs/ROADMAP.md` also carries forward cross-s
 what a later sprint's migrations/contracts must include because an earlier sprint deferred them) — check
 it, not just this file, before starting a new sprint.
 
-## ATURAN WAJIB — CLOSURE DISIPLIN (governance note permanen, insiden ke-4)
+## ATURAN WAJIB — CLOSURE DISIPLIN (governance note permanen, insiden ke-6)
+
+**ATURAN PALING KERAS (diperluas setelah insiden ke-6, 2026-09-05 — WAJIB, bukan pilihan, TIDAK perlu
+tanya Agung lagi): SEBELUM membuat branch baru APA PUN** — bukan cuma untuk topik "tak terkait", tapi
+SEMUA branch baru tanpa kecuali — **WAJIB jalankan `git branch -a` DAN `git log --oneline main..<branch>`
+untuk SETIAP branch yang baru saja dikerjakan / relevan.** Kalau ketemu branch dengan kerjaan selesai yang
+belum di-merge → **MERGE DULU** (`--no-ff` → develop → main → tag) sebelum lanjut branch baru. Ini sudah
+jadi prosedur baku. Insiden ke-6: branch `investigasi-nama-paket-vs-grup` dibuat "dari `main`" padahal
+`masa-aktif-0-unlimited` (fix "Masa Aktif 0 = Unlimited") belum di-merge — `main` jadi basis basi, Agung
+kena regresi nyata (validasi "must be >= 1" muncul lagi setelah sudah pernah diperbaiki). Pelajaran: aturan
+lama "cek dulu untuk topik TAK TERKAIT" tidak cukup — di sini branch-nya MASIH TERKAIT (sama-sama Profil
+PPP) tapi tetap lolos karena tidak dicek sama sekali.
 
 **Sebelum memulai branch/sprint BARU, WAJIB jalankan `git log --oneline main..<branch aktif sebelumnya>`.**
 Kalau ada commit yang belum masuk `main`:
@@ -126,7 +137,13 @@ tanya balik ke Agung, JANGAN langsung buat branch baru dari `main` tanpa konfirm
 > mau tetap paralel (dengan risiko sidebar/UI keliatan 'mundur' saat branch baru di-checkout dari `main`
 > yang basi)?"
 
-**Preseden insiden "kerja selesai tapi lupa merge" (jangan tambah nomor 6):**
+**Preseden insiden "kerja selesai tapi lupa merge" (jangan tambah nomor 7):**
+- **`masa-aktif-0-unlimited` vs `investigasi-nama-paket-vs-grup` (2026-09-05, insiden ke-6)** — branch fix
+  "Masa Aktif 0 = Unlimited" (commit `899d92a`, sudah selesai + full suite 1569 hijau) tidak di-merge;
+  branch berikutnya dibuat "dari `main`" tanpa cek → Agung kena regresi validasi ">= 1". Ditutup lewat
+  merge susulan (`masa-aktif` → `v0.14.5.2`, lalu `main` di-merge KE branch `investigasi-nama` supaya
+  kerjaannya di ATAS fix Masa Aktif, lalu `investigasi-nama` → `v0.14.5.3`). Melahirkan "ATURAN PALING
+  KERAS" di atas.
 - `v0.14.5.1` — checkpoint dibiarkan uncommitted lintas branch switch, berakhir di `git stash` yang nyaris
   hilang (lihat section "Branch Consolidation" di bawah).
 - `hotfix/wireguard-node-ip-race` — commit `a75f608` selesai, tidak pernah di-merge ke main; catatan
@@ -144,6 +161,22 @@ tanya balik ke Agung, JANGAN langsung buat branch baru dari `main` tanpa konfirm
   "mundur" ke state pra-komisi untuk sementara. Inilah kejadian yang melahirkan aturan tambahan ini —
   ditutup lewat merge susulan (LANGKAH 2-3 sprint governance berikutnya), TAPI seharusnya konfirmasi di
   atas ditanyakan SEBELUM branch baru dibuat, bukan diperbaiki belakangan.
+
+## ATURAN WAJIB — KAPAN MENJALANKAN FULL REGRESSION SUITE (governance note permanen, ditetapkan Agung 2026-09-05)
+
+Full regression suite (1500+ test, ~12 menit) **BERAT** — jangan dijalankan tiap selesai 1 langkah kecil.
+Aturan baku:
+
+1. **SEKALI di awal sesi/prompt** — baseline, OPSIONAL (cuma kalau perlu tahu titik mulai bersih).
+2. **Selama iterasi/development di tengah** (belum mau merge) — **CUKUP test SCOPED** ke fitur yang sedang
+   dikerjakan: `php artisan test --filter=<NamaFiturTerkait>` (mis. `--filter="PppPackage|NetworkProfileGroup"`).
+   BUKAN full suite.
+3. **SEKALI di akhir, TEPAT SEBELUM merge ke `main`** — full suite **WAJIB, TIDAK BOLEH DILEWATI**. Ini
+   gate terakhir sebelum kode masuk `main`. Kalau ada beberapa branch di-merge berturut-turut dalam satu
+   sesi, jalankan full suite sebelum SETIAP merge ke `main` (state `main` bisa berubah di antara merge).
+
+Rasionalnya: mempercepat iterasi tanpa mengurangi jaring pengaman di titik yang benar-benar penting (kode
+masuk `main`). Pint tetap dijalankan per-file yang disentuh seperti biasa (ringan).
 
 ## Sprint-based development — read this before doing anything
 
@@ -7922,6 +7955,57 @@ Livewire), `PppPackageApiTest` (11 test REST API), `PppPackageTest` (8 test unit
 `collidesWithExistingName()`) — 37 test baru total. Full regression suite dijalankan ulang, Pint clean di
 semua file yang disentuh (3 isu style pre-existing di file yang tidak disentuh, tidak diperbaiki sesuai
 disiplin codebase ini).
+
+## ATURAN NAMA PROFIL PAKET — FINAL (2026-09-05, governance note permanen)
+
+**Dikonfirmasi eksplisit Agung, meralat validasi collision awal v0.14.5. Jangan diperketat lagi tanpa
+konfirmasi ulang.**
+
+**DI DALAM dunia PPP — nama BOLEH sama semua**, lintas ketiga entitas ini (IP Pool Pelanggan tipe
+`ppp`/`general`, Grup Profil tipe `ppp`, Profil PPP). Sengaja — Agung mau nama konsisten di WinBox untuk
+troubleshooting langsung. Contoh nyata yang harus JALAN: `CustomerIpPool` "HomeFixed-10Mbps" +
+`NetworkProfileGroup` (ppp) "HomeFixed-10Mbps" + `PppPackage` "HomeFixed-10Mbps" semua di NAS yang sama.
+- `PppPackage::collidesWithExistingName()` **TIDAK LAGI** memblokir nama sama dengan Grup Profil ppp atau
+  Profil PPP lain (dulu iya — dihapus).
+- Keunikan `/ip pool` (`customer_ip_pools` unique `(nas_id, name)`) dan `/ppp profile` bare milik Grup
+  Profil (`network_profile_groups` unique `(nas_id, name)`) TETAP ada di level tabel masing-masing — dua
+  IP Pool tidak boleh identik, dua Grup Profil tidak boleh identik; yang bebas adalah nama LINTAS jenis.
+
+**RouterOS collision di-handle otomatis, bukan dengan menolak input** — Grup Profil ppp dan Profil PPP
+sama-sama push ke namespace `/ppp profile` (wajib unik router-wide). `PppPackage::routerOsProfileName()`
+dipanggil `PushPppPackageToMikrotikJob` saat push:
+- Nama TAMPILAN (`ppp_packages.name`, yang diketik/dilihat/diedit Agung) **tidak pernah berubah**.
+- Grup Profil ppp SELALU push nama verbatim (dia "anchor" — PPPoE Server Default Profile).
+- Profil PPP push verbatim JUGA, **kecuali** namanya bentrok dengan Grup Profil ppp di NAS yang sama ATAU
+  Profil PPP lain ber-`id` LEBIH KECIL di NAS yang sama → lalu kirim `"{nama} (pkg #{id})"` ke router.
+- Lookup existing tetap by `comment` (`mikrotikComment()`), tidak terpengaruh perubahan nama.
+- `NetworkProfileGroupService::create()/update()` me-re-dispatch `PushPppPackageToMikrotikJob` untuk Profil
+  PPP senama di NAS yang sama SEBELUM push Grup Profil-nya sendiri — supaya Profil PPP geser ke nama
+  ber-suffix duluan (FIFO `boss-worker` single-worker), lalu Grup Profil klaim nama verbatim.
+- **Keterbatasan diketahui, di-flag**: pada deployment multi-worker, atau kalau sebuah Grup Profil ppp
+  di-rename manual di luar `NetworkProfileGroupService` (mis. `tinker`) jadi bentrok dengan Profil PPP yang
+  sudah ter-sync, urutan re-push tidak dijamin → push Grup Profil bisa gagal sekali sampai Profil PPP yang
+  bentrok di-"Sync Ulang". Kasus umum (buat Profil PPP senama Grup Profil induknya) otomatis benar karena
+  `routerOsProfileName()` dievaluasi saat push.
+
+**Hotspot vs PPP — TETAP TIDAK BOLEH BENTRUK** untuk nama Paket/Profil & IP Pool (aturan bisnis Agung,
+BUKAN sekadar soal namespace — `/ip hotspot user profile` memang namespace beda dari `/ppp profile`, tapi
+tetap di-enforce):
+- `PppPackage::collidesWithExistingName()` memblokir nama sama dengan Grup Profil tipe `hotspot` ATAU
+  `HotspotPackage` di NAS yang sama (arah PPP→Hotspot).
+- `customer_ip_pools` unique `(nas_id, name)` sudah otomatis memblokir pool hotspot vs pool ppp senama
+  (satu namespace `/ip pool`).
+- Grup Profil hotspot vs Grup Profil ppp senama sudah otomatis diblokir oleh
+  `network_profile_groups` unique `(nas_id, name)`.
+- **Belum simetris**: form Hotspot (`StoreHotspotPackageRequest` dll) belum mengecek terhadap nama dunia
+  PPP — membuat `HotspotPackage` senama `PppPackage`/Grup-Profil-ppp yang SUDAH ada belum ditolak dari
+  sisi Hotspot. Urutan "hotspot dibuat dulu, lalu ppp" tetap terlindungi (cek ada di sisi PPP). Simetri
+  penuh = follow-up kecil kalau nanti Agung minta.
+
+**Bandwidth Profile — BEBAS, nol pembatasan lintas-entitas.** `bandwidth_profiles` cuma punya keunikan
+`(tenant_id, name)` antar-BandwidthProfile sendiri. Tidak pernah push objek RouterOS bernama (di-embed ke
+string `rate-limit`), jadi nol namespace collision — nama boleh sama dengan Grup Profil/Profil PPP/Profil
+Hotspot apa pun.
 
 ## OSRM Self-Hosted Routing (v0.16.0 Langkah 11)
 

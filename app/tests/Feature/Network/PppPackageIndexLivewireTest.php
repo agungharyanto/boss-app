@@ -6,6 +6,7 @@ use App\Enums\NetworkProfileGroupType;
 use App\Livewire\Network\PppPackageIndex;
 use App\Models\BandwidthProfile;
 use App\Models\CustomerIpPool;
+use App\Models\HotspotPackage;
 use App\Models\Nas;
 use App\Models\NetworkProfileGroup;
 use App\Models\PppPackage;
@@ -180,10 +181,11 @@ class PppPackageIndexLivewireTest extends TestCase
     }
 
     /**
-     * The real collision risk this sub-version is built around — see
-     * PppPackage::collidesWithExistingName()'s own docblock.
+     * Aturan nama final (2026-09-05): dunia PPP bebas senama — nama Profil
+     * PPP BOLEH sama dengan Grup Profil ppp induknya. Collision /ppp
+     * profile di router di-handle otomatis (PppPackage::routerOsProfileName()).
      */
-    public function test_a_name_colliding_with_the_parent_grup_profils_own_name_is_rejected(): void
+    public function test_a_name_matching_the_parent_ppp_grup_profil_is_now_allowed(): void
     {
         $f = $this->fixtures();
 
@@ -194,28 +196,58 @@ class PppPackageIndexLivewireTest extends TestCase
             ->set('name', $f['group']->name)
             ->set('costPrice', '50000')
             ->set('sellPrice', '100000')
+            ->set('activeDurationValue', '1')
+            ->set('activeDurationUnit', 'month')
             ->call('createPackage');
 
-        $component->assertHasErrors('name');
-        $this->assertDatabaseMissing('ppp_packages', ['name' => $f['group']->name]);
+        $component->assertHasNoErrors();
+        $this->assertDatabaseHas('ppp_packages', ['network_profile_group_id' => $f['group']->id, 'name' => $f['group']->name]);
     }
 
-    public function test_a_name_colliding_with_another_ppp_package_under_a_sibling_group_on_the_same_nas_is_rejected(): void
+    public function test_a_name_matching_a_hotspot_grup_profil_on_the_same_nas_is_rejected(): void
     {
         $f = $this->fixtures();
-        $siblingPool = CustomerIpPool::factory()->create(['nas_id' => $f['nas']->id]);
-        $siblingGroup = NetworkProfileGroup::factory()->create([
-            'nas_id' => $f['nas']->id, 'customer_ip_pool_id' => $siblingPool->id, 'type' => NetworkProfileGroupType::Ppp,
+        $hotspotPool = CustomerIpPool::factory()->create(['nas_id' => $f['nas']->id]);
+        NetworkProfileGroup::factory()->create([
+            'nas_id' => $f['nas']->id, 'customer_ip_pool_id' => $hotspotPool->id,
+            'type' => NetworkProfileGroupType::Hotspot, 'name' => 'TOKEN-Harian',
         ]);
-        PppPackage::factory()->create(['network_profile_group_id' => $siblingGroup->id, 'name' => 'Paket-Sudah-Ada']);
 
         $component = Livewire::actingAs($this->admin($f['tenant']))
             ->test(PppPackageIndex::class)
             ->set('networkProfileGroupId', (string) $f['group']->id)
             ->set('bandwidthProfileId', (string) $f['bandwidth']->id)
-            ->set('name', 'Paket-Sudah-Ada')
+            ->set('name', 'TOKEN-Harian')
             ->set('costPrice', '50000')
             ->set('sellPrice', '100000')
+            ->set('activeDurationValue', '1')
+            ->set('activeDurationUnit', 'month')
+            ->call('createPackage');
+
+        $component->assertHasErrors('name');
+        $this->assertDatabaseMissing('ppp_packages', ['name' => 'TOKEN-Harian']);
+    }
+
+    public function test_a_name_matching_a_hotspot_package_on_the_same_nas_is_rejected(): void
+    {
+        $f = $this->fixtures();
+        $hotspotPool = CustomerIpPool::factory()->create(['nas_id' => $f['nas']->id]);
+        $hotspotGroup = NetworkProfileGroup::factory()->create([
+            'nas_id' => $f['nas']->id, 'customer_ip_pool_id' => $hotspotPool->id, 'type' => NetworkProfileGroupType::Hotspot,
+        ]);
+        HotspotPackage::factory()->create([
+            'network_profile_group_id' => $hotspotGroup->id, 'name' => 'Voucher-6Jam',
+        ]);
+
+        $component = Livewire::actingAs($this->admin($f['tenant']))
+            ->test(PppPackageIndex::class)
+            ->set('networkProfileGroupId', (string) $f['group']->id)
+            ->set('bandwidthProfileId', (string) $f['bandwidth']->id)
+            ->set('name', 'Voucher-6Jam')
+            ->set('costPrice', '50000')
+            ->set('sellPrice', '100000')
+            ->set('activeDurationValue', '1')
+            ->set('activeDurationUnit', 'month')
             ->call('createPackage');
 
         $component->assertHasErrors('name');

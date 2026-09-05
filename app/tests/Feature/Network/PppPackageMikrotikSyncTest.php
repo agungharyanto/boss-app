@@ -203,6 +203,40 @@ class PppPackageMikrotikSyncTest extends TestCase
         $this->assertSame('5000k/10000k 5000k/10000k 5000k/10000k 1s/1s 3', $this->recordedCalls[0]['args']['rateLimit']);
     }
 
+    public function test_push_job_sends_the_display_name_verbatim_when_there_is_no_ppp_name_collision(): void
+    {
+        $this->bindGateway();
+        $package = $this->package(['name' => 'Paket-Unik-Sekali'], ['name' => 'Grup-Beda']);
+
+        $job = new PushPppPackageToMikrotikJob($package->id);
+        $job->withFakeQueueInteractions();
+        $job->handle(app(RouterOsGateway::class));
+
+        $this->assertSame('Paket-Unik-Sekali', $this->recordedCalls[0]['args']['name']);
+    }
+
+    public function test_push_job_auto_differentiates_the_router_name_when_it_matches_the_parent_ppp_grup_profil(): void
+    {
+        $this->bindGateway();
+        // Nama Paket sengaja SAMA PERSIS dengan nama Grup Profil ppp
+        // induknya (skenario nyata Agung).
+        $package = $this->package(['name' => 'test-10Mbps-HomeFixed'], ['name' => 'test-10Mbps-HomeFixed']);
+
+        $job = new PushPppPackageToMikrotikJob($package->id);
+        $job->withFakeQueueInteractions();
+        $job->handle(app(RouterOsGateway::class));
+
+        // Kolom DB `name` tetap nama asli — yang dilihat/diedit Agung.
+        $this->assertSame('test-10Mbps-HomeFixed', $package->fresh()->name);
+        // TAPI nama yang genuinely dikirim ke /ppp/profile ada pembedanya.
+        $this->assertSame(
+            "test-10Mbps-HomeFixed (pkg #{$package->id})",
+            $this->recordedCalls[0]['args']['name']
+        );
+        // Lookup tetap by comment (tidak berubah).
+        $this->assertSame($package->mikrotikComment(), $this->recordedCalls[0]['args']['comment']);
+    }
+
     public function test_push_job_omits_dns_server_when_group_has_no_dns_configured(): void
     {
         $this->bindGateway();

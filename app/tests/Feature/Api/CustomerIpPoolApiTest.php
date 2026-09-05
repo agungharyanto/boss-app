@@ -320,6 +320,32 @@ class CustomerIpPoolApiTest extends TestCase
         $response->assertJsonValidationErrors(['name']);
     }
 
+    /**
+     * FIX 3.1 (aturan nama final 2026-09-05) — Hotspot vs PPP TIDAK boleh
+     * bentrok untuk /ip pool: sebuah pool usage_type=hotspot dan pool
+     * usage_type=ppp TIDAK boleh senama di NAS yang sama. Sudah dijamin
+     * oleh unique (nas_id, name) — /ip pool memang satu namespace di
+     * RouterOS terlepas dari usage_type — test ini mengunci perilakunya.
+     */
+    public function test_a_ppp_pool_cannot_share_a_name_with_a_hotspot_pool_on_the_same_nas(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Pool-Kembar', 'usage_type' => 'hotspot']);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/customer-ip-pools', $this->payload($nas->id, [
+            'name' => 'Pool-Kembar',
+            'usage_type' => 'ppp',
+            'network_address' => '192.168.30.0/24',
+            'gateway_ip' => '192.168.30.1',
+            'range_start' => '192.168.30.10',
+            'range_end' => '192.168.30.200',
+        ]));
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['name']);
+    }
+
     public function test_a_soft_deleted_pools_name_can_be_reused_on_the_same_nas(): void
     {
         $tenant = Tenant::factory()->create();

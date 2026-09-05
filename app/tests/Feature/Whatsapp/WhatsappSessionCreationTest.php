@@ -24,10 +24,7 @@ class WhatsappSessionCreationTest extends TestCase
 
         $this->seed(RolesAndPermissionsSeeder::class);
 
-        // Branch migrasi-whatsmeow — createSession()/refreshQrCode()
-        // dialihkan ke gateway Go/whatsmeow, lihat WhatsappSessionService::
-        // refreshQrCode() docblock.
-        config(['services.whatsapp_gateway_go.url' => 'http://whatsapp-gateway-test']);
+        config(['services.whatsapp_gateway.url' => 'http://whatsapp-gateway-test']);
 
         Http::fake([
             'whatsapp-gateway-test/*' => Http::response(['qr_code_data' => null], 200),

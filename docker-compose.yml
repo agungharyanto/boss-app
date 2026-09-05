@@ -312,47 +312,25 @@ services:
         # over the WireGuard tunnel, never the public internet.
         ipv4_address: ${RSYSLOG_INTERNAL_IP}
 
+  # Migrasi whatsmeow (Go) selesai — RESMI menggantikan gateway Node/
+  # Baileys lama (v0.4.0-v0.9.9). Baileys pensiun karena masalah upstream
+  # yang tidak bisa diperbaiki dari sisi kita (race condition device_removed
+  # berulang, disconnect loop tak terduga) — whatsmeow terbukti stabil untuk
+  # kasus kita (>4 jam observasi tanpa disconnect, pesan nyata terverifikasi
+  # sampai). Lihat docs/whatsapp-gateway-api-surface.md dan CLAUDE.md untuk
+  # kronologi migrasi lengkap.
   whatsapp-gateway:
     build:
       context: ./whatsapp-gateway
     container_name: whatsapp-gateway
     restart: unless-stopped
     volumes:
-      - ./whatsapp-gateway/auth_state:/app/auth_state
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     environment:
       TZ: Asia/Jakarta
-    env_file:
-      - ./whatsapp-gateway/.env
-    networks:
-      - boss-network
-    # No host port published — internal-only, reached by boss-app/
-    # boss-whatsapp-worker via the boss-network service name (RULE
-    # BOSS-010). boss-nginx does NOT proxy to this service either; it has
-    # no public HTTP surface at all.
-
-  # Branch migrasi-whatsmeow — implementasi PARALEL (Go + whatsmeow),
-  # BELUM MENGGANTIKAN whatsapp-gateway di atas. Laravel TIDAK diarahkan
-  # ke sini sama sekali sampai cutover eksplisit dikonfirmasi (lihat
-  # docs/whatsapp-gateway-api-surface.md) — service ini murni untuk
-  # pengujian manual/menyeluruh sebelum keputusan cutover.
-  whatsapp-gateway-go:
-    build:
-      context: ./whatsapp-gateway-go
-    container_name: whatsapp-gateway-go
-    restart: unless-stopped
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
-      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
-    environment:
-      TZ: Asia/Jakarta
-      PORT: 3001
-      # HMAC_SECRET SAMA PERSIS dengan whatsapp-gateway (Node) di atas dan
-      # WHATSAPP_GATEWAY_HMAC_SECRET Laravel — kontrak HMAC harus identik
-      # selama kedua gateway hidup paralel.
+      PORT: 3000
       WHATSAPP_GATEWAY_HMAC_SECRET: ${WHATSAPP_GATEWAY_HMAC_SECRET}
       LARAVEL_BASE_URL: http://boss-nginx
       LOG_LEVEL: info
@@ -366,10 +344,10 @@ services:
         condition: service_healthy
     networks:
       - boss-network
-    # No host port published (BOSS-010) — port 3001 internal only, port
-    # berbeda dari whatsapp-gateway (3000) semata supaya keduanya bisa
-    # berjalan bersamaan tanpa bentrok kalau suatu saat perlu diakses
-    # manual dari dalam boss-network untuk pengujian.
+    # No host port published — internal-only, reached by boss-app/
+    # boss-whatsapp-worker via the boss-network service name (RULE
+    # BOSS-010). boss-nginx does NOT proxy to this service either; it has
+    # no public HTTP surface at all.
 
   freeradius-db:
     image: postgres:16-alpine

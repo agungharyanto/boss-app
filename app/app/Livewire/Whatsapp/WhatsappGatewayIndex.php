@@ -90,7 +90,7 @@ class WhatsappGatewayIndex extends Component
     /**
      * "Hubungkan Nomor" button — creates the whatsapp_sessions row for the
      * acting user's own scope (admin -> the "direct" session, reseller ->
-     * their own reseller_id) and kicks off the Node-side Baileys connect.
+     * their own reseller_id) and kicks off the gateway-side connect.
      * Authorization is scope-exact: WhatsappSessionPolicy::manage() only
      * allows an admin to create/manage the direct session, never a
      * reseller's — and a reseller only their own.
@@ -126,19 +126,16 @@ class WhatsappGatewayIndex extends Component
     }
 
     /**
-     * Tombol "Logout" — versi sederhana pasca-cutover, cuma 1 gateway (Go),
-     * tidak perlu lagi parameter target seperti versi dual-gateway yang
-     * sempat ada. Reuse `WhatsappSessionService::logout()` yang sudah ada
-     * (target 'go' hardcode) — memanggil `client.Logout(ctx)` whatsmeow
-     * SUNGGUHAN di sisi gateway (bukan sekadar wipe lokal), supaya entri
-     * "Perangkat Tertaut" di HP ikut bersih di sisi WhatsApp sendiri.
+     * Tombol "Logout" — memanggil `client.Logout(ctx)` whatsmeow SUNGGUHAN
+     * di sisi gateway (bukan sekadar wipe lokal), supaya entri "Perangkat
+     * Tertaut" di HP ikut bersih di sisi WhatsApp sendiri.
      */
     public function logout(int $sessionId, WhatsappSessionService $service): void
     {
         $session = WhatsappSession::withoutGlobalScopes()->findOrFail($sessionId);
         $this->authorize('manage', $session);
 
-        if ($service->logout($session, 'go')) {
+        if ($service->logout($session)) {
             session()->flash('status', 'Logout berhasil — sesi siap dipasangkan ulang.');
         } else {
             session()->flash('status', 'Logout gagal — cek log, atau gateway sedang tidak dapat dihubungi.');
@@ -155,11 +152,11 @@ class WhatsappGatewayIndex extends Component
     }
 
     /**
-     * "Pakai Kode Pairing" — alternatif native Baileys `requestPairingCode`
+     * "Pakai Kode Pairing" — alternatif native whatsmeow `PairPhone`
      * untuk menghubungkan sesi TANPA scan QR sama sekali. Lihat
-     * `whatsapp-gateway/src/sessionManager.js::requestPairingCode()` untuk
-     * kenapa ini mewajibkan sesi yang belum terhubung (wipe + pairing dari
-     * nol, sama seperti alur "refresh QR" pada sesi logged_out).
+     * `whatsapp-gateway/internal/session/manager.go::RequestPairingCode()`
+     * untuk kenapa ini mewajibkan sesi yang belum terhubung (wipe + pairing
+     * dari nol, sama seperti alur "refresh QR" pada sesi logged_out).
      */
     public function requestPairingCode(int $sessionId, WhatsappSessionService $service): void
     {

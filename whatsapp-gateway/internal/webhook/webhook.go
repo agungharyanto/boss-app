@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"time"
 
-	"whatsapp-gateway-go/internal/hmacsig"
+	"whatsapp-gateway/internal/hmacsig"
 )
 
 type Notifier struct {

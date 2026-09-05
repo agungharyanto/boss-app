@@ -1,5 +1,20 @@
 # WhatsApp Gateway — Peta API & Perilaku (investigasi Langkah 0, migrasi ke whatsmeow)
 
+> **MIGRASI SELESAI (2026-09-05).** Gateway Node/Baileys yang didokumentasikan di bawah ini **sudah
+> dihapus total** dari repo — digantikan sepenuhnya oleh gateway Go+whatsmeow (folder `whatsapp-gateway/`
+> sekarang ADALAH implementasi Go, bukan lagi Node). Alasan pensiun: Baileys punya masalah upstream yang
+> tidak bisa diperbaiki dari sisi kita (race condition `device_removed` berulang, disconnect loop tak
+> terduga yang tidak pernah tuntas walau sudah beberapa kali di-debug — lihat CLAUDE.md untuk kronologi
+> lengkap). Whatsmeow terbukti stabil untuk kasus kita: **>4 jam observasi tanpa satu pun disconnect**,
+> pesan nyata terverifikasi sampai ke penerima. Kontrak HTTP/HMAC/webhook yang didokumentasikan di bawah
+> ini **dipertahankan identik** di implementasi Go (itulah tujuan dokumen ini sejak awal) — jadi isinya
+> tetap akurat sebagai referensi API, hanya bagian yang secara eksplisit menyebut "Node"/"Baileys"/
+> "sessionManager.js" sebagai LOKASI SUMBER yang sudah tidak ada lagi (padanan Go-nya ada di
+> `whatsapp-gateway/internal/session/manager.go` dan sekitarnya). Sisa dokumen di bawah ini DIBIARKAN APA
+> ADANYA sebagai catatan investigasi historis, bukan ditulis ulang.
+
+---
+
 Dokumen ini adalah hasil investigasi menyeluruh terhadap `whatsapp-gateway/` (Node.js + Baileys) yang
 berjalan HARI INI, sebagai acuan implementasi kalau/ketika migrasi ke Go + `whatsmeow` dieksekusi.
 **Bukan** dokumen desain Go — murni pemetaan "apa yang harus tetap bekerja sama persis dari sudut pandang

@@ -1,4 +1,4 @@
-module whatsapp-gateway-go
+module whatsapp-gateway
 
 go 1.26.8
 

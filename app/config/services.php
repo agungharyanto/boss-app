@@ -62,26 +62,6 @@ return [
         'hmac_secret' => env('WHATSAPP_GATEWAY_HMAC_SECRET'),
     ],
 
-    // Branch migrasi-whatsmeow — gateway Go+whatsmeow PARALEL, belum
-    // menggantikan whatsapp_gateway di atas. HMAC_SECRET SAMA (dibaca dari
-    // key whatsapp_gateway di atas, bukan diduplikasi) — kontrak HMAC wajib
-    // identik selama kedua gateway hidup berdampingan. Dipakai HANYA oleh
-    // panel status migrasi sementara di /whatsapp-gateway (lihat
-    // WhatsappSessionService::checkGatewayHealth()/logout()) — belum ada
-    // caller produksi apa pun yang mengarah ke sini sampai cutover
-    // eksplisit dikonfirmasi.
-    'whatsapp_gateway_go' => [
-        'url' => env('WHATSAPP_GATEWAY_GO_URL'),
-        // Agung minta gateway Go dimatikan sementara (container di-stop,
-        // BUKAN dihapus) supaya cuma 1 gateway aktif selama fokus
-        // menstabilkan Node/Baileys dulu — lihat CLAUDE.md. Kalau ini
-        // true, panel "Status Migrasi Gateway" TIDAK mencoba menghubungi
-        // gateway ini sama sekali (bukan hanya menampilkan pesan error
-        // koneksi generik) — bedakan "sengaja dimatikan" dari "sedang
-        // down tak terduga".
-        'paused' => env('WHATSAPP_GATEWAY_GO_PAUSED', false),
-    ],
-
     // v0.6.2 OpenVPN provisioning — these paths are the boss-app side of
     // the vpn_pki/vpn_ccd named volumes shared with the openvpn container
     // (docker-compose.yml), NOT the openvpn container's own /etc/openvpn/*

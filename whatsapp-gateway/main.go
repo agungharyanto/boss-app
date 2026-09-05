@@ -1,8 +1,9 @@
-// whatsapp-gateway-go — implementasi paralel (BELUM menggantikan
-// whatsapp-gateway/ lama) berbasis Go + whatsmeow, dibangun sebagai bagian
-// investigasi/implementasi migrasi (lihat docs/whatsapp-gateway-api-surface.md
-// dan CLAUDE.md). Kontrak HTTP/HMAC/webhook WAJIB identik dengan gateway
-// Node lama — lihat internal/httpapi, internal/hmacsig, internal/webhook.
+// whatsapp-gateway — gateway WhatsApp berbasis Go + whatsmeow. Menggantikan
+// gateway Node/Baileys lama (v0.4.0-v0.9.9) sejak migrasi selesai — lihat
+// docs/whatsapp-gateway-api-surface.md dan CLAUDE.md untuk kronologi
+// migrasi lengkap dan kontrak HTTP/HMAC/webhook (dipertahankan identik
+// dengan gateway lama supaya sisi Laravel tidak perlu berubah kecuali
+// target URL/port).
 package main
 
 import (
@@ -21,9 +22,9 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 
-	"whatsapp-gateway-go/internal/httpapi"
-	"whatsapp-gateway-go/internal/session"
-	"whatsapp-gateway-go/internal/webhook"
+	"whatsapp-gateway/internal/httpapi"
+	"whatsapp-gateway/internal/session"
+	"whatsapp-gateway/internal/webhook"
 )
 
 // disableFullHistorySync — padanan opsi Baileys `syncFullHistory: false` di
@@ -54,7 +55,7 @@ func disableFullHistorySync() {
 }
 
 func main() {
-	port := envOr("PORT", "3001")
+	port := envOr("PORT", "3000")
 	hmacSecret := os.Getenv("WHATSAPP_GATEWAY_HMAC_SECRET")
 	laravelBaseURL := envOr("LARAVEL_BASE_URL", "http://boss-nginx")
 	dbDSN := os.Getenv("WHATSMEOW_DB_DSN")
@@ -64,7 +65,7 @@ func main() {
 	disableFullHistorySync()
 
 	if hmacSecret == "" {
-		slog.Warn("WHATSAPP_GATEWAY_HMAC_SECRET is empty — every request will be rejected. Set it in whatsapp-gateway-go's env.")
+		slog.Warn("WHATSAPP_GATEWAY_HMAC_SECRET is empty — every request will be rejected. Set it in whatsapp-gateway's env.")
 	}
 
 	if dbDSN == "" {
@@ -125,7 +126,7 @@ func main() {
 		_ = httpServer.Close()
 	}()
 
-	slog.Info("whatsapp-gateway-go listening", "port", port)
+	slog.Info("whatsapp-gateway listening", "port", port)
 
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("http server error", "err", err)

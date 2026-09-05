@@ -1,4 +1,0 @@
-node_modules/
-.env
-auth_state/*
-!auth_state/.gitkeep

@@ -36,9 +36,9 @@ import (
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/protobuf/proto"
 
-	"whatsapp-gateway-go/internal/disconnectmap"
-	"whatsapp-gateway-go/internal/jidnorm"
-	"whatsapp-gateway-go/internal/webhook"
+	"whatsapp-gateway/internal/disconnectmap"
+	"whatsapp-gateway/internal/jidnorm"
+	"whatsapp-gateway/internal/webhook"
 )
 
 const (

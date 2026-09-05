@@ -13,8 +13,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"whatsapp-gateway-go/internal/hmacsig"
-	"whatsapp-gateway-go/internal/session"
+	"whatsapp-gateway/internal/hmacsig"
+	"whatsapp-gateway/internal/session"
 )
 
 type Server struct {

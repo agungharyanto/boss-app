@@ -15,22 +15,18 @@ use App\Services\Whatsapp\WhatsappSessionService;
 use App\Support\WhatsappHmac;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
- * Branch migrasi-whatsmeow. `WhatsappSessionService::logout()`/
- * `checkGatewayHealth()` (target EKSPLISIT 'legacy'/'go') tetap ada di
- * layer service dari era dual-gateway. Panel "Status Migrasi Gateway" +
- * tombol Logout PER GATEWAY sudah dihapus (investigasi "Pairing Kode ke
- * Go baru saja gagal lagi" menemukan tombol Kode Pairing masih diam-diam
- * mengarah ke gateway lama) — UI disederhanakan jadi 1 sesi.
- *
- * Pasca cutover ke Go, tombol "Logout" ditambahkan LAGI — versi
- * sederhana satu-gateway (`WhatsappGatewayIndex::logout()`, target 'go'
- * hardcode, tanpa parameter pilihan gateway).
+ * Migrasi whatsmeow selesai — gateway Node/Baileys resmi pensiun, hanya
+ * ada 1 gateway (Go/whatsmeow, `services.whatsapp_gateway.url`). Method
+ * dual-target era migrasi (`logout($session, $target)`,
+ * `checkGatewayHealth($target, $key)`, `baseUrlFor()`) sudah disederhanakan
+ * — `logout()` sekarang single-argument, `checkGatewayHealth()` dihapus
+ * (tidak ada lagi caller produksi setelah panel "Status Migrasi Gateway"
+ * dihapus).
  */
 class WhatsappGatewayLogoutTest extends TestCase
 {
@@ -42,10 +38,7 @@ class WhatsappGatewayLogoutTest extends TestCase
 
         $this->seed(RolesAndPermissionsSeeder::class);
 
-        config([
-            'services.whatsapp_gateway.url' => 'http://whatsapp-gateway-test',
-            'services.whatsapp_gateway_go.url' => 'http://whatsapp-gateway-go-test',
-        ]);
+        config(['services.whatsapp_gateway.url' => 'http://whatsapp-gateway-test']);
     }
 
     private function directSession(int $tenantId, WhatsappSessionStatus $status = WhatsappSessionStatus::Connected): WhatsappSession
@@ -58,7 +51,7 @@ class WhatsappGatewayLogoutTest extends TestCase
         ]);
     }
 
-    public function test_logout_posts_to_the_legacy_gateway_url_when_target_is_legacy(): void
+    public function test_logout_posts_to_the_gateway_url(): void
     {
         Http::fake([
             'whatsapp-gateway-test/sessions/direct/logout' => Http::response(['success' => true], 200),
@@ -67,7 +60,7 @@ class WhatsappGatewayLogoutTest extends TestCase
         $tenant = Tenant::factory()->create();
         $session = $this->directSession($tenant->id);
 
-        $result = app(WhatsappSessionService::class)->logout($session, 'legacy');
+        $result = app(WhatsappSessionService::class)->logout($session);
 
         $this->assertTrue($result);
         $this->assertSame(WhatsappSessionStatus::LoggedOut, $session->fresh()->status);
@@ -75,21 +68,18 @@ class WhatsappGatewayLogoutTest extends TestCase
         Http::assertSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-test/sessions/direct/logout')
             && $request->method() === 'POST'
             && $request->hasHeader('X-Whatsapp-Signature'));
-
-        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-go-test'));
     }
 
     /**
-     * Regression guard untuk bug NYATA yang sempat lolos (branch
-     * migrasi-whatsmeow, sesi "masih gagal berkali-kali") — Http::fake()
-     * TIDAK memverifikasi kecocokan HMAC seperti gateway asli, jadi test
-     * lain di file ini yang cuma cek hasSent()/hasHeader() TIDAK PERNAH
-     * menangkap signature yang di-sign atas string SALAH. Test ini
-     * memverifikasi body yang BENAR-BENAR terkirim (bukan diasumsikan)
-     * genuinely string kosong DAN signature-nya genuinely
-     * WhatsappHmac::sign('', $timestamp) atas timestamp yang SAMA persis
-     * dengan header yang dikirim — persis apa yang verifyHmac Node/Go
-     * hitung ulang di sisi penerima.
+     * Regression guard untuk bug NYATA yang sempat lolos (era migrasi
+     * whatsmeow, sesi "masih gagal berkali-kali") — Http::fake() TIDAK
+     * memverifikasi kecocokan HMAC seperti gateway asli, jadi test lain di
+     * file ini yang cuma cek hasSent()/hasHeader() TIDAK PERNAH menangkap
+     * signature yang di-sign atas string SALAH. Test ini memverifikasi
+     * body yang BENAR-BENAR terkirim (bukan diasumsikan) genuinely string
+     * kosong DAN signature-nya genuinely WhatsappHmac::sign('', $timestamp)
+     * atas timestamp yang SAMA persis dengan header yang dikirim — persis
+     * apa yang verifyHmac gateway hitung ulang di sisi penerima.
      */
     public function test_logout_signs_the_exact_empty_body_it_actually_sends(): void
     {
@@ -100,7 +90,7 @@ class WhatsappGatewayLogoutTest extends TestCase
         $tenant = Tenant::factory()->create();
         $session = $this->directSession($tenant->id);
 
-        app(WhatsappSessionService::class)->logout($session, 'legacy');
+        app(WhatsappSessionService::class)->logout($session);
 
         $hmac = app(WhatsappHmac::class);
 
@@ -113,24 +103,6 @@ class WhatsappGatewayLogoutTest extends TestCase
         });
     }
 
-    public function test_logout_posts_to_the_go_gateway_url_when_target_is_go(): void
-    {
-        Http::fake([
-            'whatsapp-gateway-go-test/sessions/direct/logout' => Http::response(['success' => true], 200),
-        ]);
-
-        $tenant = Tenant::factory()->create();
-        $session = $this->directSession($tenant->id);
-
-        $result = app(WhatsappSessionService::class)->logout($session, 'go');
-
-        $this->assertTrue($result);
-        $this->assertSame(WhatsappSessionStatus::LoggedOut, $session->fresh()->status);
-
-        Http::assertSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-go-test/sessions/direct/logout'));
-        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-test/sessions/direct/logout'));
-    }
-
     public function test_logout_returns_false_and_does_not_change_status_on_gateway_failure(): void
     {
         Http::fake([
@@ -140,61 +112,31 @@ class WhatsappGatewayLogoutTest extends TestCase
         $tenant = Tenant::factory()->create();
         $session = $this->directSession($tenant->id);
 
-        $result = app(WhatsappSessionService::class)->logout($session, 'legacy');
+        $result = app(WhatsappSessionService::class)->logout($session);
 
         $this->assertFalse($result);
         $this->assertSame(WhatsappSessionStatus::Connected, $session->fresh()->status);
     }
 
-    public function test_check_gateway_health_reports_reachable_and_status_from_a_live_response(): void
+    public function test_logout_returns_false_when_url_not_configured(): void
     {
-        Http::fake([
-            'whatsapp-gateway-test/sessions/direct/health' => Http::response([
-                'success' => true, 'data' => ['status' => 'connected', 'phoneNumber' => '6281389014113'],
-            ], 200),
-        ]);
+        config(['services.whatsapp_gateway.url' => null]);
 
-        $result = app(WhatsappSessionService::class)->checkGatewayHealth('legacy', 'direct');
+        $tenant = Tenant::factory()->create();
+        $session = $this->directSession($tenant->id);
 
-        $this->assertTrue($result['reachable']);
-        $this->assertSame('connected', $result['status']);
-        $this->assertSame('6281389014113', $result['phone_number']);
-        $this->assertNull($result['error']);
-    }
+        $result = app(WhatsappSessionService::class)->logout($session);
 
-    public function test_check_gateway_health_reports_unreachable_on_connection_failure(): void
-    {
-        Http::fake(function () {
-            throw new ConnectionException('Connection refused');
-        });
-
-        $result = app(WhatsappSessionService::class)->checkGatewayHealth('go', 'direct');
-
-        $this->assertFalse($result['reachable']);
-        $this->assertNull($result['status']);
-        $this->assertNotNull($result['error']);
-    }
-
-    public function test_check_gateway_health_reports_unreachable_when_url_not_configured(): void
-    {
-        config(['services.whatsapp_gateway_go.url' => null]);
-
-        $result = app(WhatsappSessionService::class)->checkGatewayHealth('go', 'direct');
-
-        $this->assertFalse($result['reachable']);
-        $this->assertSame('URL gateway belum dikonfigurasi.', $result['error']);
+        $this->assertFalse($result);
     }
 
     /**
-     * Regression guard — Blade view TIDAK BOLEH lagi menampilkan panel
-     * dual-gateway ("Status Migrasi Gateway") ataupun tombol Logout per
-     * gateway (`logoutFromGateway` Livewire method sudah dihapus total
-     * dari `WhatsappGatewayIndex` — panggilan ke method itu sekarang akan
-     * error "method not found" kalau UI diam-diam mengembalikannya).
-     * Halaman harus tampil sesederhana sebelum ada migrasi sama sekali:
-     * 1 baris status polos, tanpa pembedaan gateway.
+     * Regression guard — Blade view tidak menampilkan panel dual-gateway
+     * ("Status Migrasi Gateway") peninggalan era migrasi. Halaman tampil
+     * sesederhana sebelum migrasi: 1 baris status polos, tanpa pembedaan
+     * gateway.
      */
-    public function test_overview_tab_no_longer_shows_the_dual_gateway_panel(): void
+    public function test_overview_tab_shows_a_single_plain_status_line(): void
     {
         $tenant = Tenant::factory()->create();
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
@@ -209,11 +151,10 @@ class WhatsappGatewayLogoutTest extends TestCase
         $this->assertStringNotContainsString('Status Migrasi Gateway', $html);
         $this->assertStringNotContainsString('Gateway Lama', $html);
         $this->assertStringNotContainsString('Gateway Baru', $html);
-        $this->assertStringNotContainsString('port 3000', $html);
-        $this->assertStringNotContainsString('port 3001', $html);
         $this->assertStringNotContainsString('logoutFromGateway', $html);
 
         $this->assertFalse(method_exists(WhatsappGatewayIndex::class, 'logoutFromGateway'));
+        $this->assertFalse(method_exists(WhatsappSessionService::class, 'checkGatewayHealth'));
     }
 
     public function test_logout_button_only_shows_when_the_session_is_connected(): void
@@ -246,7 +187,7 @@ class WhatsappGatewayLogoutTest extends TestCase
     public function test_admin_can_logout_the_connected_session_via_the_simple_button(): void
     {
         Http::fake([
-            'whatsapp-gateway-go-test/sessions/direct/logout' => Http::response(['success' => true], 200),
+            'whatsapp-gateway-test/sessions/direct/logout' => Http::response(['success' => true], 200),
         ]);
 
         $tenant = Tenant::factory()->create();
@@ -260,8 +201,7 @@ class WhatsappGatewayLogoutTest extends TestCase
             ->assertHasNoErrors();
 
         $this->assertSame(WhatsappSessionStatus::LoggedOut, $session->fresh()->status);
-        Http::assertSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-go-test/sessions/direct/logout'));
-        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-test'));
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-test/sessions/direct/logout'));
     }
 
     public function test_a_reseller_cannot_logout_the_direct_session_via_the_simple_button(): void

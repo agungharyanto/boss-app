@@ -7965,6 +7965,72 @@ re-run this investigation** — the answer is: coordinates are entered going for
 `App\Livewire\Customers\CustomerCoordinateFill` (`/customers/lengkapi-koordinat`, a manual per-customer
 pin-drop that writes ONLY `latitude`/`longitude`, deliberately no ODP link) or the registration form.
 
+## Migrasi whatsmeow — Baileys Resmi Pensiun (branch `migrasi-whatsmeow`, selesai 2026-09-05)
+
+**Gateway WhatsApp pindah total dari Node.js/Baileys ke Go/whatsmeow.** `whatsapp-gateway/` sekarang
+ADALAH implementasi Go (sebelumnya `whatsapp-gateway-go/`, di-rename setelah gateway Node lama dihapus
+total) — bukan lagi Node.js. Kontrak HTTP/HMAC/webhook dipertahankan **identik** dengan gateway lama
+(lihat `docs/whatsapp-gateway-api-surface.md`, ditulis SEBELUM migrasi sebagai peta kontrak yang harus
+dipertahankan) — sisi Laravel (`WhatsappSessionService`, `SendWhatsappMessageJob`) tidak berubah bentuk
+API-nya sama sekali, hanya target `services.whatsapp_gateway.url`/port yang berpindah dari container Node
+lama (port 3000) ke container Go baru (kini juga port 3000, sejak rename — sempat port 3001 selama masa
+paralel/pengujian).
+
+**Kenapa Baileys dipensiunkan — masalah upstream yang tidak bisa diperbaiki dari sisi kita, bukan
+keputusan sepihak tanpa bukti**: sepanjang v0.4.0-v0.9.9, gateway Node/Baileys berulang kali mengalami
+race condition `device_removed`/`conflict` (v0.9.9 sempat memperbaiki SATU penyebab strukturalnya lewat
+`connectLocks`), tapi pola disconnect tak terduga tetap muncul lagi di sesi migrasi ini — investigasi
+mendalam (lihat riwayat lengkap di bagian "WhatsApp Gateway Reliability" dan seluruh proses debugging
+"masih gagal berkali-kali" di atas) akhirnya menemukan sebagian besar kegagalan TERBARU justru berasal
+dari **bug wiring UI kita sendiri** (tombol masih diam-diam mengarah ke gateway yang salah, lalu bug HMAC
+signing di endpoint Logout yang baru dibangun) — bukan Baileys semata. Namun evaluasi paralel terhadap
+whatsapp-web.js (alternatif Puppeteer-based) juga menemukan bahwa whatsapp-web.js punya kelas masalah
+stabilitasnya sendiri (memory leak Chrome headless, crash proses saat logout — riset GitHub Issues nyata,
+lihat riwayat investigasi di atas), sementara whatsmeow (Go, reimplementasi protokol native seperti
+Baileys tapi ekosistem berbeda) terbukti genuinely stabil untuk kasus kita begitu bug wiring ditutup:
+**>4 jam observasi tanpa satu pun disconnect tak terduga, pesan nyata terverifikasi sampai ke penerima**
+(dikonfirmasi manual oleh Agung). Keputusan final Agung: commit penuh ke whatsmeow, hapus Baileys total —
+bukan dibiarkan sebagai fallback paralel.
+
+**Perubahan konkret saat cutover**:
+- `WhatsappSessionService::refreshQrCode()`/`requestPairingCode()`/`reconcileFromGateway()`/`logout()`
+  dan `SendWhatsappMessageJob::sendToGateway()` — semua membaca `services.whatsapp_gateway.url` (satu
+  config key, bukan lagi `whatsapp_gateway_go` terpisah selama masa transisi).
+- `WhatsappSessionService::logout()` disederhanakan jadi single-argument (`logout(WhatsappSession
+  $session)`) — parameter `$target` era dual-gateway dihapus. `checkGatewayHealth()` (dipakai panel
+  "Status Migrasi Gateway" sementara) dihapus total — tidak ada lagi caller produksi setelah panel itu
+  dihapus dari UI.
+- `config/services.php` — key `whatsapp_gateway_go` (url + paused flag) dihapus, hanya `whatsapp_gateway`
+  (url + hmac_secret) yang tersisa.
+- `.env`/`.env.example` (root dan `app/`) — `WHATSAPP_GATEWAY_GO_URL`/`WHATSAPP_GATEWAY_GO_PAUSED`
+  dihapus. `WHATSAPP_GATEWAY_URL=http://whatsapp-gateway:3000` sekarang benar-benar menunjuk ke container
+  Go (nama container sama persis dengan sebelumnya karena container Node lama dihapus dulu baru container
+  Go di-rename mengambil nama yang sama).
+- `docker-compose.yml` — service `whatsapp-gateway` (Node) dan `whatsapp-gateway-go` (Go, paralel) digabung
+  jadi SATU service `whatsapp-gateway` (build context `./whatsapp-gateway`, port 3000).
+- Folder `whatsapp-gateway/` (Node/Baileys, source asli v0.4.0) **dihapus total** dari repo. Folder
+  `whatsapp-gateway-go/` **di-rename** jadi `whatsapp-gateway/` (`git mv`) — termasuk `go.mod`'s `module`
+  declaration dan semua import path internal (`whatsapp-gateway-go/internal/...` → `whatsapp-gateway/
+  internal/...`), binary name di Dockerfile, `PORT` default (3001 → 3000).
+- Test suite: `WhatsappGatewayLogoutTest`/`WhatsappPairingCodeTest`/`WhatsappSessionCreationTest` di-update
+  ke config key/signature baru. `phpunit.xml`/`tests/bootstrap.php` tetap mengosongkan
+  `WHATSAPP_GATEWAY_URL` secara default (pengaman dari insiden nyata test yang diam-diam menembak gateway
+  sungguhan selama era migrasi — lihat riwayat di atas) — sekarang cuma satu key, bukan dua.
+
+**Database `whatsmeow_store`** (dibuat saat Fase 1 migrasi, database logis TERPISAH dari `boss_db` di
+container `boss-postgresql` yang sama — lihat `docker/postgres/initdb.d/01-create-whatsmeow-store.sql`)
+**tetap dipakai apa adanya, tidak ada perubahan skema saat cutover** — 17 tabel `whatsmeow_*` (dikelola
+`sqlstore.Container.Upgrade()` sendiri) + 1 tabel sibling `boss_session_keys` (pemetaan `session_key` BOSS
+App ↔ JID WhatsApp, kebutuhan yang tidak ada padanannya di Baileys).
+
+**Verifikasi penutup, semua nyata bukan simulasi**: full regression suite hijau (grep menyeluruh
+memastikan nol referensi kode produksi ke Baileys/Node/`whatsapp-gateway-go`/`whatsapp_gateway_go` yang
+tersisa — hanya tersisa di CLAUDE.md/CHANGELOG.md sebagai catatan historis, dan di komentar kode Go yang
+menjelaskan asal-usul desain suatu fungsi, keduanya disengaja bukan kelalaian), container `whatsapp-gateway`
+hasil rename berhasil start bersih dan `restoreAll()` genuinely me-reconnect sesi "direct" yang sudah
+ter-pairing sebelumnya tanpa perlu scan/pairing ulang, dikonfirmasi lewat health-check langsung ke
+hostname/port baru.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

@@ -25,7 +25,6 @@ foreach ([
     'TELESCOPE_ENABLED',
     'NIGHTWATCH_ENABLED',
     'WHATSAPP_GATEWAY_URL',
-    'WHATSAPP_GATEWAY_GO_URL',
 ] as $key) {
     unset($_SERVER[$key]);
 }

@@ -14,6 +14,10 @@ use App\Models\User;
  * `markDeposit` (`commission_ledger.manage`): admin menandai setoran uang
  * titip Referrer sudah masuk. Masih tidak ada approve/reject — nominal
  * komisi terkunci ke rate, OTP WhatsApp ke Referrer jadi jaring pengaman.
+ *
+ * v0.9.11 (Payout Komisi) — `markPaid` reuse permission `.manage` yang
+ * sama (sama posture `markDeposit`, tidak ada permission baru) untuk
+ * menandai baris komisi (Titip instan ATAU batch bulanan) sebagai Paid.
  */
 class CommissionLedgerPolicy
 {
@@ -28,6 +32,11 @@ class CommissionLedgerPolicy
     }
 
     public function markDeposit(User $user): bool
+    {
+        return $user->can('commission_ledger.manage');
+    }
+
+    public function markPaid(User $user): bool
     {
         return $user->can('commission_ledger.manage');
     }

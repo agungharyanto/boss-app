@@ -1866,3 +1866,37 @@ Body `POST`: **salah satu wajib** `fiber_cable_id` ATAU `splitter_id` (tidak bol
 **Belum ada di Langkah 3** (menyusul di Langkah 4): visual splice-diagram, link Google Maps direction,
 capacity report. Halaman web CRUD dasar (Livewire) + upload foto (GPS+kamera browser, draft offline
 localStorage) sudah ada di `/fiber-nodes` — lihat `docs/ROADMAP.md`'s bagian v0.16.0 untuk detail.
+
+## Payout Komisi (v0.9.11, halaman web, bukan REST API)
+
+Bagian "Payment" dari scope Commission (v0.9.0) — dua mekanisme pembayaran komisi, masing-masing halaman
+web sendiri, TIDAK ada endpoint REST JSON untuk keduanya (belum ada konsumen eksternal, akun Portal
+Referrer sendiri tidak pernah menulis ke sini — ini murni aksi admin).
+
+**`GET /titip-masuk`** (`App\Livewire\Commission\TitipMasukIndex`) — selain daftar kerja setoran Titip
+yang sudah ada sejak v0.9.6/v0.9.8, sekarang punya aksi payout INSTAN:
+- "Bayar Komisi Sekarang" (per baris) dan "Bayar Semua yang Bisa Dibayar" (per grup Referrer) — hanya
+  muncul untuk baris `status=Eligible` DAN `deposit_status=SudahSetor`. Klik membuka modal upload 1 foto
+  bukti bayar (wajib, `image|max:5120`) sebelum menandai `status=Paid` + `paid_at` + `paid_by`.
+- GUARD: tidak bisa bayar komisi sebelum setoran uang cash-nya sendiri "Sudah Setor" — ditegakkan di
+  `App\Services\Commission\CommissionPayoutService`, bukan cuma di form (memanggil method Livewire-nya
+  langsung untuk baris yang belum memenuhi syarat tetap ditolak).
+- Tidak ada jendela waktu — instan, kapan saja.
+
+**`GET /payout-komisi-bulanan`** (`App\Livewire\Commission\MonthlyPayoutIndex`, halaman baru) — list semua
+baris komisi bulanan (`scheme=recurring`/`limited_count`) `status=Eligible` dikelompokkan per Referrer.
+Tombol "Proses Payout" per grup membayar SEMUA baris Referrer itu sekaligus (batch, bukan satu-satu).
+**GUARD KERAS**: hanya bisa diproses tanggal **5-7** bulan berjalan (`CommissionPayoutService::
+isWithinMonthlyPayoutWindow()`/`payMonthlyForReferrer()`, cek `now()->day` di server) — di luar tanggal
+itu tombol dinonaktifkan DAN memanggil method Livewire-nya secara langsung tetap ditolak
+(`RuntimeException`), tidak ada jalur bypass lewat request langsung. Tidak mensyaratkan upload bukti bayar
+(beda dari Titip — komisi bulanan tidak terkait konsep "setoran cash" sama sekali).
+
+**`GET /commission-payment-proofs/{commission_ledger}`** (`App\Http\Controllers\
+CommissionPaymentProofController`) — endpoint ber-auth untuk menampilkan foto bukti bayar yang diunggah
+(disimpan privat di disk `local`, tidak pernah publicly served). Gate: `commission_ledger.view` ATAU
+`.manage` — permission yang sama dengan halaman Fee Komisi itu sendiri, tidak ada permission baru untuk
+seluruh fitur payout ini (`CommissionLedgerPolicy::markPaid()` reuse `commission_ledger.manage`).
+
+`GET /api/v1/referrers/...` (`ReferrerReferralResource`) mendapat field additive `paid_at` per baris
+`commissions[]` — terisi begitu status ditransisikan ke Paid lewat salah satu mekanisme di atas.

@@ -115,6 +115,13 @@
                             <span class="text-gray-500">{{ __('Belum setor') }}:</span>
                             <span class="font-semibold text-orange-700">{{ $rupiah($group['total_belum_setor']) }}</span>
                         </span>
+                        @if ($canManage && $group['payable_count'] > 0 && $group['referrer'])
+                            <button type="button"
+                                wire:click="openPayReferrerModal({{ $group['referrer']->id }})"
+                                class="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 whitespace-nowrap">
+                                {{ __('Bayar Semua yang Bisa Dibayar') }} ({{ $group['payable_count'] }})
+                            </button>
+                        @endif
                     </div>
                 </div>
 
@@ -129,7 +136,11 @@
                                 <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">{{ __('Komisi') }}</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status Komisi') }}</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Setoran') }}</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pembayaran Komisi') }}</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Dicatat') }}</th>
+                                @if ($canManage)
+                                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Aksi') }}</th>
+                                @endif
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100">
@@ -138,6 +149,7 @@
                                     [$badgeClass, $badgeLabel] = $statusBadge($entry->status);
                                     $sudahSetor = $entry->deposit_status === TitipDepositStatus::SudahSetor;
                                     $selectable = $entry->deposit_status === TitipDepositStatus::BelumSetor;
+                                    $payableRow = $isPayable($entry);
                                 @endphp
                                 <tr wire:key="titip-{{ $entry->id }}">
                                     <td class="px-4 py-2">
@@ -168,7 +180,34 @@
                                             </span>
                                         @endif
                                     </td>
+                                    <td class="px-4 py-2">
+                                        @if ($entry->status === \App\Enums\CommissionStatus::Paid)
+                                            <span class="inline-block px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800">{{ __('Dibayar') }}</span>
+                                            @if ($entry->paid_at)
+                                                <span class="block text-xs text-gray-400">
+                                                    {{ $entry->paid_at->format('d/m/Y H:i') }}
+                                                    @if ($entry->paidBy) · {{ $entry->paidBy->name }} @endif
+                                                </span>
+                                            @endif
+                                            @if ($entry->payment_proof_path)
+                                                <a href="{{ route('web.commission-payment-proofs.show', $entry->id) }}" target="_blank" class="text-xs text-blue-600 hover:underline">{{ __('Lihat Bukti') }}</a>
+                                            @endif
+                                        @else
+                                            <span class="text-xs text-gray-400">—</span>
+                                        @endif
+                                    </td>
                                     <td class="px-4 py-2 text-gray-500">{{ $entry->created_at->format('d/m/Y H:i') }}</td>
+                                    @if ($canManage)
+                                        <td class="px-4 py-2">
+                                            @if ($payableRow)
+                                                <button type="button"
+                                                    wire:click="openPayRowModal({{ $entry->id }})"
+                                                    class="px-2 py-1 text-xs font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 whitespace-nowrap">
+                                                    {{ __('Bayar Komisi Sekarang') }}
+                                                </button>
+                                            @endif
+                                        </td>
+                                    @endif
                                 </tr>
                             @endforeach
                         </tbody>
@@ -181,4 +220,40 @@
             </div>
         @endforelse
     </div>
+
+    {{-- ---------- Modal "Bayar Komisi Sekarang" (per baris ATAU per grup Referrer) ---------- --}}
+    @if ($payingLedgerId !== null || $payingReferrerId !== null)
+        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closePayModal">
+            <div class="bg-white rounded-md shadow-lg w-full max-w-md p-6">
+                <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ __('Bayar Komisi Sekarang') }}</h2>
+                <p class="text-sm text-gray-500 mb-4">
+                    {{ __('Unggah 1 foto bukti bayar (transfer/cash) sebelum menandai komisi ini sebagai dibayar. Aksi ini instan — tidak ada jendela waktu, tapi hanya berlaku untuk komisi Titip yang statusnya sudah "Layak Dibayar" dan setorannya sudah "Sudah Setor".') }}
+                </p>
+
+                <label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Bukti Bayar') }}</label>
+                <input type="file" wire:model="paymentProof" accept="image/*" class="block w-full text-sm text-gray-600 mb-1">
+                @if ($paymentProof)
+                    <img src="{{ $paymentProof->temporaryUrl() }}" class="mt-2 max-h-40 rounded-md border border-gray-200" alt="Pratinjau bukti bayar">
+                @endif
+                @error('paymentProof') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+
+                <div class="flex justify-end gap-2 mt-6">
+                    <button type="button" wire:click="closePayModal" class="px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 rounded-md">
+                        {{ __('Batal') }}
+                    </button>
+                    @if ($payingLedgerId !== null)
+                        <button type="button" wire:click="confirmPayRow" wire:loading.attr="disabled"
+                            class="px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50">
+                            {{ __('Tandai Dibayar') }}
+                        </button>
+                    @else
+                        <button type="button" wire:click="confirmPayReferrer" wire:loading.attr="disabled"
+                            class="px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50">
+                            {{ __('Tandai Semua Dibayar') }}
+                        </button>
+                    @endif
+                </div>
+            </div>
+        </div>
+    @endif
 </div>

@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\Internal\CpeDeviceDatatableController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDetailController;
 use App\Http\Controllers\Api\Internal\OltDeviceDatatableController;
 use App\Http\Controllers\Auth\ReferrerLoginController;
+use App\Http\Controllers\CommissionPaymentProofController;
 use App\Http\Controllers\FiberNodePhotoController;
 use App\Http\Controllers\VpnScriptDownloadController;
 use App\Http\Middleware\EnsureAdminPanelAccess;
@@ -13,6 +14,7 @@ use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
 use App\Livewire\Billing\SubscriptionIndex;
 use App\Livewire\Commission\CommissionRateIndex;
+use App\Livewire\Commission\MonthlyPayoutIndex;
 use App\Livewire\Commission\TitipMasukIndex;
 use App\Livewire\Customers\CustomerCoordinateFill;
 use App\Livewire\Customers\CustomerIndex;
@@ -203,6 +205,11 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // (commission_ledger.view, CommissionLedgerPolicy).
     Route::get('/titip-masuk', TitipMasukIndex::class)->name('titip-masuk.index');
 
+    // v0.9.11 — Payout Komisi Bulanan (batch, jendela tanggal 5-7). Guard
+    // jendela tanggal ada DI SERVICE (CommissionPayoutService), bukan cuma
+    // di sini — halaman ini cuma UI-nya.
+    Route::get('/payout-komisi-bulanan', MonthlyPayoutIndex::class)->name('monthly-payout.index');
+
     // v0.14.1 — fondasi cluster "Profil Paket", same posture as /referrers
     // above (tenant-level, no reseller.context needed — BandwidthProfile
     // has no reseller_id at all).
@@ -269,6 +276,11 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // via the same reusable GpsPhotoCapture component FiberNodeForm uses.
     Route::get('/odps/{odp}/edit', OdpEdit::class)->name('odps.edit');
     Route::get('/fiber-node-photos/{fiber_node_photo}', [FiberNodePhotoController::class, 'show'])->name('fiber-node-photos.show');
+
+    // v0.9.11 — bukti bayar payout Titip (foto transfer/cash), sama posture
+    // fiber-node-photos di atas: privat, streamed lewat controller ber-auth,
+    // tidak pernah dari storage publik.
+    Route::get('/commission-payment-proofs/{commission_ledger}', [CommissionPaymentProofController::class, 'show'])->name('commission-payment-proofs.show');
 
     Route::get('/tax-components', TaxComponentIndex::class)->name('tax-components.index');
 

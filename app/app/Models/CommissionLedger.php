@@ -31,6 +31,9 @@ class CommissionLedger extends Model
         'deposit_status',
         'deposited_at',
         'deposited_by',
+        'paid_at',
+        'paid_by',
+        'payment_proof_path',
         'notes',
     ];
 
@@ -44,6 +47,7 @@ class CommissionLedger extends Model
             'status' => CommissionStatus::class,
             'deposit_status' => TitipDepositStatus::class,
             'deposited_at' => 'datetime',
+            'paid_at' => 'datetime',
         ];
     }
 
@@ -74,5 +78,14 @@ class CommissionLedger extends Model
     public function depositedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'deposited_by');
+    }
+
+    /**
+     * v0.9.11 — admin yang menandai baris ini "dibayar" (Paid). NULL
+     * selama status belum Paid.
+     */
+    public function paidBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'paid_by');
     }
 }

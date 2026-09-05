@@ -3,6 +3,58 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.9.11 — Payout Komisi: Instan (Titip) & Batch Bulanan (Tanggal 5-7) (branch `payout-komisi-instan-batch`, dari `main`, belum di-merge/tag)
+
+Menutup bagian "Payment" dari scope Commission (v0.9.0) yang belum pernah dibangun — v0.9.5 (Auto-Maturity)
+cuma menangani transisi Pending→Eligible, tidak pernah ada mekanisme pembayaran aktual.
+
+**Investigasi fondasi**: `commission_ledger` tidak punya kolom tracking pembayaran sama sekali sebelum
+sprint ini. `App\Enums\CommissionStatus` ternyata SUDAH punya case `Paid` (juga `Approved`/`Rejected`)
+sejak v0.3.0 — tapi grep menyeluruh membuktikan tidak ada satu baris kode pun yang pernah mentransisikan
+status ke situ (cuma dipakai sebagai daftar pilihan filter/badge warna). Konsep `commission_payouts`
+sebagai tabel terpisah (dari perencanaan sangat awal) **tidak pernah direalisasikan sama sekali** — grep
+migrations/models/CLAUDE.md/ROADMAP.md nol hasil. Mengikuti pola yang sama dengan tracking setoran Titip
+(v0.9.8): perluas `commission_ledger` itu sendiri (`paid_at`/`paid_by`/`payment_proof_path`), bukan tabel
+baru — dan reuse `status` enum yang sudah ada (`Eligible`→`Paid`), bukan boolean `is_paid` terpisah.
+
+**Dua mekanisme payout, sengaja berbeda, tidak disatukan** (`App\Services\Commission\CommissionPayoutService`):
+
+1. **Titip — instan, kapan saja.** "Bayar Komisi Sekarang" (per baris) & "Bayar Semua yang Bisa Dibayar"
+   (per grup Referrer) di halaman Fee Komisi (`/titip-masuk`). GUARD KERAS: hanya bisa dibayar kalau
+   `status=Eligible` DAN `deposit_status=SudahSetor` — tidak bisa bayar komisi sebelum setoran uang cash-nya
+   sendiri confirmed masuk dari Referrer. Wajib upload 1 foto bukti bayar (transfer/cash) per
+   transaksi/batch — disimpan privat di disk 'local' (`payment_proof_path`), ditampilkan lewat endpoint
+   ber-auth baru `GET /commission-payment-proofs/{id}` (`App\Http\Controllers\CommissionPaymentProofController`,
+   mirror `FiberNodePhotoController` v0.16.0 — termasuk bug type-hint `Illuminate\Http\Response` vs
+   `Symfony\Component\HttpFoundation\StreamedResponse` di bawah `Storage::fake()`, ditemukan & diperbaiki di
+   controller baru ini, kemungkinan besar juga ada di `FiberNodePhotoController` tapi tidak disentuh —
+   di luar scope, belum ada test yang mengetes controller itu).
+2. **Bulanan (recurring/limited_count) — batch, jendela tanggal 5-7 SAJA.** Halaman baru
+   `/payout-komisi-bulanan` (`App\Livewire\Commission\MonthlyPayoutIndex`) — list semua baris Eligible
+   dikelompokkan per Referrer, tombol "Proses Payout" membayar SEMUA baris Referrer itu sekaligus (batch).
+   GUARD di `CommissionPayoutService::isWithinMonthlyPayoutWindow()`/`payMonthlyForReferrer()` — bukan cuma
+   validasi UI, memanggil method Livewire-nya langsung di luar tanggal 5-7 tetap ditolak
+   (`RuntimeException`), tidak ada jalur bypass. Tidak mensyaratkan bukti bayar (beda dari Titip).
+
+**`CommissionLedgerPolicy::markPaid()`** — reuse permission `commission_ledger.manage` yang sudah ada
+(sama posture `markDeposit`, tidak ada permission baru). Sidebar: "Payout Bulanan" ditambahkan sebagai
+child baru grup "Komisi" (sejajar "Rate Komisi"/"Fee Komisi"). `ReferrerReferralResource` (`GET
+/api/v1/referrers/...`) dapat field additive `paid_at` per baris komisi.
+
+**Test**: `CommissionPayoutServiceTest` (11 — guard Titip lengkap: sudah-setor/belum-setor/sudah-
+dibayar/skema-salah, batch per-referrer skip yang tidak memenuhi syarat, jendela tanggal 5-7 true/false via
+`Carbon::setTestNow()`, batch bulanan berhasil/ditolak), `TitipMasukIndexPayoutLivewireTest` (7 — tombol
+hanya muncul untuk baris yang memenuhi syarat, upload wajib, guard server-side tidak bisa di-bypass lewat
+panggilan langsung, batch per grup, permission), `MonthlyPayoutIndexLivewireTest` (7 — banner+tombol
+reaktif terhadap tanggal, panggilan langsung di luar jendela tetap ditolak, batch berhasil di dalam
+jendela, permission), `CommissionPaymentProofControllerTest` (4 — akses sah, forbidden, cross-tenant 404,
+belum-ada-bukti 404). Full regression suite + Pint clean.
+
+Migration `2026_09_05_090000_add_payout_tracking_to_commission_ledger_table` (`paid_at`/`paid_by`/
+`payment_proof_path`, nullable, `paid_by` `nullOnDelete`). Belum di-merge/tag — menunggu verifikasi manual
+Agung, termasuk verifikasi guard tanggal 5-7 (lihat catatan di laporan sesi ini untuk cara mem-verifikasi
+tanpa perlu menunggu tanggal aslinya).
+
 ## WhatsApp Gateway Reliability — fix race condition + Kode Pairing + evaluasi WAHA (branch `whatsapp-gateway-reliability`, dari `main`, belum di-merge/tag)
 
 Investigasi keluhan Agung: WhatsApp Gateway sering putus koneksi, scan QR lambat, sering perlu refresh

@@ -19,7 +19,7 @@ use App\Models\PppPackage;
 class CommissionRateService
 {
     /**
-     * @param  array{recurring_amount?: mixed, limited_count_amount?: mixed, limited_count_times?: mixed, titip_amount?: mixed, is_active?: bool}  $data
+     * @param  array{recurring_amount?: mixed, limited_count_amount?: mixed, limited_count_times?: mixed, titip_amount?: mixed, payout_window_start_day?: mixed, payout_window_end_day?: mixed, is_active?: bool}  $data
      */
     public function createForPackage(PppPackage $package, array $data): CommissionRate
     {
@@ -58,7 +58,10 @@ class CommissionRateService
      */
     private function normalize(array $data): array
     {
-        foreach (['recurring_amount', 'limited_count_amount', 'limited_count_times', 'titip_amount'] as $key) {
+        foreach ([
+            'recurring_amount', 'limited_count_amount', 'limited_count_times', 'titip_amount',
+            'payout_window_start_day', 'payout_window_end_day',
+        ] as $key) {
             if (array_key_exists($key, $data) && ($data[$key] === '' || $data[$key] === null)) {
                 $data[$key] = null;
             }

@@ -169,6 +169,79 @@ class CommissionRateIndexLivewireTest extends TestCase
             ->assertHasErrors('titipAmount');
     }
 
+    public function test_admin_can_set_a_payout_window_on_a_rate(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $package = $this->package($tenant);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CommissionRateIndex::class)
+            ->call('edit', $package->id)
+            ->set('recurringAmount', '5000')
+            ->set('payoutWindowStartDay', '5')
+            ->set('payoutWindowEndDay', '7')
+            ->call('saveRate')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('commission_rates', [
+            'ppp_package_id' => $package->id,
+            'payout_window_start_day' => 5,
+            'payout_window_end_day' => 7,
+        ]);
+    }
+
+    public function test_leaving_both_payout_window_fields_empty_means_payable_anytime(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $package = $this->package($tenant);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CommissionRateIndex::class)
+            ->call('edit', $package->id)
+            ->set('recurringAmount', '5000')
+            ->call('saveRate')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('commission_rates', [
+            'ppp_package_id' => $package->id,
+            'payout_window_start_day' => null,
+            'payout_window_end_day' => null,
+        ]);
+    }
+
+    public function test_payout_window_fields_must_be_filled_together(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $package = $this->package($tenant);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CommissionRateIndex::class)
+            ->call('edit', $package->id)
+            ->set('recurringAmount', '5000')
+            ->set('payoutWindowStartDay', '5')
+            ->call('saveRate')
+            ->assertHasErrors('payoutWindowEndDay');
+
+        $this->assertDatabaseCount('commission_rates', 0);
+    }
+
+    public function test_payout_window_end_before_start_is_rejected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $package = $this->package($tenant);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CommissionRateIndex::class)
+            ->call('edit', $package->id)
+            ->set('recurringAmount', '5000')
+            ->set('payoutWindowStartDay', '20')
+            ->set('payoutWindowEndDay', '10')
+            ->call('saveRate')
+            ->assertHasErrors('payoutWindowEndDay');
+
+        $this->assertDatabaseCount('commission_rates', 0);
+    }
+
     public function test_delete_rate_soft_deletes_it(): void
     {
         $tenant = Tenant::factory()->create();

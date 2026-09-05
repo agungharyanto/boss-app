@@ -52,6 +52,9 @@ class ReferrerReferralResource extends JsonResource
                 'deposited_at' => $c->deposited_at?->toIso8601String(),
                 'status' => $c->status->value,
                 'status_label' => $c->status->label(),
+                // v0.9.11 (Payout Komisi) — hanya terisi begitu status
+                // ditransisikan ke Paid (Titip instan atau batch bulanan).
+                'paid_at' => $c->paid_at?->toIso8601String(),
                 'payment_period' => $c->payment_period?->toDateString(),
                 'invoice_id' => $c->invoice_id,
                 'created_at' => $c->created_at->toIso8601String(),

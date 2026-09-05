@@ -25,6 +25,10 @@ class CommissionRateResource extends JsonResource
             'limited_count_amount' => $this->limited_count_amount,
             'limited_count_times' => $this->limited_count_times,
             'titip_amount' => $this->titip_amount,
+            // v0.9.11 lanjutan — jendela tanggal payout komisi bulanan
+            // untuk rate ini. NULL/NULL = bisa dibayar kapan saja.
+            'payout_window_start_day' => $this->payout_window_start_day,
+            'payout_window_end_day' => $this->payout_window_end_day,
             'is_active' => $this->is_active,
             'created_at' => $this->created_at->toIso8601String(),
             'updated_at' => $this->updated_at->toIso8601String(),

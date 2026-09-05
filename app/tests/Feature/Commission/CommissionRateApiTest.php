@@ -95,6 +95,61 @@ class CommissionRateApiTest extends TestCase
         $response->assertCreated();
     }
 
+    public function test_admin_can_create_a_rate_with_a_payout_window(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $package = $this->package($tenant);
+
+        $response = $this->actingAs($this->admin($tenant))->postJson('/api/v1/commission-rates', [
+            'ppp_package_id' => $package->id,
+            'recurring_amount' => 5000,
+            'payout_window_start_day' => 5,
+            'payout_window_end_day' => 7,
+        ]);
+
+        $response->assertCreated();
+        $response->assertJsonPath('data.payout_window_start_day', 5);
+        $response->assertJsonPath('data.payout_window_end_day', 7);
+    }
+
+    public function test_payout_window_fields_must_be_filled_together_via_api(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $package = $this->package($tenant);
+
+        $this->actingAs($this->admin($tenant))->postJson('/api/v1/commission-rates', [
+            'ppp_package_id' => $package->id,
+            'recurring_amount' => 5000,
+            'payout_window_start_day' => 5,
+        ])->assertStatus(422)->assertJsonValidationErrors('payout_window_end_day');
+    }
+
+    public function test_payout_window_end_before_start_is_rejected_via_api(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $package = $this->package($tenant);
+
+        $this->actingAs($this->admin($tenant))->postJson('/api/v1/commission-rates', [
+            'ppp_package_id' => $package->id,
+            'recurring_amount' => 5000,
+            'payout_window_start_day' => 20,
+            'payout_window_end_day' => 10,
+        ])->assertStatus(422)->assertJsonValidationErrors('payout_window_end_day');
+    }
+
+    public function test_payout_window_day_out_of_range_is_rejected_via_api(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $package = $this->package($tenant);
+
+        $this->actingAs($this->admin($tenant))->postJson('/api/v1/commission-rates', [
+            'ppp_package_id' => $package->id,
+            'recurring_amount' => 5000,
+            'payout_window_start_day' => 0,
+            'payout_window_end_day' => 40,
+        ])->assertStatus(422)->assertJsonValidationErrors(['payout_window_start_day', 'payout_window_end_day']);
+    }
+
     public function test_limited_count_amount_requires_limited_count_times(): void
     {
         $tenant = Tenant::factory()->create();

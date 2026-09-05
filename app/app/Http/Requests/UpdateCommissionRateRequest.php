@@ -21,7 +21,10 @@ class UpdateCommissionRateRequest extends FormRequest
 
     protected function prepareForValidation(): void
     {
-        foreach (['recurring_amount', 'limited_count_amount', 'limited_count_times', 'titip_amount'] as $key) {
+        foreach ([
+            'recurring_amount', 'limited_count_amount', 'limited_count_times', 'titip_amount',
+            'payout_window_start_day', 'payout_window_end_day',
+        ] as $key) {
             if ($this->input($key) === '') {
                 $this->merge([$key => null]);
             }
@@ -38,6 +41,8 @@ class UpdateCommissionRateRequest extends FormRequest
             'limited_count_amount' => ['sometimes', 'nullable', 'numeric', 'min:0'],
             'limited_count_times' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'titip_amount' => ['sometimes', 'nullable', 'numeric', 'min:0'],
+            'payout_window_start_day' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:31'],
+            'payout_window_end_day' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:31'],
             'is_active' => ['sometimes', 'boolean'],
         ];
     }
@@ -60,6 +65,13 @@ class UpdateCommissionRateRequest extends FormRequest
             ) as $field => $message) {
                 $validator->errors()->add($field, $message);
             }
+
+            foreach (CommissionRate::payoutWindowErrors(
+                $this->input('payout_window_start_day', $rate->payout_window_start_day),
+                $this->input('payout_window_end_day', $rate->payout_window_end_day),
+            ) as $field => $message) {
+                $validator->errors()->add($field, $message);
+            }
         });
     }
 
@@ -73,6 +85,8 @@ class UpdateCommissionRateRequest extends FormRequest
             'limited_count_amount' => 'Komisi Skema X-Kali',
             'limited_count_times' => 'Jumlah Kali Pembayaran',
             'titip_amount' => 'Komisi Titip',
+            'payout_window_start_day' => 'Dari Tanggal',
+            'payout_window_end_day' => 'Sampai Tanggal',
             'is_active' => 'Status Aktif',
         ];
     }

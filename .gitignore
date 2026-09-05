@@ -23,6 +23,7 @@ app/public/storage
 
 # Backup hasil
 backups/*.sql.gz
+backups/exports/
 !backups/.gitkeep
 
 # OS / editor

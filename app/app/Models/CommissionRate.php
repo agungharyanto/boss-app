@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Carbon;
 
 /**
  * v0.9.3 — konfigurasi rate komisi untuk satu PppPackage. Lihat migration
@@ -33,6 +34,8 @@ class CommissionRate extends Model
         'limited_count_amount',
         'limited_count_times',
         'titip_amount',
+        'payout_window_start_day',
+        'payout_window_end_day',
         'is_active',
     ];
 
@@ -43,6 +46,8 @@ class CommissionRate extends Model
             'limited_count_amount' => 'decimal:2',
             'limited_count_times' => 'integer',
             'titip_amount' => 'decimal:2',
+            'payout_window_start_day' => 'integer',
+            'payout_window_end_day' => 'integer',
             'is_active' => 'boolean',
         ];
     }
@@ -127,6 +132,56 @@ class CommissionRate extends Model
             CommissionScheme::Titip->value => $this->titipAmount(),
             default => null,
         };
+    }
+
+    /**
+     * v0.9.11 lanjutan — jendela tanggal payout komisi BULANAN
+     * (recurring/limited_count) untuk rate ini. NULL/NULL (default) =
+     * tidak dibatasi, bisa dibayar kapan saja — konsisten dengan
+     * `App\Services\Commission\CommissionPayoutService::isRowPayableNow()`,
+     * yang membaca kedua kolom ini per baris `commission_ledger`, bukan
+     * satu aturan tanggal global untuk semua rate.
+     */
+    public function hasPayoutWindow(): bool
+    {
+        return $this->payout_window_start_day !== null && $this->payout_window_end_day !== null;
+    }
+
+    public function isWithinPayoutWindow(?Carbon $now = null): bool
+    {
+        if (! $this->hasPayoutWindow()) {
+            return true;
+        }
+
+        $day = ($now ?? now())->day;
+
+        return $day >= $this->payout_window_start_day && $day <= $this->payout_window_end_day;
+    }
+
+    /**
+     * v0.9.11 lanjutan — kedua kolom jendela tanggal HARUS pasangan
+     * (keduanya terisi atau keduanya kosong, tidak boleh cuma salah satu),
+     * dan `end >= start`. Dipakai bareng oleh Store/UpdateCommissionRateRequest
+     * dan `CommissionRateIndex` — sama disiplin "satu sumber kebenaran
+     * untuk aturan lintas-field" seperti `schemeErrors()` di atas.
+     *
+     * @return array<string, string>
+     */
+    public static function payoutWindowErrors(mixed $start, mixed $end): array
+    {
+        $set = static fn (mixed $v): bool => $v !== null && $v !== '';
+
+        $errors = [];
+
+        if ($set($start) && ! $set($end)) {
+            $errors['payout_window_end_day'] = 'Sampai Tanggal wajib diisi jika Dari Tanggal diisi.';
+        } elseif ($set($end) && ! $set($start)) {
+            $errors['payout_window_start_day'] = 'Dari Tanggal wajib diisi jika Sampai Tanggal diisi.';
+        } elseif ($set($start) && $set($end) && (int) $end < (int) $start) {
+            $errors['payout_window_end_day'] = 'Sampai Tanggal tidak boleh sebelum Dari Tanggal.';
+        }
+
+        return $errors;
     }
 
     /**

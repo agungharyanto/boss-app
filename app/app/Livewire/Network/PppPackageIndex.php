@@ -216,7 +216,8 @@ class PppPackageIndex extends Component
             'sellPrice' => ['required', 'numeric', 'min:0', 'gte:costPrice'],
             'promoPrice' => ['nullable', 'numeric', 'min:0'],
             'taxPercent' => ['required', 'numeric', 'min:0', 'max:100'],
-            'activeDurationValue' => ['required', 'integer', 'min:1'],
+            // 0 = Unlimited / tanpa batas waktu (konvensi MixRadius).
+            'activeDurationValue' => ['required', 'integer', 'min:0'],
             'activeDurationUnit' => ['required', 'string', 'in:minute,hour,day,month'],
             'sharedUsers' => ['required', 'integer', 'min:1'],
             'priority' => ['nullable', 'integer', 'between:1,8'],
@@ -323,7 +324,8 @@ class PppPackageIndex extends Component
             'editSellPrice' => ['required', 'numeric', 'min:0', 'gte:editCostPrice'],
             'editPromoPrice' => ['nullable', 'numeric', 'min:0'],
             'editTaxPercent' => ['required', 'numeric', 'min:0', 'max:100'],
-            'editActiveDurationValue' => ['required', 'integer', 'min:1'],
+            // 0 = Unlimited / tanpa batas waktu (konvensi MixRadius).
+            'editActiveDurationValue' => ['required', 'integer', 'min:0'],
             'editActiveDurationUnit' => ['required', 'string', 'in:minute,hour,day,month'],
             'editSharedUsers' => ['required', 'integer', 'min:1'],
             'editPriority' => ['nullable', 'integer', 'between:1,8'],

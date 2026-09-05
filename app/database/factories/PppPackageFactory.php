@@ -41,4 +41,12 @@ class PppPackageFactory extends Factory
             'is_active' => true,
         ];
     }
+
+    /**
+     * Masa Aktif = 0 (Unlimited / tanpa batas waktu — konvensi MixRadius).
+     */
+    public function unlimitedDuration(): static
+    {
+        return $this->state(fn () => ['active_duration_value' => 0]);
+    }
 }

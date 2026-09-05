@@ -67,7 +67,7 @@ class WhatsappSessionService
     /**
      * Creates the whatsapp_sessions row for a reseller (or the "direct"
      * session when $resellerId is null) and immediately kicks off the
-     * Node-side Baileys connect via one refreshQrCode() call — Node
+     * gateway-side connect via one refreshQrCode() call — the gateway
      * generates the actual QR asynchronously and pushes it back via the
      * connection.update webhook shortly after, so the row returned here
      * may still have qr_code_data=null; the UI polls (re-renders from DB)
@@ -87,9 +87,8 @@ class WhatsappSessionService
     }
 
     /**
-     * Pulls the latest QR code data for one session from the Node gateway
-     * (GET /sessions/{key}/qr) and stores it — used by the Konfigurasi tab's
-     * "refresh QR" button.
+     * Pulls the latest QR code data for one session — used by the
+     * Konfigurasi tab's "refresh QR" button.
      */
     public function refreshQrCode(WhatsappSession $session): ?string
     {
@@ -126,17 +125,13 @@ class WhatsappSessionService
     }
 
     /**
-     * Sprint "whatsapp-gateway-reliability" LANGKAH 2 — alternatif "Kode
-     * Pairing" (native Baileys `requestPairingCode`, lihat
-     * `whatsapp-gateway/src/sessionManager.js`) sebagai pengganti scan QR
-     * saat menghubungkan sesi. HANYA berlaku untuk sesi yang BELUM
-     * terhubung — Node gateway sendiri menolak (500) kalau dipanggil pada
-     * sesi yang statusnya `connected`, jadi tidak diulang di sini (defense
-     * di satu tempat, gateway, cukup — respons error-nya sudah jelas).
+     * "Kode Pairing" — alternatif scan QR saat menghubungkan sesi. HANYA
+     * berlaku untuk sesi yang BELUM terhubung — gateway sendiri menolak
+     * (500) kalau dipanggil pada sesi yang statusnya `connected`.
      *
-     * Sama seperti `refreshQrCode()`, ini me-wipe auth_state sesi (sisi
-     * Node) dan memulai pairing dari nol — nomor HP yang dimasukkan JADI
-     * nomor baru sesi ini begitu berhasil terhubung.
+     * Sama seperti `refreshQrCode()`, ini me-wipe state sesi dan memulai
+     * pairing dari nol — nomor HP yang dimasukkan JADI nomor baru sesi ini
+     * begitu berhasil terhubung.
      *
      * @return ?string kode 8 karakter (mis. "ABCD-1234"), atau null kalau gagal
      */
@@ -179,8 +174,8 @@ class WhatsappSessionService
 
     /**
      * whatsapp:check-session-health's hourly reconciliation — actively
-     * pulls GET /sessions from the Node gateway rather than only relying on
-     * connection.update webhooks, in case a webhook delivery was missed.
+     * pulls GET /sessions rather than only relying on connection.update
+     * webhooks, in case a webhook delivery was missed.
      */
     public function reconcileFromGateway(): void
     {
@@ -201,7 +196,7 @@ class WhatsappSessionService
         ])->get(rtrim($baseUrl, '/').'/sessions');
 
         if (! $response->successful()) {
-            Log::error('WhatsappSessionService: failed to fetch /sessions from Node gateway, HTTP '.$response->status());
+            Log::error('WhatsappSessionService: failed to fetch /sessions from gateway, HTTP '.$response->status());
 
             return;
         }
@@ -223,9 +218,60 @@ class WhatsappSessionService
             try {
                 $this->applyStatus($session, WhatsappSessionStatus::from($status), $row['phone_number'] ?? null, null);
             } catch (ValueError) {
-                Log::warning("WhatsappSessionService: unknown status '{$status}' from Node gateway for session_key={$sessionKey}.");
+                Log::warning("WhatsappSessionService: unknown status '{$status}' from gateway for session_key={$sessionKey}.");
             }
         }
+    }
+
+    /**
+     * Tombol "Logout" — memanggil `client.Logout(ctx)` whatsmeow
+     * SUNGGUHAN di sisi gateway (bukan sekadar wipe lokal) supaya entri
+     * "Perangkat Tertaut" di HP pengguna ikut bersih di sisi WhatsApp
+     * sendiri — lihat `whatsapp-gateway/internal/session/manager.go::Logout()`.
+     *
+     * BUG NYATA yang sempat ditemukan+diperbaiki di sini (era migrasi
+     * whatsmeow, sesi debugging "masih gagal berkali-kali"): signature
+     * sempat di-sign atas string kosong (''), tapi `Http::post($url)`
+     * tanpa argumen body kedua diam-diam mengirim body "[]" (default
+     * Laravel Http client, BUKAN string kosong) — signature yang diterima
+     * gateway tidak pernah cocok dengan apa yang benar-benar dikirim, jadi
+     * setiap klik tombol Logout ditolak 401 oleh verifyHmac. Fix: kirim
+     * body string kosong EKSPLISIT dan sign string yang sama persis — pola
+     * identik `requestPairingCode()`/`SendWhatsappMessageJob`.
+     */
+    public function logout(WhatsappSession $session): bool
+    {
+        $baseUrl = config('services.whatsapp_gateway.url');
+
+        if (! $baseUrl) {
+            Log::warning('WhatsappSessionService: services.whatsapp_gateway.url not configured, cannot logout.');
+
+            return false;
+        }
+
+        $sessionKey = $session->sessionKey();
+        $timestamp = time();
+        $body = '';
+        $signature = $this->hmac->sign($body, $timestamp);
+
+        $response = Http::withBody($body, 'application/json')
+            ->withHeaders([
+                'X-Whatsapp-Timestamp' => (string) $timestamp,
+                'X-Whatsapp-Signature' => $signature,
+            ])->post(rtrim($baseUrl, '/')."/sessions/{$sessionKey}/logout");
+
+        if (! $response->successful()) {
+            Log::error("WhatsappSessionService: logout failed for session_key={$sessionKey}, HTTP {$response->status()}: {$response->body()}");
+
+            return false;
+        }
+
+        // Reflect segera di sisi Laravel — webhook logged_out yang sama
+        // juga akan datang menyusul dan menerapkan status yang sama
+        // (idempotent, bukan konflik).
+        $this->applyStatus($session, WhatsappSessionStatus::LoggedOut, null, null);
+
+        return true;
     }
 
     /**

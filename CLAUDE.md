@@ -95,7 +95,18 @@ to the next — no jumping ahead. `docs/ROADMAP.md` also carries forward cross-s
 what a later sprint's migrations/contracts must include because an earlier sprint deferred them) — check
 it, not just this file, before starting a new sprint.
 
-## ATURAN WAJIB — CLOSURE DISIPLIN (governance note permanen, insiden ke-4)
+## ATURAN WAJIB — CLOSURE DISIPLIN (governance note permanen, insiden ke-6)
+
+**ATURAN PALING KERAS (diperluas setelah insiden ke-6, 2026-09-05 — WAJIB, bukan pilihan, TIDAK perlu
+tanya Agung lagi): SEBELUM membuat branch baru APA PUN** — bukan cuma untuk topik "tak terkait", tapi
+SEMUA branch baru tanpa kecuali — **WAJIB jalankan `git branch -a` DAN `git log --oneline main..<branch>`
+untuk SETIAP branch yang baru saja dikerjakan / relevan.** Kalau ketemu branch dengan kerjaan selesai yang
+belum di-merge → **MERGE DULU** (`--no-ff` → develop → main → tag) sebelum lanjut branch baru. Ini sudah
+jadi prosedur baku. Insiden ke-6: branch `investigasi-nama-paket-vs-grup` dibuat "dari `main`" padahal
+`masa-aktif-0-unlimited` (fix "Masa Aktif 0 = Unlimited") belum di-merge — `main` jadi basis basi, Agung
+kena regresi nyata (validasi "must be >= 1" muncul lagi setelah sudah pernah diperbaiki). Pelajaran: aturan
+lama "cek dulu untuk topik TAK TERKAIT" tidak cukup — di sini branch-nya MASIH TERKAIT (sama-sama Profil
+PPP) tapi tetap lolos karena tidak dicek sama sekali.
 
 **Sebelum memulai branch/sprint BARU, WAJIB jalankan `git log --oneline main..<branch aktif sebelumnya>`.**
 Kalau ada commit yang belum masuk `main`:
@@ -126,7 +137,13 @@ tanya balik ke Agung, JANGAN langsung buat branch baru dari `main` tanpa konfirm
 > mau tetap paralel (dengan risiko sidebar/UI keliatan 'mundur' saat branch baru di-checkout dari `main`
 > yang basi)?"
 
-**Preseden insiden "kerja selesai tapi lupa merge" (jangan tambah nomor 6):**
+**Preseden insiden "kerja selesai tapi lupa merge" (jangan tambah nomor 7):**
+- **`masa-aktif-0-unlimited` vs `investigasi-nama-paket-vs-grup` (2026-09-05, insiden ke-6)** — branch fix
+  "Masa Aktif 0 = Unlimited" (commit `899d92a`, sudah selesai + full suite 1569 hijau) tidak di-merge;
+  branch berikutnya dibuat "dari `main`" tanpa cek → Agung kena regresi validasi ">= 1". Ditutup lewat
+  merge susulan (`masa-aktif` → `v0.14.5.2`, lalu `main` di-merge KE branch `investigasi-nama` supaya
+  kerjaannya di ATAS fix Masa Aktif, lalu `investigasi-nama` → `v0.14.5.3`). Melahirkan "ATURAN PALING
+  KERAS" di atas.
 - `v0.14.5.1` — checkpoint dibiarkan uncommitted lintas branch switch, berakhir di `git stash` yang nyaris
   hilang (lihat section "Branch Consolidation" di bawah).
 - `hotfix/wireguard-node-ip-race` — commit `a75f608` selesai, tidak pernah di-merge ke main; catatan
@@ -144,6 +161,22 @@ tanya balik ke Agung, JANGAN langsung buat branch baru dari `main` tanpa konfirm
   "mundur" ke state pra-komisi untuk sementara. Inilah kejadian yang melahirkan aturan tambahan ini —
   ditutup lewat merge susulan (LANGKAH 2-3 sprint governance berikutnya), TAPI seharusnya konfirmasi di
   atas ditanyakan SEBELUM branch baru dibuat, bukan diperbaiki belakangan.
+
+## ATURAN WAJIB — KAPAN MENJALANKAN FULL REGRESSION SUITE (governance note permanen, ditetapkan Agung 2026-09-05)
+
+Full regression suite (1500+ test, ~12 menit) **BERAT** — jangan dijalankan tiap selesai 1 langkah kecil.
+Aturan baku:
+
+1. **SEKALI di awal sesi/prompt** — baseline, OPSIONAL (cuma kalau perlu tahu titik mulai bersih).
+2. **Selama iterasi/development di tengah** (belum mau merge) — **CUKUP test SCOPED** ke fitur yang sedang
+   dikerjakan: `php artisan test --filter=<NamaFiturTerkait>` (mis. `--filter="PppPackage|NetworkProfileGroup"`).
+   BUKAN full suite.
+3. **SEKALI di akhir, TEPAT SEBELUM merge ke `main`** — full suite **WAJIB, TIDAK BOLEH DILEWATI**. Ini
+   gate terakhir sebelum kode masuk `main`. Kalau ada beberapa branch di-merge berturut-turut dalam satu
+   sesi, jalankan full suite sebelum SETIAP merge ke `main` (state `main` bisa berubah di antara merge).
+
+Rasionalnya: mempercepat iterasi tanpa mengurangi jaring pengaman di titik yang benar-benar penting (kode
+masuk `main`). Pint tetap dijalankan per-file yang disentuh seperti biasa (ringan).
 
 ## Sprint-based development — read this before doing anything
 

@@ -146,14 +146,21 @@ interface RouterOsGateway
      * `session-timeout` accepts the exact same m/h/d time-interval suffixes
      * (RouterOS normalizes the displayed value on readback — e.g. a pushed
      * "30d" reads back as "4w2d" — the underlying duration is unaffected).
-     * Both fields conditionally included only when non-null, same
-     * discipline as $remoteAddress/$localAddress above — never verified
-     * whether an empty string is accepted as a "clear" value for either
-     * (not needed: this method's only caller for these two params,
-     * PushPppPackageToMikrotikJob, always resolves a real, non-null value
-     * for both, since bandwidth_profile_id/active_duration_* are required
-     * fields on PppPackage, never optional the way HotspotPackage's own
-     * Unlimited/Limited toggle makes rate-limit/session-timeout optional).
+     * v0.14.5.4 (ATURAN KERAS 1:1 Grup Profil <-> Profil PPP) — Profil PPP
+     * no longer pushes its OWN `/ppp profile`; instead it UPDATES its parent
+     * Grup Profil's shared `/ppp profile` (keyed by the Grup Profil's
+     * comment), adding rate-limit + session-timeout onto it. So this
+     * method's SET branch now sends BOTH fields UNCONDITIONALLY —
+     * `rate-limit` = value or `""`, `session-timeout` = value or `"0s"` —
+     * mirroring the dns-server/parent-queue clear-when-null style. Verified
+     * live against ro-hotspot.bajastu.id that `/ppp/profile/set` accepts
+     * `rate-limit=""` (clears it) and `session-timeout="0s"` (RouterOS's own
+     * canonical "no timeout"). This is what makes removing/deactivating a
+     * Profil PPP genuinely reset its Grup Profil's fallback profile
+     * (PppProfileSyncService::push() with $package = null) rather than
+     * leaving a stale bandwidth cap on the PPPoE Server Default Profile.
+     * The ADD branch still only sends them when non-null (RouterOS's own
+     * default for a fresh profile IS unset/no-limit).
      *
      * @return array{success: bool, message: ?string}
      */

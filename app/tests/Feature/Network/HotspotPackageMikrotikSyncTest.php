@@ -183,21 +183,16 @@ class HotspotPackageMikrotikSyncTest extends TestCase
         // inferred from its absence in a print of an object that had
         // simply never had it set).
         $this->assertSame('Hotspot-Pool-Sync', $call['args']['addressPool']);
-        // Revisi Prioritas Dropdown — rate-limit now always carries the
-        // extended RouterOS syntax embedding priority in its 5th slot
-        // (see App\Support\RouterOsQueuePriority's own docblock) — the
-        // package fixture here doesn't set priority, so it falls back to
-        // the factory default (8, RouterOS's OWN genuine default too).
-        $this->assertSame('5000k/10000k 5000k/10000k 5000k/10000k 1s/1s 8', $call['args']['rateLimit']);
+        // DARURAT 2026-09-06 — rate-limit sekarang format POLOS (rx/tx saja),
+        // tanpa grup burst. `1s/1s` di slot burst-time bikin RouterOS gagal
+        // membuat /queue simple dinamis saat sesi connect. Lihat
+        // App\Support\RouterOsQueuePriority's own docblock.
+        $this->assertSame('5000k/10000k', $call['args']['rateLimit']);
         $this->assertSame(2, $call['args']['sharedUsers']);
         $this->assertNull($call['args']['sessionTimeout']);
     }
 
-    /**
-     * Revisi Prioritas Dropdown — a non-default priority is genuinely
-     * embedded in the pushed rate-limit string, not silently ignored.
-     */
-    public function test_push_job_embeds_a_non_default_priority_in_the_rate_limit_string(): void
+    public function test_priority_is_stored_but_not_pushed_via_rate_limit(): void
     {
         $this->bindGateway();
         $package = $this->package(['name' => 'Paket-Prioritas', 'priority' => 3]);
@@ -206,7 +201,8 @@ class HotspotPackageMikrotikSyncTest extends TestCase
         $job->withFakeQueueInteractions();
         $job->handle(app(RouterOsGateway::class));
 
-        $this->assertSame('5000k/10000k 5000k/10000k 5000k/10000k 1s/1s 3', $this->recordedCalls[0]['args']['rateLimit']);
+        $this->assertSame(3, $package->fresh()->priority);
+        $this->assertSame('5000k/10000k', $this->recordedCalls[0]['args']['rateLimit']);
     }
 
     public function test_push_job_includes_session_timeout_for_limited_time_base_package(): void

@@ -8007,6 +8007,188 @@ tetap di-enforce):
 string `rate-limit`), jadi nol namespace collision — nama boleh sama dengan Grup Profil/Profil PPP/Profil
 Hotspot apa pun.
 
+## RouterOS Live-Push — `local-address` + Ensure IP Pool Sebelum Push Profil (v0.14.5.4, branch `investigasi-local-address-drift`)
+
+**Dua bug nyata di jalur push `/ppp profile` (Grup Profil tipe ppp, Profil PPP, Profil Expired), ditemukan
+lewat investigasi read-only terhadap `ro-hotspot.bajastu.id` (NAS uji coba — BUKAN `test-x86-bajastu`,
+tidak disentuh sama sekali) setelah Agung menghapus semua `/ip pool` langsung di WinBox.**
+
+**BUG #1 — `local-address` `/ppp profile` tidak pernah dikirim.** `customer_ip_pools.gateway_ip` disimpan
+sejak v0.14.2 KHUSUS untuk jadi `local-address` di `/ppp profile` yang dipush Grup Profil/Profil PPP (lihat
+section "IP Pool Pelanggan (v0.14.2)" + "RouterOS Live-Push (v0.14.2.1)" di atas — design intent-nya
+eksplisit di situ). Tapi wiring-nya kelewat: `PushNetworkProfileGroupToMikrotikJob::syncPpp()` dan
+`PushPppPackageToMikrotikJob` sama-sama memanggil `syncPppProfile()` tanpa argumen `$localAddress` (default
+`null`) sejak v0.14.3/v0.14.5. `PppPackageMikrotikSyncTest` bahkan meng-assert `localAddress` null —
+mengunci bug ini sebagai "perilaku yang diharapkan". Akibat nyata di produksi: PPP interface klien tidak
+punya gateway di sisi router → pelanggan connect tapi tidak dapat routing / "active connection gagal".
+**Fix**: `$pool->gateway_ip` di-resolve LIVE tiap push (sama pola `dns-server`/`parent-queue` yang
+diwariskan dari Grup Profil, bukan disnapshot ke kolom `ppp_packages`) dan diteruskan sebagai `$localAddress`.
+
+**BUG #2 — resync gagal PERMANEN setelah admin hapus `/ip pool` manual di router.**
+`PushNetworkProfileGroupToMikrotikJob`/`PushPppPackageToMikrotikJob`/`PushExpiredProfileToMikrotikJob`
+mem-push `/ppp profile` yang mereferensikan sebuah `/ip pool` lewat `remote-address=<nama pool>` (dan, sejak
+FIX 1, `local-address=<gateway_ip>`) TANPA memastikan `/ip pool`-nya ada di router dulu. Admin sering hapus
+objek langsung di MikroTik tanpa update BOSS App; kalau `/ip pool` sudah hilang,
+`/ppp/profile/add remote-address=<nama pool>` ditolak RouterOS (`"invalid value for argument
+remote-address:"`) dan status entity jadi `Gagal` SELAMANYA — klik "Sync Ulang" berapa kali pun tetap gagal
+(status kolom `mikrotik_sync_*` pool masih bilang `synced` padahal sudah drift). **Fix**: ketiga Job
+sekarang memanggil `$gateway->syncIpPool($nas, $pool->mikrotikComment(), $pool->name,
+"{$pool->range_start}-{$pool->range_end}")` DULU sebelum `syncPppProfile()`. `syncIpPool()` idempoten
+(lookup by-comment: create kalau hilang, update kalau ada). Sukses → `$pool->markSynced()`. Gagal →
+`$pool->markSyncFailed()` + entity induk `markSyncFailed()`/`recordFailure()` dengan pesan
+`"IP Pool gagal disinkronkan dulu: ..."`, dan `/ppp profile` TIDAK di-push. Satu klik "Sync Ulang" jadi
+membangun ulang pool + profile dalam urutan yang benar.
+
+**Pola umum yang ditegakkan (governance note untuk push job RouterOS baru mana pun ke depan)**: sebuah
+`/ppp profile` (atau objek RouterOS apa pun) yang mereferensikan objek RouterOS LAIN by-name — `/ip pool`,
+`/queue`, interface, dll. — WAJIB memastikan objek yang direferensikan itu ada dulu di push job yang sama
+(via method `sync*()` idempoten by-comment), BUKAN mengandalkan urutan dispatch antar-job atau asumsi
+"pasti sudah pernah dipush". Drift manual di router adalah kondisi normal, bukan edge case.
+
+**`PushExpiredProfileToMikrotikJob` — FIX 1 TIDAK berlaku (pola berbeda, konfirmasi Agung terpisah).**
+Profil Expired mengirim NAMA pool sebagai `local-address` (bukan `gateway_ip`) — `remote-address` null,
+tanpa rate-limit, hanya pool terbatas. FIX 2 (ensure-pool) tetap berlaku di situ karena kelas bug-nya
+identik.
+
+**Diverifikasi NYATA end-to-end terhadap `ro-hotspot.bajastu.id`** (`test-x86-bajastu` tidak disentuh):
+Grup Profil #26 `PPPoE-Remote` (type ppp, status `failed`, error persis `"invalid value for argument
+remote-address:"`, Pool #33 `PPPoE-Remote` `gateway_ip=10.0.1.1` salah-`synced`) → 1× resync lewat jalur
+`NetworkProfileGroupService::resync()` yang sama dengan tombol UI → `synced`. Query read-only router
+setelahnya: `/ip pool PPPoE-Remote` (comment `BOSS App - Customer IP Pool #33`, ranges
+`10.0.0.10-10.0.3.254`) dibuat ulang otomatis; `/ppp profile PPPoE-Remote` kini `local-address=10.0.1.1`
+(sebelumnya kosong), `remote-address=PPPoE-Remote`, `dns-server=1.1.1.1,8.8.8.8`, comment `BOSS App -
+Network Profile Group #26`; `/interface pppoe-server server PPPoE-Remote` (interface `vlan10-PPPoE`,
+default-profile `PPPoE-Remote`) ikut dibuat. Resync ke-2 idempoten (tetap 1 pool / 1 profile / 1
+pppoe-server). Profil PPP throwaway di Grup #26 juga diverifikasi live (`local-address=10.0.1.1`,
+`rate-limit=... 5` priority di slot ke-5) lalu dihapus bersih. `boss-worker` di-restart lebih dulu (Job
+class dimuat sekali saat proses start — gotcha yang sudah berulang di file ini).
+
+### Bagian A (v0.14.5.4) — ATURAN KERAS 1:1 Grup Profil ⇄ Profil PPP, edit-in-place
+
+**Satu Grup Profil HANYA BOLEH dipakai satu Profil PPP AKTIF — tanpa syarat, dikonfirmasi eksplisit
+Agung.** Alasan teknis: satu `/ppp profile` di RouterOS cuma bisa punya satu `rate-limit`, tidak bisa
+menampung limitasi banyak paket sekaligus. Ini menggantikan aturan v0.14.5.3 (yang mengizinkan banyak
+Profil PPP per Grup Profil, di-differentiate via `PppPackage::routerOsProfileName()`).
+
+- **Investigasi data dev sebelum eksekusi**: cuma 1 `PppPackage` genuinely-live (#16 pada group #27);
+  semua yang lain sudah soft-deleted. NOL konflik → constraint keras bisa langsung ditegakkan tanpa
+  migrasi data.
+- **DB**: partial unique index `ppp_packages (network_profile_group_id) WHERE deleted_at IS NULL AND
+  is_active` (migration `2026_09_06_090000`). Predikat boolean bare portable Postgres + SQLite. Profil PPP
+  yang di-soft-delete ATAU `is_active=false` membebaskan Grup Profil-nya.
+- **`PppPackage::groupTakenByAnother(int $groupId, ?int $ignoreId)`** — dipakai identik di
+  `Store`/`UpdatePppPackageRequest::withValidator()` + `PppPackageIndex` untuk pesan jelas ("Grup Profil
+  ini sudah dipakai paket \"X\" — 1 Grup Profil cuma bisa dipakai 1 Profil PPP.") alih-alih error
+  constraint mentah. Dropdown Grup Profil form CREATE = `availableGroupOptions` (hanya grup yang belum
+  dipakai, via `whereDoesntHave('activePppPackage')`); form EDIT = `editGroupOptions` (yang belum dipakai
+  + grup yang sedang dipakai paket ini).
+- **TIDAK ADA lagi `/ppp profile` terpisah untuk Profil PPP.** Grup Profil + Profil PPP-nya berbagi SATU
+  objek `/ppp profile` — di-lookup by **comment Grup Profil** (`BOSS App - Network Profile Group #N`).
+  Profil PPP hanya menambahkan `rate-limit` (dari Bandwidth Profile) + `session-timeout` (dari Masa Aktif).
+  **`App\Services\Network\PppProfileSyncService::push(RouterOsGateway, NetworkProfileGroup, ?PppPackage)`**
+  BARU = satu-satunya tempat objek itu dirakit + dipush; dipakai bareng oleh
+  `PushNetworkProfileGroupToMikrotikJob` (grup create/edit/resync — passing `$group->activePppPackage`)
+  DAN `PushPppPackageToMikrotikJob` (package create/edit/delete/resync). "Sync Ulang" dari sisi mana pun
+  konvergen ke objek router yang sama. `PushPppPackageToMikrotikJob` menandai package DAN Grup Profil
+  synced/failed.
+- **Poin 4 (reset saat Profil PPP dihapus/dinonaktifkan) — RESET, bukan dibiarkan.**
+  `RouterOsGateway::syncPppProfile()`'s cabang SET sekarang mengirim `rate-limit=""` /
+  `session-timeout="0s"` UNCONDITIONAL (gaya sama `dns-server`/`parent-queue`). Diverifikasi live di
+  `ro-hotspot`: `/ppp/profile/set` menerima `rate-limit=""` (mengosongkan) dan `session-timeout="0s"`
+  (kanonik RouterOS "tanpa timeout"). Alasan reset: `/ppp profile` itu = **PPPoE Server Default Profile** —
+  fallback untuk sesi yang RADIUS tidak beri profile spesifik; `rate-limit` basi dari paket yang sudah
+  dihapus akan diam-diam membatasi bandwidth setiap sesi tak-terklasifikasi.
+  `RemovePppPackageFromMikrotikJob` tidak lagi menghapus objek `/ppp profile` (tidak ada objek terpisah) —
+  ia panggil `PppProfileSyncService::push($gw, $group, null)` (mode bare). Cabang ADD tetap hanya kirim
+  rate-limit/session-timeout kalau non-null (default RouterOS untuk profile baru memang unset).
+- **`PppPackage::routerOsProfileName()` (v0.14.5.3) DIHAPUS** + `NetworkProfileGroupService::
+  repushCollidingPppPackages()` DIHAPUS — tidak relevan lagi karena tidak pernah ada 2 objek `/ppp
+  profile` bersaing. `collidesWithExistingName()` (blokir bentrok dunia HOTSPOT) TETAP.
+
+### Bagian B (v0.14.5.4) — Auto-differentiate nama IP Pool kalau bentrok nama `/ppp profile`
+
+Bug nyata dari WinBox: IP Pool + `/ppp profile` nama SAMA ("PPPoE-Remote") → RouterOS gagal me-resolve
+`remote-address` ("could not determine remote address, using 10.113.100.xxx" — klien PPPoE dapat IP
+fallback SALAH, bukan dari range pool). Sama kelas problem dengan `/ppp profile` name-collision yang dulu
+di-handle `routerOsProfileName()`.
+
+**`CustomerIpPool::routerOsPoolName()`** — nama yang GENUINELY dikirim ke `/ip pool` di router auto-menambah
+suffix `" (pool)"` kalau bentrok dengan nama Grup Profil tipe ppp di NAS yang sama. Kolom DB `name` tidak
+berubah. Lookup existing tetap by comment. SETIAP `/ip pool` push (`PushCustomerIpPoolToMikrotikJob`,
+`PppProfileSyncService`, `PushExpiredProfileToMikrotikJob`, `syncHotspotServerPool`) DAN setiap
+`remote-address`/`local-address=<nama pool>` di `/ppp profile` WAJIB pakai nilai ini — kalau tidak sinkron,
+profile mengarah ke pool yang salah/tidak ada. `PushCustomerIpPoolToMikrotikJob` re-dispatch push Grup
+Profil ppp yang mereferensikan pool supaya `remote-address`-nya ikut nama baru saat differentiate berubah.
+
+**Governance note untuk cluster ini**: pola "nama tampilan di BOSS App verbatim, nama yang dikirim ke router
+auto-differentiate saat bentrok namespace RouterOS" sudah dipakai 2×: dulu `routerOsProfileName()` (dihapus
+Bagian A), sekarang `routerOsPoolName()`. Kalau modul RouterOS-push baru menambah objek bernama ke namespace
+yang bisa bentrok dengan `/ip pool` atau `/ppp profile`, pertimbangkan pola yang sama.
+
+### Verifikasi Bagian A/B — NYATA di `ro-hotspot.bajastu.id` (`test-x86-bajastu` tidak disentuh)
+
+Skenario nyata yang ada di router saat ini: Grup Profil #27 "PPPoE-Remote" (ppp, pool #33) + PppPackage
+#16 "PPPoE-Remote" (aktif, Unlimited/dur=0, BW 10Mbps 15000/15000) — DAN pool #33 juga bernama
+"PPPoE-Remote" (bentrok). State sebelum: DUA objek `/ppp profile` (satu bare comment group #27, satu
+"PPPoE-Remote (pkg #16)" comment PPP Package #16 dengan rate-limit) + `/ip pool` "PPPoE-Remote" — persis
+bug yang diperbaiki.
+
+Setelah `PushPppPackageToMikrotikJob(16)`:
+- **SATU** `/ppp profile` tersisa (`PPPoE-Remote`, comment `BOSS App - Network Profile Group #27`) —
+  membawa `rate-limit=15000k/... 8` (dari pkg #16) + `local-address=10.0.1.1`; objek `(pkg #16)` lama
+  **disapu** (`removePppProfile` by package comment).
+- `/ip pool` di-rename → **`PPPoE-Remote (pool)`** (comment `#33`), dan `/ppp profile`'s
+  `remote-address` ikut → `PPPoE-Remote (pool)`.
+- `/interface pppoe-server server` `default-profile=PPPoE-Remote` tetap benar.
+- Idempoten: 2× push (package-side + `PushNetworkProfileGroupToMikrotikJob(27)` group-side) → tetap
+  1 pool / 1 profile / 1 pppoe-server, keduanya konvergen ke objek yang sama.
+- `PppPackage::groupTakenByAnother(27)` = "PPPoE-Remote" (menolak paket kedua); `groupTakenByAnother(27,
+  ignore=16)` = null (edit #16 sendiri OK).
+- **Reset-ke-bare**: `is_active=false` + push → `/ppp profile` `rate-limit=[]` (kosong). `is_active=true`
+  + push → `rate-limit` kembali `15000k/... 8`. Pkg #16 dikembalikan ke `is_active=1`/`synced`.
+
+### DARURAT 2026-09-06 — grup burst `rate-limit` `"1s/1s"` memutus ~200 sesi PPPoE pelanggan aktif
+
+**Insiden produksi nyata di `ro-hotspot.bajastu.id`** — sesi PPPoE pelanggan terputus massal, log MikroTik
+banjir `could not add queue: no download-burst-time (6)`, tiap koneksi baru langsung `terminating`.
+
+**Akar masalah**: `App\Support\RouterOsQueuePriority::toRateLimitString()` (dari revisi v0.14.5.1
+"Prioritas Dropdown") mengeluarkan string `"{rate} {rate} {rate} 1s/1s {priority}"` — grup burst lengkap
+plus priority di slot ke-5. RouterOS **MENERIMA** string ini di `/ppp profile/set` DAN `/ip hotspot user
+profile/set` tanpa protes sama sekali (itulah kenapa "verifikasi live" v0.14.5.1 lolos) — TAPI saat sebuah
+sesi PPPoE benar-benar connect, modul PPP RouterOS menerjemahkan `rate-limit` itu jadi `/queue simple`
+dinamis dan GAGAL: burst-time `1s/1s` bukan format yang sah di parser rate-limit→queue RouterOS (butuh
+integer detik polos, dan parser jalur PPP ini lebih ketat dari `/queue/simple/add` biasa yang menerima
+apa saja). Grup burst-nya sendiri juga sia-sia sejak awal (`burst-rate = rate` = burst inert).
+
+**Pola bug yang harus diingat**: sebuah string yang DITERIMA `/ppp profile/set` / `/ip hotspot user
+profile/set` di router **BUKAN jaminan** ia sah — jalur "profile → dynamic /queue simple saat sesi
+connect" adalah parser terpisah yang lebih ketat, dan tidak bisa diverifikasi tanpa sesi klien nyata.
+Verifikasi "set diterima router" ≠ verifikasi "sesi bisa connect".
+
+**Perbaikan langsung** (prioritas paling tinggi, sebelum kode fix): `/ppp profile PPPoE-Remote` di
+`ro-hotspot` di-set manual ke `"15000k/15000k"` (polos) via gateway → log **berhenti banjir dalam
+<1 menit**, sesi pelanggan reconnect (210 PPPoE active, 140 `/queue simple`, 0 error burst-time / 0
+terminating di 60 baris log berikutnya).
+
+**Fix kode**: `toRateLimitString()` sekarang mengeluarkan format **POLOS** `"{up}k/{down}k"` saja — tanpa
+grup burst, tanpa priority. Format ini sudah terbukti bekerja untuk ratusan `/queue simple` dinamis di
+router yang sama. **Konsekuensi**: `priority` (1-8) TIDAK LAGI di-push lewat `rate-limit` (secara
+posisional priority ada di slot ke-5 SETELAH grup burst — tak bisa dikirim tanpa mengisi slot burst
+dulu). Priority tetap tersimpan di DB (`ppp_packages.priority`/`hotspot_packages.priority`), pola "stored,
+not pushed" yang sama dengan `login_days`/`login_start_time`. RouterOS default priority `/queue simple` =
+8 = `RouterOsQueuePriority::DEFAULT`, jadi untuk priority default nol yang hilang. `RouterOsQueuePriority::
+composeRateLimit()` baru menyediakan jalur burst yang BENAR untuk masa depan (all-or-nothing: grup burst
+HANYA disertakan kalau burst-rate + threshold + burst-time lengkap; burst-time integer detik polos, NEVER
+`"Ns"`) — belum ada pemanggil, tidak ada field burst di form mana pun (jadi tidak ada validasi form yang
+perlu ditambah).
+
+**BELUM diverifikasi (butuh Agung / hardware)**: satu koneksi PPPoE nyata dengan Profil PPP yang punya
+`rate-limit` untuk memastikan klien dapat IP dari range pool DAN queue-nya benar-benar terbentuk — sama
+keterbatasan "test device nyata" yang sudah tercatat di seluruh file ini. (Setelah fix darurat, sesi
+pelanggan di `ro-hotspot` yang pakai profil ini genuinely reconnect — jadi jalur "profil polos → queue"
+sudah terbukti; yang belum: profil dengan burst lengkap via `composeRateLimit()`.)
+
 ## OSRM Self-Hosted Routing (v0.16.0 Langkah 11)
 
 **First real routing engine in this codebase** — the "Cek Jalur ke ODP" sales feature needs the actual

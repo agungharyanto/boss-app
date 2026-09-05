@@ -44,14 +44,14 @@ class PushHotspotPackageToMikrotikJob implements ShouldQueue
 
         $nas = $package->networkProfileGroup->nas;
         $bandwidth = $package->bandwidthProfile;
-        // Revisi Prioritas Dropdown — `/ip hotspot user profile` has no
-        // standalone `priority` parameter (confirmed live, "unknown
-        // parameter priority"); the ONLY way to push it is embedded in the
-        // extended rate-limit syntax's 5th slot — see
-        // App\Support\RouterOsQueuePriority's own docblock for the full
-        // live-verified reasoning (range 1-8, RouterOS's own true default
-        // 8, and why the burst groups this generates are functionally
-        // inert, not a behavior change from the old plain 2-value format).
+        // DARURAT 2026-09-06 — priority is NO LONGER pushed via rate-limit.
+        // The old extended-syntax burst group ("... 1s/1s {priority}") was
+        // accepted at set-time but broke dynamic /queue simple creation on
+        // session connect ("no download-burst-time"), terminating live
+        // PPPoE sessions. rate-limit is now plain rx/tx only — see
+        // App\Support\RouterOsQueuePriority's own docblock. `/ip hotspot
+        // user profile` still has no standalone priority param, so priority
+        // is stored-not-pushed (RouterOS default = 8 = our DEFAULT).
         $rateLimit = RouterOsQueuePriority::toRateLimitString($bandwidth->upload_max, $bandwidth->download_max, $package->priority);
         // The `/ip pool` name a Profil Hotspot actually gets its clients'
         // IP from — resolved via its own Grup Profil (v0.14.3), same

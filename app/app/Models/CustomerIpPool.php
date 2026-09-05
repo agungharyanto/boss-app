@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\CustomerIpPoolUsageType;
 use App\Enums\MikrotikSyncStatus;
+use App\Enums\NetworkProfileGroupType;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CustomerIpPoolFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -72,6 +73,44 @@ class CustomerIpPool extends Model
     public function mikrotikComment(): string
     {
         return "BOSS App - Customer IP Pool #{$this->id}";
+    }
+
+    /**
+     * Nama yang GENUINELY dikirim ke `/ip pool` di router — BUKAN selalu
+     * `$this->name` verbatim (v0.14.5.4 amendment, Bagian B).
+     *
+     * Bug nyata dari WinBox `ro-hotspot.bajastu.id`: kalau sebuah `/ip pool`
+     * bernama SAMA PERSIS dengan sebuah `/ppp profile` (nama Grup Profil
+     * tipe ppp) di NAS yang sama, RouterOS gagal me-resolve `remote-address`
+     * pada `/ppp profile` yang mereferensikan pool itu ("could not determine
+     * remote address, using 10.113.100.xxx" — klien PPPoE dapat IP fallback
+     * yang SALAH, bukan dari range pool). Sama kelas problem dengan
+     * `/ppp profile` name-namespace collision yang dulu di-handle
+     * `PppPackage::routerOsProfileName()` — sekarang versi Pool.
+     *
+     * Kalau bentrok → suffix stabil `" (pool)"`. Nama TAMPILAN
+     * (`$this->name`, yang diketik/dilihat Agung di form) tidak berubah.
+     * Lookup existing tetap by `comment` (`mikrotikComment()`). SETIAP
+     * `/ppp profile` push yang mereferensikan pool ini (via `remote-address`
+     * atau `local-address=<nama pool>`) WAJIB pakai nilai ini, bukan
+     * `$this->name` — kalau tidak sinkron, profile mengarah ke pool yang
+     * salah/tidak ada.
+     */
+    public function routerOsPoolName(): string
+    {
+        $nasId = $this->nas_id;
+
+        if ($nasId === null) {
+            return $this->name;
+        }
+
+        $collidesWithPppProfileName = NetworkProfileGroup::query()
+            ->where('nas_id', $nasId)
+            ->where('type', NetworkProfileGroupType::Ppp->value)
+            ->where('name', $this->name)
+            ->exists();
+
+        return $collidesWithPppProfileName ? "{$this->name} (pool)" : $this->name;
     }
 
     public function markSyncPending(): void

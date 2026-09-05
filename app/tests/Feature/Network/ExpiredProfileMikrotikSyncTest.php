@@ -27,15 +27,20 @@ class ExpiredProfileMikrotikSyncTest extends TestCase
 
     /**
      * @param  array{success: bool, message: ?string}  $result
+     * @param  array{success: bool, message: ?string}  $poolResult
      */
-    private function bindGateway(array $result = ['success' => true, 'message' => null]): void
+    private function bindGateway(array $result = ['success' => true, 'message' => null], array $poolResult = ['success' => true, 'message' => null]): void
     {
         $recorder = &$this->recordedCalls;
 
-        $this->app->bind(RouterOsGateway::class, function () use ($result, &$recorder) {
-            return new class($result, $recorder) implements RouterOsGateway
+        $this->app->bind(RouterOsGateway::class, function () use ($result, $poolResult, &$recorder) {
+            return new class($result, $poolResult, $recorder) implements RouterOsGateway
             {
-                public function __construct(private readonly array $result, private array &$recorder) {}
+                public function __construct(
+                    private readonly array $result,
+                    private readonly array $poolResult,
+                    private array &$recorder,
+                ) {}
 
                 public function ping(Nas $nas): array
                 {
@@ -59,7 +64,9 @@ class ExpiredProfileMikrotikSyncTest extends TestCase
 
                 public function syncIpPool(Nas $nas, string $comment, string $name, string $ranges): array
                 {
-                    return ['success' => true, 'message' => null];
+                    $this->recorder[] = ['method' => 'syncIpPool', 'args' => compact('comment', 'name', 'ranges')];
+
+                    return $this->poolResult;
                 }
 
                 public function removeIpPool(Nas $nas, string $comment): array
@@ -119,7 +126,10 @@ class ExpiredProfileMikrotikSyncTest extends TestCase
         $this->bindGateway();
         $tenant = Tenant::factory()->create();
         $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
-        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'Expired-Pool']);
+        $pool = CustomerIpPool::factory()->create([
+            'nas_id' => $nas->id, 'name' => 'Expired-Pool',
+            'range_start' => '10.5.5.10', 'range_end' => '10.5.5.50',
+        ]);
         $nas->update(['expired_ip_pool_id' => $pool->id]);
 
         $job = new PushExpiredProfileToMikrotikJob($nas->id);
@@ -130,14 +140,39 @@ class ExpiredProfileMikrotikSyncTest extends TestCase
         $this->assertSame(MikrotikSyncStatus::Synced, $nas->expired_profile_mikrotik_sync_status);
         $this->assertNotNull($nas->expired_profile_mikrotik_synced_at);
 
-        $call = $this->recordedCalls[0];
+        // FIX 2 — `/ip pool` dipastikan ADA dulu ([0]), BARU `/ppp profile` ([1]).
+        $this->assertSame('syncIpPool', $this->recordedCalls[0]['method']);
+        $this->assertSame('Expired-Pool', $this->recordedCalls[0]['args']['name']);
+        $this->assertSame('10.5.5.10-10.5.5.50', $this->recordedCalls[0]['args']['ranges']);
+
+        $call = $this->recordedCalls[1];
         $this->assertSame('syncPppProfile', $call['method']);
         $this->assertSame($nas->expiredProfileMikrotikComment(), $call['args']['comment']);
         $this->assertSame($nas->expiredProfileMikrotikName(), $call['args']['name']);
         $this->assertNull($call['args']['remoteAddress']);
         $this->assertNull($call['args']['dnsServer']);
         $this->assertNull($call['args']['parentQueue']);
+        // Pola expired: nama pool dipakai sebagai local-address (bukan gateway_ip).
         $this->assertSame('Expired-Pool', $call['args']['localAddress']);
+    }
+
+    public function test_push_job_does_not_push_the_profile_when_the_pool_ensure_fails(): void
+    {
+        $this->bindGateway(poolResult: ['success' => false, 'message' => 'router unreachable']);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id]);
+        $nas->update(['expired_ip_pool_id' => $pool->id]);
+
+        $job = new PushExpiredProfileToMikrotikJob($nas->id);
+        $job->withFakeQueueInteractions();
+        $job->job->attempts = 3;
+        $job->handle(app(RouterOsGateway::class));
+
+        $nas->refresh();
+        $this->assertSame(MikrotikSyncStatus::Failed, $nas->expired_profile_mikrotik_sync_status);
+        $this->assertStringContainsString('IP Pool gagal disinkronkan dulu', (string) $nas->expired_profile_mikrotik_sync_error);
+        $this->assertSame(['syncIpPool'], array_column($this->recordedCalls, 'method'));
     }
 
     public function test_push_job_skips_gracefully_when_nas_has_no_expired_pool(): void

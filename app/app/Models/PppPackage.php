@@ -207,44 +207,21 @@ class PppPackage extends Model
     }
 
     /**
-     * Nama yang GENUINELY dikirim ke `/ppp/profile` di router — BUKAN
-     * selalu `$this->name` verbatim (FIX 2 aturan nama final).
+     * ATURAN KERAS 1:1 (v0.14.5.4 amendment) — Profil PPP AKTIF lain yang
+     * SUDAH memakai `$groupId` (kalau ada), untuk validasi + pesan error
+     * yang menyebut nama paket-nya. `$ignoreId` = baris yang sedang diedit
+     * (jangan dianggap "menghalangi dirinya sendiri").
      *
-     * `/ppp profile` wajib unik nama-nya router-wide. Grup Profil (ppp)
-     * SELALU push nama verbatim (dia "anchor" — PPPoE Server Default
-     * Profile). Profil PPP push verbatim JUGA, KECUALI namanya bentrok
-     * dengan Grup Profil ppp / Profil PPP lain di NAS yang sama — lalu
-     * pakai suffix stabil " (pkg #{id})". Nama TAMPILAN (`$this->name`,
-     * yang diketik/dilihat Agung di form) tidak pernah berubah — hanya
-     * string yang dikirim ke RouterOS API. Lookup existing tetap by
-     * `comment` (`mikrotikComment()`), tidak terpengaruh nama.
-     *
-     * Dievaluasi saat push (PushPppPackageToMikrotikJob). Kasus umum
-     * (paket dibuat senama Grup Profil induknya) otomatis benar. Kasus
-     * Grup Profil DI-RENAME jadi bentrok dengan Profil PPP yang sudah
-     * ter-sync: NetworkProfileGroupService me-re-dispatch push Profil PPP
-     * yang senama supaya mereka geser ke suffix duluan.
+     * "aktif" = `deleted_at IS NULL AND is_active = true` — sama definisi
+     * dengan partial unique index `ppp_packages_active_group_unique`.
+     * Query default (bukan `withTrashed()`) sudah meng-exclude soft-deleted.
      */
-    public function routerOsProfileName(): string
+    public static function groupTakenByAnother(int $groupId, ?int $ignoreId = null): ?self
     {
-        $nasId = $this->networkProfileGroup?->nas_id;
-
-        if ($nasId === null) {
-            return $this->name;
-        }
-
-        $collidesWithPppGroup = NetworkProfileGroup::where('nas_id', $nasId)
-            ->where('type', NetworkProfileGroupType::Ppp->value)
-            ->where('name', $this->name)
-            ->exists();
-
-        $collidesWithLowerIdPackage = self::whereHas('networkProfileGroup', fn ($query) => $query->where('nas_id', $nasId))
-            ->where('name', $this->name)
-            ->where('id', '<', $this->id)
-            ->exists();
-
-        return $collidesWithPppGroup || $collidesWithLowerIdPackage
-            ? "{$this->name} (pkg #{$this->id})"
-            : $this->name;
+        return self::query()
+            ->where('network_profile_group_id', $groupId)
+            ->where('is_active', true)
+            ->when($ignoreId !== null, fn ($query) => $query->where('id', '!=', $ignoreId))
+            ->first();
     }
 }

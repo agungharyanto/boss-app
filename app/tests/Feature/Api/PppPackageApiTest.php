@@ -89,6 +89,34 @@ class PppPackageApiTest extends TestCase
         $this->assertDatabaseMissing('ppp_packages', ['name' => 'Paket PPP Bulanan']);
     }
 
+    /**
+     * ATURAN KERAS 1:1 (v0.14.5.4) — satu Grup Profil cuma boleh dipakai
+     * satu Profil PPP aktif (satu `/ppp profile` = satu rate-limit).
+     */
+    public function test_creating_a_second_package_for_an_already_occupied_group_is_rejected(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+        PppPackage::factory()->create(['network_profile_group_id' => $f['group']->id, 'name' => 'Paket-Pertama']);
+
+        $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/ppp-packages', $this->payload($f['group']->id, $f['bandwidth']->id, ['name' => 'Paket-Kedua']));
+
+        $response->assertUnprocessable();
+        $response->assertJsonValidationErrors(['network_profile_group_id']);
+    }
+
+    public function test_a_deactivated_or_deleted_package_frees_the_group_for_a_new_one(): void
+    {
+        Bus::fake();
+        $f = $this->fixtures();
+        PppPackage::factory()->create(['network_profile_group_id' => $f['group']->id, 'is_active' => false]);
+        PppPackage::factory()->create(['network_profile_group_id' => $f['group']->id])->delete();
+
+        $response = $this->actingAs($this->admin($f['tenant']))->postJson('/api/v1/ppp-packages', $this->payload($f['group']->id, $f['bandwidth']->id, ['name' => 'Paket-Baru']));
+
+        $response->assertCreated();
+    }
+
     public function test_admin_can_create_a_ppp_package(): void
     {
         Bus::fake();
@@ -160,8 +188,8 @@ class PppPackageApiTest extends TestCase
 
     public function test_a_name_matching_the_parent_ppp_grup_profil_is_now_allowed(): void
     {
-        // Aturan nama final: dunia PPP bebas senama. Collision /ppp profile
-        // di router di-handle otomatis via PppPackage::routerOsProfileName().
+        // Aturan nama final: dunia PPP bebas senama. Sejak v0.14.5.4 Profil PPP berbagi /ppp profile milik Grup
+        // Profil induknya — tidak ada objek terpisah yang bisa bentrok.
         Bus::fake();
         $f = $this->fixtures();
 

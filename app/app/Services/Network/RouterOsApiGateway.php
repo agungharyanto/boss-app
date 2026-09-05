@@ -337,20 +337,20 @@ class RouterOsApiGateway implements RouterOsGateway
                     $set->equal('local-address', $localAddress);
                 }
 
-                // v0.14.5 (Profil PPP) — same conditional-only-when-non-null
-                // treatment as remote-address/local-address above, rather
-                // than the dns-server/parent-queue unconditional-fallback
-                // style — never verified whether these two specifically
-                // accept an empty-string clear (not needed, see this
-                // method's own interface docblock).
-                if ($rateLimit !== null) {
-                    $set->equal('rate-limit', $rateLimit);
-                }
-
-                if ($sessionTimeout !== null) {
-                    $set->equal('session-timeout', $sessionTimeout);
-                }
-
+                // v0.14.5.4 (ATURAN KERAS 1:1) — rate-limit/session-timeout
+                // are now UNCONDITIONAL on SET, using the same "clear when
+                // null" style as dns-server/parent-queue below. Verified
+                // live against ro-hotspot.bajastu.id: `/ppp/profile/set`
+                // ACCEPTS `rate-limit=""` (clears it) and
+                // `session-timeout="0s"` (RouterOS's own canonical "no
+                // timeout"). This is what makes removing/deactivating a
+                // Profil PPP genuinely RESET its Grup Profil's shared
+                // `/ppp profile` back to a bare fallback (PppProfileSyncService
+                // ::push() with $package = null) — leaving a stale
+                // rate-limit on the PPPoE Server Default Profile would
+                // silently throttle every unclassified session.
+                $set->equal('rate-limit', $rateLimit ?? '');
+                $set->equal('session-timeout', $sessionTimeout ?? '0s');
                 $set->equal('dns-server', $dnsServer ?? '');
                 $set->equal('parent-queue', $parentQueue ?? 'none');
                 $response = $client->query($set)->read();

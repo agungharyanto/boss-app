@@ -102,6 +102,20 @@ Resync ke-2 idempoten. **Bagian A/B diverifikasi nyata di Grup Profil #27 + PppP
 menolak paket kedua. Deactivate #16 → `rate-limit` kosong; reactivate → restored; #16 dikembalikan ke
 `is_active=1`/`synced`. **Belum**: satu koneksi PPPoE nyata masuk (butuh Agung / hardware).
 
+### DARURAT 2026-09-06 — grup burst `rate-limit` `"1s/1s"` memutus ~200 sesi PPPoE pelanggan
+
+Insiden produksi di `ro-hotspot.bajastu.id`: sesi PPPoE pelanggan terputus massal, log MikroTik banjir
+`could not add queue: no download-burst-time (6)`. **Akar**: `RouterOsQueuePriority::toRateLimitString()`
+(v0.14.5.1) mengeluarkan `"{rate} {rate} {rate} 1s/1s {priority}"` — RouterOS MENERIMA-nya di
+`/ppp profile/set` tapi GAGAL menerjemahkannya jadi `/queue simple` dinamis saat sesi connect (burst-time
+`"1s/1s"` bukan format sah di parser PPP→queue yang lebih ketat). **Perbaikan langsung**: `/ppp profile`
+di-set manual ke `"15000k/15000k"` → log berhenti banjir <1 menit, sesi reconnect (210 active, 140
+queue). **Fix kode**: `toRateLimitString()` → format POLOS `"{up}k/{down}k"` saja (tanpa burst/priority);
+priority jadi "stored, not pushed" (RouterOS default = 8 = `DEFAULT`). `composeRateLimit()` baru =
+jalur burst all-or-nothing yang benar (burst-time integer detik, NEVER `"Ns"`) untuk masa depan. Tidak ada
+field burst di form → tidak ada validasi form yang perlu ditambah. `RouterOsQueuePriorityTest` baru;
+assertion `PppPackageMikrotikSyncTest`/`HotspotPackageMikrotikSyncTest` disesuaikan.
+
 ## v0.14.5.3 — Aturan Nama Profil Paket: dunia PPP bebas senama, auto-differentiate di router (branch `investigasi-nama-paket-vs-grup`, merged + tagged `v0.14.5.3`)
 
 Ralat aturan collision nama v0.14.5 — dikonfirmasi eksplisit Agung (lihat CLAUDE.md "ATURAN NAMA PROFIL

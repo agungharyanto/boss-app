@@ -8147,9 +8147,47 @@ Setelah `PushPppPackageToMikrotikJob(16)`:
 - **Reset-ke-bare**: `is_active=false` + push → `/ppp profile` `rate-limit=[]` (kosong). `is_active=true`
   + push → `rate-limit` kembali `15000k/... 8`. Pkg #16 dikembalikan ke `is_active=1`/`synced`.
 
-**BELUM diverifikasi (butuh Agung / hardware)**: satu koneksi PPPoE nyata masuk untuk memastikan klien
-dapat IP dari range pool (`10.0.0.10-10.0.3.254`), bukan fallback `10.113.100.xxx` — sama keterbatasan
-"test device nyata" yang sudah tercatat di seluruh file ini.
+### DARURAT 2026-09-06 — grup burst `rate-limit` `"1s/1s"` memutus ~200 sesi PPPoE pelanggan aktif
+
+**Insiden produksi nyata di `ro-hotspot.bajastu.id`** — sesi PPPoE pelanggan terputus massal, log MikroTik
+banjir `could not add queue: no download-burst-time (6)`, tiap koneksi baru langsung `terminating`.
+
+**Akar masalah**: `App\Support\RouterOsQueuePriority::toRateLimitString()` (dari revisi v0.14.5.1
+"Prioritas Dropdown") mengeluarkan string `"{rate} {rate} {rate} 1s/1s {priority}"` — grup burst lengkap
+plus priority di slot ke-5. RouterOS **MENERIMA** string ini di `/ppp profile/set` DAN `/ip hotspot user
+profile/set` tanpa protes sama sekali (itulah kenapa "verifikasi live" v0.14.5.1 lolos) — TAPI saat sebuah
+sesi PPPoE benar-benar connect, modul PPP RouterOS menerjemahkan `rate-limit` itu jadi `/queue simple`
+dinamis dan GAGAL: burst-time `1s/1s` bukan format yang sah di parser rate-limit→queue RouterOS (butuh
+integer detik polos, dan parser jalur PPP ini lebih ketat dari `/queue/simple/add` biasa yang menerima
+apa saja). Grup burst-nya sendiri juga sia-sia sejak awal (`burst-rate = rate` = burst inert).
+
+**Pola bug yang harus diingat**: sebuah string yang DITERIMA `/ppp profile/set` / `/ip hotspot user
+profile/set` di router **BUKAN jaminan** ia sah — jalur "profile → dynamic /queue simple saat sesi
+connect" adalah parser terpisah yang lebih ketat, dan tidak bisa diverifikasi tanpa sesi klien nyata.
+Verifikasi "set diterima router" ≠ verifikasi "sesi bisa connect".
+
+**Perbaikan langsung** (prioritas paling tinggi, sebelum kode fix): `/ppp profile PPPoE-Remote` di
+`ro-hotspot` di-set manual ke `"15000k/15000k"` (polos) via gateway → log **berhenti banjir dalam
+<1 menit**, sesi pelanggan reconnect (210 PPPoE active, 140 `/queue simple`, 0 error burst-time / 0
+terminating di 60 baris log berikutnya).
+
+**Fix kode**: `toRateLimitString()` sekarang mengeluarkan format **POLOS** `"{up}k/{down}k"` saja — tanpa
+grup burst, tanpa priority. Format ini sudah terbukti bekerja untuk ratusan `/queue simple` dinamis di
+router yang sama. **Konsekuensi**: `priority` (1-8) TIDAK LAGI di-push lewat `rate-limit` (secara
+posisional priority ada di slot ke-5 SETELAH grup burst — tak bisa dikirim tanpa mengisi slot burst
+dulu). Priority tetap tersimpan di DB (`ppp_packages.priority`/`hotspot_packages.priority`), pola "stored,
+not pushed" yang sama dengan `login_days`/`login_start_time`. RouterOS default priority `/queue simple` =
+8 = `RouterOsQueuePriority::DEFAULT`, jadi untuk priority default nol yang hilang. `RouterOsQueuePriority::
+composeRateLimit()` baru menyediakan jalur burst yang BENAR untuk masa depan (all-or-nothing: grup burst
+HANYA disertakan kalau burst-rate + threshold + burst-time lengkap; burst-time integer detik polos, NEVER
+`"Ns"`) — belum ada pemanggil, tidak ada field burst di form mana pun (jadi tidak ada validasi form yang
+perlu ditambah).
+
+**BELUM diverifikasi (butuh Agung / hardware)**: satu koneksi PPPoE nyata dengan Profil PPP yang punya
+`rate-limit` untuk memastikan klien dapat IP dari range pool DAN queue-nya benar-benar terbentuk — sama
+keterbatasan "test device nyata" yang sudah tercatat di seluruh file ini. (Setelah fix darurat, sesi
+pelanggan di `ro-hotspot` yang pakai profil ini genuinely reconnect — jadi jalur "profil polos → queue"
+sudah terbukti; yang belum: profil dengan burst lengkap via `composeRateLimit()`.)
 
 ## OSRM Self-Hosted Routing (v0.16.0 Langkah 11)
 

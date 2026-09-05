@@ -27,6 +27,9 @@ class PppPackageResource extends JsonResource
             'tax_percent' => (float) $this->tax_percent,
             'active_duration_value' => $this->active_duration_value,
             'active_duration_unit' => $this->active_duration_unit?->value,
+            // 0 = Unlimited / tanpa batas waktu (session-timeout tidak
+            // di-push ke RouterOS sama sekali).
+            'is_unlimited_duration' => $this->isUnlimitedDuration(),
             'shared_users' => $this->shared_users,
             'priority' => $this->priority,
             'login_days' => $this->login_days,

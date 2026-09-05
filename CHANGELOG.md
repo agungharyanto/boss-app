@@ -95,9 +95,12 @@ Grup Profil #26 `PPPoE-Remote` (status `failed`, "invalid value for argument rem
 `synced`; router: `/ip pool PPPoE-Remote` (comment `#33`, ranges `10.0.0.10-10.0.3.254`) otomatis dibuat
 ulang, `/ppp profile PPPoE-Remote` sekarang `local-address=10.0.1.1` (sebelumnya kosong),
 `remote-address=PPPoE-Remote`, `dns-server=1.1.1.1,8.8.8.8` + `/interface pppoe-server server` ikut dibuat.
-Resync ke-2 idempoten. Profil PPP throwaway di Grup #26 diverifikasi (`local-address=10.0.1.1`, `rate-limit`
-priority slot ke-5) lalu dihapus bersih. [Verifikasi Bagian A/B penuh + PPPoE test masih menunggu — lihat
-laporan sesi.]
+Resync ke-2 idempoten. **Bagian A/B diverifikasi nyata di Grup Profil #27 + PppPackage #16 "PPPoE-Remote"**
+(skenario yang genuinely ada di router): push → SATU `/ppp profile` (comment group #27) dengan
+`rate-limit` pkg #16, objek `"(pkg #16)"` lama disapu, `/ip pool` → `"PPPoE-Remote (pool)"`,
+`remote-address` ikut. Idempoten 2× (package-side + group-side konvergen). `groupTakenByAnother(27)`
+menolak paket kedua. Deactivate #16 → `rate-limit` kosong; reactivate → restored; #16 dikembalikan ke
+`is_active=1`/`synced`. **Belum**: satu koneksi PPPoE nyata masuk (butuh Agung / hardware).
 
 ## v0.14.5.3 — Aturan Nama Profil Paket: dunia PPP bebas senama, auto-differentiate di router (branch `investigasi-nama-paket-vs-grup`, merged + tagged `v0.14.5.3`)
 

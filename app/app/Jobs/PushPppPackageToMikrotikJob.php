@@ -52,8 +52,17 @@ class PushPppPackageToMikrotikJob implements ShouldQueue
             ->with(['networkProfileGroup.nas', 'networkProfileGroup.customerIpPool', 'bandwidthProfile'])
             ->find($this->pppPackageId);
 
-        if ($package === null || $package->networkProfileGroup === null || $package->networkProfileGroup->nas === null || $package->networkProfileGroup->customerIpPool === null || $package->bandwidthProfile === null) {
-            Log::warning("PushPppPackageToMikrotikJob: PppPackage #{$this->pppPackageId}, Grup Profil, NAS, IP Pool, atau Bandwidth Profile terkait tidak ditemukan, dilewati.");
+        if ($package === null || $package->networkProfileGroup === null || $package->networkProfileGroup->nas === null || $package->networkProfileGroup->customerIpPool === null) {
+            Log::warning("PushPppPackageToMikrotikJob: PppPackage #{$this->pppPackageId}, Grup Profil, NAS, atau IP Pool terkait tidak ditemukan, dilewati.");
+
+            return;
+        }
+
+        // BandwidthProfile hanya wajib untuk paket AKTIF (dipakai menghitung
+        // rate-limit). Paket nonaktif -> profile Grup Profil di-reset ke bare,
+        // tidak butuh bandwidth.
+        if ($package->is_active && $package->bandwidthProfile === null) {
+            Log::warning("PushPppPackageToMikrotikJob: PppPackage #{$this->pppPackageId} aktif tapi Bandwidth Profile-nya tidak ditemukan, dilewati.");
 
             return;
         }

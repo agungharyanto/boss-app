@@ -8125,7 +8125,31 @@ auto-differentiate saat bentrok namespace RouterOS" sudah dipakai 2×: dulu `rou
 Bagian A), sekarang `routerOsPoolName()`. Kalau modul RouterOS-push baru menambah objek bernama ke namespace
 yang bisa bentrok dengan `/ip pool` atau `/ppp profile`, pertimbangkan pola yang sama.
 
-### Verifikasi Bagian A/B — [DIISI setelah verifikasi ro-hotspot penuh, lihat laporan sesi]
+### Verifikasi Bagian A/B — NYATA di `ro-hotspot.bajastu.id` (`test-x86-bajastu` tidak disentuh)
+
+Skenario nyata yang ada di router saat ini: Grup Profil #27 "PPPoE-Remote" (ppp, pool #33) + PppPackage
+#16 "PPPoE-Remote" (aktif, Unlimited/dur=0, BW 10Mbps 15000/15000) — DAN pool #33 juga bernama
+"PPPoE-Remote" (bentrok). State sebelum: DUA objek `/ppp profile` (satu bare comment group #27, satu
+"PPPoE-Remote (pkg #16)" comment PPP Package #16 dengan rate-limit) + `/ip pool` "PPPoE-Remote" — persis
+bug yang diperbaiki.
+
+Setelah `PushPppPackageToMikrotikJob(16)`:
+- **SATU** `/ppp profile` tersisa (`PPPoE-Remote`, comment `BOSS App - Network Profile Group #27`) —
+  membawa `rate-limit=15000k/... 8` (dari pkg #16) + `local-address=10.0.1.1`; objek `(pkg #16)` lama
+  **disapu** (`removePppProfile` by package comment).
+- `/ip pool` di-rename → **`PPPoE-Remote (pool)`** (comment `#33`), dan `/ppp profile`'s
+  `remote-address` ikut → `PPPoE-Remote (pool)`.
+- `/interface pppoe-server server` `default-profile=PPPoE-Remote` tetap benar.
+- Idempoten: 2× push (package-side + `PushNetworkProfileGroupToMikrotikJob(27)` group-side) → tetap
+  1 pool / 1 profile / 1 pppoe-server, keduanya konvergen ke objek yang sama.
+- `PppPackage::groupTakenByAnother(27)` = "PPPoE-Remote" (menolak paket kedua); `groupTakenByAnother(27,
+  ignore=16)` = null (edit #16 sendiri OK).
+- **Reset-ke-bare**: `is_active=false` + push → `/ppp profile` `rate-limit=[]` (kosong). `is_active=true`
+  + push → `rate-limit` kembali `15000k/... 8`. Pkg #16 dikembalikan ke `is_active=1`/`synced`.
+
+**BELUM diverifikasi (butuh Agung / hardware)**: satu koneksi PPPoE nyata masuk untuk memastikan klien
+dapat IP dari range pool (`10.0.0.10-10.0.3.254`), bukan fallback `10.113.100.xxx` — sama keterbatasan
+"test device nyata" yang sudah tercatat di seluruh file ini.
 
 ## OSRM Self-Hosted Routing (v0.16.0 Langkah 11)
 

@@ -2,8 +2,10 @@
 
 namespace App\Jobs;
 
+use App\Enums\NetworkProfileGroupType;
 use App\Models\PppPackage;
 use App\Services\Network\Contracts\RouterOsGateway;
+use App\Services\Network\PppProfileSyncService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -14,11 +16,23 @@ use Throwable;
 
 /**
  * v0.14.5 — companion to PushPppPackageToMikrotikJob, dispatched by
- * PppPackageService::delete(). A PppPackage's own `/ppp profile` object is
- * fully BOSS-App-created and owned (a genuinely separate object from its
- * parent Grup Profil's own `/ppp profile`, never shared) — safe, and
- * correct, to actually remove it, same posture as
- * RemoveHotspotPackageFromMikrotikJob.
+ * PppPackageService::delete().
+ *
+ * v0.14.5.4 (ATURAN KERAS 1:1) — a Profil PPP no longer has its OWN `/ppp
+ * profile` object to delete; it shares the Grup Profil's one. So removing a
+ * Profil PPP RE-PUSHES the Grup Profil's `/ppp profile` in BARE mode
+ * (PppProfileSyncService::push() with $package = null), which actively
+ * CLEARS the rate-limit + session-timeout off the router
+ * (RouterOsGateway::syncPppProfile()'s SET branch sends `rate-limit=""` /
+ * `session-timeout="0s"` when null).
+ *
+ * WHY reset rather than leave the stale cap (poin 4 dari brief, keputusan
+ * Agung): that `/ppp profile` doubles as the PPPoE Server's Default Profile
+ * — the fallback for any session RADIUS doesn't hand a specific profile to.
+ * A leftover rate-limit from a deleted package would silently throttle
+ * every unclassified session at a bandwidth that no longer maps to any
+ * sellable package. Bare = the fallback stays pure network config
+ * (pool/dns/gateway) with no bandwidth cap.
  */
 class RemovePppPackageFromMikrotikJob implements ShouldQueue
 {
@@ -30,17 +44,33 @@ class RemovePppPackageFromMikrotikJob implements ShouldQueue
 
     public function handle(RouterOsGateway $gateway): void
     {
-        $package = PppPackage::withoutGlobalScopes()->withTrashed()->with('networkProfileGroup.nas')->find($this->pppPackageId);
+        $package = PppPackage::withoutGlobalScopes()->withTrashed()
+            ->with(['networkProfileGroup.nas', 'networkProfileGroup.customerIpPool'])
+            ->find($this->pppPackageId);
 
-        if ($package === null || $package->networkProfileGroup === null || $package->networkProfileGroup->nas === null) {
-            Log::warning("RemovePppPackageFromMikrotikJob: PppPackage #{$this->pppPackageId}, Grup Profil, atau NAS terkait tidak ditemukan, dilewati.");
+        if ($package === null || $package->networkProfileGroup === null || $package->networkProfileGroup->nas === null || $package->networkProfileGroup->customerIpPool === null) {
+            Log::warning("RemovePppPackageFromMikrotikJob: PppPackage #{$this->pppPackageId}, Grup Profil, NAS, atau IP Pool terkait tidak ditemukan, dilewati.");
 
             return;
         }
 
-        $result = $gateway->removePppProfile($package->networkProfileGroup->nas, $package->mikrotikComment());
+        $group = $package->networkProfileGroup;
+
+        // The Grup Profil could itself be soft-deleted / non-ppp (a cascade
+        // delete of the parent) — nothing to reset on the router then.
+        if ($group->deleted_at !== null || $group->type !== NetworkProfileGroupType::Ppp) {
+            return;
+        }
+
+        // Sapu objek `/ppp profile` per-paket PENINGGALAN v0.14.5.3, kalau
+        // masih ada (idempoten no-op kalau tidak).
+        $gateway->removePppProfile($group->nas, $package->mikrotikComment());
+
+        $result = app(PppProfileSyncService::class)->push($gateway, $group, null);
 
         if ($result['success']) {
+            $group->markSynced();
+
             return;
         }
 
@@ -51,7 +81,7 @@ class RemovePppPackageFromMikrotikJob implements ShouldQueue
     {
         $package = PppPackage::withoutGlobalScopes()->withTrashed()->find($this->pppPackageId);
 
-        $package?->update(['mikrotik_sync_error' => 'Gagal hapus dari router: '.($exception?->getMessage() ?? 'Unknown failure')]);
+        $package?->update(['mikrotik_sync_error' => 'Gagal reset profil Grup Profil di router: '.($exception?->getMessage() ?? 'Unknown failure')]);
     }
 
     private function recordFailure(PppPackage $package, string $reason): void
@@ -59,7 +89,7 @@ class RemovePppPackageFromMikrotikJob implements ShouldQueue
         $isFinalAttempt = $this->attempts() >= $this->tries;
 
         if ($isFinalAttempt) {
-            $package->update(['mikrotik_sync_error' => 'Gagal hapus dari router: '.$reason]);
+            $package->update(['mikrotik_sync_error' => 'Gagal reset profil Grup Profil di router: '.$reason]);
 
             return;
         }

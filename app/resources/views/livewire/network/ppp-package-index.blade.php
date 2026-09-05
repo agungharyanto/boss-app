@@ -26,11 +26,12 @@
                          picked. --}}
                     <select wire:model.live="networkProfileGroupId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                         <option value="">{{ __('-- Pilih Grup Profil --') }}</option>
-                        @foreach ($groupOptions as $groupOption)
+                        @foreach ($availableGroupOptions as $groupOption)
                             <option value="{{ $groupOption->id }}">{{ $groupOption->name }} ({{ $groupOption->nas->name ?? '-' }})</option>
                         @endforeach
                     </select>
                     @error('networkProfileGroupId') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    <p class="mt-1 text-xs text-gray-500">{{ __('Hanya Grup Profil yang belum dipakai Profil PPP lain yang ditampilkan (1 Grup Profil = 1 Profil PPP).') }}</p>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700">{{ __('Bandwidth Profile') }}</label>
@@ -196,7 +197,7 @@
                                 <form wire:submit="updatePackage" class="space-y-3">
                                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                                         <select wire:model="editNetworkProfileGroupId" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
-                                            @foreach ($groupOptions as $groupOption)
+                                            @foreach ($editGroupOptions as $groupOption)
                                                 <option value="{{ $groupOption->id }}">{{ $groupOption->name }}</option>
                                             @endforeach
                                         </select>

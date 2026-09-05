@@ -72,8 +72,33 @@ class StorePppPackageRequest extends FormRequest
     {
         $validator->after(function (Validator $validator) {
             $this->validateGroupIsPppType($validator);
+            $this->validateGroupNotAlreadyTaken($validator);
             $this->validateNoNameCollisionOnNas($validator);
         });
+    }
+
+    /**
+     * ATURAN KERAS 1:1 (v0.14.5.4) — satu Grup Profil cuma boleh dipakai
+     * satu Profil PPP aktif. Satu `/ppp profile` di RouterOS cuma bisa
+     * punya satu rate-limit. Ditegakkan juga di DB (partial unique index
+     * `ppp_packages_active_group_unique`) — ini lapisan UX yang memberi
+     * pesan jelas alih-alih error constraint mentah.
+     */
+    private function validateGroupNotAlreadyTaken(Validator $validator): void
+    {
+        if ($validator->errors()->hasAny(['network_profile_group_id'])) {
+            return;
+        }
+
+        $groupId = $this->integer('network_profile_group_id');
+        $taken = PppPackage::groupTakenByAnother($groupId);
+
+        if ($taken !== null) {
+            $validator->errors()->add(
+                'network_profile_group_id',
+                "Grup Profil ini sudah dipakai paket \"{$taken->name}\" — 1 Grup Profil cuma bisa dipakai 1 Profil PPP.",
+            );
+        }
     }
 
     /**
@@ -101,11 +126,12 @@ class StorePppPackageRequest extends FormRequest
 
     /**
      * ATURAN NAMA FINAL (2026-09-05, dikonfirmasi Agung) — nama Profil PPP
-     * BOLEH sama dengan Grup Profil tipe ppp / Profil PPP lain (dunia PPP
-     * bebas, collision `/ppp profile` di router di-handle otomatis via
-     * PppPackage::routerOsProfileName() saat push). Yang TETAP diblokir di
-     * sini: nama sama dengan dunia HOTSPOT (Grup Profil tipe hotspot ATAU
-     * Profil Hotspot) di NAS yang sama. Lihat
+     * BOLEH sama dengan Grup Profil tipe ppp lain (dunia PPP bebas). Sejak
+     * v0.14.5.4 (ATURAN KERAS 1:1) Profil PPP tidak punya `/ppp profile`
+     * sendiri — ia berbagi objek milik Grup Profil induknya — jadi tidak
+     * ada lagi collision `/ppp profile` di router untuk di-handle. Yang
+     * TETAP diblokir di sini: nama sama dengan dunia HOTSPOT (Grup Profil
+     * tipe hotspot ATAU Profil Hotspot) di NAS yang sama. Lihat
      * PppPackage::collidesWithExistingName()'s own docblock.
      */
     private function validateNoNameCollisionOnNas(Validator $validator): void

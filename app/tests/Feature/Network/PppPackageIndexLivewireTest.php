@@ -52,6 +52,52 @@ class PppPackageIndexLivewireTest extends TestCase
         return compact('tenant', 'nas', 'group', 'bandwidth');
     }
 
+    /**
+     * ATURAN KERAS 1:1 (v0.14.5.4) — dropdown CREATE hanya menawarkan Grup
+     * Profil ppp yang belum dipakai; submit ke grup yang sudah dipakai
+     * ditolak.
+     */
+    public function test_create_dropdown_excludes_a_group_that_already_has_an_active_package_and_submit_is_rejected(): void
+    {
+        $f = $this->fixtures();
+        PppPackage::factory()->create(['network_profile_group_id' => $f['group']->id, 'name' => 'Sudah-Ada']);
+
+        $freePool = CustomerIpPool::factory()->create(['nas_id' => $f['nas']->id]);
+        $freeGroup = NetworkProfileGroup::factory()->create([
+            'nas_id' => $f['nas']->id, 'customer_ip_pool_id' => $freePool->id, 'type' => NetworkProfileGroupType::Ppp,
+        ]);
+
+        $component = Livewire::actingAs($this->admin($f['tenant']))->test(PppPackageIndex::class);
+
+        $available = $component->viewData('availableGroupOptions')->pluck('id')->all();
+        $this->assertContains($freeGroup->id, $available);
+        $this->assertNotContains($f['group']->id, $available);
+
+        $component
+            ->set('networkProfileGroupId', (string) $f['group']->id)
+            ->set('bandwidthProfileId', (string) $f['bandwidth']->id)
+            ->set('name', 'Paket-Kedua')
+            ->set('costPrice', '50000')
+            ->set('sellPrice', '100000')
+            ->set('activeDurationValue', '1')
+            ->set('activeDurationUnit', 'month')
+            ->call('createPackage')
+            ->assertHasErrors('networkProfileGroupId');
+    }
+
+    public function test_edit_dropdown_still_includes_the_currently_linked_group(): void
+    {
+        $f = $this->fixtures();
+        $package = PppPackage::factory()->create(['network_profile_group_id' => $f['group']->id]);
+
+        $component = Livewire::actingAs($this->admin($f['tenant']))
+            ->test(PppPackageIndex::class)
+            ->call('edit', $package->id);
+
+        $editIds = $component->viewData('editGroupOptions')->pluck('id')->all();
+        $this->assertContains($f['group']->id, $editIds);
+    }
+
     public function test_creating_a_package_via_the_form(): void
     {
         $f = $this->fixtures();
@@ -182,8 +228,8 @@ class PppPackageIndexLivewireTest extends TestCase
 
     /**
      * Aturan nama final (2026-09-05): dunia PPP bebas senama — nama Profil
-     * PPP BOLEH sama dengan Grup Profil ppp induknya. Collision /ppp
-     * profile di router di-handle otomatis (PppPackage::routerOsProfileName()).
+     * PPP BOLEH sama dengan Grup Profil ppp induknya. Sejak v0.14.5.4 Profil PPP berbagi /ppp profile milik Grup
+     * Profil induknya — tidak ada objek terpisah yang bisa bentrok.
      */
     public function test_a_name_matching_the_parent_ppp_grup_profil_is_now_allowed(): void
     {

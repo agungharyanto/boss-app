@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Enums\NetworkProfileGroupType;
 use App\Models\NetworkProfileGroup;
 use App\Services\Network\Contracts\RouterOsGateway;
+use App\Services\Network\PppProfileSyncService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -21,8 +22,12 @@ use Throwable;
  * Branches by type because the two RouterOS targets are genuinely
  * different entities, confirmed empirically before implementing (see
  * RouterOsGateway's own docblocks):
- * - Ppp: `/ppp profile`, a real reusable named profile object — clean 1:1
- *   mapping onto NetworkProfileGroup's own schema.
+ * - Ppp: `/ppp profile` — assembled + pushed by PppProfileSyncService
+ *   (v0.14.5.4), SHARED with PushPppPackageToMikrotikJob (one router
+ *   object per Grup Profil, keyed by the Grup Profil's comment). This job
+ *   passes the group's ONE active Profil PPP (or null -> bare fallback
+ *   profile) so a group create/edit/resync re-derives the rate-limit from
+ *   whatever package currently occupies it.
  * - Hotspot: `/ip hotspot user profile` has NO pool/dns/parent-queue
  *   fields at all — the only real RouterOS effect for this type is
  *   updating the NAS's existing `/ip hotspot` SERVER instance's own
@@ -40,7 +45,9 @@ class PushNetworkProfileGroupToMikrotikJob implements ShouldQueue
 
     public function handle(RouterOsGateway $gateway): void
     {
-        $group = NetworkProfileGroup::withoutGlobalScopes()->withTrashed()->with(['nas', 'customerIpPool'])->find($this->networkProfileGroupId);
+        $group = NetworkProfileGroup::withoutGlobalScopes()->withTrashed()
+            ->with(['nas', 'customerIpPool', 'activePppPackage.bandwidthProfile'])
+            ->find($this->networkProfileGroupId);
 
         if ($group === null || $group->nas === null || $group->customerIpPool === null) {
             Log::warning("PushNetworkProfileGroupToMikrotikJob: NetworkProfileGroup #{$this->networkProfileGroupId}, NAS, atau CustomerIpPool terkait tidak ditemukan, dilewati.");
@@ -49,8 +56,8 @@ class PushNetworkProfileGroupToMikrotikJob implements ShouldQueue
         }
 
         $result = $group->type === NetworkProfileGroupType::Ppp
-            ? $this->syncPpp($gateway, $group)
-            : $gateway->syncHotspotServerPool($group->nas, $group->customerIpPool->name);
+            ? app(PppProfileSyncService::class)->push($gateway, $group, $group->activePppPackage)
+            : $gateway->syncHotspotServerPool($group->nas, $group->customerIpPool->routerOsPoolName());
 
         if ($result['success']) {
             $group->markSynced();
@@ -73,98 +80,6 @@ class PushNetworkProfileGroupToMikrotikJob implements ShouldQueue
         }
 
         $this->recordFailure($group, $message);
-    }
-
-    /**
-     * Revisi Grup Profil — after the `/ppp profile` push succeeds, ALSO
-     * pushes `/interface/pppoe-server/server` when BOTH interface_name AND
-     * service_name are set (a PPPoE Server object needs both to be
-     * meaningful — neither alone is a valid RouterOS config). Its own
-     * `default-profile` is the Grup Profil's OWN name — Agung's own real
-     * Winbox pattern resolved what this bare, no-rate-limit `/ppp profile`
-     * is FOR (see CLAUDE.md's own resolution note): it's the PPPoE
-     * Server's Default Profile, referenced for any session RADIUS doesn't
-     * hand a more specific profile to. Both objects must succeed for
-     * syncPpp() to report success — a partial success (profile pushed,
-     * PPPoE Server failed) is still a real, actionable failure state, not
-     * silently reported as synced.
-     *
-     * FIX 2 (ketahanan drift, 2026-09-06) — SEBELUM push `/ppp profile`,
-     * pastikan `/ip pool` yang direferensikannya (`remote-address=<nama pool>`)
-     * genuinely ADA di router. Admin sering hapus objek langsung di
-     * MikroTik tanpa update BOSS App; kalau `/ip pool` sudah hilang,
-     * `/ppp/profile/add remote-address=<nama pool>` ditolak RouterOS
-     * ("invalid value for argument remote-address:") dan Grup Profil
-     * "Sync Ulang" gagal PERMANEN. `syncIpPool()` idempoten (lookup
-     * by-comment: create kalau hilang, update kalau ada) — satu klik
-     * "Sync Ulang" jadi membangun ulang pool + profile dalam urutan benar.
-     * Status `mikrotik_sync_*` pool ikut diperbaiki di sini kalau tadinya
-     * "synced" padahal sebenarnya sudah drift.
-     *
-     * @return array{success: bool, message: ?string}
-     */
-    private function syncPpp(RouterOsGateway $gateway, NetworkProfileGroup $group): array
-    {
-        $pool = $group->customerIpPool;
-
-        $poolResult = $gateway->syncIpPool(
-            $group->nas,
-            $pool->mikrotikComment(),
-            $pool->name,
-            "{$pool->range_start}-{$pool->range_end}",
-        );
-
-        if (! $poolResult['success']) {
-            $poolMessage = 'IP Pool gagal disinkronkan dulu: '.($poolResult['message'] ?? 'Unknown failure');
-            $pool->markSyncFailed($poolMessage);
-
-            return ['success' => false, 'message' => $poolMessage];
-        }
-
-        $pool->markSynced();
-
-        $dnsServers = array_values(array_filter([$group->dns_primary, $group->dns_secondary]));
-        $dnsServer = $dnsServers === [] ? null : implode(',', $dnsServers);
-
-        $profileResult = $gateway->syncPppProfile(
-            $group->nas,
-            $group->mikrotikComment(),
-            $group->name,
-            $pool->name,
-            $dnsServer,
-            $group->parent_queue,
-            // FIX 1 — local-address = gateway_ip pool (kolom yang memang
-            // disimpan sejak v0.14.2 KHUSUS untuk ini, tapi wiring-nya
-            // kelewat di v0.14.3/v0.14.5). Tanpa local-address, PPP
-            // interface klien tidak punya gateway di sisi router →
-            // pelanggan connect tapi tidak dapat routing.
-            $pool->gateway_ip,
-        );
-
-        if (! $profileResult['success']) {
-            return $profileResult;
-        }
-
-        if ($group->interface_name === null || $group->service_name === null) {
-            return $profileResult;
-        }
-
-        $pppoeResult = $gateway->syncPppoeServer(
-            $group->nas,
-            $group->mikrotikComment(),
-            $group->service_name,
-            $group->interface_name,
-            $group->name,
-        );
-
-        if (! $pppoeResult['success']) {
-            return [
-                'success' => false,
-                'message' => '/ppp profile berhasil, tapi PPPoE Server gagal: '.($pppoeResult['message'] ?? 'Unknown failure'),
-            ];
-        }
-
-        return $pppoeResult;
     }
 
     public function failed(?Throwable $exception): void

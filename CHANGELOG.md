@@ -38,11 +38,66 @@ server PPPoE-Remote` ikut dibuat. Resync ke-2 idempoten (tetap 1 pool / 1 profil
 PPP throwaway di Grup #26 juga diverifikasi: `local-address=10.0.1.1`, `rate-limit=...5` (priority di slot
 ke-5), lalu dihapus bersih.
 
-**Test**: `NetworkProfileGroupMikrotikSyncTest` (+2: pool-ensure-gagal → profil tidak dipush + pool Failed;
-pool drift → dibuat ulang lalu profil sukses, urutan `[syncIpPool, syncPppProfile]`), `PppPackageMikrotikSyncTest`
-(+2 sama pola), `ExpiredProfileMikrotikSyncTest` (+1 pool-ensure-gagal). Assertion `localAddress === null`
-lama di `PppPackageMikrotikSyncTest` diganti `=== gateway_ip`. Fake `RouterOsGateway` ketiga file dapat
-parameter `$poolResult` + `syncIpPool()` sekarang direkam.
+### Bagian A — ATURAN KERAS 1:1 Grup Profil ⇄ Profil PPP + edit-in-place (dikonfirmasi Agung)
+
+**1 Grup Profil HANYA BOLEH dipakai 1 Profil PPP aktif** — tanpa syarat. Alasan teknis: satu `/ppp profile`
+di RouterOS cuma bisa punya satu `rate-limit`, tidak bisa menampung limitasi banyak paket sekaligus.
+
+- **Investigasi data dev**: cuma 1 `PppPackage` genuinely-live (#16 pada group #27); semua yang lain sudah
+  soft-deleted. NOL konflik → constraint bisa ditegakkan tanpa migrasi data.
+- **Migration** `2026_09_06_090000` — partial unique index `ppp_packages (network_profile_group_id) WHERE
+  deleted_at IS NULL AND is_active`. Profil PPP yang di-soft-delete ATAU dinonaktifkan tidak menghalangi
+  Grup Profil dipakai ulang.
+- **`PppPackage::groupTakenByAnother()`** — dipakai `Store`/`UpdatePppPackageRequest` + `PppPackageIndex`
+  untuk pesan jelas ("Grup Profil ini sudah dipakai paket \"X\" — 1 Grup Profil cuma bisa dipakai 1 Profil
+  PPP.") alih-alih error constraint mentah. Dropdown Grup Profil di form CREATE hanya menampilkan grup yang
+  belum dipakai (`availableGroupOptions`); form EDIT tetap menyertakan grup yang sedang dipakai paket itu.
+- **Tidak ada lagi `/ppp profile` terpisah untuk Profil PPP.** Grup Profil + Profil PPP-nya berbagi SATU
+  objek `/ppp profile` (di-lookup by comment Grup Profil). Profil PPP hanya menambahkan `rate-limit` (dari
+  Bandwidth Profile) + `session-timeout` (dari Masa Aktif) ke profile itu. **`App\Services\Network\
+  PppProfileSyncService`** baru = satu-satunya tempat objek itu dirakit + dipush; dipakai bareng
+  `PushNetworkProfileGroupToMikrotikJob` DAN `PushPppPackageToMikrotikJob` — "Sync Ulang" dari sisi mana pun
+  konvergen ke objek router yang sama. `PushPppPackageToMikrotikJob` menandai package DAN Grup Profil synced.
+- **Profil PPP dihapus/dinonaktifkan → `/ppp profile` Grup Profil di-RESET ke bare** (poin 4 brief,
+  keputusan Agung): `RouterOsGateway::syncPppProfile()`'s cabang SET sekarang mengirim `rate-limit=""` /
+  `session-timeout="0s"` unconditional (diverifikasi live di `ro-hotspot`: RouterOS menerima keduanya). Itu
+  profile = PPPoE Server Default Profile — fallback untuk sesi yang RADIUS tidak beri profile spesifik;
+  meninggalkan `rate-limit` basi akan diam-diam membatasi bandwidth setiap sesi tak-terklasifikasi.
+  `RemovePppPackageFromMikrotikJob` tidak lagi menghapus objek `/ppp profile` (tidak ada objek terpisah) —
+  ia re-push Grup Profil dalam mode bare.
+- **`PppPackage::routerOsProfileName()` (auto-differentiate v0.14.5.3) DIHAPUS** — tidak relevan lagi
+  karena tidak pernah ada 2 objek `/ppp profile` bersaing. `NetworkProfileGroupService::
+  repushCollidingPppPackages()` ikut dihapus.
+
+### Bagian B — Auto-differentiate nama IP Pool kalau bentrok nama `/ppp profile`
+
+Bug dari WinBox: IP Pool + `/ppp profile` nama SAMA ("PPPoE-Remote") → RouterOS gagal resolve
+`remote-address` ("could not determine remote address, using 10.113.100.xxx" — klien PPPoE dapat IP fallback
+salah). **`CustomerIpPool::routerOsPoolName()`** — nama yang dikirim ke `/ip pool` auto-menambah suffix
+`" (pool)"` kalau bentrok nama Grup Profil tipe ppp di NAS yang sama. Kolom DB `name` tidak berubah.
+SETIAP `/ip pool` push (`PushCustomerIpPoolToMikrotikJob`, `PppProfileSyncService`, `PushExpiredProfileToMikrotikJob`,
+`syncHotspotServerPool`) DAN setiap `remote-address`/`local-address=<nama pool>` di `/ppp profile` sekarang
+pakai nilai ini. `PushCustomerIpPoolToMikrotikJob` re-dispatch push Grup Profil ppp yang mereferensikan pool
+supaya `remote-address`-nya ikut nama baru.
+
+### Test
+
+`PppPackageMikrotikSyncTest` ditulis ulang total (arsitektur 1-objek), `NetworkProfileGroupMikrotikSyncTest`
+(pool-ensure + drift dari v0.14.5.4), `ExpiredProfileMikrotikSyncTest` (+1), `PppPackageTest` (3 test
+`routerOsProfileName` → 3 test `groupTakenByAnother`), `CustomerIpPoolTest` (BARU — 4 test `routerOsPoolName`),
+`PppPackageApiTest`/`PppPackageIndexLivewireTest` (+ test 1:1: paket kedua ditolak, deactivate/delete
+membebaskan grup, dropdown exclude grup terpakai), `NetworkProfileGroupApiTest` (test `repushCollidingPppPackages`
+dihapus). Assertion `localAddress === null` lama diganti `=== gateway_ip`.
+
+### Diverifikasi NYATA di `ro-hotspot.bajastu.id` (`test-x86-bajastu` tidak disentuh)
+
+Grup Profil #26 `PPPoE-Remote` (status `failed`, "invalid value for argument remote-address:") → 1× resync →
+`synced`; router: `/ip pool PPPoE-Remote` (comment `#33`, ranges `10.0.0.10-10.0.3.254`) otomatis dibuat
+ulang, `/ppp profile PPPoE-Remote` sekarang `local-address=10.0.1.1` (sebelumnya kosong),
+`remote-address=PPPoE-Remote`, `dns-server=1.1.1.1,8.8.8.8` + `/interface pppoe-server server` ikut dibuat.
+Resync ke-2 idempoten. Profil PPP throwaway di Grup #26 diverifikasi (`local-address=10.0.1.1`, `rate-limit`
+priority slot ke-5) lalu dihapus bersih. [Verifikasi Bagian A/B penuh + PPPoE test masih menunggu — lihat
+laporan sesi.]
 
 ## v0.14.5.3 — Aturan Nama Profil Paket: dunia PPP bebas senama, auto-differentiate di router (branch `investigasi-nama-paket-vs-grup`, merged + tagged `v0.14.5.3`)
 

@@ -54,11 +54,12 @@ class PushExpiredProfileToMikrotikJob implements ShouldQueue
         }
 
         $pool = $nas->expiredIpPool;
+        $poolName = $pool->routerOsPoolName();
 
         $poolResult = $gateway->syncIpPool(
             $nas,
             $pool->mikrotikComment(),
-            $pool->name,
+            $poolName,
             "{$pool->range_start}-{$pool->range_end}",
         );
 
@@ -79,7 +80,7 @@ class PushExpiredProfileToMikrotikJob implements ShouldQueue
             null,
             null,
             null,
-            $pool->name,
+            $poolName,
         );
 
         if ($result['success']) {

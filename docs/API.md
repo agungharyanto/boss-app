@@ -845,15 +845,23 @@ rejected otherwise) and a Bandwidth Profile (v0.14.1). Permission: `ppp_packages
 tier admin only, same posture as `hotspot_packages.*`/`network_profile_groups.*`. Business logic in
 `App\Services\Network\PppPackageService`.
 
-**RouterOS live-push — a brand-new, SEPARATE `/ppp profile`, not the parent Grup Profil's own object**:
-`POST`/`PUT`/`DELETE` below each queue a background Job that pushes/removes this Profil PPP's OWN `/ppp
-profile` (found/updated by a stable comment, `"BOSS App - PPP Package #{id}"` — `/ppp profile` genuinely
-supports `comment`, confirmed via a live test, so — unlike Profil Hotspot's own `mikrotik_profile_name`
-workaround — a rename just works). `local-address`/`dns-server`/`parent-queue` are **inherited from the
-parent Grup Profil and resolved LIVE on every single push** (never copied/cached onto the package itself —
-so changing the Grup Profil's own pool/DNS/parent-queue later automatically flows through on the Profil
-PPP's next push). `rate-limit` comes from this package's own Bandwidth Profile (`"{upload_max}k/
-{download_max}k"`, same format as Profil Hotspot); `session-timeout` from this package's own Masa Aktif
+**ATURAN KERAS 1:1 (v0.14.5.4, meralat v0.14.5.3)** — **satu Grup Profil hanya boleh dipakai satu Profil
+PPP AKTIF**. Satu `/ppp profile` di RouterOS cuma bisa punya satu `rate-limit`. `POST` (dan `PUT` yang
+memindahkan `network_profile_group_id`) menolak dengan `422` + error pada `network_profile_group_id`
+kalau grup itu sudah dipakai Profil PPP lain yang belum di-soft-delete DAN masih `is_active`. Menonaktifkan
+(`is_active=false`) atau menghapus Profil PPP yang lama membebaskan grup-nya. Ditegakkan juga di level DB
+(partial unique index `ppp_packages_active_group_unique`).
+
+**RouterOS live-push (v0.14.5.4) — TIDAK ADA lagi `/ppp profile` terpisah untuk Profil PPP**: `POST`/`PUT`/
+`DELETE` below each queue a background Job that UPDATES the parent Grup Profil's OWN shared `/ppp profile`
+(keyed by the Grup Profil's comment, `"BOSS App - Network Profile Group #{id}"`) — adding this package's
+`rate-limit` + `session-timeout` onto it. "Sync Ulang" dari sisi Grup Profil maupun Profil PPP konvergen ke
+objek router yang sama. Menghapus/menonaktifkan Profil PPP me-RESET `rate-limit`/`session-timeout` objek itu
+ke bare (objek itu = PPPoE Server Default Profile). `local-address` (= IP Pool induk `gateway_ip`)/
+`dns-server`/`parent-queue`/`remote-address` (= nama IP Pool, lihat Bagian B di bawah) are **inherited from
+the parent Grup Profil and resolved LIVE on every single push**. `rate-limit` comes from this package's own
+Bandwidth Profile (`"{upload_max}k/{download_max}k"`, same format as Profil Hotspot); `session-timeout` from
+this package's own Masa Aktif
 (`active_duration_value`/`active_duration_unit`). **Revisi 2026-09-05: `active_duration_value = 0` berarti
 Unlimited / tanpa batas waktu** (konvensi MixRadius "0 UNTUK MASA AKTIF UNLIMITED") — `session-timeout`
 TIDAK di-push ke `/ppp profile` sama sekali (RouterOS pakai default-nya sendiri, tanpa timeout), sama
@@ -864,15 +872,19 @@ seperti kasus Profil Hotspot, di-flag bukan di-workaround.) `mikrotik_sync_statu
 `mikrotik_synced_at`/`mikrotik_sync_error` — same 3-state contract as every other live-pushed entity in
 this cluster.
 
-**Aturan nama (FINAL 2026-09-05 — meralat validasi awal v0.14.5, lihat CLAUDE.md "ATURAN NAMA PROFIL
-PAKET")**: **DI DALAM dunia PPP nama BOLEH sama** — sebuah Profil PPP boleh senama dengan Grup Profil ppp
-induknya, Profil PPP lain, atau IP Pool, di NAS yang sama (sengaja, biar konsisten di WinBox). Collision
-`/ppp profile` di RouterOS (Grup Profil ppp + Profil PPP sama-sama namespace itu) di-handle **otomatis
-saat push**, bukan dengan menolak input: `PppPackage::routerOsProfileName()` mengirim nama verbatim
-kecuali bentrok → lalu `"{nama} (pkg #{id})"`. Nama tampilan (`ppp_packages.name`) tidak pernah berubah.
-`POST`/`PUT` **HANYA** menolak `name` yang bentrok dengan **dunia HOTSPOT** di NAS yang sama (Grup Profil
-tipe `hotspot` ATAU Profil Hotspot) — aturan bisnis, bukan sekadar namespace. Baseline `name` unik
-per-Grup-Profil (`(network_profile_group_id, name)`) tetap ada.
+**Aturan nama (FINAL 2026-09-05, lihat CLAUDE.md "ATURAN NAMA PROFIL PAKET")**: **DI DALAM dunia PPP nama
+BOLEH sama** — sebuah Profil PPP boleh senama dengan Grup Profil ppp lain / Profil PPP lain di NAS yang
+sama. Sejak v0.14.5.4 (ATURAN KERAS 1:1) Profil PPP tidak punya `/ppp profile` sendiri — ia berbagi objek
+milik Grup Profil induknya — jadi tidak ada lagi collision `/ppp profile` di router untuk di-handle
+(`routerOsProfileName()` v0.14.5.3 dihapus). `POST`/`PUT` **HANYA** menolak `name` yang bentrok dengan
+**dunia HOTSPOT** di NAS yang sama (Grup Profil tipe `hotspot` ATAU Profil Hotspot) — aturan bisnis, bukan
+sekadar namespace. Baseline `name` unik per-Grup-Profil (`(network_profile_group_id, name)`) tetap ada.
+
+**Bagian B (v0.14.5.4) — auto-differentiate nama IP Pool**: kalau nama sebuah IP Pool bentrok dengan nama
+sebuah `/ppp profile` (nama Grup Profil tipe ppp) di NAS yang sama, nama yang DIKIRIM ke `/ip pool` di
+router (dan sebagai `remote-address` di `/ppp profile` yang mereferensikannya) otomatis dapat suffix
+`" (pool)"` — bug WinBox nyata: RouterOS salah me-resolve `remote-address` kalau pool dan profile senama.
+Kolom `customer_ip_pools.name` (yang dilihat/diedit user) tidak berubah.
 
 ### `GET /ppp-packages`
 

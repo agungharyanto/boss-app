@@ -189,6 +189,24 @@ class PppPackageIndex extends Component
     }
 
     /**
+     * ATURAN KERAS 1:1 (v0.14.5.4) — mirrors Store/UpdatePppPackageRequest::
+     * validateGroupNotAlreadyTaken(). Satu Grup Profil cuma boleh dipakai
+     * satu Profil PPP aktif (satu `/ppp profile` = satu rate-limit).
+     */
+    private function validateGroupNotAlreadyTaken(int $groupId, string $errorField, ?int $ignoreId = null): bool
+    {
+        $taken = PppPackage::groupTakenByAnother($groupId, $ignoreId);
+
+        if ($taken !== null) {
+            $this->addError($errorField, "Grup Profil ini sudah dipakai paket \"{$taken->name}\" — 1 Grup Profil cuma bisa dipakai 1 Profil PPP.");
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * Mirrors StorePppPackageRequest/UpdatePppPackageRequest's own
      * validateNoNameCollisionOnNas() — aturan nama final (2026-09-05):
      * hanya blokir bentrok dengan dunia HOTSPOT (Grup Profil tipe hotspot /
@@ -232,6 +250,10 @@ class PppPackageIndex extends Component
         $group = $this->validateGroupIsPppType($this->networkProfileGroupId, 'networkProfileGroupId');
 
         if ($group === null) {
+            return;
+        }
+
+        if (! $this->validateGroupNotAlreadyTaken($group->id, 'networkProfileGroupId')) {
             return;
         }
 
@@ -343,6 +365,11 @@ class PppPackageIndex extends Component
             return;
         }
 
+        if ((int) $this->editNetworkProfileGroupId !== $package->network_profile_group_id
+            && ! $this->validateGroupNotAlreadyTaken($group->id, 'editNetworkProfileGroupId', $package->id)) {
+            return;
+        }
+
         if (! $this->validateNoNameCollisionOnNas($group, $this->editName, 'editName')) {
             return;
         }
@@ -398,7 +425,24 @@ class PppPackageIndex extends Component
             // CustomerIpPoolIndex/NetworkProfileGroupIndex — reused, not
             // reinvented.
             'hasPendingSync' => $packages->contains(fn (PppPackage $package) => $package->mikrotik_sync_status === MikrotikSyncStatus::Pending),
+            // Semua Grup Profil ppp — dipakai untuk dropdown FILTER (bukan
+            // form). Form-nya pakai daftar terbatas di bawah.
             'groupOptions' => NetworkProfileGroup::query()->where('type', 'ppp')->orderBy('name')->get(['id', 'name']),
+            // ATURAN KERAS 1:1 (v0.14.5.4) — CREATE hanya menawarkan Grup
+            // Profil ppp yang BELUM dipakai Profil PPP aktif; EDIT selalu
+            // menyertakan grup yang sedang dipakai paket ini juga.
+            'availableGroupOptions' => NetworkProfileGroup::query()
+                ->where('type', 'ppp')
+                ->whereDoesntHave('activePppPackage')
+                ->orderBy('name')
+                ->get(['id', 'name']),
+            'editGroupOptions' => NetworkProfileGroup::query()
+                ->where('type', 'ppp')
+                ->where(fn ($query) => $query
+                    ->whereDoesntHave('activePppPackage')
+                    ->orWhere('id', $this->editNetworkProfileGroupId !== '' ? (int) $this->editNetworkProfileGroupId : 0))
+                ->orderBy('name')
+                ->get(['id', 'name']),
             'bandwidthProfileOptions' => BandwidthProfile::query()->where('is_active', true)->orderBy('name')->get(['id', 'name']),
             'dayOptions' => self::DAY_OPTIONS,
             'dayLabels' => self::DAY_LABELS,

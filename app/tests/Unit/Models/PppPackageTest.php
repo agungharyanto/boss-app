@@ -124,46 +124,34 @@ class PppPackageTest extends TestCase
         $this->assertNotSame($hotspotGroup->nas_id, $otherNas->id);
     }
 
-    // ── routerOsProfileName(): auto-differentiate nama yang dikirim ke router ──
+    // ── groupTakenByAnother(): ATURAN KERAS 1:1 Grup Profil <-> Profil PPP ──
 
-    public function test_router_name_is_verbatim_when_no_ppp_collision(): void
+    public function test_group_taken_by_another_returns_the_occupying_active_package(): void
     {
-        $group = $this->nasWithGroup('SomethingUnique');
-        $package = PppPackage::factory()->create([
-            'network_profile_group_id' => $group->id, 'name' => 'Paket-Sendirian',
-        ]);
+        $group = $this->nasWithGroup('Anchor');
+        $first = PppPackage::factory()->create(['network_profile_group_id' => $group->id, 'name' => 'Paket-Pertama']);
 
-        $this->assertSame('Paket-Sendirian', $package->fresh()->routerOsProfileName());
+        $taken = PppPackage::groupTakenByAnother($group->id);
+
+        $this->assertNotNull($taken);
+        $this->assertSame($first->id, $taken->id);
     }
 
-    public function test_router_name_gets_a_suffix_when_it_matches_the_parent_ppp_grup_profil(): void
+    public function test_group_taken_by_another_ignores_the_given_id(): void
     {
-        $group = $this->nasWithGroup('test-10Mbps-HomeFixed');
-        $package = PppPackage::factory()->create([
-            'network_profile_group_id' => $group->id, 'name' => 'test-10Mbps-HomeFixed',
-        ]);
+        $group = $this->nasWithGroup('Anchor');
+        $only = PppPackage::factory()->create(['network_profile_group_id' => $group->id]);
 
-        $fresh = $package->fresh();
-        // Nama TAMPILAN (kolom DB) tidak berubah.
-        $this->assertSame('test-10Mbps-HomeFixed', $fresh->name);
-        // Nama yang GENUINELY dikirim ke router beda.
-        $this->assertSame("test-10Mbps-HomeFixed (pkg #{$fresh->id})", $fresh->routerOsProfileName());
+        $this->assertNull(PppPackage::groupTakenByAnother($group->id, $only->id));
     }
 
-    public function test_router_name_suffix_only_applies_to_the_higher_id_package_when_two_packages_share_a_name(): void
+    public function test_group_taken_by_another_ignores_a_soft_deleted_or_deactivated_package(): void
     {
-        $group = $this->nasWithGroup('AnchorGroup');
-        $first = PppPackage::factory()->create(['network_profile_group_id' => $group->id, 'name' => 'Kembar']);
-        $poolB = CustomerIpPool::factory()->create(['nas_id' => $group->nas_id]);
-        $groupB = NetworkProfileGroup::factory()->create([
-            'nas_id' => $group->nas_id, 'customer_ip_pool_id' => $poolB->id,
-            'type' => NetworkProfileGroupType::Ppp, 'name' => 'GrupB', 'tenant_id' => $group->tenant_id,
-        ]);
-        $second = PppPackage::factory()->create(['network_profile_group_id' => $groupB->id, 'name' => 'Kembar']);
+        $group = $this->nasWithGroup('Anchor');
+        PppPackage::factory()->create(['network_profile_group_id' => $group->id, 'is_active' => false]);
+        $deleted = PppPackage::factory()->create(['network_profile_group_id' => $group->id]);
+        $deleted->delete();
 
-        // Yang dibuat duluan (id lebih kecil) tetap verbatim.
-        $this->assertSame('Kembar', $first->fresh()->routerOsProfileName());
-        // Yang belakangan dapat suffix.
-        $this->assertSame("Kembar (pkg #{$second->id})", $second->fresh()->routerOsProfileName());
+        $this->assertNull(PppPackage::groupTakenByAnother($group->id));
     }
 }

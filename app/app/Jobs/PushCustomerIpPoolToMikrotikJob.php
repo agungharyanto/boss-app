@@ -2,7 +2,9 @@
 
 namespace App\Jobs;
 
+use App\Enums\NetworkProfileGroupType;
 use App\Models\CustomerIpPool;
+use App\Models\NetworkProfileGroup;
 use App\Services\Network\Contracts\RouterOsGateway;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -47,10 +49,28 @@ class PushCustomerIpPoolToMikrotikJob implements ShouldQueue
         }
 
         $ranges = "{$pool->range_start}-{$pool->range_end}";
-        $result = $gateway->syncIpPool($pool->nas, $pool->mikrotikComment(), $pool->name, $ranges);
+
+        // Bagian B (v0.14.5.4) — the name sent to the router auto-appends
+        // " (pool)" when it collides with a `/ppp profile` name on the same
+        // NAS (a real WinBox bug: RouterOS mis-resolves `remote-address`
+        // when a pool and a profile share a name). The stable lookup key is
+        // still the comment, so this rename-on-collision updates the
+        // existing `/ip pool` in place.
+        $result = $gateway->syncIpPool($pool->nas, $pool->mikrotikComment(), $pool->routerOsPoolName(), $ranges);
 
         if ($result['success']) {
             $pool->markSynced();
+
+            // Any ppp-type Grup Profil referencing this pool has its
+            // `/ppp profile` `remote-address` = the pool's (possibly
+            // just-changed) router name — re-push so the reference follows.
+            NetworkProfileGroup::query()
+                ->withoutGlobalScopes()
+                ->where('customer_ip_pool_id', $pool->id)
+                ->where('type', NetworkProfileGroupType::Ppp->value)
+                ->whereNull('deleted_at')
+                ->pluck('id')
+                ->each(fn (int $id) => PushNetworkProfileGroupToMikrotikJob::dispatch($id));
 
             return;
         }

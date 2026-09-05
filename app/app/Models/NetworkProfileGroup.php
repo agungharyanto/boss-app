@@ -9,6 +9,8 @@ use Database\Factories\NetworkProfileGroupFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
 
@@ -65,6 +67,28 @@ class NetworkProfileGroup extends Model
     public function customerIpPool(): BelongsTo
     {
         return $this->belongsTo(CustomerIpPool::class);
+    }
+
+    /**
+     * ATURAN KERAS 1:1 (v0.14.5.4 amendment, dikonfirmasi Agung) — satu Grup
+     * Profil HANYA BOLEH dipakai oleh SATU Profil PPP aktif. Alasan teknis:
+     * satu `/ppp profile` di RouterOS cuma bisa punya satu `rate-limit`,
+     * tidak bisa menampung limitasi banyak paket sekaligus. Grup Profil dan
+     * Profil PPP-nya berbagi SATU objek `/ppp profile` (di-lookup by
+     * `mikrotikComment()` Grup Profil) — Profil PPP menambahkan
+     * `rate-limit`+`session-timeout` ke profile itu, bukan push objek
+     * terpisah. Ditegakkan di level DB lewat partial unique index
+     * `ppp_packages (network_profile_group_id) WHERE deleted_at IS NULL AND
+     * is_active` + validasi form/service.
+     */
+    public function pppPackages(): HasMany
+    {
+        return $this->hasMany(PppPackage::class);
+    }
+
+    public function activePppPackage(): HasOne
+    {
+        return $this->hasOne(PppPackage::class)->where('is_active', true);
     }
 
     /**

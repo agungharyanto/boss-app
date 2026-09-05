@@ -199,12 +199,15 @@ class PppPackageMikrotikSyncTest extends TestCase
         $this->assertSame('8.8.8.8,8.8.4.4', $call['dnsServer']);
         $this->assertSame('my-queue', $call['parentQueue']);
         $this->assertSame('10.7.7.1', $call['localAddress']);
-        // The package's own rate-limit (priority default 8 in slot 5) + session-timeout.
-        $this->assertSame('5000k/10000k 5000k/10000k 5000k/10000k 1s/1s 8', $call['rateLimit']);
+        // DARURAT 2026-09-06 — rate-limit sekarang format POLOS (rx/tx saja),
+        // tanpa grup burst (`1s/1s` di slot burst-time bikin RouterOS gagal
+        // buat /queue simple dinamis saat sesi PPPoE connect → memutus sesi
+        // pelanggan). Lihat RouterOsQueuePriority's own docblock.
+        $this->assertSame('5000k/10000k', $call['rateLimit']);
         $this->assertSame('30d', $call['sessionTimeout']);
     }
 
-    public function test_push_job_embeds_a_non_default_priority_in_the_rate_limit_string(): void
+    public function test_priority_is_stored_but_not_pushed_via_rate_limit_after_the_burst_string_broke_pppoe(): void
     {
         $this->bindGateway();
         $package = $this->package(['name' => 'Paket-Prioritas', 'priority' => 3]);
@@ -213,7 +216,10 @@ class PppPackageMikrotikSyncTest extends TestCase
         $job->withFakeQueueInteractions();
         $job->handle(app(RouterOsGateway::class));
 
-        $this->assertSame('5000k/10000k 5000k/10000k 5000k/10000k 1s/1s 3', $this->recordedCalls[1]['args']['rateLimit']);
+        // Priority 3 tersimpan di DB tapi TIDAK muncul di string rate-limit
+        // (tidak ada grup burst untuk menampung slot priority ke-5).
+        $this->assertSame(3, $package->fresh()->priority);
+        $this->assertSame('5000k/10000k', $this->recordedCalls[1]['args']['rateLimit']);
     }
 
     public function test_push_job_sends_null_session_timeout_for_an_unlimited_duration_package(): void

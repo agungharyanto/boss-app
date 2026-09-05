@@ -125,6 +125,26 @@ class WhatsappGatewayIndex extends Component
         session()->flash('status', 'Permintaan QR code baru dikirim — muat ulang beberapa detik lagi.');
     }
 
+    /**
+     * Tombol "Logout" — versi sederhana pasca-cutover, cuma 1 gateway (Go),
+     * tidak perlu lagi parameter target seperti versi dual-gateway yang
+     * sempat ada. Reuse `WhatsappSessionService::logout()` yang sudah ada
+     * (target 'go' hardcode) — memanggil `client.Logout(ctx)` whatsmeow
+     * SUNGGUHAN di sisi gateway (bukan sekadar wipe lokal), supaya entri
+     * "Perangkat Tertaut" di HP ikut bersih di sisi WhatsApp sendiri.
+     */
+    public function logout(int $sessionId, WhatsappSessionService $service): void
+    {
+        $session = WhatsappSession::withoutGlobalScopes()->findOrFail($sessionId);
+        $this->authorize('manage', $session);
+
+        if ($service->logout($session, 'go')) {
+            session()->flash('status', 'Logout berhasil — sesi siap dipasangkan ulang.');
+        } else {
+            session()->flash('status', 'Logout gagal — cek log, atau gateway sedang tidak dapat dihubungi.');
+        }
+    }
+
     public function togglePairingMode(int $sessionId): void
     {
         $this->pairingModeSessionId = $this->pairingModeSessionId === $sessionId ? null : $sessionId;

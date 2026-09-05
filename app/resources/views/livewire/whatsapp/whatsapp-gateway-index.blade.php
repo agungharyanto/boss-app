@@ -68,13 +68,24 @@
                     Hubungkan Nomor ISP A
                 </button>
             @else
-                <p class="text-sm">
-                    Status:
-                    <span class="font-medium {{ $directSession->status->value === 'connected' ? 'text-green-600' : 'text-amber-600' }}">
-                        {{ $directSession->status->label() }}
+                <p class="text-sm flex items-center justify-between">
+                    <span>
+                        Status:
+                        <span class="font-medium {{ $directSession->status->value === 'connected' ? 'text-green-600' : 'text-amber-600' }}">
+                            {{ $directSession->status->label() }}
+                        </span>
+                        @if ($directSession->phone_number)
+                            — {{ $directSession->phone_number }}
+                        @endif
                     </span>
-                    @if ($directSession->phone_number)
-                        — {{ $directSession->phone_number }}
+                    @if ($directSession->status->value === 'connected')
+                        <button
+                            wire:click="logout({{ $directSession->id }})"
+                            wire:confirm="Logout sesi ini? Sesi akan diputus dari server WhatsApp dan perlu dipasangkan ulang."
+                            class="text-red-600 hover:underline text-xs shrink-0 ml-2"
+                        >
+                            Logout
+                        </button>
                     @endif
                 </p>
 

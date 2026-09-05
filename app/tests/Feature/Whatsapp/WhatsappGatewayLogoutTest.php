@@ -2,8 +2,12 @@
 
 namespace Tests\Feature\Whatsapp;
 
+use App\Enums\ResellerUserRole;
+use App\Enums\ResellerUserStatus;
 use App\Enums\WhatsappSessionStatus;
 use App\Livewire\Whatsapp\WhatsappGatewayIndex;
+use App\Models\Reseller;
+use App\Models\ResellerUser;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Models\WhatsappSession;
@@ -17,15 +21,16 @@ use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
- * Branch migrasi-whatsmeow — `WhatsappSessionService::logout()`/
- * `checkGatewayHealth()` (target EKSPLISIT 'legacy'/'go', tidak pernah
- * ambigu) TETAP ADA di layer service untuk dipakai lagi nanti, TAPI
- * panel "Status Migrasi Gateway" + tombol Logout per gateway di UI SUDAH
- * DIHAPUS (investigasi "Pairing Kode ke Go baru saja gagal lagi"
- * menemukan tombol Kode Pairing masih diam-diam mengarah ke gateway
- * lama — UI disederhanakan kembali jadi 1 sesi, tidak ada lagi pilihan
- * gateway, sampai gateway lama benar-benar dihapus). Test di file ini
- * karena itu HANYA menguji layer service, bukan lagi Livewire/Blade.
+ * Branch migrasi-whatsmeow. `WhatsappSessionService::logout()`/
+ * `checkGatewayHealth()` (target EKSPLISIT 'legacy'/'go') tetap ada di
+ * layer service dari era dual-gateway. Panel "Status Migrasi Gateway" +
+ * tombol Logout PER GATEWAY sudah dihapus (investigasi "Pairing Kode ke
+ * Go baru saja gagal lagi" menemukan tombol Kode Pairing masih diam-diam
+ * mengarah ke gateway lama) — UI disederhanakan jadi 1 sesi.
+ *
+ * Pasca cutover ke Go, tombol "Logout" ditambahkan LAGI — versi
+ * sederhana satu-gateway (`WhatsappGatewayIndex::logout()`, target 'go'
+ * hardcode, tanpa parameter pilihan gateway).
  */
 class WhatsappGatewayLogoutTest extends TestCase
 {
@@ -209,5 +214,72 @@ class WhatsappGatewayLogoutTest extends TestCase
         $this->assertStringNotContainsString('logoutFromGateway', $html);
 
         $this->assertFalse(method_exists(WhatsappGatewayIndex::class, 'logoutFromGateway'));
+    }
+
+    public function test_logout_button_only_shows_when_the_session_is_connected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
+        $admin->assignRole('superadmin');
+        $connected = $this->directSession($tenant->id, WhatsappSessionStatus::Connected);
+
+        Livewire::actingAs($admin)
+            ->test(WhatsappGatewayIndex::class)
+            ->call('setTab', 'overview')
+            ->assertSee('Logout')
+            ->assertSeeHtml("logout({$connected->id})");
+    }
+
+    public function test_logout_button_is_hidden_when_the_session_is_not_connected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
+        $admin->assignRole('superadmin');
+        $session = $this->directSession($tenant->id, WhatsappSessionStatus::LoggedOut);
+
+        Livewire::actingAs($admin)
+            ->test(WhatsappGatewayIndex::class)
+            ->call('setTab', 'overview')
+            ->assertDontSeeHtml("logout({$session->id})");
+    }
+
+    public function test_admin_can_logout_the_connected_session_via_the_simple_button(): void
+    {
+        Http::fake([
+            'whatsapp-gateway-go-test/sessions/direct/logout' => Http::response(['success' => true], 200),
+        ]);
+
+        $tenant = Tenant::factory()->create();
+        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
+        $admin->assignRole('superadmin');
+        $session = $this->directSession($tenant->id);
+
+        Livewire::actingAs($admin)
+            ->test(WhatsappGatewayIndex::class)
+            ->call('logout', $session->id)
+            ->assertHasNoErrors();
+
+        $this->assertSame(WhatsappSessionStatus::LoggedOut, $session->fresh()->status);
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-go-test/sessions/direct/logout'));
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'whatsapp-gateway-test'));
+    }
+
+    public function test_a_reseller_cannot_logout_the_direct_session_via_the_simple_button(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $owner = User::factory()->create(['tenant_id' => $tenant->id]);
+        ResellerUser::create([
+            'reseller_id' => $reseller->id,
+            'user_id' => $owner->id,
+            'role' => ResellerUserRole::Owner,
+            'status' => ResellerUserStatus::Active,
+        ]);
+        $session = $this->directSession($tenant->id);
+
+        Livewire::actingAs($owner)
+            ->test(WhatsappGatewayIndex::class)
+            ->call('logout', $session->id)
+            ->assertForbidden();
     }
 }

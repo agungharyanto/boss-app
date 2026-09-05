@@ -101,11 +101,12 @@ class SendWhatsappMessageJob implements ShouldQueue
                 'X-Whatsapp-Timestamp' => (string) $timestamp,
                 'X-Whatsapp-Signature' => $signature,
             ])
-            // Sedikit di atas gateway's own SEND_TIMEOUT_MS (20s, lihat
-            // whatsapp-gateway/src/sessionManager.js) supaya error nyata
-            // dari Baileys ("session unhealthy") yang propagate ke sini,
-            // bukan cURL-28 opaque. Solusi robustness, bukan sekadar naikkan
-            // angka: gateway sekarang fail-fast, ini cuma beri marginnya.
+            // Sedikit di atas gateway's own sendTimeout (20 detik, lihat
+            // whatsapp-gateway/internal/session/manager.go) supaya error
+            // nyata dari gateway ("send timeout after ...") yang propagate
+            // ke sini, bukan cURL-28 opaque. Solusi robustness, bukan
+            // sekadar naikkan angka: gateway sudah fail-fast, ini cuma
+            // beri marginnya.
             ->timeout(35)
             ->post(rtrim((string) $baseUrl, '/')."/sessions/{$sessionKey}/send");
     }

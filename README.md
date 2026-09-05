@@ -1,8 +1,8 @@
 # BOSS App — Broadband Operations Support System
 
 Platform operasional ISP modular. GenieACS, MikroTik, FreeRADIUS, LibreNMS, dan
-WhatsApp (Baileys) menjadi service yang diintegrasikan; BOSS App adalah pusat
-data pelanggan dan pusat perintah.
+WhatsApp (Go + whatsmeow) menjadi service yang diintegrasikan; BOSS App adalah
+pusat data pelanggan dan pusat perintah.
 
 ## Status
 
@@ -23,7 +23,7 @@ Lihat `docs/RULES.md` untuk aturan pengembangan (BOSS-001 s/d BOSS-014) dan
 | Cache/Queue| Redis                             |
 | Web server | Nginx                             |
 | Deployment | Docker Compose                    |
-| WhatsApp   | Baileys (Node.js) — mulai v0.4.0  |
+| WhatsApp   | Go + whatsmeow — mulai v0.4.0, migrasi dari Baileys pasca-v0.9.9 |
 | RADIUS     | FreeRADIUS — mulai v0.6.1         |
 | ACS        | GenieACS — mulai v0.7.0           |
 | Monitoring | LibreNMS — mulai v0.8.0           |

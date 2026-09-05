@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Platform-level singleton (id=1) — one Baileys rate-limit policy for the
+ * Platform-level singleton (id=1) — one WhatsApp gateway rate-limit policy for the
  * whole ISP deployment, same posture as App\Models\PaymentGatewaySettings.
  * Only App\Services\Whatsapp\WhatsappSessionService's rate-limit reader (and
  * the ISP-admin settings Livewire component) are expected to touch this.

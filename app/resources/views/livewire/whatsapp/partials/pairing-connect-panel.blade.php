@@ -1,7 +1,7 @@
 {{--
     Sprint "whatsapp-gateway-reliability" — panel "belum terhubung" untuk
     satu sesi WhatsApp: QR (default) + tombol "Refresh QR", ATAU alternatif
-    native Baileys "Kode Pairing" (requestPairingCode, TANPA scan QR sama
+    native (Baileys/whatsmeow) "Kode Pairing" (requestPairingCode/PairPhone, TANPA scan QR sama
     sekali). Dipakai identik untuk sesi reseller (mySession) maupun sesi
     direct/ISP (directSession) — parameter `$session` + `$labelPrefix`.
 --}}

@@ -16,7 +16,7 @@ use Tests\TestCase;
 
 /**
  * Sprint "whatsapp-gateway-reliability" LANGKAH 2 — alternatif "Kode
- * Pairing" (native Baileys requestPairingCode, TANPA scan QR).
+ * Pairing" (native requestPairingCode (Baileys era, kini whatsmeow PairPhone), TANPA scan QR).
  */
 class WhatsappPairingCodeTest extends TestCase
 {
@@ -28,6 +28,11 @@ class WhatsappPairingCodeTest extends TestCase
 
         $this->seed(RolesAndPermissionsSeeder::class);
 
+        // Domain palsu ini WAJIB tetap diset di setiap test — phpunit.xml
+        // mengosongkan WHATSAPP_GATEWAY_URL secara default supaya test yang
+        // lupa men-fake tidak diam-diam menembak gateway asli (insiden
+        // nyata yang sudah terjadi sebelum pengaman ini ada, era migrasi
+        // whatsmeow — lihat CLAUDE.md).
         config(['services.whatsapp_gateway.url' => 'http://whatsapp-gateway-test']);
     }
 

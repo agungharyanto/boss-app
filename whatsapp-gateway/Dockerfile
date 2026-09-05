@@ -1,17 +1,23 @@
-FROM node:22-alpine
+# Multi-stage build — image akhir cuma binary statis, tidak bawa toolchain
+# Go (konsisten dengan filosofi container-first/image-lean BOSS-007 yang
+# sudah dipakai docker/php, whatsapp-gateway/, dst).
+FROM golang:1.26-alpine AS build
 
-# git is required at npm-install time — some transitive dependency (Baileys
-# or one of its own deps) is resolved from a git URL, which npm shells out
-# to git for; the base alpine image doesn't include it by default.
-RUN apk add --no-cache git
+WORKDIR /src
 
-WORKDIR /app
-
-COPY package.json package-lock.json* ./
-RUN npm install --omit=dev
+COPY go.mod go.sum ./
+RUN go mod download
 
 COPY . .
+RUN CGO_ENABLED=0 go build -o /out/whatsapp-gateway .
+
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+COPY --from=build /out/whatsapp-gateway .
 
 EXPOSE 3000
 
-CMD ["node", "index.js"]
+CMD ["./whatsapp-gateway"]

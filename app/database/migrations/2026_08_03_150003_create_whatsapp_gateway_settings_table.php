@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         // Platform-level singleton (id=1), same posture as
-        // payment_gateway_settings — one Baileys-managed rate limit policy
+        // payment_gateway_settings — one gateway-wide rate limit policy
         // for the whole ISP deployment, not per-tenant/per-reseller (a
         // reseller cannot set their own rate limit this sprint, see
         // docs/ROADMAP.md deferred items).

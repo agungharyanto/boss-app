@@ -12,6 +12,7 @@ use App\Models\CommissionRate;
 use App\Models\CpeDevice;
 use App\Models\Customer;
 use App\Models\CustomerContact;
+use App\Models\Invoice;
 use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Services\CommissionAttributionService;
@@ -433,6 +434,16 @@ class CustomerShow extends Component
         return view('livewire.customers.customer-show', [
             'contacts' => $this->customer->contacts()->latest()->get(),
             'timelineEntries' => $this->customer->timelineEntries()->with('actor')->paginate(15),
+            // Bagian B (v0.9.12) — Invoice KHUSUS pelanggan ini (referensi
+            // MixRadius "Invoice & Session"). Menu /invoices global tetap ada
+            // untuk overview lintas pelanggan.
+            'customerInvoices' => Invoice::query()
+                ->where('customer_id', $this->customer->id)
+                ->with('lineItems:id,invoice_id,description')
+                ->latest('period_start')
+                ->latest('id')
+                ->limit(50)
+                ->get(),
             'availableTransitions' => $availableTransitions,
             'accessLevels' => ContactAccessLevel::cases(),
             'canManage' => auth()->user()->can('update', $this->customer),

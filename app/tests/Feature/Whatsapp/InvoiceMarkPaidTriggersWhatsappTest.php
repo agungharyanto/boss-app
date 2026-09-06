@@ -104,4 +104,32 @@ class InvoiceMarkPaidTriggersWhatsappTest extends TestCase
         Bus::assertNotDispatched(SendWhatsappMessageJob::class);
         $this->assertDatabaseMissing('whatsapp_message_logs', ['invoice_id' => $invoice->id]);
     }
+
+    /**
+     * Bagian A (v0.9.12) — RenewalInvoiceService memanggil markPaid() dengan
+     * $notifyCustomer=false; WA "payment received" TIDAK dikirim (Perpanjang
+     * multi-bulan tak membanjiri pelanggan). Maturity komisi tetap jalan.
+     */
+    public function test_mark_paid_with_notify_customer_false_skips_whatsapp_but_still_matures_commission(): void
+    {
+        Bus::fake();
+
+        $tenant = Tenant::factory()->create();
+        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
+        $this->actingAs($admin);
+
+        WhatsappMessageTemplate::factory()->create([
+            'tenant_id' => $tenant->id, 'reseller_id' => null,
+            'event_type' => WhatsappEventType::PaymentReceived,
+        ]);
+
+        $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);
+        $invoice = $this->pendingInvoiceFor($customer);
+
+        app(InvoiceService::class)->markPaid($invoice, notifyCustomer: false);
+
+        Bus::assertNotDispatched(SendWhatsappMessageJob::class);
+        $this->assertDatabaseMissing('whatsapp_message_logs', ['invoice_id' => $invoice->id]);
+        $this->assertSame('paid', $invoice->fresh()->status->value);
+    }
 }

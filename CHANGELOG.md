@@ -59,6 +59,41 @@ baru yang menduplikat logic v0.9.5 — tapi HIDUPKAN jalur yang sudah ada.
 DPP+PPN), `InvoicePrintControllerTest` baru (5 — standar vs thermal, width default 80, autoprint toggle,
 forbidden tanpa akses). 146 scoped test hijau.
 
+### Revisi gabungan (5 bagian, sama branch)
+
+**A — WA "payment received" di-suppress khusus Perpanjang.** `InvoiceService::markPaid()` dapat param
+`bool $notifyCustomer = true`; `RenewalInvoiceService` memanggilnya `false`. Perpanjang multi-bulan tak lagi
+membanjiri pelanggan dengan N pesan terpisah. Dua caller lain (PATCH manual, webhook Xendit) TETAP kirim.
+Maturity komisi tidak terpengaruh flag ini.
+
+**B — Section "Invoice" di Detail Pelanggan** (referensi MixRadius "Invoice & Session"). `CustomerShow`
+menampilkan list invoice KHUSUS pelanggan itu (No. Invoice / Deskripsi / Jumlah / Periode / Jatuh Tempo /
+Status / tombol Cetak dropdown Standar+Thermal). Menu `/invoices` global TETAP ADA untuk overview lintas
+pelanggan (default: pertahankan keduanya).
+
+**C — Rate Komisi sembunyikan paket gratis.** `CommissionRateIndex` filter `sell_price > 0` di list DAN
+di `edit()`/`saveRate()` (guard, bukan cuma sembunyikan baris) — paket gratis mustahil hasilkan komisi.
+
+**D — "Fee Komisi" (`/titip-masuk`) diperluas jadi SEMUA jenis komisi.** Filter baru "Jenis Komisi"
+(Semua/Titip/Bulanan). Kolom "Uang Diterima"/"Setoran"/checkbox setor hanya untuk baris Titip; baris
+Bulanan tampilkan "—". Baris `scheme = NULL` (template belum matang) tidak pernah muncul. Ringkasan dipisah
+4 kartu: Komisi Titip Harus Dibayar / Setoran Titip Belum Masuk / Komisi Bulanan Harus Dibayar / Total
+gabungan. **Pembayaran komisi Bulanan bisa langsung dari halaman ini** (`CommissionPayoutService::
+payMonthlyRow()` baru + `payMonthlyForReferrer()`) TAPI hanya untuk baris yang jendela payout paketnya
+sedang terbuka (`isRowPayableNow()`, guard di service) — tanpa bukti bayar (beda Titip). Halaman "Payout
+Bulanan" (`MonthlyPayoutIndex`) TETAP ADA untuk alur batch khusus bulanan.
+
+**E — Menu baru "Riwayat Pembayaran" (`/riwayat-pembayaran-komisi`)** di grup sidebar "Komisi". List
+SEMUA `commission_ledger` `status = Paid` (Titip + Bulanan) — kapan, ke siapa, berapa, jenis, bukti. Filter
+tanggal + referrer + jenis. Grafik bar bertumpuk (Titip vs Bulanan) total komisi dibayar per bulan, pakai
+Chart.js yang SUDAH ada di codebase (`window.commissionPaidChart` di `resources/js/app.js`, pola
+`wire:ignore` + dispatched event — bukan dependency baru).
+
+**Test revisi**: `InvoiceMarkPaidTriggersWhatsappTest` +1 (notifyCustomer=false), `CommissionRateIndexLivewireTest`
++1 (paket gratis), `TitipMasukIndexLivewireTest` (rework: titip+bulanan+filter jenis, payMonthlyRow ×2),
+`CustomerShowInvoiceSectionTest` baru (3), `CommissionPaymentHistoryLivewireTest` baru (4). Frontend bundle
+di-rebuild (`FrontendBuildTest` hijau). 282 scoped test hijau.
+
 ## v0.14.5.4 — Local Address dari gateway_ip + Ensure IP Pool Sebelum Push Profil (branch `investigasi-local-address-drift`)
 
 Dua bug nyata di jalur RouterOS live-push `/ppp profile` (Grup Profil tipe ppp + Profil PPP + Profil

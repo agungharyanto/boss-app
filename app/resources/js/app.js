@@ -935,3 +935,67 @@ window.deviceHistoryChart = function (initialSeries, initialUnit) {
         },
     };
 };
+
+// v0.9.12 (Bagian E) — CommissionPaymentHistory: total komisi dibayar per
+// bulan, bar chart bertumpuk Titip vs Bulanan. Pola identik trafkChart /
+// signalHistoryChart: canvas di dalam `wire:ignore`, update lewat event
+// browser `commission-paid-series-updated`, chart di-destroy/rebuild —
+// tidak pernah tersapu Livewire DOM morph. Series shape:
+// { labels: string[], titip: number[], bulanan: number[] }.
+window.commissionPaidChart = function (initialSeries) {
+    return {
+        chart: null,
+        init() {
+            this.chart = this.build(initialSeries || { labels: [], titip: [], bulanan: [] });
+        },
+        update(series) {
+            if (this.chart) {
+                this.chart.destroy();
+            }
+            this.chart = this.build(series || { labels: [], titip: [], bulanan: [] });
+        },
+        build(series) {
+            const rootStyle = getComputedStyle(document.documentElement);
+            const textColor = rootStyle.getPropertyValue('--color-text').trim() || '#1f2937';
+            const rp = (v) =>
+                'Rp ' + Number(v || 0).toLocaleString('id-ID', { maximumFractionDigits: 0 });
+
+            return new Chart(this.$refs.canvas, {
+                type: 'bar',
+                data: {
+                    labels: series.labels || [],
+                    datasets: [
+                        { label: 'Titip', data: series.titip || [], backgroundColor: '#2563eb' },
+                        { label: 'Bulanan', data: series.bulanan || [], backgroundColor: '#4f46e5' },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    scales: {
+                        x: { stacked: true },
+                        y: {
+                            stacked: true,
+                            beginAtZero: true,
+                            ticks: { callback: (v) => rp(v) },
+                        },
+                    },
+                    plugins: {
+                        tooltip: {
+                            backgroundColor: '#ffffff',
+                            titleColor: textColor,
+                            bodyColor: textColor,
+                            borderColor: '#e5e7eb',
+                            borderWidth: 1,
+                            padding: 10,
+                            callbacks: {
+                                label: (item) => `${item.dataset.label}: ${rp(item.raw)}`,
+                            },
+                        },
+                    },
+                },
+            });
+        },
+    };
+};

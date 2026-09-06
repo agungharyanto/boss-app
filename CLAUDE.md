@@ -6829,6 +6829,41 @@ keduanya render benar.
 
 **DB dev sudah di-`migrate`** (`customers.tax_billable`). Kalau branch dibatalkan: `migrate:rollback --step=1`.
 
+### Revisi gabungan (v0.9.12, sama branch — jawaban 4 flag desain + 3 fitur)
+
+- **A — WA `payment_received` di-suppress khusus Perpanjang.** `InvoiceService::markPaid(Invoice, bool
+  $notifyCustomer = true)`. `RenewalInvoiceService::issuePaidForPeriod()` memanggilnya `notifyCustomer:
+  false` — Perpanjang multi-bulan bikin N invoice → tanpa ini pelanggan dapat N pesan "pembayaran
+  diterima" terpisah untuk satu transaksi. **PATCH manual v0.3.4 + webhook Xendit v0.3.5 TETAP default
+  `true`** — jangan suppress global. Pematangan komisi (v0.9.5) tidak terpengaruh flag ini. Flag 2 (header
+  cetak), 3 (nomor v0.9.12), 4 (`promo_price` diabaikan) — dikonfirmasi Agung, tidak berubah.
+- **B — Section "Invoice" di Detail Pelanggan** (`CustomerShow`, referensi MixRadius "Invoice & Session")
+  — list invoice KHUSUS pelanggan itu (`Invoice::where('customer_id', ...)`, 50 terbaru), tombol Cetak
+  dropdown per baris (reuse `web.invoices.print`). Menu `/invoices` global **TETAP ADA** untuk overview
+  lintas pelanggan — default: pertahankan keduanya (per instruksi).
+- **C — `CommissionRateIndex` sembunyikan paket `sell_price = 0`** — di list DAN di `edit()`/`saveRate()`
+  (`->where('sell_price', '>', 0)->findOrFail()` = guard, bukan cuma menyembunyikan baris). Paket gratis
+  mustahil hasilkan komisi.
+- **D — "Fee Komisi" (`/titip-masuk`, `TitipMasukIndex`) TIDAK LAGI khusus Titip.** Sekarang gabungan
+  Titip + Bulanan (recurring/limited_count), filter "Jenis Komisi" (Semua/Titip/Bulanan). Kolom "Uang
+  Diterima"/"Setoran"/checkbox setor hanya untuk baris Titip; baris `scheme = NULL` (template belum
+  matang) tidak pernah muncul. 4 kartu ringkasan (Titip harus dibayar / Setoran belum masuk / Bulanan
+  harus dibayar / total gabungan). **Pembayaran komisi Bulanan bisa langsung dari halaman ini** —
+  `CommissionPayoutService::payMonthlyRow()` (baru, single) + `payMonthlyForReferrer()` (sudah ada,
+  batch), **hanya kalau jendela payout paket-nya (Rate Komisi) sedang terbuka** (`isRowPayableNow()`,
+  guard di service bukan cuma UI); TANPA bukti bayar (beda Titip yang wajib foto). Halaman "Payout
+  Bulanan" (`MonthlyPayoutIndex`) **TETAP ADA** untuk alur batch khusus bulanan (tidak dihapus).
+- **E — Menu baru "Riwayat Pembayaran" (`/riwayat-pembayaran-komisi`, `CommissionPaymentHistory`)** di
+  grup sidebar "Komisi" (sejajar Rate Komisi / Fee Komisi / Payout Bulanan). List SEMUA `commission_ledger`
+  `status = Paid` (Titip + Bulanan) — read-only, filter tanggal/referrer/jenis. **Grafik**: bar bertumpuk
+  Titip vs Bulanan, total komisi dibayar per bulan — pakai **Chart.js yang SUDAH ADA** di codebase
+  (`window.commissionPaidChart` di `resources/js/app.js`, pola `wire:ignore` + dispatched browser event
+  `commission-paid-series-updated`, chart di-destroy/rebuild — sama persis `trafficChart`/`signalHistoryChart`),
+  BUKAN dependency baru. Bundle di-rebuild, `FrontendBuildTest` hijau.
+- **Gotcha ditemukan**: `selectRaw('scheme, ...')->groupBy('scheme')->get()` pada `CommissionLedger` tetap
+  meng-enum-cast kolom `scheme` saat hidrasi model — `firstWhere('scheme', 'recurring')` gagal (enum ≠
+  string). Fix: `->toBase()` sebelum `selectRaw` di query agregat, supaya `scheme` tetap string mentah.
+
 ## Cluster Profil Paket (v0.14.x) — Konstrain NAS Produksi
 
 **WAJIB dibaca sebelum eksekusi sub-versi apa pun di cluster v0.14.x (Bandwidth Profile → IP Pool

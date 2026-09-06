@@ -11,6 +11,7 @@ use App\Models\PppPackage;
 use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
@@ -72,6 +73,30 @@ class CommissionRateIndexLivewireTest extends TestCase
         Livewire::actingAs($this->admin($tenant))
             ->test(CommissionRateIndex::class)
             ->assertDontSee('Sudah Dihapus');
+    }
+
+    /**
+     * Bagian C (v0.9.12) — paket gratis (sell_price = 0) mustahil komisi,
+     * disembunyikan dari list DAN tidak bisa diatur rate-nya.
+     */
+    public function test_free_package_is_hidden_and_cannot_be_edited(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $paid = $this->package($tenant, 'Paket Berbayar');
+        $paid->update(['sell_price' => 100000]);
+        $free = $this->package($tenant, 'Paket Gratis');
+        $free->update(['sell_price' => 0]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CommissionRateIndex::class)
+            ->assertSee('Paket Berbayar')
+            ->assertDontSee('Paket Gratis');
+
+        $this->expectException(ModelNotFoundException::class);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CommissionRateIndex::class)
+            ->call('edit', $free->id);
     }
 
     public function test_admin_can_set_a_recurring_rate_for_a_package(): void

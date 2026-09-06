@@ -1012,8 +1012,25 @@ v0.9.5. Field customer baru **`tax_billable`** (boolean, default `false`):
 `false` → Invoice Perpanjang `tax_total = 0` (cetakan tetap tampil "PPN
 0%"); `true` → tax engine v0.3.3 normal (`sell_price` = DPP, PPN di atas).
 `POST`/`PUT /customers` (kalau nanti mengekspos field ini) + Livewire
-`CustomerShow` menerimanya. `GenerateDueInvoices` TETAP off — pembuatan
-invoice ini ON-DEMAND.
+`CustomerShow` (checklist "PPN ditagihkan ke pelanggan") menerimanya.
+`GenerateDueInvoices` TETAP off — pembuatan invoice ini ON-DEMAND.
+
+**Revisi gabungan (v0.9.12)**:
+- `InvoiceService::markPaid(Invoice $invoice, bool $notifyCustomer = true)`
+  — `RenewalInvoiceService` memanggilnya `false` supaya Perpanjang
+  multi-bulan tidak mengirim N WA "payment received" terpisah. Caller
+  PATCH manual + webhook Xendit tetap default `true`.
+- **`GET /invoices/{invoice}/print`** juga di-embed sebagai section "Invoice"
+  di halaman Detail Pelanggan (`CustomerShow`), tombol Cetak per baris.
+- **`GET /riwayat-pembayaran-komisi`** (`web.commission-payment-history.index`,
+  route web, grup `admin.panel`, gate `viewAny(CommissionLedger)`) —
+  riwayat semua komisi `status = Paid` (Titip + Bulanan) + grafik total
+  per bulan. Read-only.
+- Halaman `/titip-masuk` ("Fee Komisi") kini menampilkan Titip + Bulanan
+  (filter "Jenis Komisi"); komisi Bulanan bisa dibayar dari sini kalau
+  jendela payout paketnya (Rate Komisi) sedang terbuka.
+- `/commission-rates` ("Rate Komisi") menyembunyikan paket dengan
+  `sell_price = 0`.
 
 ### `POST /webhooks/xendit`
 

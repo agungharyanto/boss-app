@@ -14,6 +14,7 @@ use App\Livewire\Auth\ReferrerForgotPassword;
 use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
 use App\Livewire\Billing\SubscriptionIndex;
+use App\Livewire\Commission\CommissionPaymentHistory;
 use App\Livewire\Commission\CommissionRateIndex;
 use App\Livewire\Commission\MonthlyPayoutIndex;
 use App\Livewire\Commission\TitipMasukIndex;
@@ -211,6 +212,10 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // jendela tanggal ada DI SERVICE (CommissionPayoutService), bukan cuma
     // di sini — halaman ini cuma UI-nya.
     Route::get('/payout-komisi-bulanan', MonthlyPayoutIndex::class)->name('monthly-payout.index');
+
+    // v0.9.12 (Bagian E) — Riwayat Pembayaran Komisi (Titip + Bulanan yang
+    // sudah Paid) + grafik total per bulan. Read-only.
+    Route::get('/riwayat-pembayaran-komisi', CommissionPaymentHistory::class)->name('commission-payment-history.index');
 
     // v0.14.1 — fondasi cluster "Profil Paket", same posture as /referrers
     // above (tenant-level, no reseller.context needed — BandwidthProfile

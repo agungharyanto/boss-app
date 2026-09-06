@@ -83,12 +83,14 @@ class RenewalInvoiceService
         }
 
         // Draft -> Pending -> Paid. markPaid() memicu maturity Komisi
-        // Penjualan (v0.9.5) + WhatsApp "payment received".
+        // Penjualan (v0.9.5). WA "payment received" di-SUPPRESS (Bagian A).
         if ($invoice->status === InvoiceStatus::Draft) {
             $invoice = $this->invoiceService->markPending($invoice);
         }
 
-        $invoice = $this->invoiceService->markPaid($invoice);
+        // Bagian A (v0.9.12) — JANGAN kirim WA "pembayaran diterima" per
+        // invoice; Perpanjang multi-bulan akan mengirim N pesan terpisah.
+        $invoice = $this->invoiceService->markPaid($invoice, notifyCustomer: false);
 
         return ['invoice' => $invoice, 'created' => $created, 'newly_paid' => true];
     }

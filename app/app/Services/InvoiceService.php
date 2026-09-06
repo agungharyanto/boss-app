@@ -159,7 +159,16 @@ class InvoiceService
         return $this->transition($invoice, InvoiceStatus::Pending);
     }
 
-    public function markPaid(Invoice $invoice): Invoice
+    /**
+     * @param  bool  $notifyCustomer  v0.9.12 (Bagian A) — false HANYA dari
+     *                                `RenewalInvoiceService` (alur "Perpanjang"): Perpanjang bisa
+     *                                membuat beberapa invoice sekaligus (multi-bulan) → tanpa ini
+     *                                pelanggan kebanjiran N pesan "pembayaran diterima" terpisah untuk
+     *                                satu transaksi perpanjangan. Dua caller lain (PATCH manual v0.3.4,
+     *                                webhook Xendit v0.3.5) TETAP default `true` — WA dikirim seperti
+     *                                biasa. Pematangan komisi (v0.9.5) TIDAK terpengaruh flag ini.
+     */
+    public function markPaid(Invoice $invoice, bool $notifyCustomer = true): Invoice
     {
         $invoice = $this->transition($invoice, InvoiceStatus::Paid);
         $invoice->update(['paid_at' => now()]);
@@ -173,11 +182,10 @@ class InvoiceService
         // / GenerateDueInvoices — murni membaca $invoice->customer_id.
         $this->commissionMaturity->matureForPaidInvoice($invoice);
 
-        // v0.4.0 WhatsApp Gateway contract: both callers of markPaid() (the
-        // v0.3.4 manual PATCH endpoint and PaymentService::handleWebhook())
-        // must trigger this the same way — signature is unchanged
-        // deliberately, see docs/ROADMAP.md.
-        if ($invoice->customer !== null) {
+        // v0.4.0 WhatsApp Gateway contract: caller PATCH manual v0.3.4 +
+        // webhook Xendit v0.3.5 memicu ini dengan cara yang sama.
+        // RenewalInvoiceService (v0.9.12) lewat $notifyCustomer=false.
+        if ($notifyCustomer && $invoice->customer !== null) {
             $this->whatsappService->buildAndQueue(WhatsappEventType::PaymentReceived, $invoice->customer, $invoice);
         }
 

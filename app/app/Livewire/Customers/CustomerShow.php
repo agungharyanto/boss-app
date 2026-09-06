@@ -12,6 +12,7 @@ use App\Models\CommissionRate;
 use App\Models\CpeDevice;
 use App\Models\Customer;
 use App\Models\CustomerContact;
+use App\Models\Invoice;
 use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Services\CommissionAttributionService;
@@ -39,6 +40,15 @@ class CustomerShow extends Component
 
     #[Validate('required|string|max:20')]
     public string $phone_number = '';
+
+    /**
+     * v0.9.12 — checklist "PPN ditagihkan ke pelanggan". true = harga paket
+     * dianggap DPP, PPN dihitung di atasnya saat Invoice Perpanjang dibuat
+     * (tax engine v0.3.3). false (default) = PPN 0, tapi cetakan invoice
+     * tetap menampilkan baris "PPN (0%)".
+     */
+    #[Validate('boolean')]
+    public bool $tax_billable = false;
 
     public string $selectedStatus = '';
 
@@ -96,6 +106,7 @@ class CustomerShow extends Component
         $this->name = $this->customer->name;
         $this->address = $this->customer->address;
         $this->phone_number = $this->customer->phone_number;
+        $this->tax_billable = (bool) $this->customer->tax_billable;
     }
 
     private function syncCommissionFields(): void
@@ -246,9 +257,11 @@ class CustomerShow extends Component
             'name' => 'required|string|max:255',
             'address' => 'required|string',
             'phone_number' => 'required|string|max:20',
+            'tax_billable' => 'boolean',
         ]);
 
         $this->customer = $action->handle($this->customer, $data);
+        $this->syncProfileFields();
         $this->editingProfile = false;
     }
 
@@ -421,6 +434,16 @@ class CustomerShow extends Component
         return view('livewire.customers.customer-show', [
             'contacts' => $this->customer->contacts()->latest()->get(),
             'timelineEntries' => $this->customer->timelineEntries()->with('actor')->paginate(15),
+            // Bagian B (v0.9.12) — Invoice KHUSUS pelanggan ini (referensi
+            // MixRadius "Invoice & Session"). Menu /invoices global tetap ada
+            // untuk overview lintas pelanggan.
+            'customerInvoices' => Invoice::query()
+                ->where('customer_id', $this->customer->id)
+                ->with('lineItems:id,invoice_id,description')
+                ->latest('period_start')
+                ->latest('id')
+                ->limit(50)
+                ->get(),
             'availableTransitions' => $availableTransitions,
             'accessLevels' => ContactAccessLevel::cases(),
             'canManage' => auth()->user()->can('update', $this->customer),

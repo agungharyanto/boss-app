@@ -28,6 +28,19 @@
                     <input type="text" wire:model="phone_number" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                     @error('phone_number') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                 </div>
+                <div>
+                    <label class="flex items-start gap-2 text-sm">
+                        <input type="checkbox" wire:model="tax_billable" class="mt-0.5 rounded border-gray-300">
+                        <span>
+                            <span class="font-medium text-gray-700">PPN ditagihkan ke pelanggan</span>
+                            <span class="block text-xs text-gray-500">
+                                Dicentang: harga paket dianggap DPP, PPN dihitung di atasnya pada invoice.
+                                Tidak dicentang: PPN 0 (invoice tetap menampilkan keterangan "PPN 0%").
+                            </span>
+                        </span>
+                    </label>
+                    @error('tax_billable') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                </div>
                 <div class="flex gap-2">
                     <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">Simpan</button>
                     <button type="button" wire:click="$set('editingProfile', false)" class="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300">Batal</button>
@@ -39,6 +52,8 @@
                 <dd class="text-gray-800">{{ $customer->address }}</dd>
                 <dt class="text-gray-500">Telepon</dt>
                 <dd class="text-gray-800">{{ $customer->phone_number }}</dd>
+                <dt class="text-gray-500">PPN ditagihkan</dt>
+                <dd class="text-gray-800">{{ $customer->tax_billable ? 'Ya' : 'Tidak (PPN 0%)' }}</dd>
             </dl>
 
             @if ($canManage)
@@ -114,6 +129,66 @@
                     Edit paket &amp; referral
                 </button>
             @endif
+        @endif
+    </div>
+
+    {{-- Invoice khusus pelanggan ini (v0.9.12) --}}
+    <div class="p-4 border border-gray-200 rounded-md">
+        <h2 class="text-sm font-semibold text-gray-700 mb-3">Invoice</h2>
+
+        @if ($customerInvoices->isEmpty())
+            <p class="text-sm text-gray-500">
+                Belum ada invoice. Invoice dibuat otomatis saat pelanggan diperpanjang (aksi
+                &ldquo;Perpanjang&rdquo; di Daftar Pelanggan).
+            </p>
+        @else
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead>
+                        <tr class="text-left text-xs text-gray-500 uppercase border-b border-gray-200">
+                            <th class="py-2 pr-3">No. Invoice</th>
+                            <th class="py-2 pr-3">Deskripsi</th>
+                            <th class="py-2 pr-3 text-right">Jumlah</th>
+                            <th class="py-2 pr-3">Periode</th>
+                            <th class="py-2 pr-3">Jatuh Tempo</th>
+                            <th class="py-2 pr-3">Status</th>
+                            <th class="py-2 pr-3 text-right">Aksi</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach ($customerInvoices as $inv)
+                            <tr class="border-b border-gray-100">
+                                <td class="py-2 pr-3 font-mono text-xs text-gray-800">{{ $inv->invoice_number }}</td>
+                                <td class="py-2 pr-3 text-gray-600">{{ $inv->lineItems->first()?->description ?? '—' }}</td>
+                                <td class="py-2 pr-3 text-right text-gray-800">Rp {{ number_format((float) $inv->grand_total, 0, ',', '.') }}</td>
+                                <td class="py-2 pr-3 text-gray-600 whitespace-nowrap">{{ $inv->period_start->translatedFormat('d M y') }} &ndash; {{ $inv->period_end->translatedFormat('d M y') }}</td>
+                                <td class="py-2 pr-3 text-gray-600 whitespace-nowrap">{{ $inv->due_date->translatedFormat('d M y') }}</td>
+                                <td class="py-2 pr-3">
+                                    <span @class([
+                                        'inline-block px-2 py-0.5 rounded-full text-xs font-medium',
+                                        'bg-green-100 text-green-700' => $inv->status->value === 'paid',
+                                        'bg-yellow-100 text-yellow-700' => in_array($inv->status->value, ['draft', 'pending'], true),
+                                        'bg-red-100 text-red-700' => in_array($inv->status->value, ['overdue', 'cancelled'], true),
+                                    ])>{{ $inv->status->label() }}</span>
+                                </td>
+                                <td class="py-2 pr-3 text-right">
+                                    <span x-data="{ open: false }" class="relative inline-block">
+                                        <button type="button" @click="open = !open" @click.outside="open = false" class="text-gray-600 hover:underline text-xs">
+                                            Cetak &#9662;
+                                        </button>
+                                        <div x-show="open" x-cloak class="absolute right-0 z-10 mt-1 w-44 rounded-md border border-gray-200 bg-white py-1 text-left shadow-lg">
+                                            <a href="{{ route('web.invoices.print', $inv) }}" target="_blank" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50">Print Standar (A4)</a>
+                                            <a href="{{ route('web.invoices.print', ['invoice' => $inv, 'format' => 'thermal', 'width' => '80']) }}" target="_blank" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50">Print Thermal 80mm</a>
+                                            <a href="{{ route('web.invoices.print', ['invoice' => $inv, 'format' => 'thermal', 'width' => '58']) }}" target="_blank" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50">Print Thermal 58mm</a>
+                                        </div>
+                                    </span>
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+            <p class="mt-2 text-xs text-gray-400">Menampilkan {{ $customerInvoices->count() }} invoice terbaru. Overview semua pelanggan: menu <span class="font-medium">Invoice</span> (Billing &amp; Finance).</p>
         @endif
     </div>
 

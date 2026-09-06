@@ -425,14 +425,20 @@ and `::handleWebhook()` both key off it. Any future code that creates a Xendit p
 webhook must do the same; matching by numeric `Invoice::id` would still work by coincidence in dev but
 breaks the intended human-readable reconciliation trail this format exists for.
 
-**Two legitimate callers of `InvoiceService::markPaid()` now exist, not one** — confirmed explicitly by
-Agung when this tension was flagged during v0.3.5: the pre-existing manual `PATCH
-/api/v1/invoices/{invoice}/paid` endpoint (v0.3.4, no payment verification at all — an admin can mark any
-non-terminal invoice paid by hand) was deliberately **kept**, alongside the new fully-verified
-`PaymentService::handleWebhook()` path (signature + idempotency + exact amount match, v0.3.5). Don't
-"clean this up" by removing the manual endpoint without asking first — if a future sprint wants stricter
-audit trail parity for manually-recorded payments (e.g. requiring a `payments` row for those too, not just
-a bare status flip), that's new scope requiring its own confirmation, not an assumed cleanup.
+**Three legitimate callers of `InvoiceService::markPaid()` now exist** (was two through v0.9.11) — confirmed
+explicitly by Agung:
+1. The pre-existing manual `PATCH /api/v1/invoices/{invoice}/paid` endpoint (v0.3.4, no payment
+   verification — an admin marks any non-terminal invoice paid by hand). Also surfaced as the "Tandai
+   Lunas" button in `App\Livewire\Billing\InvoiceIndex`.
+2. `PaymentService::handleWebhook()` (Xendit, v0.3.5 — signature + idempotency + exact amount match).
+3. **`App\Services\Billing\RenewalInvoiceService::issuePaidForPeriod()` (v0.9.12)** — the "Perpanjang"
+   action's Invoice-is-now-real path (see the dedicated section below). Creates an on-demand invoice for
+   the renewed period and marks it paid, which — same as the other two callers — auto-triggers
+   `CommissionLedgerMaturityService::matureForPaidInvoice()` (v0.9.5) and the `payment_received` WhatsApp.
+
+Don't "clean this up" by removing the manual endpoint without asking first — if a future sprint wants
+stricter audit trail parity for manually-recorded payments (e.g. requiring a `payments` row for those too,
+not just a bare status flip), that's new scope requiring its own confirmation, not an assumed cleanup.
 
 **Webhook signature verification is a static shared-token comparison, not HMAC** — Xendit's actual
 callback verification mechanism is comparing the `x-callback-token` request header against the token shown
@@ -6738,6 +6744,125 @@ password Kamisem (id=4) untuk verifikasi manual v0.9.6 dilakukan manual via `tin
 (`User::forceFill(['password' => Hash::make(Str::password(16))])->save()`). Fitur "Lupa Password" di atas
 menutup kebutuhan ini dari sisi Referrer; aksi admin regenerate (kalau nanti diperlukan) = scope
 tersendiri.
+
+## Perpanjang → Invoice ASLI + Lunas + Cetak (v0.9.12, branch `perpanjang-invoice-asli-cetak`, belum merge/tag)
+
+**PERGESERAN PENTING dari batasan lama** — `Invoice` (v0.3.4) dan `subscriptions` selama ini DORMANT
+(0 baris di dev, tidak pernah dipakai nyata). Keputusan Agung: Invoice mulai BENAR-BENAR dipakai
+sekarang, BOSS App menggantikan MixRadius/SmartOLT di production. Solusi untuk "Komisi Penjualan tidak
+pernah matang" (v0.9.5 hook `markPaid()` tidak pernah terpicu karena tidak ada invoice yang pernah lunas)
+= HIDUPKAN jalur yang sudah ada, BUKAN jalur bypass baru yang menduplikat logic.
+
+**Aksi "Perpanjang" sekarang membuat Invoice ASLI + langsung LUNAS.** `SubscriptionRenewalService::
+renew()`, SETELAH proses Titip (tidak diubah), memanggil `RenewalInvoiceService::issuePaidForPeriod()`
+per periode bulan: buat Invoice → `markPending()` → `markPaid()`. `markPaid()` OTOMATIS men-trigger
+`CommissionLedgerMaturityService::matureForPaidInvoice()` (v0.9.5) — Komisi Penjualan (referral resmi,
+NON-titip) matang **tanpa satu baris logic komisi baru**, murni efek samping invoice beneran lunas.
+
+**`markPaid()` sekarang punya 3 caller** — lihat section "Payment gateway (Xendit)" di atas untuk daftar
+lengkapnya (ditambah `RenewalInvoiceService`).
+
+**`GenerateDueInvoices` (job recurring otomatis) TETAP OFF.** Ini pembuatan invoice ON-DEMAND, dipicu
+manual oleh aksi Perpanjang — bukan `subscriptions` yang "diaktifkan". `RenewalInvoiceService` memakai
+SATU baris `subscriptions` tersembunyi per pelanggan (`name = "Perpanjangan Manual (BOSS App)"`,
+`status = SubscriptionStatus::Cancelled`, `monthly_amount = 0`), di-`firstOrCreate` sekali lalu dipakai
+ulang untuk semua perpanjangan pelanggan itu. `status = Cancelled` → **INVISIBLE untuk
+`GenerateDueInvoices`** (yang hanya query `status = Active`). Diperlukan semata karena
+`invoices.subscription_id` NOT NULL + `InvoiceService::generateForPeriod()` menerima `Subscription`.
+Nominal + deskripsi asli datang per-invoice lewat param baru, BUKAN dari `subscription.monthly_amount`/
+`name` (yang sengaja 0/generik).
+
+**`InvoiceService::generateForPeriod()` dapat 3 param opsional** — semua default menjaga perilaku ke-3
+caller subscription-based (`GenerateDueInvoices`, `generateNextForSubscription`, API `generate`):
+`?float $overrideAmount` (= `PppPackage.sell_price` efektif saat perpanjang), `?string $overrideDescription`,
+`bool $applyTax = true`. `$applyTax = false` → lewati tax engine SEPENUHNYA (`tax_total = 0`,
+`grand_total = subtotal`, TIDAK menulis `reseller_tax_ledger`). Kontrak tax v0.3.3 tetap UTUH untuk
+`$applyTax = true`.
+
+**Checklist `customers.tax_billable`** (boolean, migration baru, default `false`) — keputusan Agung:
+- **false** (default): Invoice Perpanjang `tax_total = 0`. Cetakan TETAP menampilkan baris "PPN (0%)"
+  sebagai keterangan eksplisit.
+- **true**: `$applyTax = true` → tax engine v0.3.3 jalan normal. `sell_price` = DPP, PPN ditambahkan di
+  ATASNYA (`grand_total = subtotal + PPN`). Selama `tax_components`/`reseller_tax_policies` belum
+  dikonfigurasi Agung (sekarang 0 di dev), PPN tetap 0 — tapi jalurnya sudah aktif.
+- `promo_price` DIABAIKAN (pakai `sell_price`) — konsisten dengan `gross_amount` komisi Titip yang juga
+  pakai `sell_price`. Kalau nanti mau "harga efektif = promo_price ?? sell_price" itu perubahan tersendiri
+  (butuh helper baru + menyesuaikan `gross_amount` Titip juga).
+
+**Guard anti-duplikat Invoice per periode**: kalau invoice untuk customer+periode sudah ada (jalur mana
+pun), TIDAK membuat yang kedua — `generateForPeriod` idempoten mengembalikan yang existing + DB unique
+`(subscription_id, period_start, period_end)`. Kalau belum Paid → dilunaskan (yang men-trigger maturity);
+kalau sudah Paid → skip. (Perpanjang ke-2 untuk bulan yang sama sudah di-hard-block LEBIH DULU oleh
+`ReferrerTitipService::existingForMonth()` — guard invoice-level ini untuk kasus invoice datang dari jalur
+LAIN, mis. admin bikin draft manual lalu Perpanjang melunaskannya.)
+
+**`renew()` hasil array dapat field baru**: `invoices_created`, `invoices_paid`, `invoice_numbers`,
+`invoice_grand_total`, `sales_commission_matured`. Ditampilkan di flash message + `customer_timeline_entries`.
+Invoice creation di DALAM transaksi `renew()` (atomik — timeline write gagal → invoice "paid" ikut
+rollback). `markPaid()`'s WhatsApp `payment_received` ikut ter-antre untuk pelanggan (side effect yang
+sudah ada di `markPaid`, tidak dimatikan — kalau Agung mau suppress untuk Perpanjang, itu follow-up).
+
+### Cetak Invoice — 2 tipe, BROWSER-PRINT (nol dependency PDF baru)
+
+Codebase TIDAK punya library PDF sama sekali (no dompdf/snappy/mpdf — dicek `composer.json` + grep).
+Keputusan Agung: **browser-print** — view HTML ber-CSS `@media print` + `@page`, auto `window.print()`.
+User "Save as PDF" dari dialog browser; printer thermal via dialog juga. Kalau nanti butuh file `.pdf`
+ter-download beneran, `barryvdh/laravel-dompdf` bisa ditambahkan tanpa mengubah kontrak route.
+
+- `GET /invoices/{invoice}/print?format=standard|thermal&width=58|80` — `App\Http\Controllers\Billing\
+  InvoicePrintController` (`web.invoices.print`, di grup `['auth','admin.panel']`→`reseller.context`,
+  gate `InvoicePolicy::view`).
+- **Standar** — A4/Letter (`@page { size: A4 }`), layout invoice biasa. Kepala perusahaan dari
+  `config/invoice.php` baru (`INVOICE_COMPANY_*` env, fallback ke nama tenant — `tenants` table sengaja
+  minimal, branding per-tenant = sprint tersendiri nanti). Item, Subtotal (DPP), PPN (%), Total, stempel
+  "LUNAS" kalau paid.
+- **Thermal** — 58mm/80mm (`@page { size: 58mm auto }`), layout struk kasir monospace. `width` default 80.
+- Tombol dropdown "Cetak ▾" per baris di `/invoices` (`invoice-index.blade.php`, Alpine, buka tab baru).
+- `?autoprint=0` untuk menonaktifkan auto `window.print()` (dipakai test / preview).
+- Diverifikasi live terhadap `boss.bajastu.id`: kedua format HTTP 200, DATA sama, FORMAT beda.
+
+**Verifikasi live** (customer #439, dibersihkan setelahnya — `test-x86-bajastu` / production RADIUS tidak
+tersentuh, ini murni data BOSS App): Perpanjang periode masa depan → Invoice `INV/DIRECT/2026/11/000001`
+`status=paid`, subscription tersembunyi #N `status=cancelled`, `commission_ledger` template `limited_count`
+Pending → **Eligible** + `amount=33000` + `invoice_id`. `sales_commission_matured: 1`. Cetak standar + 58mm
+keduanya render benar.
+
+**DB dev sudah di-`migrate`** (`customers.tax_billable`). Kalau branch dibatalkan: `migrate:rollback --step=1`.
+
+### Revisi gabungan (v0.9.12, sama branch — jawaban 4 flag desain + 3 fitur)
+
+- **A — WA `payment_received` di-suppress khusus Perpanjang.** `InvoiceService::markPaid(Invoice, bool
+  $notifyCustomer = true)`. `RenewalInvoiceService::issuePaidForPeriod()` memanggilnya `notifyCustomer:
+  false` — Perpanjang multi-bulan bikin N invoice → tanpa ini pelanggan dapat N pesan "pembayaran
+  diterima" terpisah untuk satu transaksi. **PATCH manual v0.3.4 + webhook Xendit v0.3.5 TETAP default
+  `true`** — jangan suppress global. Pematangan komisi (v0.9.5) tidak terpengaruh flag ini. Flag 2 (header
+  cetak), 3 (nomor v0.9.12), 4 (`promo_price` diabaikan) — dikonfirmasi Agung, tidak berubah.
+- **B — Section "Invoice" di Detail Pelanggan** (`CustomerShow`, referensi MixRadius "Invoice & Session")
+  — list invoice KHUSUS pelanggan itu (`Invoice::where('customer_id', ...)`, 50 terbaru), tombol Cetak
+  dropdown per baris (reuse `web.invoices.print`). Menu `/invoices` global **TETAP ADA** untuk overview
+  lintas pelanggan — default: pertahankan keduanya (per instruksi).
+- **C — `CommissionRateIndex` sembunyikan paket `sell_price = 0`** — di list DAN di `edit()`/`saveRate()`
+  (`->where('sell_price', '>', 0)->findOrFail()` = guard, bukan cuma menyembunyikan baris). Paket gratis
+  mustahil hasilkan komisi.
+- **D — "Fee Komisi" (`/titip-masuk`, `TitipMasukIndex`) TIDAK LAGI khusus Titip.** Sekarang gabungan
+  Titip + Bulanan (recurring/limited_count), filter "Jenis Komisi" (Semua/Titip/Bulanan). Kolom "Uang
+  Diterima"/"Setoran"/checkbox setor hanya untuk baris Titip; baris `scheme = NULL` (template belum
+  matang) tidak pernah muncul. 4 kartu ringkasan (Titip harus dibayar / Setoran belum masuk / Bulanan
+  harus dibayar / total gabungan). **Pembayaran komisi Bulanan bisa langsung dari halaman ini** —
+  `CommissionPayoutService::payMonthlyRow()` (baru, single) + `payMonthlyForReferrer()` (sudah ada,
+  batch), **hanya kalau jendela payout paket-nya (Rate Komisi) sedang terbuka** (`isRowPayableNow()`,
+  guard di service bukan cuma UI); TANPA bukti bayar (beda Titip yang wajib foto). Halaman "Payout
+  Bulanan" (`MonthlyPayoutIndex`) **TETAP ADA** untuk alur batch khusus bulanan (tidak dihapus).
+- **E — Menu baru "Riwayat Pembayaran" (`/riwayat-pembayaran-komisi`, `CommissionPaymentHistory`)** di
+  grup sidebar "Komisi" (sejajar Rate Komisi / Fee Komisi / Payout Bulanan). List SEMUA `commission_ledger`
+  `status = Paid` (Titip + Bulanan) — read-only, filter tanggal/referrer/jenis. **Grafik**: bar bertumpuk
+  Titip vs Bulanan, total komisi dibayar per bulan — pakai **Chart.js yang SUDAH ADA** di codebase
+  (`window.commissionPaidChart` di `resources/js/app.js`, pola `wire:ignore` + dispatched browser event
+  `commission-paid-series-updated`, chart di-destroy/rebuild — sama persis `trafficChart`/`signalHistoryChart`),
+  BUKAN dependency baru. Bundle di-rebuild, `FrontendBuildTest` hijau.
+- **Gotcha ditemukan**: `selectRaw('scheme, ...')->groupBy('scheme')->get()` pada `CommissionLedger` tetap
+  meng-enum-cast kolom `scheme` saat hidrasi model — `firstWhere('scheme', 'recurring')` gagal (enum ≠
+  string). Fix: `->toBase()` sebelum `selectRaw` di query agregat, supaya `scheme` tetap string mentah.
 
 ## Cluster Profil Paket (v0.14.x) — Konstrain NAS Produksi
 

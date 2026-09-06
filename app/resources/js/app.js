@@ -948,11 +948,12 @@ window.commissionPaidChart = function (initialSeries) {
         init() {
             this.chart = this.build(initialSeries || { labels: [], titip: [], bulanan: [] });
         },
-        update(series) {
+        update(detail) {
+            const series = (detail && detail.series) || detail || { labels: [], titip: [], bulanan: [] };
             if (this.chart) {
                 this.chart.destroy();
             }
-            this.chart = this.build(series || { labels: [], titip: [], bulanan: [] });
+            this.chart = this.build(series);
         },
         build(series) {
             const rootStyle = getComputedStyle(document.documentElement);

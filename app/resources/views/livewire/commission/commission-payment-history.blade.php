@@ -58,8 +58,7 @@
     {{-- Grafik: total komisi dibayar per bulan (Titip vs Bulanan) --}}
     <div class="p-4 bg-white border border-gray-200 rounded-md mb-6" wire:ignore
         x-data="commissionPaidChart(@js($chartSeries))"
-        x-init="init()"
-        @commission-paid-series-updated.window="update($event.detail.series)">
+        x-on:commission-paid-series-updated.window="update($event.detail)">
         <p class="text-xs text-gray-500 uppercase mb-2">{{ __('Komisi Dibayar per Bulan') }}</p>
         <div class="relative" style="height: 260px">
             <canvas x-ref="canvas"></canvas>

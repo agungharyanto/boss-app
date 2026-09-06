@@ -3,6 +3,62 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.9.0 — Commission: Approval + Clawback (branch `v0.9.0-commission-approval-clawback`, belum merge/tag)
+
+Menutup sisa scope cluster Commission (v0.9.x). Eligibility (Pending→Eligible) sudah di v0.9.5, Payment
+(Eligible→Paid) di v0.9.11 — yang belum: **Approval** dan **Clawback**. `CommissionStatus` sudah punya
+case `Approved`/`Rejected` sejak v0.3.0 tapi tak pernah dipakai; sekarang di-wiring, plus case baru
+`Clawback`.
+
+### Approval — HANYA komisi Bulanan (recurring / limited_count)
+
+- **Titik keputusan dikonfirmasi Agung (2026-09-07)**: Approval **tidak** berlaku untuk Titip. Entri
+  Titip tetap langsung `Eligible` setelah OTP WhatsApp terverifikasi (keputusan eksplisit v0.9.6 — OTP =
+  jaring pengaman, bukan review admin). Yang butuh gerbang manual adalah komisi bulanan, yang matang
+  OTOMATIS dari invoice pelanggan lunas tanpa satu pun manusia yang me-review.
+- **`App\Services\Commission\CommissionApprovalService`** baru: `approve()` (Eligible→Approved),
+  `reject()` (Eligible→Rejected, **wajib alasan** — disimpan di `commission_ledger.notes` dengan prefix
+  jejak + `reviewed_by`/`reviewed_at`). Menolak baris scheme=titip / non-Eligible secara eksplisit.
+- **`CommissionPayoutService` payout bulanan sekarang `Approved` → `Paid`** (dulu `Eligible` → `Paid`).
+  `payMonthlyRow()` menolak baris Eligible-belum-approve dengan pesan jelas; `payMonthlyForReferrer()`
+  hanya query baris `Approved`. Titip TIDAK berubah (`Eligible` → `Paid`).
+- **`MonthlyPayoutIndex` (`/payout-komisi-bulanan`) hanya menampilkan baris `Approved`.** Baris Eligible
+  yang belum di-Approve muncul sebagai catatan pengingat ("X komisi bulanan masih menunggu approval") +
+  link ke Fee Komisi.
+- **UI aksi di Fee Komisi (`/titip-masuk`)**: tombol "Approve" + link "Reject" (modal alasan) untuk baris
+  bulanan Eligible; tombol "Bayar Komisi" hanya muncul setelah `Approved`. Kartu ringkasan dipecah
+  "Bulanan Menunggu Approval" vs "Bulanan Siap Dibayar".
+
+### Clawback — semua skema (termasuk Titip), append-only
+
+- Aksi admin manual "Batalkan" untuk baris `commission_ledger` berstatus Eligible / Approved / **bahkan
+  Paid** (pelanggan batal / refund / koreksi). **TIDAK menghapus/mengubah baris asli** — `clawback()`
+  membuat **BARIS BARU** (`amount` negatif, `status = Clawback`, `reversal_of_id` menunjuk baris asli,
+  `reviewed_by`/`reviewed_at`, alasan wajib di `notes`). Prinsip append-only yang sama dengan
+  `reseller_tax_ledger`/`cpe_action_logs`.
+- Kalau baris yang di-clawback **sudah Paid** (uang sudah keluar): baris reversal ditandai `[UTANG]` di
+  catatan + badge merah di UI "Utang: komisi asli sudah dibayar, perlu ditagih balik ke Referrer".
+  Sistem **tidak** menarik uang otomatis — murni pencatatan.
+- Ditolak untuk baris Pending / Rejected / yang sudah pernah di-clawback / baris Clawback itu sendiri.
+- `ReferrerReferralResource` (`GET /api/v1/referrals`) — `commission_total_earned` sekarang ikut
+  menjumlahkan baris Clawback (nominal negatif) → komisi yang dibatalkan ternetralkan dari total.
+
+### Skema / permission
+
+- Migration `2026_09_07_120000_add_approval_and_clawback_to_commission_ledger_table` —
+  `reversal_of_id` (self-FK, `nullOnDelete`), `reviewed_by` (FK users, `nullOnDelete`), `reviewed_at`.
+- Permission baru `commission_ledger.approve` + `commission_ledger.clawback`, keduanya **tier-admin**
+  (superadmin + administrator — keputusan Agung, bukan superadmin-only). `CommissionLedgerPolicy::approve()`/
+  `clawback()`.
+- `CommissionStatus::Clawback` ('clawback').
+
+### Rekonsiliasi Gap SmartOLT (48 ONU)
+
+Bagian terpisah, tidak menyentuh kode komisi — lihat catatan di bawah / CLAUDE.md.
+
+Test: `CommissionApprovalServiceTest` (14) + tambahan di `CommissionPayoutServiceTest` /
+`TitipMasukIndexLivewireTest` / `MonthlyPayoutIndexLivewireTest`. Pint clean.
+
 ## v0.9.12 — Perpanjang → Invoice ASLI + Lunas + Cetak 2 Tipe (branch `perpanjang-invoice-asli-cetak`, belum merge/tag)
 
 **Koreksi arah, dikonfirmasi Agung**: Invoice mulai BENAR-BENAR dipakai sekarang (BOSS App menggantikan

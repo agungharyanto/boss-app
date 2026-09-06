@@ -422,16 +422,30 @@ class RolesAndPermissionsSeeder extends Seeder
      * commission_rates.*.
      *
      * Sprint "perpanjang-daftar-pelanggan" (tracking setoran) —
-     * `commission_ledger.manage`: aksi "Tandai Sudah Setor Semua" per
-     * Referrer (`CommissionLedgerPolicy::markDeposit`). Masih tidak ada
-     * approve/reject.
+     * `commission_ledger.manage`: aksi "Tandai Sudah Setor" + payout
+     * (`CommissionLedgerPolicy::markDeposit`/`markPaid`).
+     *
+     * v0.9.0 (sisa scope Commission) —
+     * `commission_ledger.approve`: Approve/Reject komisi bulanan
+     * (Eligible→Approved / Eligible→Rejected). Titip tidak lewat approval.
+     * `commission_ledger.clawback`: membatalkan komisi (buat baris reversal),
+     * termasuk yang sudah Paid — aksi sensitif. Keputusan Agung (2026-09-07):
+     * kedua permission ini tetap tier-admin (superadmin + administrator),
+     * bukan superadmin-only.
      */
     private function seedCommissionLedgerPermissions(): void
     {
         Permission::firstOrCreate(['name' => 'commission_ledger.view', 'guard_name' => 'web']);
         Permission::firstOrCreate(['name' => 'commission_ledger.manage', 'guard_name' => 'web']);
+        Permission::firstOrCreate(['name' => 'commission_ledger.approve', 'guard_name' => 'web']);
+        Permission::firstOrCreate(['name' => 'commission_ledger.clawback', 'guard_name' => 'web']);
 
-        $this->giveToAdminTier(['commission_ledger.view', 'commission_ledger.manage']);
+        $this->giveToAdminTier([
+            'commission_ledger.view',
+            'commission_ledger.manage',
+            'commission_ledger.approve',
+            'commission_ledger.clawback',
+        ]);
     }
 
     /**

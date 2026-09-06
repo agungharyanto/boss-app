@@ -325,11 +325,24 @@ class CustomerIndex extends Component
         $this->resetRenewFlow();
 
         $monthsText = $result['months'] > 1 ? " {$result['months']} bulan" : '';
+
+        $invText = '';
+        if ($result['invoices_paid'] > 0) {
+            $grand = number_format((float) $result['invoice_grand_total'], 0, ',', '.');
+            $n = count($result['invoice_numbers']);
+            $invText = $n === 1
+                ? " Invoice {$result['invoice_numbers'][0]} (Rp {$grand}) dibuat & ditandai lunas."
+                : " {$n} invoice (total Rp {$grand}) dibuat & ditandai lunas.";
+            if ($result['sales_commission_matured'] > 0) {
+                $invText .= " Komisi Penjualan ({$result['sales_commission_matured']} baris) ikut matang.";
+            }
+        }
+
         if ($result['commission_created']) {
             $total = number_format((float) $result['commission_total'], 0, ',', '.');
-            $this->renewFlash = "Perpanjangan {$customer->name}{$monthsText} dicatat, komisi Titip Rp {$total} berhasil ditambahkan.";
+            $this->renewFlash = "Perpanjangan {$customer->name}{$monthsText} dicatat, komisi Titip Rp {$total} berhasil ditambahkan.{$invText}";
         } else {
-            $this->renewFlash = "Perpanjangan {$customer->name}{$monthsText} dicatat.";
+            $this->renewFlash = "Perpanjangan {$customer->name}{$monthsText} dicatat.{$invText}";
         }
     }
 

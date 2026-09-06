@@ -991,6 +991,30 @@ di bawah (atau lewat endpoint manual `PATCH /invoices/{invoice}/paid` yang
 sudah ada sejak v0.3.4, dipertahankan apa adanya per keputusan eksplisit,
 lihat CLAUDE.md).
 
+### Cetak Invoice (v0.9.12) — `GET /invoices/{invoice}/print` (route web, bukan API)
+
+**Route web** (`web.invoices.print`, di grup `['auth','admin.panel']` →
+`reseller.context`, gate `InvoicePolicy::view`), bukan bagian
+`routes/api.php`. Query: `?format=standard` (default, A4) atau
+`?format=thermal` + `?width=58|80` (default 80). `?autoprint=0` mematikan
+auto `window.print()`. Mengembalikan halaman HTML browser-print (nol
+dependency PDF) — DATA sama untuk kedua format, hanya `@page`/lebar yang
+beda. Kepala perusahaan dari `config/invoice.php` (`INVOICE_COMPANY_*`),
+fallback nama tenant.
+
+### Perpanjang → Invoice ASLI (v0.9.12)
+
+Aksi "Perpanjang" (`SubscriptionRenewalService::renew()`, dipicu dari
+`/customers` Livewire — tidak ada endpoint REST khusus) sekarang membuat
+Invoice ASLI per periode + langsung LUNAS lewat
+`InvoiceService::markPaid()` → otomatis mematangkan Komisi Penjualan
+v0.9.5. Field customer baru **`tax_billable`** (boolean, default `false`):
+`false` → Invoice Perpanjang `tax_total = 0` (cetakan tetap tampil "PPN
+0%"); `true` → tax engine v0.3.3 normal (`sell_price` = DPP, PPN di atas).
+`POST`/`PUT /customers` (kalau nanti mengekspos field ini) + Livewire
+`CustomerShow` menerimanya. `GenerateDueInvoices` TETAP off — pembuatan
+invoice ini ON-DEMAND.
+
 ### `POST /webhooks/xendit`
 
 **Publik** (di luar `auth:sanctum`, throttle `60,1`) — dipanggil Xendit,

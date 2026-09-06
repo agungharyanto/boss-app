@@ -4,11 +4,13 @@ namespace App\Services\Commission;
 
 use App\Enums\ReferrerType;
 use App\Http\Middleware\EnsureAdminPanelAccess;
+use App\Models\CommissionLedger;
 use App\Models\Customer;
 use App\Models\CustomerTimelineEntry;
 use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Models\User;
+use App\Services\Billing\RenewalInvoiceService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -18,14 +20,26 @@ use Illuminate\Support\Facades\DB;
  * Pelanggan. Mencatat perpanjangan langganan (opsional ganti paket) +
  * komisi Titip kalau acting user adalah Referrer Sales/Freelance.
  *
+ * REVISI (sprint "perpanjang-invoice-asli-cetak", keputusan Agung): aksi
+ * "Perpanjang" sekarang JUGA membuat Invoice ASLI per periode + langsung
+ * LUNAS lewat InvoiceService::markPaid() (via RenewalInvoiceService) — yang
+ * OTOMATIS men-trigger pematangan Komisi Penjualan v0.9.5
+ * (CommissionLedgerMaturityService) tanpa logic komisi baru. Titip TETAP
+ * terpisah (baris commission_ledger scheme=titip), tidak berubah.
+ *
  * BATASAN KERAS (dikonfirmasi berulang di CLAUDE.md untuk seluruh cluster
  * komisi):
  *  - HANYA data BOSS App. TIDAK ADA satu pun panggilan ke NAS / RouterOS /
  *    FreeRADIUS / MixRadius. Perpanjangan layanan yang sebenarnya tetap
  *    proses manual admin di luar BOSS App.
- *  - `subscriptions` / `SubscriptionService` / `GenerateDueInvoices` TIDAK
- *    disentuh — `customers.ppp_package_id` sepenuhnya independen dari
- *    `subscriptions` (lihat catatan v0.9.4 di CLAUDE.md).
+ *  - `GenerateDueInvoices` (job recurring otomatis) TETAP OFF —
+ *    `SubscriptionService` tidak dipakai. Invoice yang dibuat di sini
+ *    ON-DEMAND, dipicu manual. Subscription "asli" tetap tidak diaktifkan;
+ *    RenewalInvoiceService memakai 1 baris `subscriptions` tersembunyi
+ *    per pelanggan (`status = Cancelled`, invisible untuk GenerateDueInvoices)
+ *    semata sebagai "vehicle" karena `invoices.subscription_id` NOT NULL.
+ *  - `customers.ppp_package_id` tetap sumber kebenaran paket (independen
+ *    dari `subscriptions`, lihat catatan v0.9.4 di CLAUDE.md).
  *  - Ganti paket = update `customers.ppp_package_id` SEKALI (bukan per
  *    bulan) untuk seluruh transaksi.
  *  - Komisi: `ReferrerType::Sales` / `ReferrerType::Freelance` → `amount`
@@ -43,7 +57,10 @@ use Illuminate\Support\Facades\DB;
  */
 class SubscriptionRenewalService
 {
-    public function __construct(private readonly ReferrerTitipService $titip) {}
+    public function __construct(
+        private readonly ReferrerTitipService $titip,
+        private readonly RenewalInvoiceService $renewalInvoice,
+    ) {}
 
     /**
      * @param  int  $months  jumlah bulan (>= 1). > 1 hanya untuk admin.
@@ -60,6 +77,11 @@ class SubscriptionRenewalService
      *     commission_total: ?float,
      *     commission_gross_amount: ?float,
      *     commission_skipped_reason: ?string,
+     *     invoices_created: int,
+     *     invoices_paid: int,
+     *     invoice_numbers: list<string>,
+     *     invoice_grand_total: float,
+     *     sales_commission_matured: int,
      * }
      *
      * @throws \RuntimeException kalau: paket baru tidak valid; multi-bulan
@@ -144,6 +166,11 @@ class SubscriptionRenewalService
             'commission_total' => null,
             'commission_gross_amount' => null,
             'commission_skipped_reason' => null,
+            'invoices_created' => 0,
+            'invoices_paid' => 0,
+            'invoice_numbers' => [],
+            'invoice_grand_total' => 0.0,
+            'sales_commission_matured' => 0,
         ];
 
         DB::transaction(function () use (&$result, $actor, $customer, $newPackage, $originalPackageId, $fromName, $referrer, $periods, $months): void {
@@ -179,6 +206,7 @@ class SubscriptionRenewalService
             $grossAmount = $effectivePackage !== null ? (float) $effectivePackage->sell_price : null;
 
             $perRowCommission = null;
+            $invoiceIds = [];
             foreach ($periods as $period) {
                 $ledger = $this->titip->recordTitipForPeriod(
                     customer: $customer,
@@ -192,7 +220,28 @@ class SubscriptionRenewalService
                 if ($withCommission && $ledger->amount !== null) {
                     $perRowCommission = (float) $ledger->amount;
                 }
+
+                // Invoice ASLI per periode + langsung LUNAS lewat
+                // InvoiceService::markPaid() — yang men-trigger pematangan
+                // Komisi Penjualan v0.9.5 tanpa logic komisi baru.
+                $issued = $this->renewalInvoice->issuePaidForPeriod($customer, $period);
+                $invoiceIds[] = $issued['invoice']->id;
+                $result['invoice_numbers'][] = $issued['invoice']->invoice_number;
+                $result['invoice_grand_total'] += (float) $issued['invoice']->grand_total;
+                if ($issued['created']) {
+                    $result['invoices_created']++;
+                }
+                if ($issued['newly_paid']) {
+                    $result['invoices_paid']++;
+                }
             }
+
+            // Berapa baris Komisi Penjualan (referral resmi, NON-titip) yang
+            // matang sebagai EFEK SAMPING invoice-invoice ini lunas.
+            $result['sales_commission_matured'] = CommissionLedger::query()
+                ->withoutGlobalScopes()
+                ->whereIn('invoice_id', $invoiceIds)
+                ->count();
 
             $result['rows_created'] = count($periods);
             $result['commission_gross_amount'] = $grossAmount;
@@ -216,6 +265,10 @@ class SubscriptionRenewalService
                 $desc .= ", paket diubah dari {$fromName} ke {$result['package_to']}";
             }
 
+            if ($result['invoice_numbers'] !== []) {
+                $desc .= '. Invoice: '.implode(', ', $result['invoice_numbers']);
+            }
+
             CustomerTimelineEntry::create([
                 'tenant_id' => $customer->tenant_id,
                 'customer_id' => $customer->id,
@@ -233,6 +286,11 @@ class SubscriptionRenewalService
                     'commission_amount' => $result['commission_amount'],
                     'commission_total' => $result['commission_total'],
                     'referrer_id' => $referrer?->id,
+                    'invoice_numbers' => $result['invoice_numbers'],
+                    'invoices_created' => $result['invoices_created'],
+                    'invoices_paid' => $result['invoices_paid'],
+                    'invoice_grand_total' => $result['invoice_grand_total'],
+                    'sales_commission_matured' => $result['sales_commission_matured'],
                 ],
                 'actor_id' => $actor->id,
             ]);

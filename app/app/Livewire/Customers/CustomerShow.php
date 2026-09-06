@@ -40,6 +40,15 @@ class CustomerShow extends Component
     #[Validate('required|string|max:20')]
     public string $phone_number = '';
 
+    /**
+     * v0.9.12 — checklist "PPN ditagihkan ke pelanggan". true = harga paket
+     * dianggap DPP, PPN dihitung di atasnya saat Invoice Perpanjang dibuat
+     * (tax engine v0.3.3). false (default) = PPN 0, tapi cetakan invoice
+     * tetap menampilkan baris "PPN (0%)".
+     */
+    #[Validate('boolean')]
+    public bool $tax_billable = false;
+
     public string $selectedStatus = '';
 
     public bool $showContactForm = false;
@@ -96,6 +105,7 @@ class CustomerShow extends Component
         $this->name = $this->customer->name;
         $this->address = $this->customer->address;
         $this->phone_number = $this->customer->phone_number;
+        $this->tax_billable = (bool) $this->customer->tax_billable;
     }
 
     private function syncCommissionFields(): void
@@ -246,9 +256,11 @@ class CustomerShow extends Component
             'name' => 'required|string|max:255',
             'address' => 'required|string',
             'phone_number' => 'required|string|max:20',
+            'tax_billable' => 'boolean',
         ]);
 
         $this->customer = $action->handle($this->customer, $data);
+        $this->syncProfileFields();
         $this->editingProfile = false;
     }
 

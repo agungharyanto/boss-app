@@ -7,7 +7,7 @@ use App\Models\Customer;
 class UpdateCustomerAction
 {
     /**
-     * @param  array{name?: string, address?: string, phone_number?: string}  $data
+     * @param  array{name?: string, address?: string, phone_number?: string, tax_billable?: bool}  $data
      */
     public function handle(Customer $customer, array $data): Customer
     {

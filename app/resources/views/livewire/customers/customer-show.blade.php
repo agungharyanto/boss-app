@@ -28,6 +28,19 @@
                     <input type="text" wire:model="phone_number" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                     @error('phone_number') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                 </div>
+                <div>
+                    <label class="flex items-start gap-2 text-sm">
+                        <input type="checkbox" wire:model="tax_billable" class="mt-0.5 rounded border-gray-300">
+                        <span>
+                            <span class="font-medium text-gray-700">PPN ditagihkan ke pelanggan</span>
+                            <span class="block text-xs text-gray-500">
+                                Dicentang: harga paket dianggap DPP, PPN dihitung di atasnya pada invoice.
+                                Tidak dicentang: PPN 0 (invoice tetap menampilkan keterangan "PPN 0%").
+                            </span>
+                        </span>
+                    </label>
+                    @error('tax_billable') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                </div>
                 <div class="flex gap-2">
                     <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">Simpan</button>
                     <button type="button" wire:click="$set('editingProfile', false)" class="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300">Batal</button>
@@ -39,6 +52,8 @@
                 <dd class="text-gray-800">{{ $customer->address }}</dd>
                 <dt class="text-gray-500">Telepon</dt>
                 <dd class="text-gray-800">{{ $customer->phone_number }}</dd>
+                <dt class="text-gray-500">PPN ditagihkan</dt>
+                <dd class="text-gray-800">{{ $customer->tax_billable ? 'Ya' : 'Tidak (PPN 0%)' }}</dd>
             </dl>
 
             @if ($canManage)

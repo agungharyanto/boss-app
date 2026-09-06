@@ -29,10 +29,13 @@ use RuntimeException;
  *    (beda dari Titip — lihat migration 2026_09_05_090000 untuk alasan
  *    `payment_proof_path` nullable).
  *
- * Baik payout Titip maupun bulanan MENTRANSISIKAN `status` yang sudah ada
- * (`Eligible` → `Paid`, case yang sudah ada sejak v0.3.0 tapi baru
- * benar-benar dipakai di sini) — bukan kolom boolean `is_paid` terpisah
- * yang redundan.
+ * Payout Titip mentransisikan `Eligible` → `Paid`. Payout Bulanan
+ * mentransisikan **`Approved`** → `Paid` — sejak v0.9.0, komisi bulanan
+ * WAJIB di-Approve admin dulu (`CommissionApprovalService`) sebelum bisa
+ * dibayar; baris `Eligible` yang belum di-Approve TIDAK ikut ke payout.
+ * Titip tetap TIDAK lewat approval (OTP WhatsApp jadi gerbangnya, lihat
+ * keputusan v0.9.6). Bukan kolom boolean `is_paid` terpisah — reuse
+ * `status` enum yang sudah ada sejak v0.3.0.
  *
  * AMANDEMEN (2026-09-05) — "tanggal 5-7" TIDAK LAGI hardcode global.
  * Sebelumnya `PAYOUT_WINDOW_START_DAY`/`_END_DAY`/`isWithinMonthlyPayoutWindow()`
@@ -162,10 +165,10 @@ class CommissionPayoutService
 
     /**
      * Bayar SEMUA baris komisi bulanan (recurring/limited_count) milik
-     * satu Referrer yang berstatus Eligible DAN genuinely payable sekarang
-     * (`isRowPayableNow()`, per rate paketnya masing-masing) — batch,
-     * bukan satu-satu. Baris yang statusnya Eligible tapi jendela
-     * paketnya sedang TERTUTUP diam-diam dilewati, sama semantik
+     * satu Referrer yang berstatus **Approved** DAN genuinely payable
+     * sekarang (`isRowPayableNow()`, per rate paketnya masing-masing) —
+     * batch, bukan satu-satu. Baris Approved tapi jendela paketnya sedang
+     * TERTUTUP diam-diam dilewati, sama semantik
      * `payTitipForReferrer()` — bukan lagi menolak seluruh panggilan
      * (lihat docblock class untuk alasan perubahan ini).
      *
@@ -191,8 +194,12 @@ class CommissionPayoutService
             throw new RuntimeException('Komisi ini sudah pernah dibayar sebelumnya.');
         }
 
-        if ($entry->status !== CommissionStatus::Eligible) {
-            throw new RuntimeException('Komisi ini belum berstatus "Layak Dibayar".');
+        if ($entry->status === CommissionStatus::Eligible) {
+            throw new RuntimeException('Komisi bulanan harus di-Approve admin dulu di halaman Fee Komisi sebelum bisa dibayar.');
+        }
+
+        if ($entry->status !== CommissionStatus::Approved) {
+            throw new RuntimeException('Hanya komisi bulanan berstatus "Disetujui" yang bisa dibayar.');
         }
 
         if (! $this->isRowPayableNow($entry)) {
@@ -213,7 +220,7 @@ class CommissionPayoutService
         $rows = CommissionLedger::query()
             ->whereIn('scheme', [CommissionScheme::Recurring->value, CommissionScheme::LimitedCount->value])
             ->where('referrer_id', $referrerId)
-            ->where('status', CommissionStatus::Eligible->value)
+            ->where('status', CommissionStatus::Approved->value)
             ->with('customer.pppPackage.commissionRate')
             ->get();
 

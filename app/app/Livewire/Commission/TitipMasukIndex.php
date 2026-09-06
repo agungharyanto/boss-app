@@ -6,6 +6,7 @@ use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
 use App\Enums\TitipDepositStatus;
 use App\Models\CommissionLedger;
+use App\Services\Commission\CommissionApprovalService;
 use App\Services\Commission\CommissionPayoutService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Component;
@@ -47,7 +48,14 @@ use RuntimeException;
  * Baris `scheme = NULL` (template v0.9.4 yang belum matang) TIDAK pernah
  * ditampilkan di sini — belum jadi komisi nyata.
  *
- * TETAP tanpa approve/reject.
+ * v0.9.0 (sisa scope Commission) — halaman ini jadi tempat aksi
+ * **Approval** komisi Bulanan (Eligible → Approved / Rejected, via
+ * `CommissionApprovalService`, permission `commission_ledger.approve`) dan
+ * **Clawback** (batalkan komisi apa pun statusnya, buat baris reversal,
+ * permission `commission_ledger.clawback`). Komisi Bulanan sekarang WAJIB
+ * di-Approve sebelum tombol "Bayar Komisi" muncul — baris `Eligible` yang
+ * belum di-Approve hanya menampilkan tombol Approve/Reject. Titip TIDAK
+ * lewat approval (OTP jadi gerbangnya, lihat v0.9.6) — alurnya tak berubah.
  */
 class TitipMasukIndex extends Component
 {
@@ -75,6 +83,16 @@ class TitipMasukIndex extends Component
 
     /** foto bukti bayar yang diunggah admin di modal, sementara sebelum disimpan */
     public $paymentProof = null;
+
+    /** id baris komisi bulanan yang sedang di-Reject lewat modal (null = tertutup) */
+    public ?int $rejectingLedgerId = null;
+
+    public string $rejectReason = '';
+
+    /** id baris komisi yang sedang di-Clawback lewat modal (null = tertutup) */
+    public ?int $clawbackLedgerId = null;
+
+    public string $clawbackReason = '';
 
     public ?string $flash = null;
 
@@ -195,7 +213,123 @@ class TitipMasukIndex extends Component
 
         $this->flash = $affected > 0
             ? "{$affected} komisi bulanan ditandai dibayar."
-            : 'Tidak ada komisi bulanan yang bisa dibayar sekarang (harus Layak Dibayar dan dalam jendela payout paketnya).';
+            : 'Tidak ada komisi bulanan yang bisa dibayar sekarang (harus Disetujui dan dalam jendela payout paketnya).';
+    }
+
+    // ── v0.9.0 — Approval komisi Bulanan ──────────────────────────────
+
+    public function approve(int $ledgerId, CommissionApprovalService $approvalService): void
+    {
+        $this->authorize('approve', CommissionLedger::class);
+
+        $entry = CommissionLedger::query()->find($ledgerId);
+
+        if ($entry === null) {
+            return;
+        }
+
+        try {
+            $approvalService->approve($entry, auth()->user());
+            $this->flash = 'Komisi bulanan disetujui — sekarang bisa masuk payout.';
+        } catch (RuntimeException $e) {
+            $this->addError('review', $e->getMessage());
+        }
+    }
+
+    public function openRejectModal(int $ledgerId): void
+    {
+        $this->authorize('approve', CommissionLedger::class);
+
+        $this->rejectingLedgerId = $ledgerId;
+        $this->rejectReason = '';
+        $this->resetErrorBag();
+    }
+
+    public function closeRejectModal(): void
+    {
+        $this->rejectingLedgerId = null;
+        $this->rejectReason = '';
+        $this->resetErrorBag();
+    }
+
+    public function confirmReject(CommissionApprovalService $approvalService): void
+    {
+        $this->authorize('approve', CommissionLedger::class);
+
+        $this->validate(['rejectReason' => ['required', 'string', 'min:3', 'max:500']]);
+
+        if ($this->rejectingLedgerId === null) {
+            return;
+        }
+
+        $entry = CommissionLedger::query()->find($this->rejectingLedgerId);
+
+        if ($entry === null) {
+            $this->closeRejectModal();
+
+            return;
+        }
+
+        try {
+            $approvalService->reject($entry, auth()->user(), $this->rejectReason);
+            $this->flash = 'Komisi bulanan ditolak — tidak akan masuk payout.';
+        } catch (RuntimeException $e) {
+            $this->addError('rejectReason', $e->getMessage());
+
+            return;
+        }
+
+        $this->closeRejectModal();
+    }
+
+    // ── v0.9.0 — Clawback (semua skema) ──────────────────────────────
+
+    public function openClawbackModal(int $ledgerId): void
+    {
+        $this->authorize('clawback', CommissionLedger::class);
+
+        $this->clawbackLedgerId = $ledgerId;
+        $this->clawbackReason = '';
+        $this->resetErrorBag();
+    }
+
+    public function closeClawbackModal(): void
+    {
+        $this->clawbackLedgerId = null;
+        $this->clawbackReason = '';
+        $this->resetErrorBag();
+    }
+
+    public function confirmClawback(CommissionApprovalService $approvalService): void
+    {
+        $this->authorize('clawback', CommissionLedger::class);
+
+        $this->validate(['clawbackReason' => ['required', 'string', 'min:3', 'max:500']]);
+
+        if ($this->clawbackLedgerId === null) {
+            return;
+        }
+
+        $entry = CommissionLedger::query()->find($this->clawbackLedgerId);
+
+        if ($entry === null) {
+            $this->closeClawbackModal();
+
+            return;
+        }
+
+        try {
+            $reversal = $approvalService->clawback($entry, auth()->user(), $this->clawbackReason);
+            $this->flash = $entry->status === CommissionStatus::Paid
+                ? 'Komisi dibatalkan. Komisi asli SUDAH dibayar — tercatat sebagai utang yang perlu ditagih balik ke Referrer.'
+                : 'Komisi dibatalkan (baris pembatalan dibuat, baris asli tetap tersimpan).';
+        } catch (RuntimeException $e) {
+            $this->addError('clawbackReason', $e->getMessage());
+
+            return;
+        }
+
+        $this->closeClawbackModal();
     }
 
     /**
@@ -276,10 +410,20 @@ class TitipMasukIndex extends Component
             ->where('deposit_status', TitipDepositStatus::BelumSetor->value)
             ->sum('gross_amount');
 
-        $totalBulananHarusDibayar = (float) $tenantAll()
+        // v0.9.0 — komisi bulanan sekarang 2 tahap: menunggu approval
+        // (Eligible) vs siap dibayar (Approved). "Harus dibayar" = keduanya
+        // (kewajiban sudah ada begitu invoice lunas, approval cuma gerbang).
+        $totalBulananMenungguApproval = (float) $tenantAll()
             ->whereIn('scheme', $monthlyValues)
             ->where('status', CommissionStatus::Eligible->value)
             ->sum('amount');
+
+        $totalBulananSiapDibayar = (float) $tenantAll()
+            ->whereIn('scheme', $monthlyValues)
+            ->where('status', CommissionStatus::Approved->value)
+            ->sum('amount');
+
+        $totalBulananHarusDibayar = $totalBulananMenungguApproval + $totalBulananSiapDibayar;
 
         // Scope skema sesuai filter "Jenis Komisi".
         $schemeScope = match ($this->schemeFilter) {
@@ -290,7 +434,12 @@ class TitipMasukIndex extends Component
 
         $query = CommissionLedger::query()
             ->whereIn('scheme', $schemeScope)
-            ->with(['customer:id,name,ppp_package_id', 'customer.pppPackage.commissionRate', 'referrer:id,name,phone', 'depositedBy:id,name', 'paidBy:id,name', 'invoice:id,invoice_number'])
+            ->with([
+                'customer:id,name,ppp_package_id', 'customer.pppPackage.commissionRate',
+                'referrer:id,name,phone', 'depositedBy:id,name', 'paidBy:id,name',
+                'reviewedBy:id,name', 'invoice:id,invoice_number',
+                'reversals:id,reversal_of_id', 'reversalOf:id,status,amount',
+            ])
             ->orderByDesc('id');
 
         if ($this->search !== '') {
@@ -316,13 +465,22 @@ class TitipMasukIndex extends Component
         $isTitipPayable = fn ($r) => $isTitip($r)
             && $r->status === CommissionStatus::Eligible
             && $r->deposit_status === TitipDepositStatus::SudahSetor;
+        // v0.9.0 — "reviewable" = komisi bulanan Eligible yang belum
+        // di-Approve/Reject; "payable now" = sudah Approved + jendela terbuka.
+        $isMonthlyReviewable = fn ($r) => in_array($r->scheme, self::MONTHLY_SCHEMES, true)
+            && $r->status === CommissionStatus::Eligible;
         $isMonthlyPayableNow = fn ($r) => in_array($r->scheme, self::MONTHLY_SCHEMES, true)
-            && $r->status === CommissionStatus::Eligible
+            && $r->status === CommissionStatus::Approved
             && $payoutService->isRowPayableNow($r);
+        // Clawback tersedia untuk baris komisi "hidup" (bukan template
+        // Pending, bukan sudah Rejected/Clawback, belum pernah di-clawback).
+        $isClawbackable = fn ($r) => in_array($r->status, [
+            CommissionStatus::Eligible, CommissionStatus::Approved, CommissionStatus::Paid,
+        ], true) && ! $r->wasClawedBack();
 
         $groups = $query->get()
             ->groupBy('referrer_id')
-            ->map(function ($groupRows) use ($selectedInt, $isTitip, $isTitipPayable, $isMonthlyPayableNow) {
+            ->map(function ($groupRows) use ($selectedInt, $isTitip, $isTitipPayable, $isMonthlyReviewable, $isMonthlyPayableNow) {
                 $titipRows = $groupRows->filter($isTitip);
                 $monthlyRows = $groupRows->reject($isTitip);
 
@@ -330,6 +488,7 @@ class TitipMasukIndex extends Component
                 $belumSetorIds = $belumSetor->pluck('id')->map(fn ($id) => (int) $id)->all();
 
                 $titipPayable = $titipRows->filter($isTitipPayable);
+                $monthlyReview = $monthlyRows->filter($isMonthlyReviewable);
                 $monthlyPayable = $monthlyRows->filter($isMonthlyPayableNow);
 
                 return [
@@ -343,6 +502,7 @@ class TitipMasukIndex extends Component
                         && array_diff($belumSetorIds, $selectedInt) === [],
                     'payable_count' => $titipPayable->count(),
                     'payable_total' => (float) $titipPayable->sum(fn ($r) => (float) ($r->amount ?? 0)),
+                    'monthly_review_count' => $monthlyReview->count(),
                     'monthly_payable_count' => $monthlyPayable->count(),
                     'monthly_payable_total' => (float) $monthlyPayable->sum(fn ($r) => (float) ($r->amount ?? 0)),
                 ];
@@ -354,14 +514,20 @@ class TitipMasukIndex extends Component
             'groups' => $groups,
             'isTitip' => $isTitip,
             'isPayable' => $isTitipPayable,
+            'isMonthlyReviewable' => $isMonthlyReviewable,
             'isMonthlyPayableNow' => $isMonthlyPayableNow,
+            'isClawbackable' => $isClawbackable,
             'totalTitipHarusDibayar' => $totalTitipHarusDibayar,
             'totalSetoranBelumMasuk' => $totalSetoranBelumMasuk,
+            'totalBulananMenungguApproval' => $totalBulananMenungguApproval,
+            'totalBulananSiapDibayar' => $totalBulananSiapDibayar,
             'totalBulananHarusDibayar' => $totalBulananHarusDibayar,
             'totalGabungan' => $totalTitipHarusDibayar + $totalBulananHarusDibayar,
             'statuses' => CommissionStatus::cases(),
             'depositStatuses' => TitipDepositStatus::cases(),
             'canManage' => auth()->user()->can('markDeposit', CommissionLedger::class),
+            'canApprove' => auth()->user()->can('approve', CommissionLedger::class),
+            'canClawback' => auth()->user()->can('clawback', CommissionLedger::class),
             'selectedCount' => count($selectedInt),
         ]);
     }

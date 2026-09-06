@@ -6864,6 +6864,91 @@ keduanya render benar.
   meng-enum-cast kolom `scheme` saat hidrasi model — `firstWhere('scheme', 'recurring')` gagal (enum ≠
   string). Fix: `->toBase()` sebelum `selectRaw` di query agregat, supaya `scheme` tetap string mentah.
 
+## Commission — Approval + Clawback (v0.9.0, branch `v0.9.0-commission-approval-clawback`, belum merge/tag)
+
+**Sisa scope cluster Commission (v0.9.x) — setelah ini cluster TUNTAS PENUH.** Eligibility (Pending→Eligible)
+= v0.9.5, Payment (Eligible→Paid) = v0.9.11. Yang belum: Approval + Clawback. `CommissionStatus` sudah punya
+case `Approved`/`Rejected` sejak v0.3.0 tapi tak pernah dipakai di transisi mana pun — sekarang di-wiring;
+plus case baru `Clawback`.
+
+**TITIK KEPUTUSAN — dikonfirmasi Agung eksplisit (2026-09-07): Approval HANYA untuk komisi bulanan
+(recurring/limited_count), TITIP TIDAK.** Jangan tambahkan Approval untuk Titip tanpa konfirmasi ulang —
+itu membalik keputusan v0.9.6 ("entri Titip langsung Eligible begitu OTP WhatsApp ke Referrer terverifikasi,
+OTP = jaring pengaman, tidak perlu admin approve"). Alasan: komisi bulanan matang OTOMATIS dari invoice
+pelanggan lunas TANPA satu pun manusia me-review — itu lubang yang ditutup; Titip sudah punya OTP.
+**Clawback permission = tier-admin (superadmin + administrator), bukan superadmin-only** — juga keputusan
+Agung eksplisit di sesi yang sama (prompt awalnya menyarankan superadmin-only).
+
+- **`App\Services\Commission\CommissionApprovalService`** — satu-satunya tempat logic Approve/Reject/Clawback.
+  - `approve()`: Eligible→Approved (`reviewed_by`/`reviewed_at`). `reject()`: Eligible→Rejected, **wajib
+    alasan** (append ke `commission_ledger.notes` dengan prefix jejak). Keduanya `assertReviewable()` —
+    menolak scheme=titip & status≠Eligible.
+  - `clawback()`: berlaku untuk Eligible/Approved/**Paid** (semua skema, termasuk Titip). **APPEND-ONLY** —
+    membuat BARIS BARU (`amount` negatif = `-abs(original)`, `gross_amount` negatif juga kalau ada,
+    `status=Clawback`, `reversal_of_id`→baris asli, `reviewed_by`/`reviewed_at`, alasan wajib). Baris asli
+    TIDAK disentuh. Clawback baris yang sudah Paid → `notes` diberi tag `[UTANG]` (perlu ditagih balik,
+    sistem tidak narik uang otomatis). `assertClawbackable()` menolak Pending/Rejected/sudah-di-clawback/
+    baris Clawback sendiri.
+- **`CommissionLedger`**: kolom baru `reversal_of_id`/`reviewed_by`/`reviewed_at` (migration
+  `2026_09_07_120000`, semua nullable, FK `nullOnDelete`). Relasi `reviewedBy()`, `reversalOf()` (BelongsTo
+  self), `reversals()` (HasMany self). `wasClawedBack()` — pakai relasi ter-eager-load kalau ada (hindari
+  N+1 di daftar Fee Komisi).
+- **`CommissionPayoutService` payout bulanan sekarang `Approved` → `Paid`** (dulu `Eligible` → `Paid`).
+  `payMonthlyRow()` menolak baris Eligible dengan pesan "harus di-Approve admin dulu";
+  `payMonthlyForReferrer()` query `status = Approved`. **Payout Titip TIDAK berubah** (`Eligible` → `Paid`,
+  guard `deposit_status=SudahSetor` + bukti bayar).
+- **`MonthlyPayoutIndex` (`/payout-komisi-bulanan`)** — hanya menampilkan baris `Approved`. Baris Eligible
+  yang belum di-Approve muncul sebagai banner "X komisi bulanan masih menunggu approval" + link ke Fee
+  Komisi (tidak bisa di-payout dari halaman batch sampai di-Approve).
+- **`TitipMasukIndex` (`/titip-masuk`, "Fee Komisi")** — tombol "Approve" + link "Reject" (modal alasan)
+  untuk baris bulanan Eligible; "Bayar Komisi" hanya muncul setelah Approved. Link "Batalkan" (modal
+  alasan, ungu) untuk semua baris Eligible/Approved/Paid yang belum di-clawback. Baris Clawback tampil
+  dengan nominal negatif + badge "Dibatalkan"; kalau `reversalOf?->status === Paid` → badge merah "Utang".
+  Kartu ringkasan dipecah: "Bulanan Menunggu Approval" (Eligible) vs "Bulanan Siap Dibayar" (Approved).
+- **`CommissionLedgerMaturityService` limited_count cap** — sudah menghitung status `Eligible/Approved/Paid`
+  sejak awal (tidak berubah). Baris Rejected tidak dihitung → membebaskan slot untuk invoice berikutnya.
+  Baris Clawback tidak dihitung TAPI baris aslinya tetap dihitung → clawback tidak otomatis
+  "mencetak ulang" satu slot limited_count (konservatif, sengaja — didokumentasikan, bukan bug).
+- **`ReferrerReferralResource`** (`GET /api/v1/referrals`) — `commission_total_earned` sekarang ikut
+  menjumlahkan baris `Clawback` (negatif) → komisi dibatalkan ternetralkan. Baris Clawback juga muncul di
+  `commissions[]`.
+- Permission: `commission_ledger.approve` + `commission_ledger.clawback`, keduanya `giveToAdminTier()`.
+  Policy `CommissionLedgerPolicy::approve()`/`clawback()`. **Wajib `db:seed --class=RolesAndPermissionsSeeder`
+  ulang terhadap DB dev** — sudah dilakukan (insiden berulang di file ini). Migration juga sudah `migrate`
+  di DB dev; kalau branch dibatalkan `migrate:rollback --step=1`.
+- Test: `CommissionApprovalServiceTest` (14) + tambahan di `CommissionPayoutServiceTest`,
+  `TitipMasukIndexLivewireTest`, `MonthlyPayoutIndexLivewireTest`. Pint clean.
+
+### Backup SmartOLT + Rekonsiliasi 48 Gap ONU (Bagian B — DI LUAR kode komisi, 2026-09-07)
+
+**Langganan SmartOLT (`bajastu.smartolt.com`) berakhir ~2026-09-12** — backup penuh via API SmartOLT
+(`X-Token`, base `https://bajastu.smartolt.com/api/`) disimpan di
+`/opt/boss-app-backups/smartolt-export-2026-09-07/` (+ tarball). 1 OLT ZTE-C300, **193 ONU** dengan config
+penuh (SN, nama/alamat/HP pelanggan, PPPoE user/pass, VLAN, ODB/ODP, board/port/onu, speed profile, GPS,
+sinyal, `distance`). **Endpoint yang tidak ada di API SmartOLT (semua 405): histori trafik per-ONU,
+running-config OLT** — tidak bisa diselamatkan. Detail lengkap: `README.md` di folder itu.
+
+**Dampak fungsional kalau API SmartOLT ditutup: NOL di BOSS App** — SmartOLT tidak pernah terintegrasi
+(tidak ada `SmartOltService`, tidak ada pemanggilan API SmartOLT di kode; `olt_devices` cuma registry
+kredensial v0.8.1). SmartOLT = tool GUI Agung untuk provisioning ONT baru di ZTE-C300. Kalau hilang:
+provisioning ONT baru tetap bisa via GUI web / CLI-telnet ZTE-C300 langsung (`144.79.52.0:23323` /
+`10.168.100.34`), lebih lambat tanpa UI. 193 ONU existing tidak terpengaruh (config di OLT sendiri, OMCI).
+Monitoring OLT tetap jalan (LibreNMS SNMP langsung, v0.8.1). Sprint pengganti resmi = **v0.23.0 OMCI**
+(Backlog).
+
+**Rekonsiliasi gap** (`GAP_smartolt_not_in_boss.csv` = 48 ONU SmartOLT tanpa baris `cpe_devices`; matching
+`contact`/`pppoe_username` SmartOLT → `customers.phone_number`/`legacy_username`):
+- **27 baris `cpe_devices` baru DIBUAT** — `import_match_confidence = 'smartolt_gap_reconcile_2026_09_07'`,
+  `status = pending_first_connect` (OMCI-managed, belum pernah lewat TR-069/GenieACS), `genieacs_device_id
+  = null`, `manufacturer` dari prefix SN, `model_name` dari `onu_type` SmartOLT. `cpe_devices`: 385 → 412.
+- **21 sisanya TIDAK dibuat — perlu keputusan manual Agung** (lihat `RECONCILIATION_2026-09-07.md`):
+  10 ONU customer-nya sudah punya `cpe_device` lain (**8 kemungkinan besar DEVICE FISIK SAMA, serial di
+  BOSS ter-mangle jadi `123454C46D14` + 5-char-terakhir saat import GenieACS** — butuh koreksi serial baris
+  existing, bukan baris baru; 2 ambigu ganti-modem); 11 ONU tanpa `customers` sama sekali (3 di antaranya
+  = akun `hambalang-baru`/`homebase@tokia.net.id` yang sudah didokumentasikan di section v0.8.4, sengaja
+  belum ada customers row; 6 pelanggan `268…`/`265…` CID kemungkinan belum di-import; 2 nama cocok tapi
+  nomor beda). `cpe_devices.customer_id` NOT NULL → tidak bisa buat baris bare untuk yang tanpa customer.
+
 ## Cluster Profil Paket (v0.14.x) — Konstrain NAS Produksi
 
 **WAJIB dibaca sebelum eksekusi sub-versi apa pun di cluster v0.14.x (Bandwidth Profile → IP Pool

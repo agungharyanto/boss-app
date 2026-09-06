@@ -71,14 +71,14 @@ class TitipMasukIndexLivewireTest extends TestCase
         ]);
     }
 
-    private function monthlyRow(Tenant $tenant, string $customerName, string $scheme = 'recurring', float $amount = 5000): CommissionLedger
+    private function monthlyRow(Tenant $tenant, string $customerName, string $scheme = 'recurring', float $amount = 5000, CommissionStatus $status = CommissionStatus::Approved): CommissionLedger
     {
         $r = Referrer::factory()->create(['tenant_id' => $tenant->id]);
         $c = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null, 'name' => $customerName, 'referred_by_referrer_id' => $r->id]);
 
         return CommissionLedger::factory()->create([
             'tenant_id' => $tenant->id, 'referrer_id' => $r->id, 'customer_id' => $c->id,
-            'scheme' => $scheme, 'status' => CommissionStatus::Eligible, 'amount' => $amount,
+            'scheme' => $scheme, 'status' => $status, 'amount' => $amount,
         ]);
     }
 
@@ -119,7 +119,7 @@ class TitipMasukIndexLivewireTest extends TestCase
             ->assertDontSee('Pelanggan Titip');
     }
 
-    public function test_pay_monthly_row_flips_an_eligible_monthly_commission_to_paid(): void
+    public function test_pay_monthly_row_flips_an_approved_monthly_commission_to_paid(): void
     {
         $tenant = Tenant::factory()->create();
         $row = $this->monthlyRow($tenant, 'Bulanan', 'recurring', 5000);
@@ -133,6 +133,19 @@ class TitipMasukIndexLivewireTest extends TestCase
         $this->assertSame(CommissionStatus::Paid, $row->status);
         $this->assertNotNull($row->paid_at);
         $this->assertNull($row->payment_proof_path); // bulanan tidak butuh bukti
+    }
+
+    public function test_pay_monthly_row_rejects_a_monthly_commission_still_awaiting_approval(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $row = $this->monthlyRow($tenant, 'Belum Approve', 'recurring', 5000, CommissionStatus::Eligible);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->call('payMonthlyRow', $row->id)
+            ->assertHasErrors('monthlyPay');
+
+        $this->assertSame(CommissionStatus::Eligible, $row->fresh()->status);
     }
 
     public function test_pay_monthly_row_rejects_a_row_whose_package_payout_window_is_closed(): void
@@ -157,7 +170,7 @@ class TitipMasukIndexLivewireTest extends TestCase
         ]);
         $row = CommissionLedger::factory()->create([
             'tenant_id' => $tenant->id, 'referrer_id' => $ref->id, 'customer_id' => $customer->id,
-            'scheme' => 'recurring', 'status' => CommissionStatus::Eligible, 'amount' => 5000,
+            'scheme' => 'recurring', 'status' => CommissionStatus::Approved, 'amount' => 5000,
         ]);
 
         Livewire::actingAs($this->admin($tenant))
@@ -165,7 +178,7 @@ class TitipMasukIndexLivewireTest extends TestCase
             ->call('payMonthlyRow', $row->id)
             ->assertHasErrors('monthlyPay');
 
-        $this->assertSame(CommissionStatus::Eligible, $row->fresh()->status);
+        $this->assertSame(CommissionStatus::Approved, $row->fresh()->status);
     }
 
     public function test_status_filter_narrows_the_list(): void
@@ -226,15 +239,18 @@ class TitipMasukIndexLivewireTest extends TestCase
         // Paid + belum setor: TIDAK hitung komisi (bukan eligible), hitung setoran belum masuk.
         $this->titipRow($tenant, 'C', CommissionStatus::Paid, amount: 7000, gross: 50000, deposit: TitipDepositStatus::BelumSetor);
 
-        // + komisi Bulanan (recurring) Eligible: 12000
-        $this->monthlyRow($tenant, 'D', 'recurring', 12000);
+        // + komisi Bulanan (recurring) Approved: 12000; + satu Eligible (belum approve): 4000
+        $this->monthlyRow($tenant, 'D', 'recurring', 12000, CommissionStatus::Approved);
+        $this->monthlyRow($tenant, 'E', 'recurring', 4000, CommissionStatus::Eligible);
 
         Livewire::actingAs($this->admin($tenant))
             ->test(TitipMasukIndex::class)
             ->assertViewHas('totalTitipHarusDibayar', 8000.0)       // 3000 + 5000
             ->assertViewHas('totalSetoranBelumMasuk', 150000.0)     // 100000 + 50000
-            ->assertViewHas('totalBulananHarusDibayar', 12000.0)
-            ->assertViewHas('totalGabungan', 20000.0);              // 8000 + 12000
+            ->assertViewHas('totalBulananMenungguApproval', 4000.0)
+            ->assertViewHas('totalBulananSiapDibayar', 12000.0)
+            ->assertViewHas('totalBulananHarusDibayar', 16000.0)    // 12000 + 4000
+            ->assertViewHas('totalGabungan', 24000.0);              // 8000 + 16000
     }
 
     public function test_rows_are_grouped_per_referrer_with_a_correct_undeposited_total(): void
@@ -364,5 +380,104 @@ class TitipMasukIndexLivewireTest extends TestCase
             ->set('depositFilter', TitipDepositStatus::SudahSetor->value)
             ->assertSee('Sudah Lunas Ke Kantor')
             ->assertDontSee('Belum Bayar Ke Kantor');
+    }
+
+    // ── v0.9.0 — Approval + Clawback lewat UI ────────────────────────
+
+    public function test_approve_flips_an_eligible_monthly_row_and_then_it_can_be_paid(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $row = $this->monthlyRow($tenant, 'Bulanan Approve', 'recurring', 5000, CommissionStatus::Eligible);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->call('approve', $row->id)
+            ->assertHasNoErrors();
+
+        $this->assertSame(CommissionStatus::Approved, $row->fresh()->status);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->call('payMonthlyRow', $row->id)
+            ->assertHasNoErrors();
+
+        $this->assertSame(CommissionStatus::Paid, $row->fresh()->status);
+    }
+
+    public function test_reject_needs_a_reason_and_stores_it(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $row = $this->monthlyRow($tenant, 'Bulanan Reject', 'recurring', 5000, CommissionStatus::Eligible);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->call('openRejectModal', $row->id)
+            ->set('rejectReason', '')
+            ->call('confirmReject')
+            ->assertHasErrors('rejectReason');
+
+        $this->assertSame(CommissionStatus::Eligible, $row->fresh()->status);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->call('openRejectModal', $row->id)
+            ->set('rejectReason', 'pelanggan tidak jadi pasang')
+            ->call('confirmReject')
+            ->assertHasNoErrors();
+
+        $row->refresh();
+        $this->assertSame(CommissionStatus::Rejected, $row->status);
+        $this->assertStringContainsString('pelanggan tidak jadi pasang', $row->notes);
+    }
+
+    public function test_a_user_without_approve_permission_cannot_approve(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $viewer = User::factory()->create(['tenant_id' => $tenant->id]);
+        $viewer->givePermissionTo('commission_ledger.view');
+        $row = $this->monthlyRow($tenant, 'Bulanan', 'recurring', 5000, CommissionStatus::Eligible);
+
+        Livewire::actingAs($viewer)
+            ->test(TitipMasukIndex::class)
+            ->call('approve', $row->id)
+            ->assertForbidden();
+
+        $this->assertSame(CommissionStatus::Eligible, $row->fresh()->status);
+    }
+
+    public function test_clawback_creates_a_reversal_row_and_keeps_the_original(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $row = $this->monthlyRow($tenant, 'Mau Dibatalkan', 'recurring', 5000, CommissionStatus::Approved);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->call('openClawbackModal', $row->id)
+            ->set('clawbackReason', 'pelanggan refund penuh')
+            ->call('confirmClawback')
+            ->assertHasNoErrors();
+
+        // Original masih ada, tidak berubah.
+        $this->assertSame(CommissionStatus::Approved, $row->fresh()->status);
+        // Baris reversal baru.
+        $reversal = CommissionLedger::query()->where('reversal_of_id', $row->id)->first();
+        $this->assertNotNull($reversal);
+        $this->assertSame(CommissionStatus::Clawback, $reversal->status);
+        $this->assertEquals(-5000, (float) $reversal->amount);
+    }
+
+    public function test_a_user_without_clawback_permission_cannot_clawback(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $viewer = User::factory()->create(['tenant_id' => $tenant->id]);
+        $viewer->givePermissionTo('commission_ledger.view');
+        $row = $this->monthlyRow($tenant, 'Bulanan', 'recurring', 5000, CommissionStatus::Approved);
+
+        Livewire::actingAs($viewer)
+            ->test(TitipMasukIndex::class)
+            ->call('openClawbackModal', $row->id)
+            ->assertForbidden();
+
+        $this->assertSame(0, CommissionLedger::query()->where('reversal_of_id', $row->id)->count());
     }
 }

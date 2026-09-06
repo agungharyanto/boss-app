@@ -26,10 +26,15 @@ class ReferrerReferralResource extends JsonResource
     {
         $entries = $this->commissionLedgerEntries->sortBy('id')->values();
 
+        // Baris yang dihitung ke `commission_total_earned`. Clawback ikut
+        // (v0.9.0) — nominalnya negatif dan hanya pernah dibuat untuk baris
+        // Eligible/Approved/Paid, jadi menambahkannya menetralkan komisi
+        // yang dibatalkan dari total.
         $earnedStatuses = [
             CommissionStatus::Eligible->value,
             CommissionStatus::Approved->value,
             CommissionStatus::Paid->value,
+            CommissionStatus::Clawback->value,
         ];
 
         return [

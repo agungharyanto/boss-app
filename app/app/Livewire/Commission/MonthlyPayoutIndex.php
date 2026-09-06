@@ -31,6 +31,12 @@ use Livewire\Component;
  *
  * Sama permission dengan `TitipMasukIndex`/`CommissionLedgerPolicy` —
  * tidak ada permission baru (`commission_ledger.view`/`.manage`).
+ *
+ * v0.9.0 — halaman ini SEKARANG hanya menampilkan baris **Approved**.
+ * Komisi bulanan yang baru matang (Eligible) harus di-Approve dulu di
+ * halaman Fee Komisi (`commission_ledger.approve`) sebelum muncul di
+ * sini. Jumlah baris yang masih menunggu approval ditampilkan sebagai
+ * pengingat (link ke Fee Komisi).
  */
 class MonthlyPayoutIndex extends Component
 {
@@ -51,7 +57,7 @@ class MonthlyPayoutIndex extends Component
 
         $this->flash = $affected > 0
             ? "{$affected} baris komisi bulanan ditandai dibayar."
-            : 'Tidak ada baris komisi yang memenuhi syarat untuk dibayar sekarang (harus Layak Dibayar dan jendela tanggal paketnya sedang terbuka).';
+            : 'Tidak ada baris komisi yang memenuhi syarat untuk dibayar sekarang (harus sudah Disetujui dan jendela tanggal paketnya sedang terbuka).';
     }
 
     public function render()
@@ -60,11 +66,16 @@ class MonthlyPayoutIndex extends Component
 
         $rows = CommissionLedger::query()
             ->whereIn('scheme', [CommissionScheme::Recurring->value, CommissionScheme::LimitedCount->value])
-            ->where('status', CommissionStatus::Eligible->value)
+            ->where('status', CommissionStatus::Approved->value)
             ->whereNotNull('referrer_id')
             ->with(['referrer:id,name,phone', 'customer:id,name,ppp_package_id', 'customer.pppPackage.commissionRate'])
             ->orderByDesc('id')
             ->get();
+
+        $awaitingApprovalCount = CommissionLedger::query()
+            ->whereIn('scheme', [CommissionScheme::Recurring->value, CommissionScheme::LimitedCount->value])
+            ->where('status', CommissionStatus::Eligible->value)
+            ->count();
 
         $groups = $rows->groupBy('referrer_id')
             ->map(function ($groupRows) use ($payoutService) {
@@ -88,6 +99,7 @@ class MonthlyPayoutIndex extends Component
 
         return view('livewire.commission.monthly-payout-index', [
             'groups' => $groups,
+            'awaitingApprovalCount' => $awaitingApprovalCount,
             'canManage' => auth()->user()->can('markPaid', CommissionLedger::class),
         ]);
     }

@@ -1983,3 +1983,32 @@ seluruh fitur payout ini (`CommissionLedgerPolicy::markPaid()` reuse `commission
 
 `GET /api/v1/referrers/...` (`ReferrerReferralResource`) mendapat field additive `paid_at` per baris
 `commissions[]` — terisi begitu status ditransisikan ke Paid lewat salah satu mekanisme di atas.
+
+## Commission — Approval + Clawback (v0.9.0, halaman web, bukan REST API)
+
+Sisa scope Commission. TIDAK ada endpoint REST — semua aksi admin di `/titip-masuk` (Fee Komisi),
+`App\Services\Commission\CommissionApprovalService`.
+
+**Approval — HANYA komisi bulanan (`recurring`/`limited_count`).** Komisi Titip TIDAK lewat approval
+(langsung `Eligible` setelah OTP WhatsApp, keputusan v0.9.6). Komisi bulanan matang OTOMATIS dari invoice
+lunas → sekarang butuh gerbang manual:
+- `approve()` — `Eligible` → `Approved`. `reject()` — `Eligible` → `Rejected`, **wajib alasan** (disimpan
+  di `commission_ledger.notes`), + `reviewed_by`/`reviewed_at`.
+- **Payout bulanan sekarang `Approved` → `Paid`** (dulu `Eligible` → `Paid`). `MonthlyPayoutIndex`
+  (`/payout-komisi-bulanan`) hanya menampilkan baris `Approved`; baris Eligible-belum-approve muncul
+  sebagai catatan "menunggu approval". Payout Titip TIDAK berubah (`Eligible` → `Paid`).
+- Permission `commission_ledger.approve` (tier-admin: superadmin + administrator).
+
+**Clawback — semua skema (termasuk Titip), semua status `Eligible`/`Approved`/`Paid`.** APPEND-ONLY:
+`clawback()` membuat **baris baru** (`amount` negatif, `status = Clawback`, `reversal_of_id` → baris asli,
+`reviewed_by`/`reviewed_at`, alasan wajib di `notes`). Baris asli TIDAK diubah/dihapus. Clawback baris
+yang sudah `Paid` → ditandai `[UTANG]` (perlu ditagih balik ke Referrer — sistem tidak menarik uang
+otomatis). Ditolak untuk `Pending`/`Rejected`/sudah-di-clawback/baris Clawback sendiri. Permission
+`commission_ledger.clawback` (tier-admin).
+
+**`GET /api/v1/referrals`** (`ReferrerReferralResource`) — `commission_total_earned` sekarang ikut
+menjumlahkan baris `Clawback` (nominal negatif) → komisi yang dibatalkan ternetralkan dari total. Baris
+Clawback juga muncul di array `commissions[]` (`status: "clawback"`, `amount` negatif).
+
+**Skema**: migration `2026_09_07_120000` menambah `commission_ledger.reversal_of_id` (self-FK,
+`nullOnDelete`), `reviewed_by` (FK users, `nullOnDelete`), `reviewed_at`. `CommissionStatus::Clawback`.

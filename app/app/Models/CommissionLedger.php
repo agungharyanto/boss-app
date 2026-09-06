@@ -10,6 +10,7 @@ use Database\Factories\CommissionLedgerFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class CommissionLedger extends Model
 {
@@ -34,6 +35,9 @@ class CommissionLedger extends Model
         'paid_at',
         'paid_by',
         'payment_proof_path',
+        'reversal_of_id',
+        'reviewed_by',
+        'reviewed_at',
         'notes',
     ];
 
@@ -48,6 +52,7 @@ class CommissionLedger extends Model
             'deposit_status' => TitipDepositStatus::class,
             'deposited_at' => 'datetime',
             'paid_at' => 'datetime',
+            'reviewed_at' => 'datetime',
         ];
     }
 
@@ -87,5 +92,47 @@ class CommissionLedger extends Model
     public function paidBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'paid_by');
+    }
+
+    /**
+     * v0.9.0 — admin yang meng-Approve/Reject baris komisi bulanan ini,
+     * ATAU yang membuat baris Clawback ini. NULL kalau belum pernah
+     * di-review / bukan baris reversal.
+     */
+    public function reviewedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reviewed_by');
+    }
+
+    /**
+     * v0.9.0 — baris komisi asli yang di-reverse oleh baris Clawback ini
+     * (NULL untuk baris non-reversal).
+     */
+    public function reversalOf(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'reversal_of_id');
+    }
+
+    /**
+     * v0.9.0 — baris Clawback yang me-reverse baris ini (biasanya 0 atau 1;
+     * `wasClawedBack()` menjaga tidak pernah lebih dari 1).
+     *
+     * @return HasMany<CommissionLedger, $this>
+     */
+    public function reversals(): HasMany
+    {
+        return $this->hasMany(self::class, 'reversal_of_id');
+    }
+
+    /**
+     * v0.9.0 — baris ini sudah pernah di-clawback (ada baris reversal yang
+     * menunjuk ke sini). Pakai relasi `reversals` yang sudah di-eager-load
+     * kalau tersedia (hindari N+1 di daftar Fee Komisi).
+     */
+    public function wasClawedBack(): bool
+    {
+        return $this->relationLoaded('reversals')
+            ? $this->reversals->isNotEmpty()
+            : $this->reversals()->exists();
     }
 }

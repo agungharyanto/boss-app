@@ -10,6 +10,7 @@
             CommissionStatus::Approved => ['bg-amber-100 text-amber-800', 'Disetujui'],
             CommissionStatus::Paid => ['bg-green-100 text-green-800', 'Dibayar'],
             CommissionStatus::Rejected => ['bg-red-100 text-red-800', 'Ditolak'],
+            CommissionStatus::Clawback => ['bg-purple-100 text-purple-800', 'Dibatalkan'],
         };
     };
     $rupiah = fn ($n) => 'Rp '.number_format((float) $n, 0, ',', '.');
@@ -20,19 +21,20 @@
         <h1 class="text-2xl font-semibold text-gray-800">{{ __('Fee Komisi') }}</h1>
     </div>
     <p class="text-sm text-gray-500 mb-6">
-        {{ __('Semua komisi Referrer di satu tempat — Titip (cash pelanggan yang dipegang Referrer, dicatat lewat Perpanjang) dan Bulanan (Per Bulan / X-Kali, matang otomatis tiap invoice pelanggan lunas). Gunakan filter "Jenis Komisi" untuk memisahkan tampilan. Kolom "Uang Diterima" & "Setoran" hanya relevan untuk Titip.') }}
+        {{ __('Semua komisi Referrer di satu tempat — Titip (cash pelanggan yang dipegang Referrer, dicatat lewat Perpanjang) dan Bulanan (Per Bulan / X-Kali, matang otomatis tiap invoice pelanggan lunas). Komisi Bulanan wajib di-Approve admin dulu sebelum bisa dibayar; Titip langsung layak dibayar setelah OTP. Kolom "Uang Diterima" & "Setoran" hanya relevan untuk Titip.') }}
     </p>
 
     @if ($flash)
         <p class="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2">{{ $flash }}</p>
     @endif
     @error('monthlyPay') <p class="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{{ $message }}</p> @enderror
+    @error('review') <p class="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{{ $message }}</p> @enderror
 
     {{-- ---------- Kartu ringkasan ---------- --}}
     <p class="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2 mb-3">
         {{ __('Komisi & Setoran adalah 2 arus uang BERBEDA: "Setoran Belum Masuk" = cash pelanggan yang masih dipegang Referrer (Referrer → perusahaan); "Harus Dibayar" = komisi yang perusahaan bayar balik ke Referrer. Menandai "Sudah Setor" tidak mengubah angka "Harus Dibayar".') }}
     </p>
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
         <div class="p-4 bg-white border border-gray-200 rounded-md">
             <p class="text-xs text-gray-500 uppercase">{{ __('Komisi Titip Harus Dibayar') }}</p>
             <p class="mt-1 text-xl font-semibold text-blue-700">{{ $rupiah($totalTitipHarusDibayar) }}</p>
@@ -44,14 +46,19 @@
             <p class="text-xs text-gray-400 mt-1">{{ __('Cash pelanggan masih dipegang Referrer.') }}</p>
         </div>
         <div class="p-4 bg-white border border-gray-200 rounded-md">
-            <p class="text-xs text-gray-500 uppercase">{{ __('Komisi Bulanan Harus Dibayar') }}</p>
-            <p class="mt-1 text-xl font-semibold text-indigo-700">{{ $rupiah($totalBulananHarusDibayar) }}</p>
-            <p class="text-xs text-gray-400 mt-1">{{ __('Per Bulan / X-Kali, status "Layak Dibayar".') }}</p>
+            <p class="text-xs text-gray-500 uppercase">{{ __('Bulanan Menunggu Approval') }}</p>
+            <p class="mt-1 text-xl font-semibold text-amber-700">{{ $rupiah($totalBulananMenungguApproval) }}</p>
+            <p class="text-xs text-gray-400 mt-1">{{ __('Eligible, belum di-Approve — belum bisa dibayar.') }}</p>
+        </div>
+        <div class="p-4 bg-white border border-gray-200 rounded-md">
+            <p class="text-xs text-gray-500 uppercase">{{ __('Bulanan Siap Dibayar') }}</p>
+            <p class="mt-1 text-xl font-semibold text-indigo-700">{{ $rupiah($totalBulananSiapDibayar) }}</p>
+            <p class="text-xs text-gray-400 mt-1">{{ __('Sudah Disetujui — tinggal payout (cek jendela).') }}</p>
         </div>
         <div class="p-4 bg-white border border-gray-200 rounded-md">
             <p class="text-xs text-gray-500 uppercase">{{ __('Total Komisi Harus Dibayar') }}</p>
             <p class="mt-1 text-xl font-semibold text-gray-800">{{ $rupiah($totalGabungan) }}</p>
-            <p class="text-xs text-gray-400 mt-1">{{ __('Titip + Bulanan.') }}</p>
+            <p class="text-xs text-gray-400 mt-1">{{ __('Titip + seluruh Bulanan (menunggu + siap).') }}</p>
         </div>
     </div>
 
@@ -120,6 +127,11 @@
 
                     <div class="flex flex-wrap items-center gap-3 text-sm">
                         <span class="text-gray-500">{{ $group['tx_count'] }} {{ __('baris') }}</span>
+                        @if ($group['monthly_review_count'] > 0)
+                            <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800">
+                                {{ $group['monthly_review_count'] }} {{ __('menunggu approval') }}
+                            </span>
+                        @endif
                         <span>
                             <span class="text-gray-500">{{ __('Belum setor') }}:</span>
                             <span class="font-semibold text-orange-700">{{ $rupiah($group['total_belum_setor']) }}</span>
@@ -134,7 +146,7 @@
                         @if ($canManage && $group['monthly_payable_count'] > 0 && $group['referrer'])
                             <button type="button"
                                 wire:click="payMonthlyReferrer({{ $group['referrer']->id }})"
-                                wire:confirm="{{ __('Bayar semua komisi bulanan yang jendelanya terbuka untuk Referrer ini?') }}"
+                                wire:confirm="{{ __('Bayar semua komisi bulanan (Disetujui) yang jendelanya terbuka untuk Referrer ini?') }}"
                                 class="px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 whitespace-nowrap">
                                 {{ __('Bayar Bulanan yang Bisa Dibayar') }} ({{ $group['monthly_payable_count'] }})
                             </button>
@@ -155,7 +167,7 @@
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status Komisi') }}</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Setoran') }}</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pembayaran Komisi') }}</th>
-                                @if ($canManage)
+                                @if ($canManage || $canApprove || $canClawback)
                                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Aksi') }}</th>
                                 @endif
                             </tr>
@@ -165,12 +177,16 @@
                                 @php
                                     [$badgeClass, $badgeLabel] = $statusBadge($entry->status);
                                     $isTitipRow = $isTitip($entry);
+                                    $isClawbackRow = $entry->status === CommissionStatus::Clawback;
                                     $sudahSetor = $entry->deposit_status === TitipDepositStatus::SudahSetor;
-                                    $selectable = $isTitipRow && $entry->deposit_status === TitipDepositStatus::BelumSetor;
+                                    $selectable = $isTitipRow && $entry->deposit_status === TitipDepositStatus::BelumSetor && ! $isClawbackRow;
                                     $titipPayableRow = $isPayable($entry);
+                                    $monthlyReviewableRow = $isMonthlyReviewable($entry);
                                     $monthlyPayableRow = $isMonthlyPayableNow($entry);
+                                    $clawbackableRow = $isClawbackable($entry);
+                                    $reversedPaid = $isClawbackRow && $entry->reversalOf?->status === CommissionStatus::Paid;
                                 @endphp
-                                <tr wire:key="fk-{{ $entry->id }}">
+                                <tr wire:key="fk-{{ $entry->id }}" @class(['bg-purple-50/40' => $isClawbackRow])>
                                     <td class="px-4 py-2">
                                         @if ($canManage && $selectable)
                                             <input type="checkbox" value="{{ $entry->id }}" wire:model.live="selected"
@@ -180,13 +196,18 @@
                                     <td class="px-4 py-2">
                                         <span @class([
                                             'inline-block px-2 py-0.5 text-xs font-medium rounded',
-                                            'bg-blue-50 text-blue-700' => $isTitipRow,
-                                            'bg-indigo-50 text-indigo-700' => ! $isTitipRow,
-                                        ])>{{ $entry->scheme?->label() ?? '—' }}</span>
+                                            'bg-blue-50 text-blue-700' => $isTitipRow && ! $isClawbackRow,
+                                            'bg-indigo-50 text-indigo-700' => ! $isTitipRow && ! $isClawbackRow,
+                                            'bg-purple-50 text-purple-700' => $isClawbackRow,
+                                        ])>
+                                            {{ $entry->scheme?->label() ?? '—' }}@if ($isClawbackRow) · {{ __('pembatalan') }}@endif
+                                        </span>
                                     </td>
                                     <td class="px-4 py-2 text-gray-800">{{ $entry->customer?->name ?? '—' }}</td>
                                     <td class="px-4 py-2 text-gray-600">
-                                        @if ($isTitipRow)
+                                        @if ($isClawbackRow)
+                                            <span class="text-xs text-purple-700">{{ __('membatalkan baris') }} #{{ $entry->reversal_of_id }}</span>
+                                        @elseif ($isTitipRow)
                                             {{ $entry->payment_period?->translatedFormat('F Y') ?? '—' }}
                                         @else
                                             <span class="font-mono text-xs">{{ $entry->invoice?->invoice_number ?? '—' }}</span>
@@ -195,14 +216,23 @@
                                     <td class="px-4 py-2 text-right text-gray-800">
                                         {{ $isTitipRow && $entry->gross_amount !== null ? $rupiah($entry->gross_amount) : '—' }}
                                     </td>
-                                    <td class="px-4 py-2 text-right text-gray-600">
+                                    <td class="px-4 py-2 text-right {{ $isClawbackRow ? 'text-purple-700 font-medium' : 'text-gray-600' }}">
                                         {{ $entry->amount !== null ? $rupiah($entry->amount) : '—' }}
                                     </td>
                                     <td class="px-4 py-2">
                                         <span class="inline-block px-2 py-0.5 text-xs font-medium rounded {{ $badgeClass }}">{{ $badgeLabel }}</span>
+                                        @if ($reversedPaid)
+                                            <span class="block mt-1 text-xs font-medium text-red-700">⚠ {{ __('Utang: komisi asli sudah dibayar, perlu ditagih balik') }}</span>
+                                        @endif
+                                        @if ($entry->wasClawedBack())
+                                            <span class="block mt-1 text-xs text-purple-600">{{ __('Sudah dibatalkan (clawback)') }}</span>
+                                        @endif
+                                        @if ($entry->status === CommissionStatus::Rejected && $entry->reviewedBy)
+                                            <span class="block text-xs text-gray-400">{{ __('oleh') }} {{ $entry->reviewedBy->name }}</span>
+                                        @endif
                                     </td>
                                     <td class="px-4 py-2">
-                                        @if ($isTitipRow)
+                                        @if ($isTitipRow && ! $isClawbackRow)
                                             <span class="inline-block px-2 py-0.5 text-xs font-medium rounded {{ $sudahSetor ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800' }}">
                                                 {{ $sudahSetor ? __('Sudah Setor') : __('Belum Setor') }}
                                             </span>
@@ -232,24 +262,46 @@
                                             <span class="text-xs text-gray-400">—</span>
                                         @endif
                                     </td>
-                                    @if ($canManage)
+                                    @if ($canManage || $canApprove || $canClawback)
                                         <td class="px-4 py-2 whitespace-nowrap">
-                                            @if ($titipPayableRow)
-                                                <button type="button"
-                                                    wire:click="openPayRowModal({{ $entry->id }})"
-                                                    class="px-2 py-1 text-xs font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700">
-                                                    {{ __('Bayar Komisi') }}
-                                                </button>
-                                            @elseif ($monthlyPayableRow)
-                                                <button type="button"
-                                                    wire:click="payMonthlyRow({{ $entry->id }})"
-                                                    wire:confirm="{{ __('Tandai komisi bulanan ini sebagai dibayar?') }}"
-                                                    class="px-2 py-1 text-xs font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
-                                                    {{ __('Bayar Komisi') }}
-                                                </button>
-                                            @elseif ($entry->scheme !== CommissionScheme::Titip && $entry->status === CommissionStatus::Eligible)
-                                                <span class="text-xs text-gray-400" title="{{ __('Jendela payout paket ini sedang tertutup — atur di Rate Komisi.') }}">{{ __('Jendela tertutup') }}</span>
-                                            @endif
+                                            <div class="flex items-center gap-3">
+                                                @if ($canApprove && $monthlyReviewableRow)
+                                                    <button type="button"
+                                                        wire:click="approve({{ $entry->id }})"
+                                                        wire:confirm="{{ __('Setujui komisi bulanan ini?') }}"
+                                                        class="px-2 py-1 text-xs font-medium bg-amber-600 text-white rounded-md hover:bg-amber-700">
+                                                        {{ __('Approve') }}
+                                                    </button>
+                                                    <button type="button"
+                                                        wire:click="openRejectModal({{ $entry->id }})"
+                                                        class="text-xs text-red-600 hover:underline">
+                                                        {{ __('Reject') }}
+                                                    </button>
+                                                @elseif ($canManage && $titipPayableRow)
+                                                    <button type="button"
+                                                        wire:click="openPayRowModal({{ $entry->id }})"
+                                                        class="px-2 py-1 text-xs font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                                                        {{ __('Bayar Komisi') }}
+                                                    </button>
+                                                @elseif ($canManage && $monthlyPayableRow)
+                                                    <button type="button"
+                                                        wire:click="payMonthlyRow({{ $entry->id }})"
+                                                        wire:confirm="{{ __('Tandai komisi bulanan ini sebagai dibayar?') }}"
+                                                        class="px-2 py-1 text-xs font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
+                                                        {{ __('Bayar Komisi') }}
+                                                    </button>
+                                                @elseif (! $isClawbackRow && $entry->scheme !== CommissionScheme::Titip && $entry->status === CommissionStatus::Approved)
+                                                    <span class="text-xs text-gray-400" title="{{ __('Jendela payout paket ini sedang tertutup — atur di Rate Komisi.') }}">{{ __('Jendela tertutup') }}</span>
+                                                @endif
+
+                                                @if ($canClawback && $clawbackableRow)
+                                                    <button type="button"
+                                                        wire:click="openClawbackModal({{ $entry->id }})"
+                                                        class="text-xs text-purple-700 hover:underline">
+                                                        {{ __('Batalkan') }}
+                                                    </button>
+                                                @endif
+                                            </div>
                                         </td>
                                     @endif
                                 </tr>
@@ -296,6 +348,54 @@
                             {{ __('Tandai Semua Dibayar') }}
                         </button>
                     @endif
+                </div>
+            </div>
+        </div>
+    @endif
+
+    {{-- ---------- Modal Reject (komisi bulanan) ---------- --}}
+    @if ($rejectingLedgerId !== null)
+        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeRejectModal">
+            <div class="bg-white rounded-md shadow-lg w-full max-w-md p-6">
+                <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ __('Tolak Komisi Bulanan') }}</h2>
+                <p class="text-sm text-gray-500 mb-4">
+                    {{ __('Komisi yang ditolak TIDAK akan pernah masuk payout. Alasan disimpan sebagai jejak audit di catatan baris.') }}
+                </p>
+                <label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Alasan Penolakan') }}</label>
+                <textarea wire:model="rejectReason" rows="3" class="block w-full rounded-md border-gray-300 shadow-sm text-sm"
+                    placeholder="{{ __('mis. pelanggan batal berlangganan sebelum instalasi') }}"></textarea>
+                @error('rejectReason') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+
+                <div class="flex justify-end gap-2 mt-6">
+                    <button type="button" wire:click="closeRejectModal" class="px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 rounded-md">{{ __('Batal') }}</button>
+                    <button type="button" wire:click="confirmReject" wire:loading.attr="disabled"
+                        class="px-3 py-2 text-sm font-medium bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50">
+                        {{ __('Tolak Komisi') }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    @endif
+
+    {{-- ---------- Modal Clawback (semua skema) ---------- --}}
+    @if ($clawbackLedgerId !== null)
+        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeClawbackModal">
+            <div class="bg-white rounded-md shadow-lg w-full max-w-md p-6">
+                <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ __('Batalkan Komisi (Clawback)') }}</h2>
+                <p class="text-sm text-gray-500 mb-4">
+                    {{ __('Membuat baris pembatalan bernilai negatif yang me-reverse komisi ini — baris asli TETAP tersimpan sebagai jejak. Kalau komisi asli sudah dibayar, sistem TIDAK menarik uang otomatis; hanya dicatat sebagai utang yang perlu ditagih balik ke Referrer.') }}
+                </p>
+                <label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Alasan Pembatalan') }}</label>
+                <textarea wire:model="clawbackReason" rows="3" class="block w-full rounded-md border-gray-300 shadow-sm text-sm"
+                    placeholder="{{ __('mis. pelanggan refund / koreksi salah input paket') }}"></textarea>
+                @error('clawbackReason') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+
+                <div class="flex justify-end gap-2 mt-6">
+                    <button type="button" wire:click="closeClawbackModal" class="px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 rounded-md">{{ __('Batal') }}</button>
+                    <button type="button" wire:click="confirmClawback" wire:loading.attr="disabled"
+                        class="px-3 py-2 text-sm font-medium bg-purple-700 text-white rounded-md hover:bg-purple-800 disabled:opacity-50">
+                        {{ __('Batalkan Komisi') }}
+                    </button>
                 </div>
             </div>
         </div>

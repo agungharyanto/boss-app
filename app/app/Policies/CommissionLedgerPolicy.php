@@ -18,6 +18,11 @@ use App\Models\User;
  * v0.9.11 (Payout Komisi) — `markPaid` reuse permission `.manage` yang
  * sama (sama posture `markDeposit`, tidak ada permission baru) untuk
  * menandai baris komisi (Titip instan ATAU batch bulanan) sebagai Paid.
+ *
+ * v0.9.0 (sisa scope Commission) — `approve` (`commission_ledger.approve`)
+ * untuk Approve/Reject komisi bulanan; `clawback`
+ * (`commission_ledger.clawback`) untuk membatalkan komisi. Keduanya
+ * permission BARU tersendiri (bukan reuse `.manage`) — tier-admin.
  */
 class CommissionLedgerPolicy
 {
@@ -39,5 +44,15 @@ class CommissionLedgerPolicy
     public function markPaid(User $user): bool
     {
         return $user->can('commission_ledger.manage');
+    }
+
+    public function approve(User $user): bool
+    {
+        return $user->can('commission_ledger.approve');
+    }
+
+    public function clawback(User $user): bool
+    {
+        return $user->can('commission_ledger.clawback');
     }
 }

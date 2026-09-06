@@ -276,19 +276,22 @@ class CommissionPayoutServiceTest extends TestCase
         $closedPackage = $this->packageWithWindow($tenant, 20, 25);
         $unrestrictedPackage = $this->packageWithWindow($tenant, null, null);
 
-        $openRow = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer, package: $openPackage);
-        $closedRow = $this->ledgerRow($tenant, CommissionScheme::LimitedCount, CommissionStatus::Eligible, null, $referrer, package: $closedPackage);
-        $unrestrictedRow = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer, package: $unrestrictedPackage);
+        $openRow = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Approved, null, $referrer, package: $openPackage);
+        $closedRow = $this->ledgerRow($tenant, CommissionScheme::LimitedCount, CommissionStatus::Approved, null, $referrer, package: $closedPackage);
+        $unrestrictedRow = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Approved, null, $referrer, package: $unrestrictedPackage);
+        // v0.9.0 — baris yang masih Eligible (belum di-Approve) TIDAK ikut payout.
+        $notApprovedYet = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer, package: $unrestrictedPackage);
         $titip = $this->ledgerRow($tenant, CommissionScheme::Titip, CommissionStatus::Eligible, TitipDepositStatus::SudahSetor, $referrer, package: $openPackage);
 
         $affected = app(CommissionPayoutService::class)->payMonthlyForReferrer($referrer->id, $admin);
 
-        // Hanya 2 dari 3 baris bulanan yang genuinely payable sekarang —
-        // baris dari paket tertutup DILEWATI, bukan menggagalkan batch.
+        // Hanya 2 dari 3 baris bulanan Approved yang genuinely payable sekarang
+        // — baris dari paket tertutup DILEWATI, bukan menggagalkan batch.
         $this->assertSame(2, $affected);
         $this->assertSame(CommissionStatus::Paid, $openRow->fresh()->status);
         $this->assertSame(CommissionStatus::Paid, $unrestrictedRow->fresh()->status);
-        $this->assertSame(CommissionStatus::Eligible, $closedRow->fresh()->status);
+        $this->assertSame(CommissionStatus::Approved, $closedRow->fresh()->status);
+        $this->assertSame(CommissionStatus::Eligible, $notApprovedYet->fresh()->status);
         $this->assertNotNull($openRow->fresh()->paid_at);
         $this->assertSame($admin->id, $openRow->fresh()->paid_by);
         // Titip TIDAK ikut terbayar lewat jalur bulanan (mekanisme beda total).
@@ -305,15 +308,15 @@ class CommissionPayoutServiceTest extends TestCase
         $admin = User::factory()->create(['tenant_id' => $tenant->id]);
         $referrer = Referrer::factory()->create(['tenant_id' => $tenant->id]);
         $closedPackage = $this->packageWithWindow($tenant, 5, 7);
-        $row = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer, package: $closedPackage);
+        $row = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Approved, null, $referrer, package: $closedPackage);
 
         $affected = app(CommissionPayoutService::class)->payMonthlyForReferrer($referrer->id, $admin);
 
         $this->assertSame(0, $affected);
-        $this->assertSame(CommissionStatus::Eligible, $row->fresh()->status);
+        $this->assertSame(CommissionStatus::Approved, $row->fresh()->status);
     }
 
-    public function test_pay_monthly_for_referrer_ignores_other_referrers_and_non_eligible_rows(): void
+    public function test_pay_monthly_for_referrer_ignores_other_referrers_and_non_approved_rows(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-09-06 10:00:00'));
 
@@ -322,17 +325,48 @@ class CommissionPayoutServiceTest extends TestCase
         $referrer = Referrer::factory()->create(['tenant_id' => $tenant->id]);
         $otherReferrer = Referrer::factory()->create(['tenant_id' => $tenant->id]);
 
-        $recurring = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer);
-        $otherReferrerRow = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $otherReferrer);
+        $approved = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Approved, null, $referrer);
+        $otherReferrerRow = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Approved, null, $otherReferrer);
+        $stillEligible = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible, null, $referrer);
         $alreadyPending = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Pending, null, $referrer);
 
         $affected = app(CommissionPayoutService::class)->payMonthlyForReferrer($referrer->id, $admin);
 
         $this->assertSame(1, $affected);
-        $this->assertSame(CommissionStatus::Paid, $recurring->fresh()->status);
+        $this->assertSame(CommissionStatus::Paid, $approved->fresh()->status);
         // Referrer lain tidak ikut terpengaruh.
-        $this->assertSame(CommissionStatus::Eligible, $otherReferrerRow->fresh()->status);
-        // Baris yang belum Eligible tidak ikut dibayar.
+        $this->assertSame(CommissionStatus::Approved, $otherReferrerRow->fresh()->status);
+        // v0.9.0 — baris Eligible yang belum di-Approve tidak ikut dibayar.
+        $this->assertSame(CommissionStatus::Eligible, $stillEligible->fresh()->status);
         $this->assertSame(CommissionStatus::Pending, $alreadyPending->fresh()->status);
+    }
+
+    // ---------- v0.9.0 — payMonthlyRow butuh status Approved ----------
+
+    public function test_pay_monthly_row_rejects_an_eligible_row_that_is_not_yet_approved(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
+        $row = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Eligible);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('harus di-Approve admin dulu');
+
+        app(CommissionPayoutService::class)->payMonthlyRow($row, $admin);
+    }
+
+    public function test_pay_monthly_row_succeeds_for_an_approved_row_in_an_open_window(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-09-06 10:00:00'));
+
+        $tenant = Tenant::factory()->create();
+        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
+        $package = $this->packageWithWindow($tenant, 5, 7);
+        $row = $this->ledgerRow($tenant, CommissionScheme::Recurring, CommissionStatus::Approved, package: $package);
+
+        $result = app(CommissionPayoutService::class)->payMonthlyRow($row, $admin);
+
+        $this->assertSame(CommissionStatus::Paid, $result->status);
+        $this->assertSame($admin->id, $result->paid_by);
     }
 }

@@ -4,9 +4,17 @@
 
 <div class="p-6 max-w-6xl mx-auto">
     <h1 class="text-2xl font-semibold text-gray-800 mb-2">{{ __('Payout Komisi Bulanan') }}</h1>
-    <p class="text-sm text-gray-500 mb-6">
-        {{ __('Komisi Per Bulan & X-Kali (dari referral resmi) berstatus "Layak Dibayar" yang belum dibayar, dikelompokkan per Referrer. Berbeda dari komisi Titip (bisa dibayar instan kapan saja) — jendela tanggal payout diatur PER PAKET (lihat Rate Komisi). Paket tanpa jendela diatur bisa dibayar kapan saja; baris dari paket berjendela tertutup dilewati otomatis saat "Proses Payout".') }}
+    <p class="text-sm text-gray-500 mb-4">
+        {{ __('Komisi Per Bulan & X-Kali (dari referral resmi) yang sudah DISETUJUI admin dan belum dibayar, dikelompokkan per Referrer. Berbeda dari komisi Titip (bisa dibayar instan kapan saja) — jendela tanggal payout diatur PER PAKET (lihat Rate Komisi). Paket tanpa jendela diatur bisa dibayar kapan saja; baris dari paket berjendela tertutup dilewati otomatis saat "Proses Payout".') }}
     </p>
+
+    @if ($awaitingApprovalCount > 0)
+        <p class="mb-4 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+            {{ __(':count komisi bulanan masih menunggu approval — Approve dulu di halaman', ['count' => $awaitingApprovalCount]) }}
+            <a href="{{ route('web.titip-masuk.index') }}" class="font-medium underline">{{ __('Fee Komisi') }}</a>
+            {{ __('supaya muncul di sini.') }}
+        </p>
+    @endif
 
     @if ($flash)
         <p class="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2">{{ $flash }}</p>

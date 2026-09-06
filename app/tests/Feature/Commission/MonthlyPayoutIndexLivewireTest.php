@@ -86,7 +86,10 @@ class MonthlyPayoutIndexLivewireTest extends TestCase
         Referrer $referrer,
         CommissionScheme $scheme = CommissionScheme::Recurring,
         ?PppPackage $package = null,
+        CommissionStatus $status = CommissionStatus::Approved,
     ): CommissionLedger {
+        // v0.9.0 — halaman ini kini HANYA menampilkan baris yang sudah
+        // di-Approve; default helper diubah dari Eligible → Approved.
         $customer = Customer::factory()->create([
             'tenant_id' => $tenant->id,
             'reseller_id' => null,
@@ -98,7 +101,7 @@ class MonthlyPayoutIndexLivewireTest extends TestCase
             'referrer_id' => $referrer->id,
             'customer_id' => $customer->id,
             'scheme' => $scheme->value,
-            'status' => CommissionStatus::Eligible,
+            'status' => $status,
             'amount' => 5000,
         ]);
     }
@@ -111,7 +114,7 @@ class MonthlyPayoutIndexLivewireTest extends TestCase
         Livewire::actingAs($plain)->test(MonthlyPayoutIndex::class)->assertForbidden();
     }
 
-    public function test_lists_eligible_recurring_and_limited_count_rows_grouped_by_referrer(): void
+    public function test_lists_approved_recurring_and_limited_count_rows_grouped_by_referrer(): void
     {
         $tenant = Tenant::factory()->create();
         $referrer = Referrer::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Kamisem']);
@@ -175,7 +178,7 @@ class MonthlyPayoutIndexLivewireTest extends TestCase
             ->call('payReferrer', $referrer->id)
             ->assertSee('Tidak ada baris komisi yang memenuhi syarat');
 
-        $this->assertSame(CommissionStatus::Eligible, $row->fresh()->status);
+        $this->assertSame(CommissionStatus::Approved, $row->fresh()->status);
     }
 
     public function test_process_payout_pays_only_the_row_whose_window_is_open_and_skips_the_closed_one(): void
@@ -196,8 +199,21 @@ class MonthlyPayoutIndexLivewireTest extends TestCase
             ->assertSee('1 baris komisi bulanan ditandai dibayar');
 
         $this->assertSame(CommissionStatus::Paid, $openRow->fresh()->status);
-        $this->assertSame(CommissionStatus::Eligible, $closedRow->fresh()->status);
+        $this->assertSame(CommissionStatus::Approved, $closedRow->fresh()->status);
         $this->assertSame($admin->id, $openRow->fresh()->paid_by);
+    }
+
+    public function test_eligible_rows_are_hidden_here_and_surfaced_as_an_awaiting_approval_note(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $referrer = Referrer::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Belum Diapprove']);
+        $this->monthlyRow($tenant, $referrer, CommissionScheme::Recurring, status: CommissionStatus::Eligible);
+        $this->monthlyRow($tenant, $referrer, CommissionScheme::LimitedCount, status: CommissionStatus::Eligible);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(MonthlyPayoutIndex::class)
+            ->assertDontSee('Belum Diapprove')
+            ->assertSee('2 komisi bulanan masih menunggu approval');
     }
 
     public function test_a_view_only_user_cannot_process_payout(): void
@@ -215,6 +231,6 @@ class MonthlyPayoutIndexLivewireTest extends TestCase
             ->call('payReferrer', $referrer->id)
             ->assertForbidden();
 
-        $this->assertSame(CommissionStatus::Eligible, $row->fresh()->status);
+        $this->assertSame(CommissionStatus::Approved, $row->fresh()->status);
     }
 }

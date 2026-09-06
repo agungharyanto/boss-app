@@ -59,7 +59,8 @@
                 || request()->routeIs('web.referrers.*')
                 || request()->routeIs('web.commission-rates.*')
                 || request()->routeIs('web.titip-masuk.*')
-                || request()->routeIs('web.monthly-payout.*'),
+                || request()->routeIs('web.monthly-payout.*')
+                || request()->routeIs('web.commission-payment-history.*'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\TaxComponent::class)
                     ? ['route' => 'web.tax-components.index', 'label' => __('Tax Components')]
@@ -140,6 +141,11 @@
                             // (yang khusus Titip, payout instan).
                             auth()->user()->can('viewAny', \App\Models\CommissionLedger::class)
                                 ? ['route' => 'web.monthly-payout.index', 'label' => __('Payout Bulanan')]
+                                : null,
+                            // v0.9.12 — riwayat pembayaran komisi (Titip +
+                            // Bulanan yang sudah Paid) + grafik.
+                            auth()->user()->can('viewAny', \App\Models\CommissionLedger::class)
+                                ? ['route' => 'web.commission-payment-history.index', 'label' => __('Riwayat Pembayaran')]
                                 : null,
                         ]),
                     ]

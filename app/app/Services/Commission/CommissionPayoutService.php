@@ -171,6 +171,43 @@ class CommissionPayoutService
      *
      * @return int jumlah baris yang benar-benar dibayar
      */
+    /**
+     * Bayar SATU baris komisi bulanan (recurring/limited_count).
+     * Bagian D (v0.9.12) — dipakai halaman "Fee Komisi" yang kini gabungan
+     * Titip + Bulanan; tombol bayar per baris hanya muncul kalau
+     * `isRowPayableNow()` true (jendela paketnya terbuka). Guard di sini
+     * juga, bukan cuma UI. Tidak butuh bukti bayar (sama seperti
+     * `payMonthlyForReferrer()`).
+     *
+     * @throws RuntimeException pesan user-facing Indonesia kalau tidak layak
+     */
+    public function payMonthlyRow(CommissionLedger $entry, User $actor): CommissionLedger
+    {
+        if (! in_array($entry->scheme, [CommissionScheme::Recurring, CommissionScheme::LimitedCount], true)) {
+            throw new RuntimeException('Aksi ini hanya berlaku untuk komisi bulanan (Per Bulan / X-Kali).');
+        }
+
+        if ($entry->status === CommissionStatus::Paid) {
+            throw new RuntimeException('Komisi ini sudah pernah dibayar sebelumnya.');
+        }
+
+        if ($entry->status !== CommissionStatus::Eligible) {
+            throw new RuntimeException('Komisi ini belum berstatus "Layak Dibayar".');
+        }
+
+        if (! $this->isRowPayableNow($entry)) {
+            throw new RuntimeException('Jendela payout untuk paket komisi ini sedang tertutup — coba lagi dalam rentang tanggal yang ditetapkan pada Rate Komisi.');
+        }
+
+        $entry->update([
+            'status' => CommissionStatus::Paid,
+            'paid_at' => now(),
+            'paid_by' => $actor->id,
+        ]);
+
+        return $entry->fresh();
+    }
+
     public function payMonthlyForReferrer(int $referrerId, User $actor): int
     {
         $rows = CommissionLedger::query()

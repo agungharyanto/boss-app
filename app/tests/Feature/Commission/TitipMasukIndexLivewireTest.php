@@ -4,15 +4,21 @@ namespace Tests\Feature\Commission;
 
 use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
+use App\Enums\NetworkProfileGroupType;
 use App\Enums\TitipDepositStatus;
 use App\Livewire\Commission\TitipMasukIndex;
+use App\Models\BandwidthProfile;
 use App\Models\CommissionLedger;
+use App\Models\CommissionRate;
 use App\Models\Customer;
+use App\Models\NetworkProfileGroup;
+use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
@@ -65,23 +71,101 @@ class TitipMasukIndexLivewireTest extends TestCase
         ]);
     }
 
-    public function test_lists_only_titip_scheme_rows(): void
+    private function monthlyRow(Tenant $tenant, string $customerName, string $scheme = 'recurring', float $amount = 5000): CommissionLedger
+    {
+        $r = Referrer::factory()->create(['tenant_id' => $tenant->id]);
+        $c = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null, 'name' => $customerName, 'referred_by_referrer_id' => $r->id]);
+
+        return CommissionLedger::factory()->create([
+            'tenant_id' => $tenant->id, 'referrer_id' => $r->id, 'customer_id' => $c->id,
+            'scheme' => $scheme, 'status' => CommissionStatus::Eligible, 'amount' => $amount,
+        ]);
+    }
+
+    public function test_lists_both_titip_and_monthly_rows_but_never_null_scheme_templates(): void
     {
         $tenant = Tenant::factory()->create();
         $this->titipRow($tenant, 'Pelanggan Titip');
+        $this->monthlyRow($tenant, 'Pelanggan Recurring');
 
-        // A non-titip row must not appear.
+        // A null-scheme template row (v0.9.4, belum matang) never appears.
         $r = Referrer::factory()->create(['tenant_id' => $tenant->id]);
-        $c = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null, 'name' => 'Pelanggan Recurring']);
+        $c = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null, 'name' => 'Template Belum Matang', 'referred_by_referrer_id' => $r->id]);
         CommissionLedger::factory()->create([
             'tenant_id' => $tenant->id, 'referrer_id' => $r->id, 'customer_id' => $c->id,
-            'scheme' => CommissionScheme::Recurring->value, 'status' => CommissionStatus::Eligible, 'amount' => 5000,
+            'scheme' => null, 'status' => CommissionStatus::Pending, 'amount' => null,
         ]);
 
         Livewire::actingAs($this->admin($tenant))
             ->test(TitipMasukIndex::class)
             ->assertSee('Pelanggan Titip')
-            ->assertDontSee('Pelanggan Recurring');
+            ->assertSee('Pelanggan Recurring')
+            ->assertDontSee('Template Belum Matang');
+    }
+
+    public function test_scheme_filter_narrows_to_titip_or_bulanan(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->titipRow($tenant, 'Pelanggan Titip');
+        $this->monthlyRow($tenant, 'Pelanggan Bulanan');
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->set('schemeFilter', 'titip')
+            ->assertSee('Pelanggan Titip')
+            ->assertDontSee('Pelanggan Bulanan')
+            ->set('schemeFilter', 'bulanan')
+            ->assertSee('Pelanggan Bulanan')
+            ->assertDontSee('Pelanggan Titip');
+    }
+
+    public function test_pay_monthly_row_flips_an_eligible_monthly_commission_to_paid(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $row = $this->monthlyRow($tenant, 'Bulanan', 'recurring', 5000);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->call('payMonthlyRow', $row->id)
+            ->assertHasNoErrors();
+
+        $row->refresh();
+        $this->assertSame(CommissionStatus::Paid, $row->status);
+        $this->assertNotNull($row->paid_at);
+        $this->assertNull($row->payment_proof_path); // bulanan tidak butuh bukti
+    }
+
+    public function test_pay_monthly_row_rejects_a_row_whose_package_payout_window_is_closed(): void
+    {
+        Carbon::setTestNow('2026-09-20'); // di luar 5-7
+
+        $tenant = Tenant::factory()->create();
+        $ref = Referrer::factory()->create(['tenant_id' => $tenant->id]);
+        $group = NetworkProfileGroup::factory()->create(['tenant_id' => $tenant->id, 'type' => NetworkProfileGroupType::Ppp]);
+        $package = PppPackage::factory()->create([
+            'tenant_id' => $tenant->id, 'network_profile_group_id' => $group->id,
+            'bandwidth_profile_id' => BandwidthProfile::factory()->create(['tenant_id' => $tenant->id])->id,
+            'sell_price' => 100000,
+        ]);
+        CommissionRate::factory()->create([
+            'ppp_package_id' => $package->id, 'recurring_amount' => 5000, 'is_active' => true,
+            'payout_window_start_day' => 5, 'payout_window_end_day' => 7,
+        ]);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $tenant->id, 'reseller_id' => null,
+            'ppp_package_id' => $package->id, 'referred_by_referrer_id' => $ref->id,
+        ]);
+        $row = CommissionLedger::factory()->create([
+            'tenant_id' => $tenant->id, 'referrer_id' => $ref->id, 'customer_id' => $customer->id,
+            'scheme' => 'recurring', 'status' => CommissionStatus::Eligible, 'amount' => 5000,
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(TitipMasukIndex::class)
+            ->call('payMonthlyRow', $row->id)
+            ->assertHasErrors('monthlyPay');
+
+        $this->assertSame(CommissionStatus::Eligible, $row->fresh()->status);
     }
 
     public function test_status_filter_narrows_the_list(): void
@@ -142,10 +226,15 @@ class TitipMasukIndexLivewireTest extends TestCase
         // Paid + belum setor: TIDAK hitung komisi (bukan eligible), hitung setoran belum masuk.
         $this->titipRow($tenant, 'C', CommissionStatus::Paid, amount: 7000, gross: 50000, deposit: TitipDepositStatus::BelumSetor);
 
+        // + komisi Bulanan (recurring) Eligible: 12000
+        $this->monthlyRow($tenant, 'D', 'recurring', 12000);
+
         Livewire::actingAs($this->admin($tenant))
             ->test(TitipMasukIndex::class)
-            ->assertViewHas('totalKomisiHarusDibayar', 8000.0)      // 3000 + 5000
-            ->assertViewHas('totalSetoranBelumMasuk', 150000.0);    // 100000 + 50000
+            ->assertViewHas('totalTitipHarusDibayar', 8000.0)       // 3000 + 5000
+            ->assertViewHas('totalSetoranBelumMasuk', 150000.0)     // 100000 + 50000
+            ->assertViewHas('totalBulananHarusDibayar', 12000.0)
+            ->assertViewHas('totalGabungan', 20000.0);              // 8000 + 12000
     }
 
     public function test_rows_are_grouped_per_referrer_with_a_correct_undeposited_total(): void

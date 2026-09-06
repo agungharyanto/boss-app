@@ -58,7 +58,10 @@ class CommissionRateIndex extends Component
     {
         $this->authorize('manage', CommissionRate::class);
 
-        $package = PppPackage::with('commissionRate')->findOrFail($packageId);
+        // Bagian C (v0.9.12) — paket gratis (sell_price = 0) mustahil
+        // menghasilkan komisi, tidak ditampilkan di list & tidak bisa
+        // diatur rate-nya (guard di sini, bukan cuma menyembunyikan baris).
+        $package = PppPackage::with('commissionRate')->where('sell_price', '>', 0)->findOrFail($packageId);
         $rate = $package->commissionRate;
 
         $this->editingPackageId = $package->id;
@@ -85,7 +88,7 @@ class CommissionRateIndex extends Component
     {
         $this->authorize('manage', CommissionRate::class);
 
-        $package = PppPackage::with('commissionRate')->findOrFail($this->editingPackageId);
+        $package = PppPackage::with('commissionRate')->where('sell_price', '>', 0)->findOrFail($this->editingPackageId);
 
         foreach ([
             'recurringAmount', 'limitedCountAmount', 'limitedCountTimes', 'titipAmount',
@@ -168,6 +171,8 @@ class CommissionRateIndex extends Component
     {
         $packages = PppPackage::query()
             ->with(['commissionRate', 'networkProfileGroup'])
+            // Bagian C (v0.9.12) — sembunyikan paket gratis: mustahil komisi.
+            ->where('sell_price', '>', 0)
             ->when($this->search, fn ($query) => $query->where('name', 'like', "%{$this->search}%"))
             ->orderBy('name')
             ->paginate(25);

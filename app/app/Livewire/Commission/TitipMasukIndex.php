@@ -34,6 +34,19 @@ use RuntimeException;
  * ini ditegakkan DI SERVICE (bukan cuma UI menyembunyikan tombol), dan
  * wajib upload 1 foto bukti bayar per transaksi/batch payout.
  *
+ * BAGIAN D (v0.9.12) — halaman ini TIDAK LAGI khusus Titip. Sekarang
+ * menampilkan SEMUA jenis komisi (Titip + Bulanan recurring/limited_count)
+ * dalam satu tempat, dengan filter "Jenis Komisi" (Semua/Titip/Bulanan).
+ * Kolom yang cuma relevan Titip (Uang Diterima, Status Setoran, checkbox
+ * setor) kosong/disembunyikan untuk baris Bulanan. Pembayaran komisi
+ * Bulanan bisa langsung dari sini lewat `payMonthlyRow()`/
+ * `payMonthlyForReferrer()` TAPI hanya untuk baris yang jendela payout
+ * paketnya sedang terbuka (`CommissionPayoutService::isRowPayableNow()`) —
+ * halaman "Payout Bulanan" (`MonthlyPayoutIndex`) tetap ada untuk alur
+ * batch khusus bulanan. Ringkasan di atas dipisah per jenis + total gabungan.
+ * Baris `scheme = NULL` (template v0.9.4 yang belum matang) TIDAK pernah
+ * ditampilkan di sini — belum jadi komisi nyata.
+ *
  * TETAP tanpa approve/reject.
  */
 class TitipMasukIndex extends Component
@@ -42,10 +55,13 @@ class TitipMasukIndex extends Component
 
     public string $search = '';
 
+    /** '' = semua jenis, 'titip', 'bulanan' (recurring + limited_count) */
+    public string $schemeFilter = '';
+
     /** '' = semua status komisi */
     public string $statusFilter = '';
 
-    /** '' = semua status setoran */
+    /** '' = semua status setoran (hanya berlaku untuk baris Titip) */
     public string $depositFilter = '';
 
     /** id baris commission_ledger yang dicentang untuk ditandai sudah setor */
@@ -145,6 +161,44 @@ class TitipMasukIndex extends Component
     }
 
     /**
+     * Bagian D — bayar SATU baris komisi Bulanan (recurring/limited_count)
+     * langsung dari halaman ini. Tanpa modal/bukti bayar (beda dari Titip).
+     * Guard jendela payout ada di service.
+     */
+    public function payMonthlyRow(int $ledgerId, CommissionPayoutService $payoutService): void
+    {
+        $this->authorize('markPaid', CommissionLedger::class);
+
+        $entry = CommissionLedger::query()->find($ledgerId);
+
+        if ($entry === null) {
+            return;
+        }
+
+        try {
+            $payoutService->payMonthlyRow($entry, auth()->user());
+            $this->flash = 'Komisi bulanan berhasil ditandai dibayar.';
+        } catch (RuntimeException $e) {
+            $this->addError('monthlyPay', $e->getMessage());
+        }
+    }
+
+    /**
+     * Bagian D — bayar SEMUA baris komisi Bulanan milik satu Referrer yang
+     * jendela payout paketnya sedang terbuka (sisanya dilewati diam-diam).
+     */
+    public function payMonthlyReferrer(int $referrerId, CommissionPayoutService $payoutService): void
+    {
+        $this->authorize('markPaid', CommissionLedger::class);
+
+        $affected = $payoutService->payMonthlyForReferrer($referrerId, auth()->user());
+
+        $this->flash = $affected > 0
+            ? "{$affected} komisi bulanan ditandai dibayar."
+            : 'Tidak ada komisi bulanan yang bisa dibayar sekarang (harus Layak Dibayar dan dalam jendela payout paketnya).';
+    }
+
+    /**
      * Toggle centang untuk SEMUA baris `belum_setor` milik satu Referrer.
      */
     public function toggleGroupSelection(int $referrerId): void
@@ -200,22 +254,43 @@ class TitipMasukIndex extends Component
             ->all();
     }
 
-    public function render()
-    {
-        $tenantTitip = fn () => CommissionLedger::query()->where('scheme', CommissionScheme::Titip->value);
+    /** Skema yang dianggap "Bulanan" di halaman ini. */
+    private const MONTHLY_SCHEMES = [CommissionScheme::Recurring, CommissionScheme::LimitedCount];
 
-        // Kartu ringkasan — GLOBAL (tenant-scoped), independen dari filter di
-        // bawah, supaya angka "berapa harus ditagih / dibayar" stabil.
-        $totalKomisiHarusDibayar = (float) $tenantTitip()
+    public function render(CommissionPayoutService $payoutService)
+    {
+        $monthlyValues = array_map(fn (CommissionScheme $s) => $s->value, self::MONTHLY_SCHEMES);
+        $allValues = array_merge([CommissionScheme::Titip->value], $monthlyValues);
+
+        $tenantAll = fn () => CommissionLedger::query()->whereIn('scheme', $allValues);
+
+        // Kartu ringkasan — GLOBAL (tenant-scoped), independen dari filter,
+        // dipisah per jenis + total gabungan.
+        $totalTitipHarusDibayar = (float) $tenantAll()
+            ->where('scheme', CommissionScheme::Titip->value)
             ->where('status', CommissionStatus::Eligible->value)
             ->sum('amount');
 
-        $totalSetoranBelumMasuk = (float) $tenantTitip()
+        $totalSetoranBelumMasuk = (float) $tenantAll()
+            ->where('scheme', CommissionScheme::Titip->value)
             ->where('deposit_status', TitipDepositStatus::BelumSetor->value)
             ->sum('gross_amount');
 
-        $query = $tenantTitip()
-            ->with(['customer:id,name', 'referrer:id,name,phone', 'depositedBy:id,name', 'paidBy:id,name'])
+        $totalBulananHarusDibayar = (float) $tenantAll()
+            ->whereIn('scheme', $monthlyValues)
+            ->where('status', CommissionStatus::Eligible->value)
+            ->sum('amount');
+
+        // Scope skema sesuai filter "Jenis Komisi".
+        $schemeScope = match ($this->schemeFilter) {
+            'titip' => [CommissionScheme::Titip->value],
+            'bulanan' => $monthlyValues,
+            default => $allValues,
+        };
+
+        $query = CommissionLedger::query()
+            ->whereIn('scheme', $schemeScope)
+            ->with(['customer:id,name,ppp_package_id', 'customer.pppPackage.commissionRate', 'referrer:id,name,phone', 'depositedBy:id,name', 'paidBy:id,name', 'invoice:id,invoice_number'])
             ->orderByDesc('id');
 
         if ($this->search !== '') {
@@ -226,27 +301,36 @@ class TitipMasukIndex extends Component
             });
         }
 
-        // Filter status komisi — independen dari filter setoran (AND).
         if (CommissionStatus::tryFrom($this->statusFilter) !== null) {
             $query->where('status', $this->statusFilter);
         }
 
-        // Filter status setoran.
+        // Filter status setoran — hanya bermakna untuk baris Titip.
         if (TitipDepositStatus::tryFrom($this->depositFilter) !== null) {
             $query->where('deposit_status', $this->depositFilter);
         }
 
         $selectedInt = array_map('intval', $this->selected);
 
-        $isPayable = fn ($r) => $r->status === CommissionStatus::Eligible
+        $isTitip = fn ($r) => $r->scheme === CommissionScheme::Titip;
+        $isTitipPayable = fn ($r) => $isTitip($r)
+            && $r->status === CommissionStatus::Eligible
             && $r->deposit_status === TitipDepositStatus::SudahSetor;
+        $isMonthlyPayableNow = fn ($r) => in_array($r->scheme, self::MONTHLY_SCHEMES, true)
+            && $r->status === CommissionStatus::Eligible
+            && $payoutService->isRowPayableNow($r);
 
         $groups = $query->get()
             ->groupBy('referrer_id')
-            ->map(function ($groupRows) use ($selectedInt, $isPayable) {
-                $belumSetor = $groupRows->where('deposit_status', TitipDepositStatus::BelumSetor);
+            ->map(function ($groupRows) use ($selectedInt, $isTitip, $isTitipPayable, $isMonthlyPayableNow) {
+                $titipRows = $groupRows->filter($isTitip);
+                $monthlyRows = $groupRows->reject($isTitip);
+
+                $belumSetor = $titipRows->where('deposit_status', TitipDepositStatus::BelumSetor);
                 $belumSetorIds = $belumSetor->pluck('id')->map(fn ($id) => (int) $id)->all();
-                $payableRows = $groupRows->filter($isPayable);
+
+                $titipPayable = $titipRows->filter($isTitipPayable);
+                $monthlyPayable = $monthlyRows->filter($isMonthlyPayableNow);
 
                 return [
                     'referrer' => $groupRows->first()->referrer,
@@ -257,18 +341,24 @@ class TitipMasukIndex extends Component
                     'belum_setor_count' => $belumSetor->count(),
                     'all_belum_setor_selected' => $belumSetorIds !== []
                         && array_diff($belumSetorIds, $selectedInt) === [],
-                    'payable_count' => $payableRows->count(),
-                    'payable_total' => (float) $payableRows->sum(fn ($r) => (float) ($r->amount ?? 0)),
+                    'payable_count' => $titipPayable->count(),
+                    'payable_total' => (float) $titipPayable->sum(fn ($r) => (float) ($r->amount ?? 0)),
+                    'monthly_payable_count' => $monthlyPayable->count(),
+                    'monthly_payable_total' => (float) $monthlyPayable->sum(fn ($r) => (float) ($r->amount ?? 0)),
                 ];
             })
-            ->sortByDesc('total_belum_setor')
+            ->sortByDesc(fn ($g) => $g['total_belum_setor'] + $g['payable_total'] + $g['monthly_payable_total'])
             ->values();
 
         return view('livewire.commission.titip-masuk-index', [
             'groups' => $groups,
-            'isPayable' => $isPayable,
-            'totalKomisiHarusDibayar' => $totalKomisiHarusDibayar,
+            'isTitip' => $isTitip,
+            'isPayable' => $isTitipPayable,
+            'isMonthlyPayableNow' => $isMonthlyPayableNow,
+            'totalTitipHarusDibayar' => $totalTitipHarusDibayar,
             'totalSetoranBelumMasuk' => $totalSetoranBelumMasuk,
+            'totalBulananHarusDibayar' => $totalBulananHarusDibayar,
+            'totalGabungan' => $totalTitipHarusDibayar + $totalBulananHarusDibayar,
             'statuses' => CommissionStatus::cases(),
             'depositStatuses' => TitipDepositStatus::cases(),
             'canManage' => auth()->user()->can('markDeposit', CommissionLedger::class),

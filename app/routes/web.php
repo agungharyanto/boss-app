@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\Internal\CpeDeviceDatatableController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDetailController;
 use App\Http\Controllers\Api\Internal\OltDeviceDatatableController;
 use App\Http\Controllers\Auth\ReferrerLoginController;
+use App\Http\Controllers\Billing\InvoicePrintController;
 use App\Http\Controllers\CommissionPaymentProofController;
 use App\Http\Controllers\FiberNodePhotoController;
 use App\Http\Controllers\VpnScriptDownloadController;
@@ -13,6 +14,7 @@ use App\Livewire\Auth\ReferrerForgotPassword;
 use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
 use App\Livewire\Billing\SubscriptionIndex;
+use App\Livewire\Commission\CommissionPaymentHistory;
 use App\Livewire\Commission\CommissionRateIndex;
 use App\Livewire\Commission\MonthlyPayoutIndex;
 use App\Livewire\Commission\TitipMasukIndex;
@@ -150,6 +152,7 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
         Route::get('/reseller-tax-policies', ResellerTaxPolicyIndex::class)->name('reseller-tax-policies.index');
         Route::get('/subscriptions', SubscriptionIndex::class)->name('subscriptions.index');
         Route::get('/invoices', InvoiceIndex::class)->name('invoices.index');
+        Route::get('/invoices/{invoice}/print', [InvoicePrintController::class, 'show'])->name('invoices.print');
         Route::get('/payment-reconciliation', ReconciliationReport::class)->name('payment-reconciliation.index');
         Route::get('/whatsapp-gateway', WhatsappGatewayIndex::class)->name('whatsapp-gateway.index');
         Route::get('/nas', NasIndex::class)->name('nas.index');
@@ -209,6 +212,10 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // jendela tanggal ada DI SERVICE (CommissionPayoutService), bukan cuma
     // di sini — halaman ini cuma UI-nya.
     Route::get('/payout-komisi-bulanan', MonthlyPayoutIndex::class)->name('monthly-payout.index');
+
+    // v0.9.12 (Bagian E) — Riwayat Pembayaran Komisi (Titip + Bulanan yang
+    // sudah Paid) + grafik total per bulan. Read-only.
+    Route::get('/riwayat-pembayaran-komisi', CommissionPaymentHistory::class)->name('commission-payment-history.index');
 
     // v0.14.1 — fondasi cluster "Profil Paket", same posture as /referrers
     // above (tenant-level, no reseller.context needed — BandwidthProfile

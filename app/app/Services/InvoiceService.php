@@ -62,10 +62,30 @@ class InvoiceService
      * as the insert, so this is also safe under concurrent calls — the
      * DB's unique constraint on subscription_id+period_start+period_end is
      * the last-resort backstop, not the primary guard).
+     *
+     * Sprint "perpanjang-invoice-asli-cetak" — 3 param opsional, semua
+     * default menjaga perilaku lama untuk ke-3 pemanggil subscription-based
+     * (GenerateDueInvoices, generateNextForSubscription, API generate):
+     *  - $overrideAmount / $overrideDescription: dipakai aksi "Perpanjang"
+     *    (SubscriptionRenewalService) supaya subtotal + line item berasal
+     *    dari `PppPackage.sell_price`/`name` SAAT perpanjang, bukan dari
+     *    `subscription.monthly_amount`/`name` (yang, untuk subscription
+     *    "Perpanjangan Manual" tersembunyi, sengaja 0/generik).
+     *  - $applyTax = false: lewati tax engine sepenuhnya (tax_total=0,
+     *    grand_total=subtotal, TIDAK menulis reseller_tax_ledger) — dipakai
+     *    saat `customers.tax_billable = false` (checklist PPN mati). Kontrak
+     *    tax v0.3.3 tetap utuh untuk $applyTax=true.
      */
-    public function generateForPeriod(Subscription $subscription, Carbon $periodStart, Carbon $periodEnd, Carbon $dueDate): Invoice
-    {
-        return DB::transaction(function () use ($subscription, $periodStart, $periodEnd, $dueDate) {
+    public function generateForPeriod(
+        Subscription $subscription,
+        Carbon $periodStart,
+        Carbon $periodEnd,
+        Carbon $dueDate,
+        ?float $overrideAmount = null,
+        ?string $overrideDescription = null,
+        bool $applyTax = true,
+    ): Invoice {
+        return DB::transaction(function () use ($subscription, $periodStart, $periodEnd, $dueDate, $overrideAmount, $overrideDescription, $applyTax) {
             // whereDate() — a plain where() string-compares the raw stored
             // value, which can carry a time suffix depending on driver (see
             // TaxCalculationService::calculateForAmount for the full
@@ -82,9 +102,13 @@ class InvoiceService
             }
 
             $reseller = $subscription->reseller;
-            $baseAmount = (float) $subscription->monthly_amount;
+            $baseAmount = $overrideAmount ?? (float) $subscription->monthly_amount;
+            $lineDescription = $overrideDescription ?? $subscription->name;
 
-            $breakdown = $this->taxService->calculateForAmount($reseller, $baseAmount, $periodStart);
+            $breakdown = $applyTax
+                ? $this->taxService->calculateForAmount($reseller, $baseAmount, $periodStart)
+                : null;
+
             $invoiceNumber = $this->numberService->next($subscription->tenant_id, $reseller, $periodStart);
 
             $invoice = Invoice::create([
@@ -97,21 +121,23 @@ class InvoiceService
                 'period_end' => $periodEnd,
                 'due_date' => $dueDate,
                 'status' => InvoiceStatus::Draft,
-                'subtotal' => $breakdown->baseAmount,
-                'tax_total' => $breakdown->totalTax,
-                'grand_total' => $breakdown->grandTotal,
+                'subtotal' => $breakdown?->baseAmount ?? $baseAmount,
+                'tax_total' => $breakdown?->totalTax ?? 0,
+                'grand_total' => $breakdown?->grandTotal ?? $baseAmount,
                 'generated_at' => now(),
             ]);
 
             $invoice->lineItems()->create([
                 'tenant_id' => $subscription->tenant_id,
-                'description' => $subscription->name,
+                'description' => $lineDescription,
                 'quantity' => 1,
                 'unit_price' => $baseAmount,
                 'line_total' => $baseAmount,
             ]);
 
-            $this->taxService->writeLedgerEntry($breakdown, $reseller, Invoice::class, $invoice->id, $periodStart, 'system');
+            if ($breakdown !== null) {
+                $this->taxService->writeLedgerEntry($breakdown, $reseller, Invoice::class, $invoice->id, $periodStart, 'system');
+            }
 
             // ->load() (not ->fresh()) deliberately — fresh() returns a
             // brand-new model instance queried from the DB, which resets
@@ -133,7 +159,16 @@ class InvoiceService
         return $this->transition($invoice, InvoiceStatus::Pending);
     }
 
-    public function markPaid(Invoice $invoice): Invoice
+    /**
+     * @param  bool  $notifyCustomer  v0.9.12 (Bagian A) — false HANYA dari
+     *                                `RenewalInvoiceService` (alur "Perpanjang"): Perpanjang bisa
+     *                                membuat beberapa invoice sekaligus (multi-bulan) → tanpa ini
+     *                                pelanggan kebanjiran N pesan "pembayaran diterima" terpisah untuk
+     *                                satu transaksi perpanjangan. Dua caller lain (PATCH manual v0.3.4,
+     *                                webhook Xendit v0.3.5) TETAP default `true` — WA dikirim seperti
+     *                                biasa. Pematangan komisi (v0.9.5) TIDAK terpengaruh flag ini.
+     */
+    public function markPaid(Invoice $invoice, bool $notifyCustomer = true): Invoice
     {
         $invoice = $this->transition($invoice, InvoiceStatus::Paid);
         $invoice->update(['paid_at' => now()]);
@@ -147,11 +182,10 @@ class InvoiceService
         // / GenerateDueInvoices — murni membaca $invoice->customer_id.
         $this->commissionMaturity->matureForPaidInvoice($invoice);
 
-        // v0.4.0 WhatsApp Gateway contract: both callers of markPaid() (the
-        // v0.3.4 manual PATCH endpoint and PaymentService::handleWebhook())
-        // must trigger this the same way — signature is unchanged
-        // deliberately, see docs/ROADMAP.md.
-        if ($invoice->customer !== null) {
+        // v0.4.0 WhatsApp Gateway contract: caller PATCH manual v0.3.4 +
+        // webhook Xendit v0.3.5 memicu ini dengan cara yang sama.
+        // RenewalInvoiceService (v0.9.12) lewat $notifyCustomer=false.
+        if ($notifyCustomer && $invoice->customer !== null) {
             $this->whatsappService->buildAndQueue(WhatsappEventType::PaymentReceived, $invoice->customer, $invoice);
         }
 

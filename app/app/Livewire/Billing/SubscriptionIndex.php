@@ -4,6 +4,7 @@ namespace App\Livewire\Billing;
 
 use App\Models\Customer;
 use App\Models\Subscription;
+use App\Services\Billing\RenewalInvoiceService;
 use App\Services\InvoiceService;
 use App\Services\SubscriptionService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
@@ -90,7 +91,13 @@ class SubscriptionIndex extends Component
     public function render()
     {
         return view('livewire.billing.subscription-index', [
-            'subscriptions' => Subscription::query()->with(['customer', 'reseller'])->latest()->paginate(15),
+            // v0.9.12 — sembunyikan baris "vehicle" tersembunyi milik
+            // RenewalInvoiceService (Perpanjang → Invoice ASLI). Bukan
+            // subscription "asli" — cuma placeholder karena
+            // invoices.subscription_id NOT NULL.
+            'subscriptions' => Subscription::query()
+                ->where('name', '!=', RenewalInvoiceService::RENEWAL_SUBSCRIPTION_NAME)
+                ->with(['customer', 'reseller'])->latest()->paginate(15),
             'customers' => Customer::orderBy('name')->limit(200)->get(),
             'canCreate' => auth()->user()->can('create', Subscription::class),
         ]);

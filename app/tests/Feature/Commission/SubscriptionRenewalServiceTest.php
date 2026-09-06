@@ -4,20 +4,30 @@ namespace Tests\Feature\Commission;
 
 use App\Enums\CommissionScheme;
 use App\Enums\CommissionStatus;
+use App\Enums\InvoiceStatus;
 use App\Enums\NetworkProfileGroupType;
 use App\Enums\ReferrerType;
+use App\Enums\SubscriptionStatus;
+use App\Enums\TaxBurden;
+use App\Enums\TaxComponentType;
 use App\Enums\TitipDepositStatus;
 use App\Models\BandwidthProfile;
 use App\Models\CommissionLedger;
 use App\Models\CommissionRate;
 use App\Models\Customer;
 use App\Models\CustomerTimelineEntry;
+use App\Models\Invoice;
 use App\Models\NetworkProfileGroup;
 use App\Models\PppPackage;
 use App\Models\Referrer;
+use App\Models\ResellerTaxPolicy;
+use App\Models\Subscription;
+use App\Models\TaxComponent;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\Billing\RenewalInvoiceService;
 use App\Services\Commission\SubscriptionRenewalService;
+use App\Services\InvoiceService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Spatie\Permission\Models\Permission;
@@ -380,5 +390,118 @@ class SubscriptionRenewalServiceTest extends TestCase
             $this->assertStringNotContainsString('App\\Services\\Network', $name);
             $this->assertStringNotContainsString('RouterOs', $name);
         }
+    }
+
+    // ── Sprint "perpanjang-invoice-asli-cetak" — Invoice ASLI + maturity ──
+
+    public function test_renew_creates_a_real_paid_invoice_and_matures_sales_commission_without_new_logic(): void
+    {
+        $user = $this->actingUser(); // admin, NOT a Sales referrer -> no Titip commission
+        $package = $this->package(3000, 'Paket', 99000);
+
+        $officialReferrer = Referrer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'type' => ReferrerType::Sales, 'is_active' => true,
+        ]);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'reseller_id' => null,
+            'ppp_package_id' => $package->id,
+            'referred_by_referrer_id' => $officialReferrer->id,
+        ]);
+        // v0.9.4 template row: recurring scheme, Pending, no invoice yet.
+        $template = CommissionLedger::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'referrer_id' => $officialReferrer->id,
+            'customer_id' => $customer->id,
+            'scheme' => CommissionScheme::Recurring->value,
+            'status' => CommissionStatus::Pending,
+            'amount' => null,
+            'invoice_id' => null,
+        ]);
+
+        $result = $this->service->renew($user, $customer, null);
+
+        // Invoice created + paid.
+        $this->assertSame(1, $result['invoices_created']);
+        $this->assertSame(1, $result['invoices_paid']);
+        $this->assertCount(1, $result['invoice_numbers']);
+        $invoice = Invoice::withoutGlobalScopes()->where('customer_id', $customer->id)->sole();
+        $this->assertSame(InvoiceStatus::Paid, $invoice->status);
+        $this->assertSame('99000.00', $invoice->subtotal);
+        $this->assertSame('0.00', $invoice->tax_total); // tax_billable = false (default)
+        $this->assertSame('99000.00', $invoice->grand_total);
+        $this->assertNotNull($invoice->paid_at);
+
+        // Hidden renewal subscription — Cancelled (invisible to GenerateDueInvoices).
+        $sub = Subscription::withoutGlobalScopes()->where('customer_id', $customer->id)->sole();
+        $this->assertSame(SubscriptionStatus::Cancelled, $sub->status);
+
+        // Komisi Penjualan matured — as a SIDE EFFECT of markPaid(), zero new logic.
+        $this->assertSame(1, $result['sales_commission_matured']);
+        $template->refresh();
+        $this->assertSame(CommissionStatus::Eligible, $template->status);
+        $this->assertSame('5000.00', $template->amount); // CommissionRate.recurring_amount
+        $this->assertSame($invoice->id, $template->invoice_id);
+    }
+
+    public function test_renew_reuses_an_existing_unpaid_invoice_for_the_period_instead_of_creating_a_second(): void
+    {
+        $user = $this->actingUser();
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'reseller_id' => null,
+            'ppp_package_id' => $this->package(3000, 'Paket', 80000)->id,
+        ]);
+
+        // Pre-existing Draft invoice for THIS month via the hidden renewal
+        // subscription (simulating a manual admin draft / another path).
+        $renewalInvoice = app(RenewalInvoiceService::class);
+        $ref = new \ReflectionMethod($renewalInvoice, 'renewalSubscriptionFor');
+        $sub = $ref->invoke($renewalInvoice, $customer);
+        $start = now()->startOfMonth();
+        $preExisting = app(InvoiceService::class)->generateForPeriod(
+            $sub, $start->copy(), $start->copy()->endOfMonth(), $start->copy(),
+            overrideAmount: 80000.0, overrideDescription: 'Draft manual', applyTax: false,
+        );
+        $this->assertSame(InvoiceStatus::Draft, $preExisting->status);
+
+        $result = $this->service->renew($user, $customer, null);
+
+        // No second invoice — the existing one was reused and paid.
+        $this->assertSame(1, Invoice::withoutGlobalScopes()->where('customer_id', $customer->id)->count());
+        $this->assertSame(0, $result['invoices_created']);
+        $this->assertSame(1, $result['invoices_paid']);
+        $this->assertSame(InvoiceStatus::Paid, $preExisting->fresh()->status);
+    }
+
+    public function test_renew_with_tax_billable_customer_runs_the_tax_engine_dpp_plus_ppn(): void
+    {
+        $user = $this->actingUser();
+        $package = $this->package(3000, 'Paket', 100000);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'reseller_id' => null,
+            'ppp_package_id' => $package->id,
+            'tax_billable' => true,
+        ]);
+
+        // Configure a real PPN component + direct-retail (customer-borne) policy.
+        $component = TaxComponent::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'code' => 'PPN', 'name' => 'PPN', 'rate' => 11,
+            'type' => TaxComponentType::Percentage,
+            'is_active' => true, 'effective_from' => now()->subYear()->toDateString(), 'effective_to' => null,
+        ]);
+        ResellerTaxPolicy::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'reseller_id' => null, // direct-retail
+            'tax_component_id' => $component->id,
+            'burden' => TaxBurden::CustomerBorne->value,
+            'is_active' => true, 'effective_from' => now()->subYear()->toDateString(), 'effective_to' => null,
+        ]);
+
+        $this->service->renew($user, $customer, null);
+
+        $invoice = Invoice::withoutGlobalScopes()->where('customer_id', $customer->id)->sole();
+        $this->assertSame('100000.00', $invoice->subtotal);      // sell_price = DPP
+        $this->assertSame('11000.00', $invoice->tax_total);       // PPN 11% on top
+        $this->assertSame('111000.00', $invoice->grand_total);
     }
 }

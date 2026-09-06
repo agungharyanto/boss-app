@@ -1,4 +1,5 @@
 @php
+    use App\Enums\CommissionScheme;
     use App\Enums\CommissionStatus;
     use App\Enums\TitipDepositStatus;
 
@@ -19,44 +20,52 @@
         <h1 class="text-2xl font-semibold text-gray-800">{{ __('Fee Komisi') }}</h1>
     </div>
     <p class="text-sm text-gray-500 mb-6">
-        {{ __('Pembayaran cash "titip" yang dicatat lewat aksi Perpanjang (terverifikasi OTP WhatsApp). Referrer memegang uang PENUH dari pelanggan lalu menyetorkannya ke admin; komisi dibayar balik terpisah. Centang transaksi yang uangnya benar-benar sudah disetor, lalu "Tandai Sudah Setor (Terpilih)". Perpanjang layanan pelanggan secara manual di MixRadius.') }}
+        {{ __('Semua komisi Referrer di satu tempat — Titip (cash pelanggan yang dipegang Referrer, dicatat lewat Perpanjang) dan Bulanan (Per Bulan / X-Kali, matang otomatis tiap invoice pelanggan lunas). Gunakan filter "Jenis Komisi" untuk memisahkan tampilan. Kolom "Uang Diterima" & "Setoran" hanya relevan untuk Titip.') }}
     </p>
 
     @if ($flash)
         <p class="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2">{{ $flash }}</p>
     @endif
+    @error('monthlyPay') <p class="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{{ $message }}</p> @enderror
 
     {{-- ---------- Kartu ringkasan ---------- --}}
     <p class="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2 mb-3">
-        {{ __('2 kartu di bawah melacak 2 arus uang yang BERBEDA dan SALING TIDAK MEMPENGARUHI — menandai sebuah transaksi "Sudah Setor" tidak mengubah angka "Total Komisi Harus Dibayar", karena itu bukan hal yang sama.') }}
+        {{ __('Komisi & Setoran adalah 2 arus uang BERBEDA: "Setoran Belum Masuk" = cash pelanggan yang masih dipegang Referrer (Referrer → perusahaan); "Harus Dibayar" = komisi yang perusahaan bayar balik ke Referrer. Menandai "Sudah Setor" tidak mengubah angka "Harus Dibayar".') }}
     </p>
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div class="p-4 bg-white border border-gray-200 rounded-md">
-            <p class="text-xs text-gray-500 uppercase">{{ __('Total Komisi Harus Dibayar') }}</p>
-            <p class="mt-1 text-2xl font-semibold text-blue-700">{{ $rupiah($totalKomisiHarusDibayar) }}</p>
-            <p class="text-xs text-gray-400 mt-1">
-                {{ __('Arah: perusahaan → Referrer. Uang komisi yang harus dibayar BALIK ke Referrer (status "Layak Dibayar"). Belum ada fitur payout — angka ini TIDAK berubah oleh status Setoran di kartu sebelah.') }}
-            </p>
+            <p class="text-xs text-gray-500 uppercase">{{ __('Komisi Titip Harus Dibayar') }}</p>
+            <p class="mt-1 text-xl font-semibold text-blue-700">{{ $rupiah($totalTitipHarusDibayar) }}</p>
+            <p class="text-xs text-gray-400 mt-1">{{ __('Status "Layak Dibayar", skema Titip.') }}</p>
         </div>
         <div class="p-4 bg-white border border-gray-200 rounded-md">
-            <p class="text-xs text-gray-500 uppercase">{{ __('Total Setoran Belum Masuk') }}</p>
-            <p class="mt-1 text-2xl font-semibold text-orange-700">{{ $rupiah($totalSetoranBelumMasuk) }}</p>
-            <p class="text-xs text-gray-400 mt-1">
-                {{ __('Arah: Referrer → perusahaan. Uang CASH pelanggan yang masih dipegang Referrer, belum disetor. Independen dari kartu Komisi di atas.') }}
-            </p>
+            <p class="text-xs text-gray-500 uppercase">{{ __('Setoran Titip Belum Masuk') }}</p>
+            <p class="mt-1 text-xl font-semibold text-orange-700">{{ $rupiah($totalSetoranBelumMasuk) }}</p>
+            <p class="text-xs text-gray-400 mt-1">{{ __('Cash pelanggan masih dipegang Referrer.') }}</p>
+        </div>
+        <div class="p-4 bg-white border border-gray-200 rounded-md">
+            <p class="text-xs text-gray-500 uppercase">{{ __('Komisi Bulanan Harus Dibayar') }}</p>
+            <p class="mt-1 text-xl font-semibold text-indigo-700">{{ $rupiah($totalBulananHarusDibayar) }}</p>
+            <p class="text-xs text-gray-400 mt-1">{{ __('Per Bulan / X-Kali, status "Layak Dibayar".') }}</p>
+        </div>
+        <div class="p-4 bg-white border border-gray-200 rounded-md">
+            <p class="text-xs text-gray-500 uppercase">{{ __('Total Komisi Harus Dibayar') }}</p>
+            <p class="mt-1 text-xl font-semibold text-gray-800">{{ $rupiah($totalGabungan) }}</p>
+            <p class="text-xs text-gray-400 mt-1">{{ __('Titip + Bulanan.') }}</p>
         </div>
     </div>
 
-    <div class="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+    <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 mb-4">
         <input
             type="text" wire:key="fk-search" wire:model.live.debounce.300ms="search"
             placeholder="{{ __('Cari nama pelanggan / referrer...') }}"
-            class="flex-1 rounded-md border-gray-300 shadow-sm"
+            class="flex-1 min-w-[12rem] rounded-md border-gray-300 shadow-sm"
         >
-        {{-- wire:key wajib: dua <select> berstruktur nyaris identik & tanpa
-             key gampang tertukar identitasnya saat Livewire morph DOM —
-             itu penyebab filter "status komisi" tampak tidak bekerja
-             padahal query-nya benar. --}}
+        <select wire:key="fk-scheme-filter" wire:model.live="schemeFilter" class="rounded-md border-gray-300 shadow-sm">
+            <option value="">{{ __('Semua jenis komisi') }}</option>
+            <option value="titip">{{ __('Titip') }}</option>
+            <option value="bulanan">{{ __('Bulanan (Per Bulan / X-Kali)') }}</option>
+        </select>
         <select wire:key="fk-status-filter" wire:model.live="statusFilter" class="rounded-md border-gray-300 shadow-sm">
             <option value="">{{ __('Semua status komisi') }}</option>
             @foreach ($statuses as $status)
@@ -95,7 +104,7 @@
                             <input type="checkbox"
                                 wire:click="toggleGroupSelection({{ $group['referrer']->id }})"
                                 @checked($group['all_belum_setor_selected'])
-                                title="{{ __('Pilih semua transaksi belum setor di grup ini') }}"
+                                title="{{ __('Pilih semua transaksi Titip belum setor di grup ini') }}"
                                 class="rounded border-gray-300">
                         @endif
                         <button type="button" x-on:click="open = !open" class="flex items-center gap-2 text-left">
@@ -109,8 +118,8 @@
                         </button>
                     </div>
 
-                    <div class="flex flex-wrap items-center gap-4 text-sm">
-                        <span class="text-gray-500">{{ $group['tx_count'] }} {{ __('transaksi') }}</span>
+                    <div class="flex flex-wrap items-center gap-3 text-sm">
+                        <span class="text-gray-500">{{ $group['tx_count'] }} {{ __('baris') }}</span>
                         <span>
                             <span class="text-gray-500">{{ __('Belum setor') }}:</span>
                             <span class="font-semibold text-orange-700">{{ $rupiah($group['total_belum_setor']) }}</span>
@@ -119,7 +128,15 @@
                             <button type="button"
                                 wire:click="openPayReferrerModal({{ $group['referrer']->id }})"
                                 class="px-3 py-1.5 text-xs font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 whitespace-nowrap">
-                                {{ __('Bayar Semua yang Bisa Dibayar') }} ({{ $group['payable_count'] }})
+                                {{ __('Bayar Titip yang Bisa Dibayar') }} ({{ $group['payable_count'] }})
+                            </button>
+                        @endif
+                        @if ($canManage && $group['monthly_payable_count'] > 0 && $group['referrer'])
+                            <button type="button"
+                                wire:click="payMonthlyReferrer({{ $group['referrer']->id }})"
+                                wire:confirm="{{ __('Bayar semua komisi bulanan yang jendelanya terbuka untuk Referrer ini?') }}"
+                                class="px-3 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 whitespace-nowrap">
+                                {{ __('Bayar Bulanan yang Bisa Dibayar') }} ({{ $group['monthly_payable_count'] }})
                             </button>
                         @endif
                     </div>
@@ -130,14 +147,14 @@
                         <thead class="bg-gray-50">
                             <tr>
                                 <th class="px-4 py-2 w-8"></th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Jenis') }}</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pelanggan') }}</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Periode') }}</th>
+                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Periode / Invoice') }}</th>
                                 <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">{{ __('Uang Diterima') }}</th>
                                 <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">{{ __('Komisi') }}</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status Komisi') }}</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Setoran') }}</th>
                                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Pembayaran Komisi') }}</th>
-                                <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Dicatat') }}</th>
                                 @if ($canManage)
                                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Aksi') }}</th>
                                 @endif
@@ -147,21 +164,36 @@
                             @foreach ($group['rows'] as $entry)
                                 @php
                                     [$badgeClass, $badgeLabel] = $statusBadge($entry->status);
+                                    $isTitipRow = $isTitip($entry);
                                     $sudahSetor = $entry->deposit_status === TitipDepositStatus::SudahSetor;
-                                    $selectable = $entry->deposit_status === TitipDepositStatus::BelumSetor;
-                                    $payableRow = $isPayable($entry);
+                                    $selectable = $isTitipRow && $entry->deposit_status === TitipDepositStatus::BelumSetor;
+                                    $titipPayableRow = $isPayable($entry);
+                                    $monthlyPayableRow = $isMonthlyPayableNow($entry);
                                 @endphp
-                                <tr wire:key="titip-{{ $entry->id }}">
+                                <tr wire:key="fk-{{ $entry->id }}">
                                     <td class="px-4 py-2">
                                         @if ($canManage && $selectable)
                                             <input type="checkbox" value="{{ $entry->id }}" wire:model.live="selected"
                                                 class="rounded border-gray-300">
                                         @endif
                                     </td>
+                                    <td class="px-4 py-2">
+                                        <span @class([
+                                            'inline-block px-2 py-0.5 text-xs font-medium rounded',
+                                            'bg-blue-50 text-blue-700' => $isTitipRow,
+                                            'bg-indigo-50 text-indigo-700' => ! $isTitipRow,
+                                        ])>{{ $entry->scheme?->label() ?? '—' }}</span>
+                                    </td>
                                     <td class="px-4 py-2 text-gray-800">{{ $entry->customer?->name ?? '—' }}</td>
-                                    <td class="px-4 py-2 text-gray-600">{{ $entry->payment_period?->translatedFormat('F Y') ?? '—' }}</td>
+                                    <td class="px-4 py-2 text-gray-600">
+                                        @if ($isTitipRow)
+                                            {{ $entry->payment_period?->translatedFormat('F Y') ?? '—' }}
+                                        @else
+                                            <span class="font-mono text-xs">{{ $entry->invoice?->invoice_number ?? '—' }}</span>
+                                        @endif
+                                    </td>
                                     <td class="px-4 py-2 text-right text-gray-800">
-                                        {{ $entry->gross_amount !== null ? $rupiah($entry->gross_amount) : '—' }}
+                                        {{ $isTitipRow && $entry->gross_amount !== null ? $rupiah($entry->gross_amount) : '—' }}
                                     </td>
                                     <td class="px-4 py-2 text-right text-gray-600">
                                         {{ $entry->amount !== null ? $rupiah($entry->amount) : '—' }}
@@ -170,18 +202,22 @@
                                         <span class="inline-block px-2 py-0.5 text-xs font-medium rounded {{ $badgeClass }}">{{ $badgeLabel }}</span>
                                     </td>
                                     <td class="px-4 py-2">
-                                        <span class="inline-block px-2 py-0.5 text-xs font-medium rounded {{ $sudahSetor ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800' }}">
-                                            {{ $sudahSetor ? __('Sudah Setor') : __('Belum Setor') }}
-                                        </span>
-                                        @if ($sudahSetor && $entry->deposited_at)
-                                            <span class="block text-xs text-gray-400">
-                                                {{ $entry->deposited_at->format('d/m/Y') }}
-                                                @if ($entry->depositedBy) · {{ $entry->depositedBy->name }} @endif
+                                        @if ($isTitipRow)
+                                            <span class="inline-block px-2 py-0.5 text-xs font-medium rounded {{ $sudahSetor ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800' }}">
+                                                {{ $sudahSetor ? __('Sudah Setor') : __('Belum Setor') }}
                                             </span>
+                                            @if ($sudahSetor && $entry->deposited_at)
+                                                <span class="block text-xs text-gray-400">
+                                                    {{ $entry->deposited_at->format('d/m/Y') }}
+                                                    @if ($entry->depositedBy) · {{ $entry->depositedBy->name }} @endif
+                                                </span>
+                                            @endif
+                                        @else
+                                            <span class="text-xs text-gray-400">—</span>
                                         @endif
                                     </td>
                                     <td class="px-4 py-2">
-                                        @if ($entry->status === \App\Enums\CommissionStatus::Paid)
+                                        @if ($entry->status === CommissionStatus::Paid)
                                             <span class="inline-block px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800">{{ __('Dibayar') }}</span>
                                             @if ($entry->paid_at)
                                                 <span class="block text-xs text-gray-400">
@@ -196,15 +232,23 @@
                                             <span class="text-xs text-gray-400">—</span>
                                         @endif
                                     </td>
-                                    <td class="px-4 py-2 text-gray-500">{{ $entry->created_at->format('d/m/Y H:i') }}</td>
                                     @if ($canManage)
-                                        <td class="px-4 py-2">
-                                            @if ($payableRow)
+                                        <td class="px-4 py-2 whitespace-nowrap">
+                                            @if ($titipPayableRow)
                                                 <button type="button"
                                                     wire:click="openPayRowModal({{ $entry->id }})"
-                                                    class="px-2 py-1 text-xs font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 whitespace-nowrap">
-                                                    {{ __('Bayar Komisi Sekarang') }}
+                                                    class="px-2 py-1 text-xs font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                                                    {{ __('Bayar Komisi') }}
                                                 </button>
+                                            @elseif ($monthlyPayableRow)
+                                                <button type="button"
+                                                    wire:click="payMonthlyRow({{ $entry->id }})"
+                                                    wire:confirm="{{ __('Tandai komisi bulanan ini sebagai dibayar?') }}"
+                                                    class="px-2 py-1 text-xs font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
+                                                    {{ __('Bayar Komisi') }}
+                                                </button>
+                                            @elseif ($entry->scheme !== CommissionScheme::Titip && $entry->status === CommissionStatus::Eligible)
+                                                <span class="text-xs text-gray-400" title="{{ __('Jendela payout paket ini sedang tertutup — atur di Rate Komisi.') }}">{{ __('Jendela tertutup') }}</span>
                                             @endif
                                         </td>
                                     @endif
@@ -221,13 +265,13 @@
         @endforelse
     </div>
 
-    {{-- ---------- Modal "Bayar Komisi Sekarang" (per baris ATAU per grup Referrer) ---------- --}}
+    {{-- ---------- Modal "Bayar Komisi Sekarang" (Titip — per baris ATAU per grup Referrer) ---------- --}}
     @if ($payingLedgerId !== null || $payingReferrerId !== null)
         <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closePayModal">
             <div class="bg-white rounded-md shadow-lg w-full max-w-md p-6">
-                <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ __('Bayar Komisi Sekarang') }}</h2>
+                <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ __('Bayar Komisi Titip') }}</h2>
                 <p class="text-sm text-gray-500 mb-4">
-                    {{ __('Unggah 1 foto bukti bayar (transfer/cash) sebelum menandai komisi ini sebagai dibayar. Aksi ini instan — tidak ada jendela waktu, tapi hanya berlaku untuk komisi Titip yang statusnya sudah "Layak Dibayar" dan setorannya sudah "Sudah Setor".') }}
+                    {{ __('Unggah 1 foto bukti bayar (transfer/cash) sebelum menandai komisi ini sebagai dibayar. Aksi ini instan — hanya berlaku untuk komisi Titip yang statusnya "Layak Dibayar" dan setorannya sudah "Sudah Setor".') }}
                 </p>
 
                 <label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Bukti Bayar') }}</label>

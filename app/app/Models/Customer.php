@@ -39,6 +39,11 @@ class Customer extends Model
         // dari form, tetap fillable supaya jalur lama tidak error.
         'package',
         'ppp_package_id',
+        // Sprint "perpanjang-invoice-asli-cetak" — checklist per-pelanggan:
+        // true = PPN ditagihkan (harga paket dianggap DPP, PPN di atasnya);
+        // false (default) = PPN tidak ditagihkan, Invoice lewat "Perpanjang"
+        // di-set tax_total=0 tapi cetakan tetap tampilkan baris "PPN (0%)".
+        'tax_billable',
     ];
 
     protected function casts(): array
@@ -50,6 +55,7 @@ class Customer extends Model
             'latitude' => 'decimal:7',
             'longitude' => 'decimal:7',
             'nik' => 'encrypted',
+            'tax_billable' => 'boolean',
         ];
     }
 

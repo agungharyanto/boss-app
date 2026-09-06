@@ -50,6 +50,16 @@
                             <span class="px-2 py-0.5 rounded-full text-xs {{ $badgeClass }}">{{ $invoice->status->label() }}</span>
                         </td>
                         <td class="px-4 py-2 text-sm text-right space-x-2">
+                            <span x-data="{ open: false }" class="relative inline-block">
+                                <button type="button" @click="open = !open" @click.outside="open = false" class="text-gray-600 hover:underline">
+                                    {{ __('Cetak') }} &#9662;
+                                </button>
+                                <div x-show="open" x-cloak class="absolute right-0 z-10 mt-1 w-44 rounded-md border border-gray-200 bg-white py-1 text-left shadow-lg">
+                                    <a href="{{ route('web.invoices.print', $invoice) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Standar (A4)') }}</a>
+                                    <a href="{{ route('web.invoices.print', ['invoice' => $invoice, 'format' => 'thermal', 'width' => '80']) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Thermal 80mm') }}</a>
+                                    <a href="{{ route('web.invoices.print', ['invoice' => $invoice, 'format' => 'thermal', 'width' => '58']) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Thermal 58mm') }}</a>
+                                </div>
+                            </span>
                             @if ($canManage)
                                 @if ($invoice->status->canTransitionTo(\App\Enums\InvoiceStatus::Pending))
                                     <button wire:click="markPending({{ $invoice->id }})" class="text-primary hover:underline">{{ __('Issue') }}</button>

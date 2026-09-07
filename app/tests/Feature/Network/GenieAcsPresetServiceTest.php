@@ -177,6 +177,10 @@ class GenieAcsPresetServiceTest extends TestCase
         $this->assertStringContainsString('isHuawei', $script);
         $this->assertStringContainsString('isCMCC', $script);
         $this->assertStringContainsString('isZTEGeneric', $script);
+        // Cabang CT-COM (data model dominan fleet ini) + VLAN level-WCD.
+        $this->assertStringContainsString('isCTCom', $script);
+        $this->assertStringContainsString('X_CT-COM_WANGponLinkConfig.VLANIDMark', $script);
+        $this->assertStringContainsString('ctcFreeWcd', $script);
         // WAN2 guard v2 — cek isi (bridge di posisi mana pun) + SN allowlist in-script.
         $this->assertStringContainsString('bridgeWithTargetVlanExists', $script);
         $this->assertStringContainsString('wan2Allowlist', $script);

@@ -2251,6 +2251,44 @@ directive → EOF error "expecting endif"; jangan tulis `@`-directive di komenta
 `UnboundGenieacsDeviceServiceTest` (8), `UnboundGenieacsDeviceControllerTest` (8), `CpeDeviceIndexLivewireTest`
 (+2). Nol migration, nol permission baru (reuse `cpe_devices.*`).
 
+**Cabang CT-COM di `default-wan.js` (2026-09-07) — data model DOMINAN fleet, bukan kasus pinggiran.**
+Test provisioning end-to-end device pertama (`CMDCA21C01E7`, CMDC `H3-2S XPON`, fw `V1.1.20P1T4`) gagal:
+device match NOL dari 3 cabang vendor lama (Huawei/CMCC/ZTE-via-`X_ZTE-COM_`). Investigasi:
+**~372/415 device GenieACS pakai data model `X_CT-COM_*` (China Telecom / CTC unified)** — ZTE F663NV3a/
+M63X, Fiberhome GM220-S, CMDC H3-2S. Deteksi ZTE lama (`X_ZTE-COM_WANPONInterfaceConfig.RXPower`) juga
+salah untuk fleet ini (F663NV3a pakai `X_CT-COM_GponInterfaceConfig.RXPower`). Field CT-COM diverifikasi
+dari device template yang Agung konfig manual (WAN1 PPPoE VID 111, WAN2 bridge VID 172, multi-SSID),
+`refreshObject` penuh:
+- **VLAN**: `WANConnectionDevice.{N}.X_CT-COM_WANGponLinkConfig.VLANIDMark` — LEVEL-WCD, bukan connection.
+  + `.Mode` (2=tagged) + `.Enable`.
+- **PPPoE user/pass**: field STANDAR `WANPPPConnection.1.Username`/`.Password` (BUKAN `X_CT-COM_IPoE*` —
+  itu untuk IPoE/DHCP WAN).
+- **ConnectionType**: routed-PPPoE = `"IP_Routed"` di `WANPPPConnection` (BUKAN `"PPPoE_Routed"`); bridge =
+  `"PPPoE_Bridged"`.
+- **ServiceList**: `WANPPPConnection.1.X_CT-COM_ServiceList` = `"INTERNET"` (TR069 WAN = `"TR069"`).
+- **LAN binding (SSID→WAN)**: `WANPPPConnection.1.X_CT-COM_LanInterface` = CSV full-path
+  (`...WLANConfiguration.1,...WLANConfiguration.5`), + `X_CT-COM_LanInterface-DHCPEnable` (true=LAN mode/
+  DHCP lokal, false=WAN mode/bridged).
+- **Slot WCD**: tiap WAN di `WANConnectionDevice` TERPISAH (bukan instance .2 di WCD.1 seperti H/C/Z).
+  Device auto-assign, TIDAK konsisten: H3-2S = WCD.1 spare + WCD.2 TR069; F663NV3a = WCD.1 TR069 tanpa
+  spare. Helper `ctcFreeWcd()` memindai WCD 1-8 cari slot tanpa `ConnectionType` di WANIP/WANPPPConnection.1.
+
+Implementasi: `isCTCom` (fallback terakhir, `X_CT-COM_UserInfo.UserName` ADA), cabang WAN1 (`ctcFreeWcd()`,
+`IP_Routed`+Username, VLAN level-WCD, SSID1+5 DHCP=true) + WAN2 (`PPPoE_Bridged`, VLAN level-WCD, SSID4+8
+DHCP=false), guard WAN2 diperlebar WCD 1-2→1-8 + cek VLAN CT-COM di level-WCD. `cpe_parameter_maps` sudah
+mencakup CT-COM (RX/TX/uptime `X_CT-COM_GponInterfaceConfig.*`) — tidak diubah. `GenieAcsPresetServiceTest`
++3 asersi (`isCTCom`, `X_CT-COM_WANGponLinkConfig.VLANIDMark`, `ctcFreeWcd`).
+
+**Guard idempoten CT-COM TERVERIFIKASI ke device asli `CMDCA21C01E7`** (2026-09-07): preset ter-scope ke SN
+itu, `wan1_vlan=111`/`wan2_vlan=172` (match device), `docker compose restart genieacs-cwmp`, 4+ Inform →
+cwmp log = **13 GetParameterNames + 5 GetParameterValues, NOL SetParameterValues/AddObject, NOL fault**;
+WAN tree device (WCD.1-4, VLAN 0/9/111/172, `testppoe`) **identik** sebelum/sesudah. WAN1 guard skip
+(`WCD.3.WANPPPConnection.1.Username="testppoe"`), WAN2 guard skip (`WCD.4` bridge + `VLANIDMark=172`).
+**PROVISIONING WAN BARU CT-COM BELUM diverifikasi** — butuh device CT-COM fresh (belum dikonfig); cabang
+provisioning ditandai eksplisit "BELUM DIVERIFIKASI" di komentar script. Setelah test, `RemoteWanConfig`
+di-revert `enabled=false` (preset dihapus, `wan2_serial_allowlist=CMDCA21C01E7` dipertahankan untuk
+re-enable cepat). `default-wan` provision tetap di GenieACS (harmless, tak direferensikan).
+
 ## Network Navigation Restructure & OLT Credential Registry (v0.8.1)
 
 **Built as a same-branch addendum to the still-open `v0.8.1-librenms-install`

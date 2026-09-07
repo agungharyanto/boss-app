@@ -32,15 +32,30 @@
 // tidak boleh menghentikan refresh SSID/Hosts/optik yang andal di
 // provision lain.
 //
+// DETEKSI DATA MODEL — 4 cabang, urutan penting:
+//   Huawei      : X_HW_SerialNumber ADA / manufacturer "Huawei ..."
+//   CMCC        : X_CMCC_UserInfo.ServiceName ADA
+//   ZTE generic : X_ZTE-COM_WANPONInterfaceConfig.RXPower ADA
+//   CT-COM      : X_CT-COM_UserInfo.UserName ADA (fallback TERAKHIR) —
+//     data model DOMINAN fleet ini (~372/415: ZTE F663NV3a/M63X,
+//     Fiberhome GM220-S, CMDC H3-2S). VLAN per-WAN di LEVEL-WCD
+//     (X_CT-COM_WANGponLinkConfig.VLANIDMark), tiap WAN di WCD terpisah
+//     (bukan instance ke-2 di WCD.1). Diverifikasi 2026-09-07 dari
+//     template CMDCA21C01E7 (di-konfig manual: WAN1 PPPoE VID 111 +
+//     WAN2 bridge VID 172 + multi-SSID). GUARD idempoten CT-COM SUDAH
+//     dites ke device asli; PROVISIONING WAN BARU CT-COM belum (butuh
+//     device fresh) — lihat komentar per-cabang.
+//
 // IDEMPOTEN — cek BERDASARKAN ISI, bukan posisi:
 //   WAN1: skip kalau SUDAH ada WANPPPConnection.*.1.Username terisi di
-//     perangkat (pelanggan existing tidak disentuh, hanya ONT baru/
-//     factory-reset).
+//     perangkat (WCD 1-8 di-sapu — pelanggan existing tidak disentuh,
+//     hanya ONT baru/factory-reset).
 //   WAN2: skip kalau SUDAH ada koneksi ber-ConnectionType "*Bridged*"
-//     dengan VLAN == wan2Vlan di POSISI MANA PUN (bukan cuma slot .2) +
-//     gate SN allowlist. Kalau lolos guard, bridge BARU dibuat di
-//     WANConnectionDevice.1 instance .2; binding SSID2 di-assert ulang
-//     tiap Inform hanya kalau device memang genuinely dapat WAN2.
+//     dengan VLAN == wan2Vlan di POSISI MANA PUN (WCD 1-8; VLAN dicek di
+//     field yang benar per data model — CT-COM di level-WCD) + gate SN
+//     allowlist. Kalau lolos guard, bridge BARU dibuat (H/C/Z:
+//     instance .2 di WCD.1; CT-COM: WCD kosong berikutnya). Binding SSID
+//     di-assert ulang tiap Inform hanya kalau device genuinely dapat WAN2.
 
 const enabled = args[0] === true || args[0] === "true" || args[0] === 1;
 if (enabled) {
@@ -69,7 +84,40 @@ if (enabled) {
   const zteRx = declare("InternetGatewayDevice.WANDevice.1.X_ZTE-COM_WANPONInterfaceConfig.RXPower", { value: 1 });
   const isZTEGeneric = !isCMCC && zteRx.size && zteRx.value[0] !== undefined;
 
+  // CT-COM (China Telecom / CTC unified data model) — data model DOMINAN di
+  // fleet ini (~372/415 device: ZTE F663NV3a/M63X, Fiberhome GM220-S, dan
+  // CMDC H3-2S). Diverifikasi 2026-09-07 dari device template
+  // CMDCA21C01E7 (di-konfig manual Agung: WAN1 PPPoE VID 111, WAN2 bridge
+  // VID 172, multi-SSID). Deteksi = X_CT-COM_UserInfo.UserName ADA. Ini
+  // fallback TERAKHIR — sebagian device Huawei juga expose X_CT-COM_*,
+  // jadi cuma dipakai kalau 3 deteksi di atas semua false.
+  const ctcUser = declare("InternetGatewayDevice.X_CT-COM_UserInfo.UserName", { value: 1 });
+  const isCTCom = !isHuawei && !isCMCC && !isZTEGeneric && ctcUser.size && ctcUser.value[0] !== undefined;
+
   const wanDevicePath = "InternetGatewayDevice.WANDevice.1";
+
+  // CT-COM: VLAN tiap WAN ada di X_CT-COM_WANGponLinkConfig LEVEL-WCD
+  // (`WANConnectionDevice.{N}.X_CT-COM_WANGponLinkConfig.VLANIDMark`),
+  // BUKAN di connection. Helper cari slot WCD kosong pertama (1..8) untuk
+  // provisioning WAN baru — model CT-COM menaruh tiap WAN di WCD terpisah
+  // (device auto-assign slot, tidak konsisten: H3-2S pakai WCD.1 spare +
+  // WCD.2 TR069; F663NV3a pakai WCD.1 TR069 tanpa spare). "Kosong" =
+  // tidak ada ConnectionType di WANIPConnection.1 MAUPUN WANPPPConnection.1.
+  // FUNGSI (bukan nilai) — dipanggil ulang di blok WAN1 & WAN2 supaya WAN2
+  // dapat slot BERIKUTNYA setelah WAN1 tercatat; kalau read belum
+  // ter-refresh dalam eksekusi yang sama, WAN2 skip Inform ini & konvergen
+  // di Inform berikutnya (sama pola guard idempoten lain).
+  function ctcFreeWcd() {
+    if (!isCTCom) return 0;
+    for (let wcd = 1; wcd <= 8; wcd++) {
+      const ip = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.WANIPConnection.1.ConnectionType`, { value: Date.now() });
+      const ppp = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.WANPPPConnection.1.ConnectionType`, { value: Date.now() });
+      const ipSet = ip.size && ip.value && ip.value[0];
+      const pppSet = ppp.size && ppp.value && ppp.value[0];
+      if (!ipSet && !pppSet) return wcd;
+    }
+    return 0;
+  }
 
   // ───────────────────────── WAN1: internet PPPoE ─────────────────────────
   // GUARD berbasis ISI, bukan posisi: skip TOTAL kalau device SUDAH punya
@@ -164,6 +212,47 @@ if (enabled) {
           value: "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1,InternetGatewayDevice.LANDevice.1.WLANConfiguration.1",
         });
         commit();
+      } else if (isCTCom && ctcFreeWcd() > 0) {
+        // CT-COM WAN1 = routed PPPoE. Diverifikasi dari template
+        // CMDCA21C01E7 (`2_INTERNET_R_VID_111`):
+        //  - WANPPPConnection.1 di WCD kosong (bukan instance .2 di WCD.1)
+        //  - Username/Password = field STANDAR (bukan X_CT-COM_IPoE*)
+        //  - ConnectionType = "IP_Routed" (BUKAN "PPPoE_Routed" — device
+        //    tetap routed-PPPoE selama Username terisi)
+        //  - VLAN di X_CT-COM_WANGponLinkConfig.VLANIDMark LEVEL-WCD + Mode=2
+        //  - X_CT-COM_ServiceList = "INTERNET"
+        //  - X_CT-COM_LanInterface = CSV path SSID (default SSID1+SSID5 =
+        //    wifi rumah), X_CT-COM_LanInterface-DHCPEnable = true (LAN mode)
+        // BELUM DIVERIFIKASI ke device CT-COM fresh — hanya guard idempoten
+        // yang sudah dites (2026-09-07). Butuh device kosong utk uji
+        // provisioning nyata.
+        const w1Wcd = ctcFreeWcd();
+        const wcdPath = `${wanDevicePath}.WANConnectionDevice.${w1Wcd}`;
+        const wan1PppPath = `${wcdPath}.WANPPPConnection`;
+        declare(`${wan1PppPath}.*`, null, { path: 1 });
+        commit();
+        const basePath = `${wan1PppPath}.1`;
+        declare(`${basePath}.Username`, null, { value: wan1Username });
+        declare(`${basePath}.Password`, null, { value: wan1Password });
+        commit();
+        declare(`${basePath}.Enable`, null, { value: true });
+        declare(`${basePath}.ConnectionType`, null, { value: "IP_Routed" });
+        declare(`${basePath}.X_CT-COM_ServiceList`, null, { value: "INTERNET" });
+        commit();
+        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Enable`, null, { value: true });
+        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Mode`, null, { value: 2 });
+        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, null, { value: wan1Vlan });
+        commit();
+        const nat = declare(`${basePath}.NATEnabled`, { value: Date.now() });
+        if (!nat.size || nat.value[0] != true) {
+          declare(`${basePath}.NATEnabled`, null, { value: true });
+          commit();
+        }
+        declare(`${basePath}.X_CT-COM_LanInterface`, null, {
+          value: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1,InternetGatewayDevice.LANDevice.1.WLANConfiguration.5",
+        });
+        declare(`${basePath}.X_CT-COM_LanInterface-DHCPEnable`, null, { value: true });
+        commit();
       }
     }
   }
@@ -192,9 +281,15 @@ if (enabled) {
     const deviceSerial = String((declare("DeviceID.SerialNumber", { value: 1 }).value || [""])[0] || "");
     const serialAllowed = wan2Allowlist.length === 0 || wan2Allowlist.indexOf(deviceSerial) !== -1;
 
+    // Field VLAN per data model. CT-COM: VLAN ada di
+    // X_CT-COM_WANGponLinkConfig LEVEL-WCD, bukan di connection — jadi
+    // dicek terpisah di dalam loop, `vlanFieldFor` di sini hanya untuk
+    // H/C/Z (VLAN di level connection).
     const vlanFieldFor = isHuawei ? "X_HW_VLAN" : (isCMCC ? "X_CMCC_VLANIDMark" : "X_ZTE-COM_VLANID");
     let bridgeWithTargetVlanExists = false;
-    for (let wcd = 1; wcd <= 2 && !bridgeWithTargetVlanExists; wcd++) {
+    // WCD scan diperlebar 1-2 → 1-8: model CT-COM menaruh bridge di WCD
+    // terpisah (template CMDCA21C01E7: bridge di WCD.4; F663NV3a: WCD.4).
+    for (let wcd = 1; wcd <= 8 && !bridgeWithTargetVlanExists; wcd++) {
       for (let ci = 0; ci < 2 && !bridgeWithTargetVlanExists; ci++) {
         const connType = ci === 0 ? "WANIPConnection" : "WANPPPConnection";
         for (let inst = 1; inst <= 3 && !bridgeWithTargetVlanExists; inst++) {
@@ -202,6 +297,13 @@ if (enabled) {
           const ct = declare(`${scanBase}.ConnectionType`, { value: Date.now() });
           if (!(ct.size && ct.value && ct.value[0])) continue;
           if (String(ct.value[0]).toLowerCase().indexOf("bridg") === -1) continue;
+          if (isCTCom) {
+            const ctcVlan = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, { value: Date.now() });
+            if (ctcVlan.size && ctcVlan.value && parseInt(ctcVlan.value[0], 10) === wan2Vlan) {
+              bridgeWithTargetVlanExists = true;
+            }
+            continue;
+          }
           const scanVlan = declare(`${scanBase}.${vlanFieldFor}`, { value: Date.now() });
           if (scanVlan.size && scanVlan.value && parseInt(scanVlan.value[0], 10) === wan2Vlan) {
             bridgeWithTargetVlanExists = true;
@@ -281,6 +383,46 @@ if (enabled) {
       const wan2Lan = declare(`${wan1PppPath}.2.X_ZTE-COM_LanInterface`, { value: Date.now() });
       if (!wan2Lan.size || wan2Lan.value[0] !== wan2LanTarget) {
         declare(`${wan1PppPath}.2.X_ZTE-COM_LanInterface`, null, { value: wan2LanTarget });
+        commit();
+      }
+    } else if (shouldProvisionWan2 && isCTCom && ctcFreeWcd() > 0) {
+      // CT-COM WAN2 = bridge. Diverifikasi dari template CMDCA21C01E7
+      // (`3_INTERNET_B_VID_172`):
+      //  - WANPPPConnection.1 di WCD kosong TERPISAH (ctcFreeWcd sudah
+      //    memperhitungkan WAN1 yang mungkin baru dibuat di atas — helper
+      //    memindai ulang tiap eksekusi, jadi WAN2 dapat slot berikutnya
+      //    pada Inform setelah WAN1 tercatat)
+      //  - ConnectionType = "PPPoE_Bridged", Username kosong, NAT OFF
+      //  - VLAN di X_CT-COM_WANGponLinkConfig.VLANIDMark LEVEL-WCD + Mode=2
+      //  - X_CT-COM_ServiceList = "INTERNET"
+      //  - X_CT-COM_LanInterface = SSID4+SSID8 (default "TOKEN WIFI" /
+      //    hotspot bridged), X_CT-COM_LanInterface-DHCPEnable = false (WAN mode)
+      // BELUM DIVERIFIKASI ke device fresh — hanya guard idempoten yang dites.
+      const w2Wcd = ctcFreeWcd();
+      const wcdPath = `${wanDevicePath}.WANConnectionDevice.${w2Wcd}`;
+      const wan2PppPath = `${wcdPath}.WANPPPConnection`;
+      const wan2Check = declare(`${wan2PppPath}.1.ConnectionType`, { value: Date.now() });
+      if (!(wan2Check.size && wan2Check.value[0])) {
+        declare(`${wan2PppPath}.*`, null, { path: 1 });
+        commit();
+        const base2Path = `${wan2PppPath}.1`;
+        declare(`${base2Path}.Enable`, null, { value: true });
+        declare(`${base2Path}.ConnectionType`, null, { value: "PPPoE_Bridged" });
+        declare(`${base2Path}.X_CT-COM_ServiceList`, null, { value: "INTERNET" });
+        commit();
+        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Enable`, null, { value: true });
+        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Mode`, null, { value: 2 });
+        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, null, { value: wan2Vlan });
+        commit();
+        const nat2 = declare(`${base2Path}.NATEnabled`, { value: Date.now() });
+        if (!nat2.size || nat2.value[0] != false) {
+          declare(`${base2Path}.NATEnabled`, null, { value: false });
+          commit();
+        }
+        declare(`${base2Path}.X_CT-COM_LanInterface`, null, {
+          value: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.4,InternetGatewayDevice.LANDevice.1.WLANConfiguration.8",
+        });
+        declare(`${base2Path}.X_CT-COM_LanInterface-DHCPEnable`, null, { value: false });
         commit();
       }
     }

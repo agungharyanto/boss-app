@@ -879,6 +879,18 @@ services:
       GENIEACS_MONGODB_CONNECTION_URL: mongodb://${MONGO_DB_USER}:${MONGO_DB_PASSWORD}@mongo/${MONGO_DB_NAME}?authSource=admin
       GENIEACS_CWMP_INTERFACE: "0.0.0.0"
       GENIEACS_CWMP_PORT: "7547"
+      # fix too_many_commits (2026-09-02, branch fix-genieacs-pppoe-provision,
+      # folded ke branch genieacs-auto-wan-configurable) — default `cwmp.
+      # maxCommitIterations` di GenieACS 1.2.16 = 32 (efektif ×2). Fleet ini
+      # punya banyak perangkat pohon-besar (M63X XPON / H3-2S XPON / M12X5G —
+      # WAN interface + host banyak) yang mentok limit ini SETIAP Inform di
+      # provision "default"/"default-optical"/"default-pppoe", menghasilkan
+      # fault `too_many_commits` berulang. 128 (efektif 256 — genieacs meng-x2
+      # internal) memberi pohon besar ruang selesai — TIDAK mengubah data yang
+      # dikumpulkan, hanya membiarkan sesi commit lebih banyak. Butuh
+      # `docker compose up -d genieacs-cwmp` (recreate). Lihat CLAUDE.md
+      # "GenieACS ... too_many_commits".
+      GENIEACS_MAX_COMMIT_ITERATIONS: "128"
       TZ: Asia/Jakarta
     volumes:
       # v0.8.1 fragment+reconcile — read-only, see CLAUDE.md's "Fragment+

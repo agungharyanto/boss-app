@@ -2122,6 +2122,76 @@ also no "look up WorkOrder by device serial number" endpoint —
 `index()` only filters by `status`. Both are real gaps to close as part of
 `v0.12.0`, not something to design/build yet.
 
+## GenieACS Auto-WAN Configurable + Sidebar "Remote" (branch `genieacs-auto-wan-configurable`, belum merge/tag)
+
+**Folding `fix-genieacs-pppoe-provision` (Opsi A, keputusan Agung 2026-09-07)** — branch itu selesai +
+tested + DITERAPKAN LIVE ke GenieACS sejak 2026-09-02 (provision `default-pppoe` + `default-optical`
+diperluas ADA di mongo, `genieacs-cwmp` di-recreate) tapi tidak pernah di-merge → `main` drift dari
+produksi (melanggar BOSS-001). 7 file inti (`CpeParameterResolverService` rework + 22 test,
+`docker/genieacs/presets/default-*.js`, `GENIEACS_MAX_COMMIT_ITERATIONS=128`, evaluasi VP) di-`git checkout
+origin/fix-genieacs-pppoe-provision -- <file>` apa adanya (BUKAN cherry-pick commit — branch basi, doc-nya
+usang, konflik). Dikonfirmasi cocok dengan state GenieACS live. Signature publik resolver kompatibel semua
+caller existing.
+
+**genieacs-nbi 1.2.16 PUNYA endpoint REST `/presets/<id>` + `/provisions/<id>` (GET/PUT/DELETE)** —
+dikonfirmasi live 2026-09-07 (create+delete preset probe `zzz-probe-delete-me` → HTTP 200). **Komentar di
+`docker/genieacs/presets/apply.sh` yang bilang "genieacs-nbi 1.2.16 has no REST endpoint for presets/
+provisions, so mongosh is the only way" KELIRU / usang** — jangan dipercaya. `apply.sh` tetap dipakai untuk
+provision statik (`default`/`default-optical`/`default-pppoe`) karena runbook itu sudah ada, tapi provision
+`default-wan` dikelola boss-app lewat REST.
+
+**Cache preset genieacs-cwmp — window ~5,5 menit** (dikonfirmasi: `db.cache` `_id: cwmp-local-cache-hash`,
+`expire - timestamp` = 330 detik; `MAX_CACHE_TTL`/`PRESETS_CACHE_DURATION` default 86400 itu untuk hal
+lain). Jadi EDIT preset/provision yang SUDAH ada (mis. `args` preset `default`) berlaku otomatis dalam ~5,5
+menit TANPA restart. Provision *baru* (dokumen yang belum pernah ada) mungkin masih butuh
+`docker compose restart genieacs-cwmp` sekali — catatan empiris apply.sh, belum di-retest untuk jalur NBI.
+
+**Auto-WAN Configurable (pendekatan b, keputusan Agung)**:
+- **`app/resources/genieacs/default-wan.js`** — provision KANONIK di repo (di-bind-mount ke boss-app via
+  `app/` bind mount, dibaca `resource_path('genieacs/default-wan.js')`). Adaptasi 2 script referensi rekan
+  Agung (`docs/genieacs-auto-wan-reference/auto_setup_wan_{pppoe,bridge}.js` — `targetVlan` 1000 /
+  `targetVlanWan2` 1200 HARDCODED). Digabung jadi 1 provision: blok WAN1 (internet PPPoE) + WAN2 (bridge
+  kedua), master switch `enabled`. **Deteksi vendor DIPERTAHANKAN PERSIS** — Huawei via
+  `DeviceInfo.X_HW_SerialNumber`, CMCC via `X_CMCC_UserInfo.ServiceName`, ZTE generic via
+  `X_ZTE-COM_WANPONInterfaceConfig.RXPower` (fallback, cek CMCC dulu). Guard idempoten dipertahankan: WAN1
+  skip kalau `WANPPPConnection.1.Username` sudah terisi (baca live via `declare {value: Date.now()}`),
+  WAN2 skip pembuatan kalau instance ke-2 sudah ada. **Satu-satunya provision di preset ini yang MENULIS
+  nilai ke perangkat** (`declare(path, null, {value})`) — provision lain read-only.
+- **`App\Services\Network\GenieAcsPresetService`** — `syncAutoWanConfig(RemoteWanConfig)`: `PUT
+  /provisions/default-wan` (script) + GET preset `default` → rebuild `configurations` (pertahankan 3
+  provision statik, buang `default-wan` lama, tambah dengan `args` segar kalau `enabled`) → PUT balik.
+  `weight`/`precondition` preset lama dipertahankan (default 0 / `"true"` kalau tak ada). `enabled=false`
+  → `default-wan` dikeluarkan total dari `configurations`. `inspectAutoWanState()` = baca balik state
+  efektif untuk UI. Semua `RuntimeException` pesan Indonesia → Job tangkap → `markSyncFailed()`.
+- **`remote_wan_configs`** (singleton id=1, platform-level, pola `payment_gateway_settings`). **GOTCHA**:
+  `firstOrCreate(['id'=>1])` tidak mengisi default kolom DB ke instance in-memory — `current()` `->refresh()`
+  kalau `wasRecentlyCreated`. `toProvisionArgs()` = kontrak posisional `[enabled, wan1_enabled, wan1_vlan,
+  wan1_pppoe_username, wan1_pppoe_password, wan2_enabled, wan2_vlan]` — `default-wan.js` baca `args[0..6]`.
+  `genieacs_sync_status` cast `MikrotikSyncStatus` (di-reuse — konsep "push sync status" generik, bukan
+  Mikrotik-spesifik).
+- **`SyncRemoteWanConfigToGenieAcsJob`** — async, `tries=3`, backoff 30s/2min/5min (pola persis
+  `PushCustomerIpPoolToMikrotikJob`). Dispatch oleh `RemoteWanConfigService::save()` SETELAH commit.
+- **`/remote-config`** (`App\Livewire\Network\RemoteConfigSettings`) — halaman "Konfig Remote", grup
+  sidebar "Remote". Poll conditional `wire:poll.5s` selama status Pending. `RemoteWanConfigPolicy`
+  view/manage → permission `remote_config.*` (tier-admin + `noc`, pola `monitoring.*`) — **wajib
+  `db:seed --class=RolesAndPermissionsSeeder` ulang** (sudah dilakukan; insiden berulang di file ini).
+  Migration sudah `migrate` di DB dev; rollback branch → `migrate:rollback --step=1`.
+- **Sidebar: "Perangkat CPE" (dulu route-parent + 1 child di cluster Network) → grup TOGGLE-MURNI
+  "Remote"** (`toggle_only`, tanpa key `route`, `sidebar-subgroup-remote`, pola PERSIS "Komisi"/"Profil
+  Paket"). Isi: Perangkat CPE, Cek Status Device, Konfig Remote. Grup tampil kalau bisa lihat salah satu
+  child; `noc` lihat "Konfig Remote" tapi tidak "Cek Status Device" (`cpe_devices.view` admin-only).
+
+**BELUM diterapkan ke GenieACS live — butuh go-ahead Agung + rollout bertahap**:
+- Investigasi read-only fleet (414 device di GenieACS): **0 device punya WAN2/bridge instance sekarang** →
+  mengaktifkan `wan2_enabled` = perubahan konfig ke ~400 ONT pelanggan hidup. WAN1: guard idempoten =
+  no-op untuk pelanggan yang sudah punya PPPoE username → hanya ONT baru/factory-reset yang dikonfigurasi
+  (use-case zero-touch provisioning yang aman).
+- Langkah deploy live (belum dijalankan): (1) `RemoteWanConfigService::save()` dengan `enabled=true`,
+  `wan1_enabled=true`, `wan2_enabled=false` → Job PUT `default-wan` + preset args ke genieacs-nbi;
+  (2) `docker compose restart genieacs-cwmp` (kemungkinan perlu untuk provision baru — verifikasi);
+  (3) uji terhadap 1-2 ONT test dulu (bukan fleet) sebelum percaya; (4) kalau WAN2 diinginkan, aktifkan
+  terpisah + uji per-device.
+
 ## Network Navigation Restructure & OLT Credential Registry (v0.8.1)
 
 **Built as a same-branch addendum to the still-open `v0.8.1-librenms-install`

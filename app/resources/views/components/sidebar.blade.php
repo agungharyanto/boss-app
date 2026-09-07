@@ -165,7 +165,7 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.remote-config.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*'),
             // v0.8.1 — nested one level deeper than a plain link: an item
             // with a 'children' key renders as its own expand/collapse
             // sub-group (own localStorage key, same pattern as the
@@ -196,18 +196,31 @@
                 auth()->user()->can('monitoring.view')
                     ? ['route' => 'web.monitoring.index', 'label' => __('Monitoring')]
                     : null,
-                auth()->user()->can('viewAny', \App\Models\CpeDevice::class)
+                // "Remote" — grup collapsible TOGGLE-MURNI (tanpa key
+                // 'route'): klik header HANYA expand/collapse. Pola persis
+                // "Profil Paket"/"Komisi". Isi: Perangkat CPE (+ Cek Status
+                // Device), Konfig Remote (GenieACS Auto-WAN). Grup tampil
+                // kalau user bisa lihat SALAH SATU child — tiap child tetap
+                // punya check sendiri (defense in depth).
+                (auth()->user()->can('viewAny', \App\Models\CpeDevice::class) || auth()->user()->can('remote_config.view'))
                     ? [
-                        'id' => 'cpe-devices',
-                        'route' => 'web.cpe-devices.index',
-                        'label' => __('Perangkat CPE'),
-                        // Admin-only (cpe_devices.view directly, not the
-                        // reseller carve-out CpeDevicePolicy::viewAny()
-                        // also allows) — exposes legacy-import/matching
-                        // internals not meant for reseller users.
-                        'children' => auth()->user()->can('cpe_devices.view')
-                            ? [['route' => 'web.cpe-devices.status-check', 'label' => __('Cek Status Device')]]
-                            : [],
+                        'id' => 'remote',
+                        'toggle_only' => true,
+                        'label' => __('Remote'),
+                        'children' => array_filter([
+                            auth()->user()->can('viewAny', \App\Models\CpeDevice::class)
+                                ? ['route' => 'web.cpe-devices.index', 'label' => __('Perangkat CPE')]
+                                : null,
+                            // Admin-only (cpe_devices.view langsung, bukan
+                            // carve-out reseller CpeDevicePolicy::viewAny())
+                            // — internal legacy-import/matching.
+                            auth()->user()->can('cpe_devices.view')
+                                ? ['route' => 'web.cpe-devices.status-check', 'label' => __('Cek Status Device')]
+                                : null,
+                            auth()->user()->can('remote_config.view')
+                                ? ['route' => 'web.remote-config.index', 'label' => __('Konfig Remote')]
+                                : null,
+                        ]),
                     ]
                     : null,
             ]),

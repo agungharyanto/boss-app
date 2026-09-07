@@ -43,6 +43,7 @@ use App\Livewire\Network\NetworkProfileGroupIndex;
 use App\Livewire\Network\OdpRouteCheck;
 use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\PppPackageIndex;
+use App\Livewire\Network\RemoteConfigSettings;
 use App\Livewire\Network\VpnScriptGenerator;
 use App\Livewire\Referrers\ReferrerIndex;
 use App\Livewire\Resellers\PackagePricingIndex;
@@ -161,6 +162,10 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
         Route::get('api/internal/olt-devices/datatable', OltDeviceDatatableController::class)->name('olt-devices.internal.datatable');
         Route::get('/cpe-devices', CpeDeviceIndex::class)->name('cpe-devices.index');
         Route::get('/cpe-devices/status-check', CpeDeviceStatusCheck::class)->name('cpe-devices.status-check');
+
+        // "Konfig Remote" — GenieACS Auto-WAN configurable (grup sidebar
+        // "Remote"). Singleton settings page, permission remote_config.*.
+        Route::get('/remote-config', RemoteConfigSettings::class)->name('remote-config.index');
 
         // Standalone detail page (2026-08-16, replaces the DataTables
         // child-row expand interaction — see CpeDeviceDetailController's

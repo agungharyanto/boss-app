@@ -3,7 +3,52 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## v0.9.0 — Commission: Approval + Clawback (branch `v0.9.0-commission-approval-clawback`, belum merge/tag)
+## GenieACS Auto-WAN Configurable + Restrukturisasi Sidebar "Remote" (branch `genieacs-auto-wan-configurable`, belum merge/tag)
+
+Sesi GenieACS/OLT/ONT. **Langkah 0 — folding `fix-genieacs-pppoe-provision` (Opsi A, keputusan Agung):**
+branch itu sudah selesai + tested + DITERAPKAN LIVE ke GenieACS sejak 2026-09-02 (4 hari) tapi tidak
+pernah di-merge → `main` drift dari produksi. 7 file inti (resolver RX/TX/MAC/PPPoE multi-vendor +
+`docker/genieacs/presets/default-*.js` + `GENIEACS_MAX_COMMIT_ITERATIONS=128`) di-checkout apa adanya ke
+branch ini. Mongo GenieACS live sudah menjalankan versi ini — folding menutup drift, tidak mengubah state.
+
+**Langkah 1 — v0.7.6 Connected Clients diverifikasi** (backend): `cpe_connected_hosts` 16.817 baris, 267
+device punya client aktif, scheduler `cpe:sync-connected-hosts` jalan tiap 5 menit (`last_seen_at` terbaru
+< 5 menit). Data nyata (hostname `vivo-2007`/`realme-C30s`, MAC, IP). Genuinely bekerja end-to-end; belum
+diverifikasi Agung di browser.
+
+**Langkah 2 — GenieACS Auto-WAN Configurable (pendekatan b, keputusan Agung):**
+- **`default-wan` provision GenieACS** (`app/resources/genieacs/default-wan.js`) — adaptasi 2 script
+  provision referensi rekan Agung (`docs/genieacs-auto-wan-reference/`, `targetVlan` 1000 / `targetVlanWan2`
+  1200 HARDCODED) jadi SATU provision yang membaca `args` preset. Deteksi vendor (Huawei / CMCC / ZTE
+  generic) + guard idempoten dipertahankan PERSIS. WAN1 (internet PPPoE) + WAN2 (bridge kedua) dalam satu
+  provision, master switch `enabled`.
+- **`App\Services\Network\GenieAcsPresetService`** — menulis provision + `args` preset `default` lewat
+  **REST genieacs-nbi** (`PUT /provisions/<id>`, `PUT /presets/<id>` — dikonfirmasi 2026-09-07 GENUINELY
+  berfungsi di genieacs-nbi 1.2.16, komentar lama di `apply.sh` yang bilang "tidak ada endpoint" keliru).
+  Tidak perlu mongosh / docker exec / driver Mongo di boss-app. Cache preset genieacs-cwmp di-refresh tiap
+  ~5,5 menit (`db.cache` `expire - timestamp` = 330s) → perubahan VLAN berlaku otomatis tanpa restart.
+- **`remote_wan_configs`** (singleton id=1, platform-level — pola `payment_gateway_settings`). Kolom:
+  `enabled`, `wan1_enabled`/`wan1_vlan`/`wan1_pppoe_username`/`wan1_pppoe_password`, `wan2_enabled`/
+  `wan2_vlan`, `genieacs_sync_status`/`_synced_at`/`_sync_error` (pola `mikrotik_sync_*`).
+  `toProvisionArgs()` = kontrak args posisional.
+- **`App\Livewire\Network\RemoteConfigSettings`** (`/remote-config`) — halaman "Konfig Remote". Simpan →
+  `RemoteWanConfigService` men-dispatch `SyncRemoteWanConfigToGenieAcsJob` (async, retry 30s/2min/5min).
+  Badge status GenieACS + poll conditional + "State di GenieACS live" (baca balik preset via
+  `inspectAutoWanState()`).
+- **Permission `remote_config.view`/`.manage`** — tier-admin + `noc` (pola `monitoring.*`).
+  `RemoteWanConfigPolicy`.
+- **Sidebar "Perangkat CPE" → grup collapsible TOGGLE-MURNI "Remote"** (pola persis "Komisi"/"Profil
+  Paket": `toggle_only`, tanpa key `route`, `sidebar-subgroup-remote`). Isi: Perangkat CPE, Cek Status
+  Device, Konfig Remote.
+- **BELUM diterapkan ke GenieACS live** — provision `default-wan` + preset args belum di-push ke container
+  running (butuh go-ahead Agung + rollout bertahap: WAN1 aman no-op untuk ~400 pelanggan existing via
+  guard idempoten; WAN2 bridge = 0 device punya sekarang, mengaktifkan = perubahan fleet-wide, uji 1-2
+  device dulu).
+
+Test: `GenieAcsPresetServiceTest` (7), `RemoteConfigSettingsLivewireTest` (9), `SidebarNavigationTest` (+3).
+253 test scoped hijau. Pint clean.
+
+## v0.9.0 — Commission: Approval + Clawback (merged `develop`→`main`, tagged `v0.9.13`)
 
 Menutup sisa scope cluster Commission (v0.9.x). Eligibility (Pending→Eligible) sudah di v0.9.5, Payment
 (Eligible→Paid) di v0.9.11 — yang belum: **Approval** dan **Clawback**. `CommissionStatus` sudah punya

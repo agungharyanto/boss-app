@@ -2207,10 +2207,49 @@ fleet-wide bisa memperburuk.
   Begitu SN diketahui → Agung isi `wan1_serial_allowlist` di "Konfig Remote" + toggle `enabled=true` →
   Job PUT `boss-auto-wan` preset scoped ke SN itu → `docker compose restart genieacs-cwmp` (untuk
   provision/preset baru) → ONT test auto-provision WAN1.
-- **ro-hotspot PPPoE VLAN = 10** (`vlan10-PPPoE`, PPPoE server `PPPoE-Remote`, pool `PPPOE-REMOTE`
+- **ro-hotspot PPPoE VLAN = 10** (`vlan10-PPPoE`, PPPoE server `PPPoE-Remote`, pool `PPPoE-REMOTE`
   10.0.0.10-10.0.3.254). Jadi `wan1_vlan` untuk test = 10. (Preset fleet-wide → kalau nanti dilonggarkan,
   VLAN per-NAS jadi keterbatasan yang perlu ditangani — di luar scope sekarang.)
 - WAN2 tetap OFF sepanjang stage ini.
+
+**VLAN9-TR069 di ro-hotspot — dieksekusi langsung via RouterOS API (2026-09-07, keputusan Agung: Claude
+Code apply sendiri, bertahap + verifikasi tiap langkah).** ro-hotspot BELUM punya VLAN TR-069 dedicated
+(beda dari test-x86 yang sudah `vlan9-TR069` + `10.1.0.0/20`). Ditambahkan: `vlan9-TR069` (vlan-id 9,
+tagged di `ether2` — pola sama 4 VLAN existing 10/69/110/111), `10.1.16.1/20` (blok **beda** dari test-x86
+`10.1.0.0/20` — sengaja, supaya tiap NAS punya subnet manajemen sendiri), DHCP `dhcp-tr069` +
+network `10.1.16.0/20` gw+dns `10.1.16.1` + `dhcp-option=acs-url`, pool `tr069-pool`
+`10.1.16.10-10.1.16.254` (konservatif fase test), Option 43 `code=43` value **byte-identik test-x86**
+(`http://genieacs.bajastu.id:7547`; ROS 7.12 menolak `comment` pada `/ip dhcp-server option add` — sama
+seperti option test-x86 yang juga tanpa comment). **NAT — ro-hotspot pakai masquerade PER-SUBNET
+(bukan blanket SNAT seperti test-x86)**: satu-satunya srcnat existing `masquerade src-address=192.168.10.0/24`
+(hotspot); jadi WAJIB tambah `masquerade src-address=10.1.16.0/20` sendiri atau subnet baru tidak dapat
+internet → tidak bisa Inform ke ACS. 235→235 PPP active nol drop tiap langkah; 4 VLAN + hotspot + `dhcp1`
+tidak tersentuh; `ping genieacs.bajastu.id` dari router resolve `45.123.142.242` 0% loss. **Tagging VLAN 9
+sampai port fisik switch downstream = sisi Agung** (Claude Code tidak bisa). Rollback: hapus 7 object
+by-comment (nat/dhcp-network/dhcp-server/pool/option/address/vlan). **STAGE 2 (Connection Request path)
+belum**: `nas.tr069_management_subnet=10.1.16.0/20` + regen script WireGuard = langkah terpisah.
+
+**Section "Device GenieACS Belum Ter-bind" di `/cpe-devices` (2026-09-07, digabung ke branch ini — sejalan,
+sama area GenieACS/CPE "Remote").** Device yang ADA di `db.devices` GenieACS tapi belum punya baris
+`cpe_devices` sama sekali (belum di-bind auto-matcher / reconcile / manual). `App\Services\Network\
+UnboundGenieacsDeviceService::list()` = diff `queryDevices(['_id'=>['$ne'=>null]])` (satu bulk query,
+cache pendek `config('services.genieacs.unbound_cache_ttl')` default 15s karena section-nya auto-reload)
+vs `CpeDevice::whereNotNull('genieacs_device_id')` (**`withoutGlobalScopes()`** — device di-claim tenant
+mana pun = bukan unbound). Pengayaan `boss_state` (`serial_known` + nama pelanggan bila `cpe_devices`
+sudah punya serial itu, mis. `pending_first_connect`) tetap tenant-scoped. Pseudo-device `probe`/`probe`
+(health-check GenieACS) difilter. `GET /api/internal/cpe-devices/unbound-genieacs`
+(`UnboundGenieacsDeviceController`, di `routes/web.php` session-auth seperti endpoint internal cpe-devices
+lain) → `{data:[...]}`; genieacs-nbi down → HTTP 200 `{data:[],error:...}` bukan 500 (auto-reload tidak
+meledak). **`CpeDevicePolicy::viewUnbound` = `cpe_devices.view`/`.manage` (admin/NOC, TANPA carve-out
+reseller** — triage device unbound bukan tugas reseller; reseller tetap bisa buka `/cpe-devices` tapi
+section-nya tidak dirender, sama posture `/cpe-devices/status-check`). UI: section kedua di
+`cpe-device-index.blade.php`, client-side DataTables + dropdown auto-reload sendiri (`#unboundPollInterval`,
+Off/5s/…/5m — pola persis tabel utama), kolom Serial/Manufacturer-ProductClass/MAC/Pertama Terlihat/
+Terakhir Inform/**ACS URL (Option 43)** (auto-isi vs kosong — konteks testing per device)/Status di BOSS
+App. **Gotcha**: `@can` yang tertulis di dalam komentar JS di blade tetap di-compile Blade sebagai
+directive → EOF error "expecting endif"; jangan tulis `@`-directive di komentar `.blade.php`. Test:
+`UnboundGenieacsDeviceServiceTest` (8), `UnboundGenieacsDeviceControllerTest` (8), `CpeDeviceIndexLivewireTest`
+(+2). Nol migration, nol permission baru (reuse `cpe_devices.*`).
 
 ## Network Navigation Restructure & OLT Credential Registry (v0.8.1)
 

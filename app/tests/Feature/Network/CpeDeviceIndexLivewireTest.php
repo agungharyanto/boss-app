@@ -3,6 +3,7 @@
 namespace Tests\Feature\Network;
 
 use App\Livewire\Network\CpeDeviceIndex;
+use App\Models\Reseller;
 use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -71,5 +72,30 @@ class CpeDeviceIndexLivewireTest extends TestCase
             ->assertSee('30 detik')
             ->assertSee('60 detik')
             ->assertSee('5 menit');
+    }
+
+    public function test_admin_sees_the_unbound_genieacs_section(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CpeDeviceIndex::class)
+            ->assertSee('Device GenieACS Belum Ter-bind')
+            ->assertSeeHtml('id="unbound-genieacs-table"')
+            ->assertSeeHtml('id="unboundPollInterval"');
+    }
+
+    public function test_reseller_only_user_can_mount_but_does_not_see_the_unbound_section(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $user = User::factory()->create(['tenant_id' => $tenant->id]);
+        $reseller->users()->attach($user->id, ['role' => 'owner', 'status' => 'active']);
+
+        Livewire::actingAs($user)
+            ->test(CpeDeviceIndex::class)
+            ->assertOk()
+            ->assertDontSee('Device GenieACS Belum Ter-bind')
+            ->assertDontSeeHtml('id="unbound-genieacs-table"');
     }
 }

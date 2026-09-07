@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\Internal\CpeDeviceActionController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDatatableController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDetailController;
 use App\Http\Controllers\Api\Internal\OltDeviceDatatableController;
+use App\Http\Controllers\Api\Internal\UnboundGenieacsDeviceController;
 use App\Http\Controllers\Auth\ReferrerLoginController;
 use App\Http\Controllers\Billing\InvoicePrintController;
 use App\Http\Controllers\CommissionPaymentProofController;
@@ -184,6 +185,8 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
         // auth + CSRF, not routes/api.php's stateless "api" group.
         Route::prefix('api/internal/cpe-devices')->name('cpe-devices.internal.')->group(function () {
             Route::get('/datatable', CpeDeviceDatatableController::class)->name('datatable');
+            // Section "Belum Ter-bind" — device GenieACS tanpa baris cpe_devices.
+            Route::get('/unbound-genieacs', UnboundGenieacsDeviceController::class)->name('unbound-genieacs');
             Route::get('/{cpe_device}/detail', [CpeDeviceDetailController::class, 'show'])->name('detail');
             Route::get('/{cpe_device}/pppoe-password', [CpeDeviceDetailController::class, 'pppoePassword'])->name('pppoe-password');
             Route::post('/{cpe_device}/reboot', [CpeDeviceActionController::class, 'reboot'])->name('reboot');

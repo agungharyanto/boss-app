@@ -2142,33 +2142,51 @@ provision statik (`default`/`default-optical`/`default-pppoe`) karena runbook it
 
 **Cache preset genieacs-cwmp — window ~5,5 menit** (dikonfirmasi: `db.cache` `_id: cwmp-local-cache-hash`,
 `expire - timestamp` = 330 detik; `MAX_CACHE_TTL`/`PRESETS_CACHE_DURATION` default 86400 itu untuk hal
-lain). Jadi EDIT preset/provision yang SUDAH ada (mis. `args` preset `default`) berlaku otomatis dalam ~5,5
-menit TANPA restart. Provision *baru* (dokumen yang belum pernah ada) mungkin masih butuh
-`docker compose restart genieacs-cwmp` sekali — catatan empiris apply.sh, belum di-retest untuk jalur NBI.
+lain). Jadi EDIT preset/provision yang SUDAH ada (mis. `precondition`/`args` preset `boss-auto-wan`)
+berlaku otomatis dalam ~5,5 menit TANPA restart. Provision/preset *baru* (dokumen yang belum pernah ada)
+mungkin masih butuh `docker compose restart genieacs-cwmp` sekali — catatan empiris apply.sh, belum
+di-retest untuk jalur NBI.
 
-**Auto-WAN Configurable (pendekatan b, keputusan Agung)**:
+**Fault fleet — sudah ADA masalah kronis** (baseline 2026-09-07, sebelum Auto-WAN): 68 fault (41
+`too_many_commits` + 27 `too_many_rpcs`) di ~device pohon-besar M63X XPON / F663NV3a / H3-2s. GenieACS
+NBI cuma tahu `WANPPPConnection.1.Username` untuk 68 dari 414 device (sisanya `default-pppoe.js` belum
+sempat baca). **INI alasan `default-wan` TIDAK di-fold ke preset `default`** — nambah beban tiap Inform
+fleet-wide bisa memperburuk.
+
+**Auto-WAN Configurable (pendekatan b + preset TERPISAH ter-scope, keputusan Agung)**:
 - **`app/resources/genieacs/default-wan.js`** — provision KANONIK di repo (di-bind-mount ke boss-app via
   `app/` bind mount, dibaca `resource_path('genieacs/default-wan.js')`). Adaptasi 2 script referensi rekan
   Agung (`docs/genieacs-auto-wan-reference/auto_setup_wan_{pppoe,bridge}.js` — `targetVlan` 1000 /
   `targetVlanWan2` 1200 HARDCODED). Digabung jadi 1 provision: blok WAN1 (internet PPPoE) + WAN2 (bridge
-  kedua), master switch `enabled`. **Deteksi vendor DIPERTAHANKAN PERSIS** — Huawei via
+  kedua), master switch `enabled` (arg[0]). **Deteksi vendor DIPERTAHANKAN PERSIS** — Huawei via
   `DeviceInfo.X_HW_SerialNumber`, CMCC via `X_CMCC_UserInfo.ServiceName`, ZTE generic via
-  `X_ZTE-COM_WANPONInterfaceConfig.RXPower` (fallback, cek CMCC dulu). Guard idempoten dipertahankan: WAN1
-  skip kalau `WANPPPConnection.1.Username` sudah terisi (baca live via `declare {value: Date.now()}`),
-  WAN2 skip pembuatan kalau instance ke-2 sudah ada. **Satu-satunya provision di preset ini yang MENULIS
-  nilai ke perangkat** (`declare(path, null, {value})`) — provision lain read-only.
+  `X_ZTE-COM_WANPONInterfaceConfig.RXPower` (fallback, cek CMCC dulu).
+- **GUARD berbasis ISI, BUKAN posisi** (redesign 2026-09-07 — "0 device punya WAN2" cuma soal slot ke-2,
+  sebagian device mungkin sudah punya bridge di slot LAIN hasil konfig manual teknisi):
+  - WAN1: skip TOTAL kalau ada `WANPPPConnection` ber-Username di WCD 1-8 × inst 1-2 di posisi MANA PUN
+    (script referensi cuma cek WCD 1-5 × inst .1 — CLAUDE.md sendiri catat pelanggan pernah di WCD 6).
+  - WAN2: `bridgeWithTargetVlanExists` — sapu WCD 1-2 × {WANIPConnection, WANPPPConnection} 1-3, cari
+    `ConnectionType` mengandung "bridg" (case-insensitive) DAN VLAN (`X_HW_VLAN`/`X_CMCC_VLANIDMark`/
+    `X_ZTE-COM_VLANID`) == `wan2Vlan` di posisi MANA PUN → skip total. **Guard ini belum diverifikasi ke
+    device asli** — SN allowlist (args[7], in-script) adalah jaring pengaman selama fase testing.
+  - `default-wan` = satu-satunya provision yang MENULIS nilai ke perangkat (`declare(path, null, {value})`)
+    — provision lain read-only.
 - **`App\Services\Network\GenieAcsPresetService`** — `syncAutoWanConfig(RemoteWanConfig)`: `PUT
-  /provisions/default-wan` (script) + GET preset `default` → rebuild `configurations` (pertahankan 3
-  provision statik, buang `default-wan` lama, tambah dengan `args` segar kalau `enabled`) → PUT balik.
-  `weight`/`precondition` preset lama dipertahankan (default 0 / `"true"` kalau tak ada). `enabled=false`
-  → `default-wan` dikeluarkan total dari `configurations`. `inspectAutoWanState()` = baca balik state
-  efektif untuk UI. Semua `RuntimeException` pesan Indonesia → Job tangkap → `markSyncFailed()`.
+  /provisions/default-wan` (script) SELALU. Lalu: `enabled=false` → `DELETE /presets/boss-auto-wan`
+  (toleran 404); `enabled=true` → `PUT /presets/boss-auto-wan` (channel sendiri, weight 0) dengan
+  `precondition` = `buildPrecondition($config->allSerialAllowlist())` — union wan1+wan2 SN → `DeviceID.
+  SerialNumber = "SN1" OR ...`, atau `"true"` (fleet-wide) kalau kedua allowlist kosong. **TIDAK PERNAH
+  menyentuh preset `default`.** `inspectAutoWanState()` = baca balik provision + preset `boss-auto-wan`
+  (exists / precondition / args) untuk UI. `RuntimeException` pesan Indonesia → Job tangkap →
+  `markSyncFailed()`.
 - **`remote_wan_configs`** (singleton id=1, platform-level, pola `payment_gateway_settings`). **GOTCHA**:
   `firstOrCreate(['id'=>1])` tidak mengisi default kolom DB ke instance in-memory — `current()` `->refresh()`
-  kalau `wasRecentlyCreated`. `toProvisionArgs()` = kontrak posisional `[enabled, wan1_enabled, wan1_vlan,
-  wan1_pppoe_username, wan1_pppoe_password, wan2_enabled, wan2_vlan]` — `default-wan.js` baca `args[0..6]`.
-  `genieacs_sync_status` cast `MikrotikSyncStatus` (di-reuse — konsep "push sync status" generik, bukan
-  Mikrotik-spesifik).
+  kalau `wasRecentlyCreated`. Kolom: `enabled`, `wan1_*` (vlan/username/password/`serial_allowlist`),
+  `wan2_*` (vlan/`serial_allowlist`), `genieacs_sync_*`. `toProvisionArgs()` = 8 elemen posisional
+  `[enabled, wan1_enabled, wan1_vlan, wan1_pppoe_username, wan1_pppoe_password, wan2_enabled, wan2_vlan,
+  wan2_serial_allowlist_CSV]` — `default-wan.js` baca `args[0..7]`. `allSerialAllowlist()` = union wan1+wan2
+  (dedup) untuk precondition. `genieacs_sync_status` cast `MikrotikSyncStatus` (di-reuse — konsep "push
+  sync status" generik).
 - **`SyncRemoteWanConfigToGenieAcsJob`** — async, `tries=3`, backoff 30s/2min/5min (pola persis
   `PushCustomerIpPoolToMikrotikJob`). Dispatch oleh `RemoteWanConfigService::save()` SETELAH commit.
 - **`/remote-config`** (`App\Livewire\Network\RemoteConfigSettings`) — halaman "Konfig Remote", grup
@@ -2181,16 +2199,18 @@ menit TANPA restart. Provision *baru* (dokumen yang belum pernah ada) mungkin ma
   Paket"). Isi: Perangkat CPE, Cek Status Device, Konfig Remote. Grup tampil kalau bisa lihat salah satu
   child; `noc` lihat "Konfig Remote" tapi tidak "Cek Status Device" (`cpe_devices.view` admin-only).
 
-**BELUM diterapkan ke GenieACS live — butuh go-ahead Agung + rollout bertahap**:
-- Investigasi read-only fleet (414 device di GenieACS): **0 device punya WAN2/bridge instance sekarang** →
-  mengaktifkan `wan2_enabled` = perubahan konfig ke ~400 ONT pelanggan hidup. WAN1: guard idempoten =
-  no-op untuk pelanggan yang sudah punya PPPoE username → hanya ONT baru/factory-reset yang dikonfigurasi
-  (use-case zero-touch provisioning yang aman).
-- Langkah deploy live (belum dijalankan): (1) `RemoteWanConfigService::save()` dengan `enabled=true`,
-  `wan1_enabled=true`, `wan2_enabled=false` → Job PUT `default-wan` + preset args ke genieacs-nbi;
-  (2) `docker compose restart genieacs-cwmp` (kemungkinan perlu untuk provision baru — verifikasi);
-  (3) uji terhadap 1-2 ONT test dulu (bukan fleet) sebelum percaya; (4) kalau WAN2 diinginkan, aktifkan
-  terpisah + uji per-device.
+**Deploy bertahap (go-ahead Agung 2026-09-07)**:
+- **STAGE 1 SUDAH: provision `default-wan` di-PUT ke GenieACS live** (`enabled=false` → preset
+  `boss-auto-wan` TIDAK dibuat). Zero fleet impact — 0 device terkena, provision ada tapi tak dipakai
+  preset mana pun. `RemoteWanConfig` id=1 `enabled=false`.
+- **STAGE 2 (menunggu SN modem test)**: 3-5 modem BARU dicolok KHUSUS di ro-hotspot (bukan NAS lain).
+  Begitu SN diketahui → Agung isi `wan1_serial_allowlist` di "Konfig Remote" + toggle `enabled=true` →
+  Job PUT `boss-auto-wan` preset scoped ke SN itu → `docker compose restart genieacs-cwmp` (untuk
+  provision/preset baru) → ONT test auto-provision WAN1.
+- **ro-hotspot PPPoE VLAN = 10** (`vlan10-PPPoE`, PPPoE server `PPPoE-Remote`, pool `PPPOE-REMOTE`
+  10.0.0.10-10.0.3.254). Jadi `wan1_vlan` untuk test = 10. (Preset fleet-wide → kalau nanti dilonggarkan,
+  VLAN per-NAS jadi keterbatasan yang perlu ditangani — di luar scope sekarang.)
+- WAN2 tetap OFF sepanjang stage ini.
 
 ## Network Navigation Restructure & OLT Credential Registry (v0.8.1)
 

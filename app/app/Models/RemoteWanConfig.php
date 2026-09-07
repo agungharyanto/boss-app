@@ -27,6 +27,7 @@ class RemoteWanConfig extends Model
         'wan1_vlan',
         'wan1_pppoe_username',
         'wan1_pppoe_password',
+        'wan1_serial_allowlist',
         'wan2_enabled',
         'wan2_vlan',
         'wan2_serial_allowlist',
@@ -67,9 +68,36 @@ class RemoteWanConfig extends Model
     /**
      * @return list<string>
      */
+    public function wan1SerialAllowlist(): array
+    {
+        return self::parseSerialList($this->wan1_serial_allowlist);
+    }
+
+    /**
+     * @return list<string>
+     */
     public function wan2SerialAllowlist(): array
     {
-        return collect(preg_split('/[\s,;]+/', (string) $this->wan2_serial_allowlist))
+        return self::parseSerialList($this->wan2_serial_allowlist);
+    }
+
+    /**
+     * Union kedua allowlist — dasar `precondition` preset `boss-auto-wan`.
+     *
+     * @return list<string>
+     */
+    public function allSerialAllowlist(): array
+    {
+        return collect([...$this->wan1SerialAllowlist(), ...$this->wan2SerialAllowlist()])
+            ->unique()->values()->all();
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function parseSerialList(?string $raw): array
+    {
+        return collect(preg_split('/[\s,;]+/', (string) $raw))
             ->map(fn ($s) => trim($s))
             ->filter()
             ->unique()

@@ -22,15 +22,22 @@ diverifikasi Agung di browser.
   1200 HARDCODED) jadi SATU provision yang membaca `args` preset. Deteksi vendor (Huawei / CMCC / ZTE
   generic) + guard idempoten dipertahankan PERSIS. WAN1 (internet PPPoE) + WAN2 (bridge kedua) dalam satu
   provision, master switch `enabled`.
-- **`App\Services\Network\GenieAcsPresetService`** — menulis provision + `args` preset `default` lewat
-  **REST genieacs-nbi** (`PUT /provisions/<id>`, `PUT /presets/<id>` — dikonfirmasi 2026-09-07 GENUINELY
-  berfungsi di genieacs-nbi 1.2.16, komentar lama di `apply.sh` yang bilang "tidak ada endpoint" keliru).
-  Tidak perlu mongosh / docker exec / driver Mongo di boss-app. Cache preset genieacs-cwmp di-refresh tiap
-  ~5,5 menit (`db.cache` `expire - timestamp` = 330s) → perubahan VLAN berlaku otomatis tanpa restart.
+- **`App\Services\Network\GenieAcsPresetService`** — menulis provision `default-wan` + preset **TERPISAH
+  `boss-auto-wan`** (BUKAN di-fold ke `default`) lewat **REST genieacs-nbi** (`PUT /provisions/<id>`,
+  `PUT /presets/<id>`, `DELETE /presets/<id>` — dikonfirmasi 2026-09-07 GENUINELY berfungsi di
+  genieacs-nbi 1.2.16, komentar lama di `apply.sh` yang bilang "tidak ada endpoint" keliru). Tidak perlu
+  mongosh / docker exec / driver Mongo di boss-app. Cache preset genieacs-cwmp di-refresh tiap ~5,5 menit
+  (`db.cache` `expire - timestamp` = 330s) → perubahan precondition/args berlaku otomatis tanpa restart.
+- **Preset `boss-auto-wan` di-SCOPE lewat `precondition`** — preset `default` fleet-wide (~414 device)
+  sudah punya masalah kronis `too_many_commits`/`too_many_rpcs` di ~68 device pohon-besar, menambah
+  provision ke situ berisiko. `enabled=false` → preset dihapus total; `enabled=true` + ada SN allowlist
+  (union wan1+wan2) → `precondition` = `DeviceID.SerialNumber = "SN1" OR ...` (HANYA SN itu); `enabled=true`
+  + allowlist kosong → `precondition "true"` (fleet-wide — state akhir "dilonggarkan").
 - **`remote_wan_configs`** (singleton id=1, platform-level — pola `payment_gateway_settings`). Kolom:
-  `enabled`, `wan1_enabled`/`wan1_vlan`/`wan1_pppoe_username`/`wan1_pppoe_password`, `wan2_enabled`/
-  `wan2_vlan`, `genieacs_sync_status`/`_synced_at`/`_sync_error` (pola `mikrotik_sync_*`).
-  `toProvisionArgs()` = kontrak args posisional.
+  `enabled`, `wan1_enabled`/`wan1_vlan`/`wan1_pppoe_username`/`wan1_pppoe_password`/`wan1_serial_allowlist`,
+  `wan2_enabled`/`wan2_vlan`/`wan2_serial_allowlist`, `genieacs_sync_status`/`_synced_at`/`_sync_error`
+  (pola `mikrotik_sync_*`). `toProvisionArgs()` = kontrak args posisional (8 elemen, args[7] = CSV SN
+  allowlist WAN2 in-script).
 - **`App\Livewire\Network\RemoteConfigSettings`** (`/remote-config`) — halaman "Konfig Remote". Simpan →
   `RemoteWanConfigService` men-dispatch `SyncRemoteWanConfigToGenieAcsJob` (async, retry 30s/2min/5min).
   Badge status GenieACS + poll conditional + "State di GenieACS live" (baca balik preset via
@@ -40,10 +47,15 @@ diverifikasi Agung di browser.
 - **Sidebar "Perangkat CPE" → grup collapsible TOGGLE-MURNI "Remote"** (pola persis "Komisi"/"Profil
   Paket": `toggle_only`, tanpa key `route`, `sidebar-subgroup-remote`). Isi: Perangkat CPE, Cek Status
   Device, Konfig Remote.
-- **BELUM diterapkan ke GenieACS live** — provision `default-wan` + preset args belum di-push ke container
-  running (butuh go-ahead Agung + rollout bertahap: WAN1 aman no-op untuk ~400 pelanggan existing via
-  guard idempoten; WAN2 bridge = 0 device punya sekarang, mengaktifkan = perubahan fleet-wide, uji 1-2
-  device dulu).
+- **Guard berbasis ISI (bukan posisi)** — WAN1: skip kalau ada `WANPPPConnection` ber-Username di WCD
+  1-8 × inst 1-2 di posisi MANA PUN (script referensi cuma 1-5 × .1). WAN2: `bridgeWithTargetVlanExists`
+  — sapu WANConnectionDevice 1-2 × {WANIPConnection, WANPPPConnection} 1-3 cari ConnectionType `*bridg*`
+  + VLAN cocok di posisi mana pun (keputusan Agung: "0 device punya WAN2" cuma soal slot ke-2, sebagian
+  device mungkin sudah punya bridge di slot lain hasil konfig manual → guard cek-posisi bisa bikin dobel).
+- **Deploy bertahap (go-ahead Agung)** — provision `default-wan` di-push ke GenieACS live (siap),
+  `boss-auto-wan` preset `enabled=false` (tidak dibuat) sampai SN modem test masuk. Modem test (3-5,
+  BARU) dicolok khusus di ro-hotspot. Setelah SN diketahui → Agung isi allowlist + `enabled=true` →
+  preset scoped ke SN itu saja → restart genieacs-cwmp → ONT test auto-provision WAN1.
 
 Test: `GenieAcsPresetServiceTest` (7), `RemoteConfigSettingsLivewireTest` (9), `SidebarNavigationTest` (+3).
 253 test scoped hijau. Pint clean.

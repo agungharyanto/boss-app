@@ -41,6 +41,10 @@ class RemoteConfigSettings extends Component
     #[Validate('required|string|min:1|max:64')]
     public string $wan1_pppoe_password = 'default';
 
+    /** SN allowlist WAN1, satu per baris. Kosong = fleet-wide (precondition "true"). */
+    #[Validate('nullable|string|max:20000')]
+    public string $wan1_serial_allowlist = '';
+
     #[Validate('boolean')]
     public bool $wan2_enabled = false;
 
@@ -71,6 +75,7 @@ class RemoteConfigSettings extends Component
         $this->wan1_vlan = (int) $config->wan1_vlan;
         $this->wan1_pppoe_username = (string) $config->wan1_pppoe_username;
         $this->wan1_pppoe_password = (string) $config->wan1_pppoe_password;
+        $this->wan1_serial_allowlist = (string) $config->wan1_serial_allowlist;
         $this->wan2_enabled = (bool) $config->wan2_enabled;
         $this->wan2_vlan = (int) $config->wan2_vlan;
         $this->wan2_serial_allowlist = (string) $config->wan2_serial_allowlist;
@@ -97,6 +102,7 @@ class RemoteConfigSettings extends Component
             'wan1_vlan' => $validated['wan1_vlan'],
             'wan1_pppoe_username' => $validated['wan1_pppoe_username'],
             'wan1_pppoe_password' => $validated['wan1_pppoe_password'],
+            'wan1_serial_allowlist' => $validated['wan1_serial_allowlist'] ?: null,
             'wan2_enabled' => $validated['wan2_enabled'],
             'wan2_vlan' => $validated['wan2_vlan'],
             'wan2_serial_allowlist' => $validated['wan2_serial_allowlist'] ?: null,

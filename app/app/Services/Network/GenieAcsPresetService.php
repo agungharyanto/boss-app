@@ -7,32 +7,40 @@ use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 /**
- * Mengelola preset + provision GenieACS lewat REST API genieacs-nbi
+ * Mengelola provision + preset GenieACS Auto-WAN lewat REST genieacs-nbi
  * (`/presets/<id>`, `/provisions/<id>` — dikonfirmasi 2026-09-07: endpoint
  * ini GENUINELY berfungsi di genieacs-nbi 1.2.16, meski komentar lama di
- * `docker/genieacs/presets/apply.sh` bilang tidak ada — komentar itu keliru
- * / usang). Tidak perlu `mongosh` / docker exec / driver Mongo di boss-app.
+ * `docker/genieacs/presets/apply.sh` bilang tidak ada). Tidak perlu
+ * `mongosh` / docker exec / driver Mongo di boss-app.
  *
- * SCOPE SEKARANG: hanya provision `default-wan` (Auto-WAN configurable) —
- * satu-satunya provision yang nilainya datang dari BOSS App (`args` preset).
- * Provision statik lain (`default`/`default-optical`/`default-pppoe`) tetap
- * dikelola runbook manual `apply.sh` (read-only refresh, jarang berubah).
+ * DESAIN — preset TERPISAH `boss-auto-wan`, BUKAN di-fold ke `default`:
+ * preset `default` berlaku fleet-wide (~414 device) dan sudah punya masalah
+ * kronis `too_many_commits`/`too_many_rpcs` di ~68 device pohon-besar —
+ * menambah provision ke situ berisiko memperburuk. Preset `boss-auto-wan`
+ * di-SCOPE lewat `precondition`:
+ *   - `enabled = false` → preset DIHAPUS total (GenieACS tidak menjalankan
+ *     `default-wan` sama sekali);
+ *   - `enabled = true` + ada SN di allowlist (union wan1+wan2) →
+ *     `precondition` = `DeviceID.SerialNumber = "SN1" OR ...` (HANYA SN itu);
+ *   - `enabled = true` + kedua allowlist KOSONG → `precondition = "true"`
+ *     (fleet-wide — state akhir "dilonggarkan", disengaja setelah guard
+ *     content-based terbukti reliable).
  *
- * Kontrak args `default-wan` (posisional) — lihat
- * `RemoteWanConfig::toProvisionArgs()` + `resources/genieacs/default-wan.js`.
+ * Provision `default-wan` dibaca dari `app/resources/genieacs/default-wan.js`.
+ * Kontrak args posisional — lihat `RemoteWanConfig::toProvisionArgs()`.
  *
- * CACHE GenieACS: genieacs-cwmp me-refresh snapshot preset/provision dari
- * mongo tiap ~5,5 menit (dikonfirmasi lewat `db.cache` `cwmp-local-cache-hash`
- * `expire - timestamp` = 330s). Jadi perubahan args (preset yang SUDAH ada)
- * berlaku otomatis dalam ~5,5 menit TANPA restart. Provision `default-wan`
- * yang BENAR-BENAR BARU (deploy pertama) mungkin butuh
- * `docker compose restart genieacs-cwmp` sekali — lihat catatan apply.sh.
+ * CACHE GenieACS: genieacs-cwmp me-refresh snapshot preset dari mongo tiap
+ * ~5,5 menit (`db.cache` `cwmp-local-cache-hash`, `expire - timestamp` =
+ * 330s). Perubahan `precondition`/`args` preset yang SUDAH ada berlaku
+ * dalam ~5,5 menit TANPA restart. Provision `default-wan` / preset
+ * `boss-auto-wan` yang BENAR-BENAR baru (deploy pertama) mungkin butuh
+ * `docker compose restart genieacs-cwmp` sekali — catatan empiris apply.sh.
  */
 class GenieAcsPresetService
 {
     private const PROVISION_NAME = 'default-wan';
 
-    private const PRESET_NAME = 'default';
+    private const PRESET_NAME = 'boss-auto-wan';
 
     private readonly string $baseUrl;
 
@@ -41,42 +49,45 @@ class GenieAcsPresetService
         $this->baseUrl = rtrim($baseUrl ?? config('services.genieacs.nbi_url'), '/');
     }
 
-    /**
-     * Terapkan baris singleton `RemoteWanConfig` ke GenieACS:
-     *  - selalu PUT script provision `default-wan` (idempoten — genieacs
-     *    upsert; kalau isi script berubah di git, deploy berikutnya
-     *    menyinkronkan);
-     *  - kalau `enabled` → pastikan preset `default` memasukkan
-     *    `default-wan` dengan `args` terbaru dari config;
-     *  - kalau `enabled = false` → keluarkan `default-wan` dari preset
-     *    `default` (GenieACS berhenti menjalankannya sama sekali).
-     *
-     * Melempar RuntimeException (pesan user-facing) kalau genieacs-nbi
-     * menolak / tak terjangkau — caller (Job) menangkap & menandai
-     * `markSyncFailed()`.
-     */
     public function syncAutoWanConfig(RemoteWanConfig $config): void
     {
         $this->putProvisionScript(self::PROVISION_NAME, $this->autoWanScript());
 
-        $preset = $this->getPreset(self::PRESET_NAME);
-        $configurations = $this->rebuildConfigurations(
-            $preset['configurations'] ?? [],
-            includeAutoWan: (bool) $config->enabled,
-            autoWanArgs: $config->toProvisionArgs(),
-        );
+        if (! $config->enabled) {
+            $this->deletePreset(self::PRESET_NAME);
 
-        $this->putPreset(self::PRESET_NAME, $preset, $configurations);
+            return;
+        }
+
+        $this->putPreset(self::PRESET_NAME, [
+            'weight' => 0,
+            'precondition' => $this->buildPrecondition($config->allSerialAllowlist()),
+            'channel' => self::PRESET_NAME,
+            'configurations' => [[
+                'type' => 'provision',
+                'name' => self::PROVISION_NAME,
+                'args' => $config->toProvisionArgs(),
+            ]],
+        ]);
     }
 
     /**
-     * Isi script provision `default-wan` — dibaca dari file kanonik di repo
-     * (`app/resources/genieacs/default-wan.js`, ter-bind-mount ke boss-app).
+     * @param  list<string>  $serials
      */
+    private function buildPrecondition(array $serials): string
+    {
+        if ($serials === []) {
+            return 'true';
+        }
+
+        return collect($serials)
+            ->map(fn (string $sn) => 'DeviceID.SerialNumber = "'.addslashes($sn).'"')
+            ->implode(' OR ');
+    }
+
     public function autoWanScript(): string
     {
         $path = resource_path('genieacs/default-wan.js');
-
         $script = @file_get_contents($path);
 
         if ($script === false || trim($script) === '') {
@@ -87,66 +98,10 @@ class GenieAcsPresetService
     }
 
     /**
-     * @return array<string, mixed>
+     * @param  array<string, mixed>  $body
      */
-    private function getPreset(string $name): array
+    private function putPreset(string $name, array $body): void
     {
-        $response = Http::baseUrl($this->baseUrl)
-            ->acceptJson()
-            ->get('/presets/?query='.rawurlencode(json_encode(['_id' => $name])));
-
-        if ($response->failed()) {
-            throw new RuntimeException("Gagal membaca preset '{$name}' dari GenieACS (HTTP {$response->status()}).");
-        }
-
-        return $response->json()[0] ?? ['_id' => $name, 'channel' => 'default', 'configurations' => []];
-    }
-
-    /**
-     * @param  array<int, array<string, mixed>>  $existing
-     * @param  array<int, bool|int|string>  $autoWanArgs
-     * @return array<int, array<string, mixed>>
-     */
-    private function rebuildConfigurations(array $existing, bool $includeAutoWan, array $autoWanArgs): array
-    {
-        // Buang entri default-wan lama (kalau ada) — apa pun bentuknya.
-        $configurations = array_values(array_filter(
-            $existing,
-            fn ($c) => ! (($c['type'] ?? null) === 'provision' && ($c['name'] ?? null) === self::PROVISION_NAME),
-        ));
-
-        if ($includeAutoWan) {
-            $configurations[] = [
-                'type' => 'provision',
-                'name' => self::PROVISION_NAME,
-                'args' => $autoWanArgs,
-            ];
-        }
-
-        return $configurations;
-    }
-
-    /**
-     * @param  array<string, mixed>  $currentPreset
-     * @param  array<int, array<string, mixed>>  $configurations
-     */
-    private function putPreset(string $name, array $currentPreset, array $configurations): void
-    {
-        // Pertahankan bentuk preset yang sudah ada; hanya `configurations`
-        // yang berubah. `weight`/`precondition` diberi default aman kalau
-        // preset lama (dibuat mongosh) tak punya — 0 / "true" = perilaku
-        // identik dengan default GenieACS.
-        $body = [
-            'weight' => $currentPreset['weight'] ?? 0,
-            'precondition' => $currentPreset['precondition'] ?? 'true',
-            'channel' => $currentPreset['channel'] ?? 'default',
-            'configurations' => $configurations,
-        ];
-
-        if (isset($currentPreset['events'])) {
-            $body['events'] = $currentPreset['events'];
-        }
-
         $response = Http::baseUrl($this->baseUrl)
             ->withHeaders(['Content-Type' => 'application/json'])
             ->send('PUT', '/presets/'.rawurlencode($name), ['body' => json_encode($body)]);
@@ -154,6 +109,18 @@ class GenieAcsPresetService
         if ($response->failed()) {
             throw new RuntimeException(
                 "GenieACS menolak update preset '{$name}' (HTTP {$response->status()}): ".mb_substr($response->body(), 0, 300)
+            );
+        }
+    }
+
+    private function deletePreset(string $name): void
+    {
+        $response = Http::baseUrl($this->baseUrl)->delete('/presets/'.rawurlencode($name));
+
+        // 404 = sudah tidak ada, itu hasil yang diinginkan.
+        if ($response->failed() && $response->status() !== 404) {
+            throw new RuntimeException(
+                "GenieACS menolak hapus preset '{$name}' (HTTP {$response->status()}): ".mb_substr($response->body(), 0, 300)
             );
         }
     }
@@ -172,11 +139,9 @@ class GenieAcsPresetService
     }
 
     /**
-     * Baca kembali state efektif dari GenieACS — dipakai halaman "Konfig
-     * Remote" untuk menampilkan apakah yang tersimpan benar-benar sudah
-     * terpasang di preset live.
+     * State efektif di GenieACS live — dipakai halaman "Konfig Remote".
      *
-     * @return array{provision_exists: bool, in_preset: bool, preset_args: ?array}
+     * @return array{provision_exists: bool, preset_exists: bool, precondition: ?string, preset_args: ?array}
      */
     public function inspectAutoWanState(): array
     {
@@ -184,13 +149,18 @@ class GenieAcsPresetService
             ->get('/provisions/?projection=_id')->json() ?? [];
         $provisionExists = collect($provisions)->contains(fn ($p) => ($p['_id'] ?? null) === self::PROVISION_NAME);
 
-        $preset = $this->getPreset(self::PRESET_NAME);
-        $entry = collect($preset['configurations'] ?? [])
+        $presetRows = Http::baseUrl($this->baseUrl)->acceptJson()
+            ->get('/presets/?query='.rawurlencode(json_encode(['_id' => self::PRESET_NAME])))
+            ->json() ?? [];
+        $preset = $presetRows[0] ?? null;
+
+        $entry = $preset === null ? null : collect($preset['configurations'] ?? [])
             ->first(fn ($c) => ($c['type'] ?? null) === 'provision' && ($c['name'] ?? null) === self::PROVISION_NAME);
 
         return [
             'provision_exists' => $provisionExists,
-            'in_preset' => $entry !== null,
+            'preset_exists' => $preset !== null,
+            'precondition' => $preset['precondition'] ?? null,
             'preset_args' => $entry['args'] ?? null,
         ];
     }

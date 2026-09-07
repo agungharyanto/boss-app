@@ -30,17 +30,22 @@
 
     {{-- State efektif di preset GenieACS live --}}
     @if ($liveState !== null)
-        <div class="mb-6 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
-            <p>{{ __('State di GenieACS live') }}:
-                {{ __('provision default-wan') }}
+        <div class="mb-6 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2 space-y-1">
+            <p>
+                {{ __('provision') }} <span class="font-mono">default-wan</span>:
                 @if ($liveState['provision_exists']) <span class="text-green-700">{{ __('ada') }}</span> @else <span class="text-amber-700">{{ __('belum ada') }}</span> @endif
                 ·
-                {{ __('dipakai preset default') }}
-                @if ($liveState['in_preset']) <span class="text-green-700">{{ __('ya') }}</span> @else <span class="text-gray-600">{{ __('tidak') }}</span> @endif
-                @if ($liveState['preset_args'])
-                    · <span class="font-mono">args={{ json_encode($liveState['preset_args']) }}</span>
-                @endif
+                {{ __('preset') }} <span class="font-mono">boss-auto-wan</span>:
+                @if ($liveState['preset_exists']) <span class="text-green-700">{{ __('aktif') }}</span> @else <span class="text-gray-600">{{ __('tidak ada (Auto-WAN off)') }}</span> @endif
             </p>
+            @if ($liveState['preset_exists'])
+                <p>{{ __('Scope (precondition)') }}: <span class="font-mono break-all">{{ $liveState['precondition'] ?? '—' }}</span>
+                    @if (($liveState['precondition'] ?? '') === 'true') <span class="text-amber-700">({{ __('FLEET-WIDE — semua device') }})</span> @endif
+                </p>
+                @if ($liveState['preset_args'])
+                    <p class="font-mono break-all">args={{ json_encode($liveState['preset_args']) }}</p>
+                @endif
+            @endif
         </div>
     @else
         <p class="mb-6 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
@@ -83,6 +88,14 @@
                     <input type="text" wire:model="wan1_pppoe_password" @disabled(!$canManage) class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                     @error('wan1_pppoe_password') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                 </div>
+            </div>
+            <div class="pl-7">
+                <label class="block text-xs font-medium text-gray-600 mb-1">{{ __('SN Allowlist WAN1 (scope preset)') }}</label>
+                <textarea wire:model="wan1_serial_allowlist" rows="4" @disabled(!$canManage)
+                    placeholder="Satu Serial Number per baris.&#10;Kosong = FLEET-WIDE (precondition &quot;true&quot;, semua device)."
+                    class="block w-full rounded-md border-gray-300 shadow-sm text-sm font-mono"></textarea>
+                <p class="text-xs text-gray-400 mt-1">{{ __('SN di sini + SN di allowlist WAN2 digabung jadi precondition preset boss-auto-wan (DeviceID.SerialNumber = "..." OR ...). Selama fase testing, isi dengan SN modem test saja — supaya ~414 device fleet TIDAK terkena beban provision ini (sudah ada masalah too_many_commits kronis).') }}</p>
+                @error('wan1_serial_allowlist') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
             </div>
         </div>
 

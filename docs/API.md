@@ -1599,11 +1599,13 @@ REST** — singleton `remote_wan_configs` (id=1), tulis lewat `RemoteWanConfigSe
 
 Simpan → `SyncRemoteWanConfigToGenieAcsJob` (async) → `GenieAcsPresetService::syncAutoWanConfig()`:
 - `PUT http://genieacs-nbi:7557/provisions/default-wan` — isi script dari
-  `app/resources/genieacs/default-wan.js` (kanonik di repo).
-- `PUT http://genieacs-nbi:7557/presets/default` — `configurations[].args` untuk `default-wan` di-set dari
-  `RemoteWanConfig::toProvisionArgs()` (kontrak posisional: `[enabled, wan1_enabled, wan1_vlan,
-  wan1_pppoe_username, wan1_pppoe_password, wan2_enabled, wan2_vlan]`). `enabled=false` → `default-wan`
-  dikeluarkan total dari `configurations` preset.
+  `app/resources/genieacs/default-wan.js` (kanonik di repo). SELALU.
+- `enabled=true` → `PUT http://genieacs-nbi:7557/presets/boss-auto-wan` (preset TERPISAH, channel sendiri
+  — BUKAN `default`, yang fleet-wide + sudah bermasalah `too_many_commits`). `precondition` = union SN
+  `wan1_serial_allowlist` + `wan2_serial_allowlist` → `DeviceID.SerialNumber = "SN1" OR ...`, atau `"true"`
+  (fleet-wide) kalau kedua allowlist kosong. `configurations[0].args` = `RemoteWanConfig::toProvisionArgs()`
+  (8 elemen posisional, args[7] = CSV SN allowlist WAN2 in-script).
+- `enabled=false` → `DELETE http://genieacs-nbi:7557/presets/boss-auto-wan` (toleran 404).
 
 genieacs-nbi 1.2.16 **punya** endpoint `/presets/<id>` + `/provisions/<id>` (GET/PUT/DELETE) — dikonfirmasi
 live 2026-09-07 (komentar lama di `docker/genieacs/presets/apply.sh` yang menyatakan sebaliknya keliru).

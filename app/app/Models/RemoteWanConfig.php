@@ -29,6 +29,7 @@ class RemoteWanConfig extends Model
         'wan1_pppoe_password',
         'wan2_enabled',
         'wan2_vlan',
+        'wan2_serial_allowlist',
         'updated_by',
         'genieacs_sync_status',
         'genieacs_synced_at',
@@ -64,10 +65,28 @@ class RemoteWanConfig extends Model
     }
 
     /**
+     * @return list<string>
+     */
+    public function wan2SerialAllowlist(): array
+    {
+        return collect(preg_split('/[\s,;]+/', (string) $this->wan2_serial_allowlist))
+            ->map(fn ($s) => trim($s))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
      * Kontrak posisional `args` provision `default-wan` GenieACS.
      * GenieACS meng-evaluasi tiap arg sebagai ekspresi — boolean/angka
      * dikirim sebagai literal JS (`true`/`false`/`1000`), string sebagai
-     * string. `default-wan.js` membaca `args[0]`..`args[6]`.
+     * string. `default-wan.js` membaca `args[0]`..`args[7]`.
+     *
+     *   [0] enabled            [1] wan1_enabled       [2] wan1_vlan
+     *   [3] wan1_pppoe_username [4] wan1_pppoe_password
+     *   [5] wan2_enabled        [6] wan2_vlan
+     *   [7] wan2_serial_allowlist (CSV, kosong = izinkan semua)
      *
      * @return array<int, bool|int|string>
      */
@@ -81,6 +100,7 @@ class RemoteWanConfig extends Model
             (string) $this->wan1_pppoe_password,
             $this->wan2_enabled,
             $this->wan2_vlan,
+            implode(',', $this->wan2SerialAllowlist()),
         ];
     }
 

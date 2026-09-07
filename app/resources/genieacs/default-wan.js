@@ -16,6 +16,8 @@
 //   args[4] wan1Password       (string) default PPPoE password
 //   args[5] wan2Enabled        (bool)   provisioning WAN2 (bridge kedua)
 //   args[6] wan2Vlan           (int)
+//   args[7] wan2SerialAllowlist (string CSV) — kosong = izinkan semua;
+//           diisi = HANYA SN itu yang boleh diprovision WAN2 (fase testing)
 //
 // GenieACS meng-evaluasi tiap arg sebagai ekspresi; `args` di dalam script
 // adalah array nilai hasil evaluasi. Kalau preset TIDAK memasukkan
@@ -30,13 +32,15 @@
 // tidak boleh menghentikan refresh SSID/Hosts/optik yang andal di
 // provision lain.
 //
-// IDEMPOTEN: tiap blok cek state perangkat LIVE dulu (declare `{value:
-// Date.now()}` = baca segar) sebelum reconfigure — pola dipertahankan
-// persis dari script referensi. WAN1: skip kalau WANPPPConnection.1.
-// Username sudah terisi di perangkat (jadi pelanggan existing tidak
-// disentuh, hanya ONT baru/factory-reset). WAN2: skip pembuatan kalau
-// instance ke-2 sudah ada, tapi binding SSID2 tetap di-assert ulang tiap
-// Inform.
+// IDEMPOTEN — cek BERDASARKAN ISI, bukan posisi:
+//   WAN1: skip kalau SUDAH ada WANPPPConnection.*.1.Username terisi di
+//     perangkat (pelanggan existing tidak disentuh, hanya ONT baru/
+//     factory-reset).
+//   WAN2: skip kalau SUDAH ada koneksi ber-ConnectionType "*Bridged*"
+//     dengan VLAN == wan2Vlan di POSISI MANA PUN (bukan cuma slot .2) +
+//     gate SN allowlist. Kalau lolos guard, bridge BARU dibuat di
+//     WANConnectionDevice.1 instance .2; binding SSID2 di-assert ulang
+//     tiap Inform hanya kalau device memang genuinely dapat WAN2.
 
 const enabled = args[0] === true || args[0] === "true" || args[0] === 1;
 if (enabled) {
@@ -46,6 +50,11 @@ if (enabled) {
   const wan1Password = String(args[4] != null ? args[4] : "default");
   const wan2Enabled = args[5] === true || args[5] === "true" || args[5] === 1;
   const wan2Vlan = parseInt(args[6], 10);
+  // SN allowlist WAN2 (CSV) — lapisan keamanan tambahan fase testing.
+  // Kosong = izinkan semua. Diisi = HANYA SN itu yang boleh diprovision
+  // WAN2 (dilonggarkan setelah guard content-based di bawah terbukti).
+  const wan2Allowlist = String(args[7] != null ? args[7] : "")
+    .split(",").map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
 
   const manufacturer = declare("DeviceID.Manufacturer", { value: 1 }).value[0];
   const hwSerial = declare("InternetGatewayDevice.DeviceInfo.X_HW_SerialNumber", { value: 1 });
@@ -152,15 +161,51 @@ if (enabled) {
   }
 
   // ───────────────────────── WAN2: bridge kedua ──────────────────────────
-  // PENTING (dari script referensi): WAN kedua NAMBAH INSTANCE di
-  // WANConnectionDevice.1 yang SAMA (instance .2), BUKAN WANConnectionDevice.2
-  // — perangkat cuma punya 1 slot WANConnectionDevice. Huawei pakai
-  // WANIPConnection.2 (IP_Bridged), CMCC/ZTE pakai WANPPPConnection.2
-  // (PPPoE_Bridged). Semua NAT OFF.
+  // PENTING (dari script referensi): WAN kedua BARU dibuat sebagai INSTANCE
+  // di WANConnectionDevice.1 yang SAMA (instance .2), BUKAN
+  // WANConnectionDevice.2 — perangkat cuma punya 1 slot WANConnectionDevice.
+  // Huawei pakai WANIPConnection.2 (IP_Bridged), CMCC/ZTE pakai
+  // WANPPPConnection.2 (PPPoE_Bridged). Semua NAT OFF.
+  //
+  // GUARD v2 (redesign 2026-09-07, keputusan Agung) — cek BERDASARKAN ISI,
+  // BUKAN posisi. "0 device punya WAN2" itu cuma soal slot instance ke-2 —
+  // sebagian device mungkin sudah punya bridge WAN di slot LAIN (hasil
+  // konfigurasi manual teknisi beda-beda). Guard yang cuma cek posisi bisa
+  // gagal deteksi bridge existing lalu bikin DOBEL. `bridgeWithTargetVlanExists()`
+  // menyapu WANConnectionDevice 1-2 × {WANIPConnection, WANPPPConnection}
+  // 1-3 mencari SATU koneksi yang `ConnectionType` mengandung "bridg"
+  // (case-insensitive: IP_Bridged / PPPoE_Bridged) DAN VLAN ID-nya
+  // (X_HW_VLAN / X_CMCC_VLANIDMark / X_ZTE-COM_VLANID) == wan2Vlan, di posisi
+  // MANA PUN. Kalau ada → skip total. Bias ke aman: kalau ragu (field tak
+  // terbaca) diperlakukan sebagai "tidak ada", TAPI SN allowlist di bawah
+  // adalah jaring pengaman sesungguhnya selama guard ini belum terverifikasi
+  // ke device asli.
   if (wan2Enabled && !isNaN(wan2Vlan)) {
+    const deviceSerial = String((declare("DeviceID.SerialNumber", { value: 1 }).value || [""])[0] || "");
+    const serialAllowed = wan2Allowlist.length === 0 || wan2Allowlist.indexOf(deviceSerial) !== -1;
+
+    const vlanFieldFor = isHuawei ? "X_HW_VLAN" : (isCMCC ? "X_CMCC_VLANIDMark" : "X_ZTE-COM_VLANID");
+    let bridgeWithTargetVlanExists = false;
+    for (let wcd = 1; wcd <= 2 && !bridgeWithTargetVlanExists; wcd++) {
+      for (let ci = 0; ci < 2 && !bridgeWithTargetVlanExists; ci++) {
+        const connType = ci === 0 ? "WANIPConnection" : "WANPPPConnection";
+        for (let inst = 1; inst <= 3 && !bridgeWithTargetVlanExists; inst++) {
+          const scanBase = `${wanDevicePath}.WANConnectionDevice.${wcd}.${connType}.${inst}`;
+          const ct = declare(`${scanBase}.ConnectionType`, { value: Date.now() });
+          if (!(ct.size && ct.value && ct.value[0])) continue;
+          if (String(ct.value[0]).toLowerCase().indexOf("bridg") === -1) continue;
+          const scanVlan = declare(`${scanBase}.${vlanFieldFor}`, { value: Date.now() });
+          if (scanVlan.size && scanVlan.value && parseInt(scanVlan.value[0], 10) === wan2Vlan) {
+            bridgeWithTargetVlanExists = true;
+          }
+        }
+      }
+    }
+
+    const shouldProvisionWan2 = serialAllowed && !bridgeWithTargetVlanExists;
     const wan2LanTarget = "InternetGatewayDevice.LANDevice.1.WLANConfiguration.2";
 
-    if (isHuawei) {
+    if (shouldProvisionWan2 && isHuawei) {
       const wan1IpPath = `${wanDevicePath}.WANConnectionDevice.1.WANIPConnection`;
       const wan2Check = declare(`${wan1IpPath}.2.ConnectionType`, { value: Date.now() });
       if (!(wan2Check.size && wan2Check.value[0])) {
@@ -182,7 +227,7 @@ if (enabled) {
         declare(`${wan1IpPath}.2.X_HW_LANBIND.SSID2Enable`, null, { value: 1 });
         commit();
       }
-    } else if (isCMCC) {
+    } else if (shouldProvisionWan2 && isCMCC) {
       const wan1PppPath = `${wanDevicePath}.WANConnectionDevice.1.WANPPPConnection`;
       const wan2Check = declare(`${wan1PppPath}.2.ConnectionType`, { value: Date.now() });
       if (!(wan2Check.size && wan2Check.value[0])) {
@@ -206,7 +251,7 @@ if (enabled) {
         declare(`${wan1PppPath}.2.X_CMCC_LanInterface`, null, { value: wan2LanTarget });
         commit();
       }
-    } else if (isZTEGeneric) {
+    } else if (shouldProvisionWan2 && isZTEGeneric) {
       const wan1PppPath = `${wanDevicePath}.WANConnectionDevice.1.WANPPPConnection`;
       const wan2Check = declare(`${wan1PppPath}.2.ConnectionType`, { value: Date.now() });
       if (!(wan2Check.size && wan2Check.value[0])) {

@@ -102,6 +102,14 @@
                     @error('wan2_vlan') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                 </div>
             </div>
+            <div class="pl-7">
+                <label class="block text-xs font-medium text-gray-600 mb-1">{{ __('SN Allowlist WAN2 (lapisan keamanan fase testing)') }}</label>
+                <textarea wire:model="wan2_serial_allowlist" rows="4" @disabled(!$canManage)
+                    placeholder="Satu Serial Number per baris.&#10;Kosong = izinkan SEMUA device (guard content-based saja)."
+                    class="block w-full rounded-md border-gray-300 shadow-sm text-sm font-mono"></textarea>
+                <p class="text-xs text-gray-400 mt-1">{{ __('Selama guard "cek bridge di posisi mana pun" belum terverifikasi ke device asli, WAN2 HANYA menyentuh SN di daftar ini. Dilonggarkan (dikosongkan) setelah guard terbukti reliable.') }}</p>
+                @error('wan2_serial_allowlist') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+            </div>
         </div>
 
         @if ($canManage)

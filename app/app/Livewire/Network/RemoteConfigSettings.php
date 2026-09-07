@@ -47,6 +47,10 @@ class RemoteConfigSettings extends Component
     #[Validate('required|integer|min:1|max:4094')]
     public int $wan2_vlan = 1200;
 
+    /** SN allowlist WAN2, satu per baris. Kosong = izinkan semua. */
+    #[Validate('nullable|string|max:20000')]
+    public string $wan2_serial_allowlist = '';
+
     public ?string $flash = null;
 
     /** State efektif di GenieACS live (diisi mount/refresh, null kalau genieacs-nbi tak terjangkau). */
@@ -69,6 +73,7 @@ class RemoteConfigSettings extends Component
         $this->wan1_pppoe_password = (string) $config->wan1_pppoe_password;
         $this->wan2_enabled = (bool) $config->wan2_enabled;
         $this->wan2_vlan = (int) $config->wan2_vlan;
+        $this->wan2_serial_allowlist = (string) $config->wan2_serial_allowlist;
     }
 
     private function loadLiveState(GenieAcsPresetService $presets): void
@@ -94,6 +99,7 @@ class RemoteConfigSettings extends Component
             'wan1_pppoe_password' => $validated['wan1_pppoe_password'],
             'wan2_enabled' => $validated['wan2_enabled'],
             'wan2_vlan' => $validated['wan2_vlan'],
+            'wan2_serial_allowlist' => $validated['wan2_serial_allowlist'] ?: null,
         ], auth()->user());
 
         $this->flash = 'Konfigurasi disimpan. Sinkronisasi ke GenieACS berjalan di latar belakang '

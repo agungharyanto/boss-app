@@ -25,7 +25,7 @@ class RemoteWanConfigService
      * @param  array{
      *   enabled?: bool, wan1_enabled?: bool, wan1_vlan?: int,
      *   wan1_pppoe_username?: string, wan1_pppoe_password?: string,
-     *   wan2_enabled?: bool, wan2_vlan?: int
+     *   wan2_enabled?: bool, wan2_vlan?: int, wan2_serial_allowlist?: ?string
      * }  $data
      */
     public function save(array $data, User $actor): RemoteWanConfig

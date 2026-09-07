@@ -68,7 +68,7 @@ class GenieAcsPresetServiceTest extends TestCase
             $this->assertSame(['default', 'default-optical', 'default-wan'], $names);
             $wan = collect($body['configurations'])->firstWhere('name', 'default-wan');
             // Kontrak args posisional: [enabled, wan1_enabled, wan1_vlan, user, pass, wan2_enabled, wan2_vlan]
-            $this->assertSame([true, true, 1234, 'boss', 's3cr3t', false, 1200], $wan['args']);
+            $this->assertSame([true, true, 1234, 'boss', 's3cr3t', false, 1200, ''], $wan['args']);
 
             return true;
         });
@@ -179,7 +179,7 @@ class GenieAcsPresetServiceTest extends TestCase
             'genieacs-nbi:7557/provisions/*' => Http::response([['_id' => 'default-wan']], 200),
             'genieacs-nbi:7557/presets/*' => Http::response([[
                 '_id' => 'default',
-                'configurations' => [['type' => 'provision', 'name' => 'default-wan', 'args' => [true, true, 1000, 'default', 'default', false, 1200]]],
+                'configurations' => [['type' => 'provision', 'name' => 'default-wan', 'args' => [true, true, 1000, 'default', 'default', false, 1200, '']]],
             ]], 200),
         ]);
 
@@ -187,7 +187,7 @@ class GenieAcsPresetServiceTest extends TestCase
 
         $this->assertTrue($state['provision_exists']);
         $this->assertTrue($state['in_preset']);
-        $this->assertSame([true, true, 1000, 'default', 'default', false, 1200], $state['preset_args']);
+        $this->assertSame([true, true, 1000, 'default', 'default', false, 1200, ''], $state['preset_args']);
     }
 
     public function test_auto_wan_script_reads_the_canonical_file(): void
@@ -198,5 +198,34 @@ class GenieAcsPresetServiceTest extends TestCase
         $this->assertStringContainsString('isHuawei', $script);
         $this->assertStringContainsString('isCMCC', $script);
         $this->assertStringContainsString('isZTEGeneric', $script);
+        // Guard WAN2 v2 — cek isi (bridge di posisi mana pun) + SN allowlist.
+        $this->assertStringContainsString('bridgeWithTargetVlanExists', $script);
+        $this->assertStringContainsString('wan2Allowlist', $script);
+        $this->assertStringContainsString('DeviceID.SerialNumber', $script);
+    }
+
+    public function test_serial_allowlist_is_normalized_into_a_csv_arg(): void
+    {
+        $this->fakeGenieAcs([['type' => 'provision', 'name' => 'default', 'args' => []]]);
+
+        $config = RemoteWanConfig::current();
+        $config->update([
+            'enabled' => true, 'wan2_enabled' => true,
+            'wan2_serial_allowlist' => "ZTEGC1234567\n  HWTC0089ABCD  \nZTEGC1234567\n\nCMDC00AA11BB",
+        ]);
+
+        $this->service()->syncAutoWanConfig($config->fresh());
+
+        Http::assertSent(function ($request) {
+            if ($request->method() !== 'PUT' || ! str_contains($request->url(), '/presets/default')) {
+                return false;
+            }
+            $body = json_decode((string) $request->body(), true);
+            $wan = collect($body['configurations'])->firstWhere('name', 'default-wan');
+            // Dedup + trim + join koma; urutan dipertahankan.
+            $this->assertSame('ZTEGC1234567,HWTC0089ABCD,CMDC00AA11BB', $wan['args'][7]);
+
+            return true;
+        });
     }
 }

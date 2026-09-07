@@ -72,13 +72,21 @@ if (enabled) {
   const wanDevicePath = "InternetGatewayDevice.WANDevice.1";
 
   // ───────────────────────── WAN1: internet PPPoE ─────────────────────────
+  // GUARD berbasis ISI, bukan posisi: skip TOTAL kalau device SUDAH punya
+  // WANPPPConnection dengan Username terisi di POSISI MANA PUN. Script
+  // referensi cuma cek WANConnectionDevice 1-5 instance .1 — tapi CLAUDE.md
+  // sendiri mencatat koneksi INTERNET pelanggan nyata pernah ada di
+  // WANConnectionDevice.6 (dan instance .2 untuk sebagian). Diperlebar ke
+  // WCD 1-8 x WANPPPConnection 1-3 supaya pelanggan existing TIDAK PERNAH
+  // ter-provision ulang tak sengaja.
   if (wan1Enabled && !isNaN(wan1Vlan)) {
     let wan1AlreadyConfigured = false;
-    for (let i = 1; i <= 5; i++) {
-      const pppCheck = declare(`${wanDevicePath}.WANConnectionDevice.${i}.WANPPPConnection.1.Username`, { value: Date.now() });
-      if (pppCheck.size && pppCheck.value[0]) {
-        wan1AlreadyConfigured = true;
-        break;
+    for (let wcd = 1; wcd <= 8 && !wan1AlreadyConfigured; wcd++) {
+      for (let inst = 1; inst <= 3 && !wan1AlreadyConfigured; inst++) {
+        const pppCheck = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.WANPPPConnection.${inst}.Username`, { value: Date.now() });
+        if (pppCheck.size && pppCheck.value && pppCheck.value[0]) {
+          wan1AlreadyConfigured = true;
+        }
       }
     }
 

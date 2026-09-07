@@ -82,7 +82,7 @@ if (enabled) {
   if (wan1Enabled && !isNaN(wan1Vlan)) {
     let wan1AlreadyConfigured = false;
     for (let wcd = 1; wcd <= 8 && !wan1AlreadyConfigured; wcd++) {
-      for (let inst = 1; inst <= 3 && !wan1AlreadyConfigured; inst++) {
+      for (let inst = 1; inst <= 2 && !wan1AlreadyConfigured; inst++) {
         const pppCheck = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.WANPPPConnection.${inst}.Username`, { value: Date.now() });
         if (pppCheck.size && pppCheck.value && pppCheck.value[0]) {
           wan1AlreadyConfigured = true;

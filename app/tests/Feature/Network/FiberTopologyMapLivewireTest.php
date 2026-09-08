@@ -524,4 +524,20 @@ class FiberTopologyMapLivewireTest extends TestCase
             ->call('openMarkerPanel', 'fiber_node', 999999)
             ->assertSet('markerPanel', null);
     }
+
+    public function test_revisi_a_undo_last_waypoint_button_is_rendered_and_wired_in_the_bundle(): void
+    {
+        [$tenant] = $this->cableWithCores();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberTopologyMap::class)
+            ->assertSee('Undo Titik Terakhir')
+            ->assertSeeHtml('undoLastWaypoint()');
+
+        $built = collect(glob(public_path('build/assets/app-*.js')))
+            ->map(fn ($f) => (string) file_get_contents($f))
+            ->implode("\n");
+
+        $this->assertStringContainsString('undoLastWaypoint', $built);
+    }
 }

@@ -411,6 +411,17 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
             this.redrawEdit();
         },
 
+        /* v0.16.1 Revisi A — one-click undo of the most recently added
+           waypoint (tap-add or drag-inserted), clickable repeatedly to
+           peel back several. Still client-side until "Simpan Rute". */
+        undoLastWaypoint() {
+            if (this.editWaypoints.length === 0) {
+                return;
+            }
+            this.editWaypoints.pop();
+            this.redrawEdit();
+        },
+
         fmtLatLng(p) {
             return Number(p[0]).toFixed(6) + ', ' + Number(p[1]).toFixed(6);
         },

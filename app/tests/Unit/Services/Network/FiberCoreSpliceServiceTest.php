@@ -163,6 +163,65 @@ class FiberCoreSpliceServiceTest extends TestCase
         $this->assertSame(1, $this->service->splicesForNode($closure->fresh())->count());
     }
 
+    /**
+     * A Closure with TWO incoming cables (both `to` = closure) and TWO
+     * outgoing (both `from` = closure) — for the direction guard.
+     *
+     * @return array{0: FiberNode, 1: FiberCable, 2: FiberCable, 3: FiberCable, 4: FiberCable}
+     */
+    private function closureWithTwoInTwoOut(): array
+    {
+        $tenant = Tenant::factory()->create();
+        $this->actingAs(User::factory()->create(['tenant_id' => $tenant->id]));
+
+        $closure = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'closure', 'port_count' => null]);
+        $topo = app(FiberTopologyService::class);
+
+        $mk = function (bool $incoming) use ($tenant, $closure, $topo) {
+            $other = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'odc', 'port_count' => null]);
+
+            return $topo->createCable([
+                'tenant_id' => $tenant->id,
+                'from_type' => FiberNode::class, 'from_id' => $incoming ? $other->id : $closure->id,
+                'to_type' => FiberNode::class, 'to_id' => $incoming ? $closure->id : $other->id,
+                'total_cores' => 2, 'tube_count' => 1, 'cores_per_tube' => 2,
+            ]);
+        };
+
+        return [$closure, $mk(true), $mk(true), $mk(false), $mk(false)];
+    }
+
+    public function test_rejects_a_splice_between_two_incoming_cables(): void
+    {
+        [$closure, $in1, $in2] = $this->closureWithTwoInTwoOut();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('kabel masuk dengan kabel keluar');
+        $this->service->createSplice($closure, $in1->cores()->first(), $in2->cores()->first());
+    }
+
+    public function test_rejects_a_splice_between_two_outgoing_cables(): void
+    {
+        [$closure, , , $out1, $out2] = $this->closureWithTwoInTwoOut();
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('kabel masuk dengan kabel keluar');
+        $this->service->createSplice($closure, $out1->cores()->first(), $out2->cores()->first());
+    }
+
+    public function test_accepts_a_splice_between_an_incoming_and_an_outgoing_cable_either_order(): void
+    {
+        [$closure, $in1, , $out1] = $this->closureWithTwoInTwoOut();
+
+        // incoming -> outgoing
+        $s1 = $this->service->createSplice($closure, $in1->cores()->orderBy('id')->get()[0], $out1->cores()->orderBy('id')->get()[0]);
+        // outgoing -> incoming (reversed argument order still fine)
+        $s2 = $this->service->createSplice($closure, $out1->cores()->orderBy('id')->get()[1], $in1->cores()->orderBy('id')->get()[1]);
+
+        $this->assertDatabaseHas('fiber_core_splices', ['id' => $s1->id]);
+        $this->assertDatabaseHas('fiber_core_splices', ['id' => $s2->id]);
+    }
+
     public function test_works_at_an_odp_node_polymorphic(): void
     {
         $tenant = Tenant::factory()->create();

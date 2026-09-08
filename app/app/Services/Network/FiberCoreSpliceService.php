@@ -88,6 +88,30 @@ class FiberCoreSpliceService
                 throw new InvalidArgumentException("Core sisi \"{$side}\" sudah tersambung ke core lain — lepas dulu splice yang lama.");
             }
         }
+
+        // v0.16.1 Revisi C — a through-splice must connect an INCOMING
+        // cable (its `to` end is this node) with an OUTGOING one (its
+        // `from` end is this node). Reject two incoming or two outgoing.
+        // No limit on how many cables of each direction touch the node —
+        // this is purely about the orientation of THIS pair. A self-loop
+        // cable (both ends this node) satisfies either side.
+        $fromCable = $from->fiberCable;
+        $toCable = $to->fiberCable;
+
+        $fromIn = $this->cableEndsAt($fromCable, $node, 'to');
+        $fromOut = $this->cableEndsAt($fromCable, $node, 'from');
+        $toIn = $this->cableEndsAt($toCable, $node, 'to');
+        $toOut = $this->cableEndsAt($toCable, $node, 'from');
+
+        if (! (($fromIn && $toOut) || ($fromOut && $toIn))) {
+            throw new InvalidArgumentException('Splice harus menghubungkan kabel masuk dengan kabel keluar (bukan dua-duanya masuk atau dua-duanya keluar).');
+        }
+    }
+
+    private function cableEndsAt(FiberCable $cable, FiberNode|Odp $node, string $end): bool
+    {
+        return $cable->{"{$end}_type"} === $node::class
+            && (int) $cable->{"{$end}_id"} === $node->id;
     }
 
     private function cableTouchesNode(FiberCable $cable, FiberNode|Odp $node): bool

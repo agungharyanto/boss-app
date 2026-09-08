@@ -129,6 +129,7 @@
                         <span x-show="!tapAddMode">{{ __('Mode Edit Rute (tap peta)') }}</span>
                         <span x-show="tapAddMode">{{ __('Mode Edit AKTIF — tap peta untuk tambah titik') }}</span>
                     </button>
+                    <button type="button" x-on:click="undoLastWaypoint()" x-bind:disabled="editWaypoints.length === 0" class="px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">{{ __('Undo Titik Terakhir') }}</button>
                     <button type="button" x-on:click="persistRoute()" class="px-3 py-1 bg-primary text-white rounded-md hover:opacity-90">{{ __('Simpan Rute') }}</button>
                     <button type="button" x-on:click="resetRoute()" class="px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50">{{ __('Batalkan perubahan') }}</button>
                     <button type="button" x-on:click="stopEditing()" class="px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50">{{ __('Selesai') }}</button>

@@ -41,6 +41,12 @@ class FiberNodeDetail extends Component
     /** @var array<int, string> coreId => PON port label */
     public array $oltPonInputs = [];
 
+    /* v0.16.1 Revisi E — cari + tukar cepat di tabel "Assign Port ke Core" */
+    public string $portSearch = '';
+
+    /** @var list<int> core ids picked for a port swap (max 2) */
+    public array $swapSelection = [];
+
     public bool $showAccessoryForm = false;
 
     public string $accTargetKey = '';
@@ -168,6 +174,56 @@ class FiberNodeDetail extends Component
         session()->flash('port-status', 'Semua patching port disimpan.');
     }
 
+    /* ---- v0.16.1 Revisi E — search + swap in "Assign Port ke Core" ---- */
+
+    /** Pick / unpick a core row for a swap; keep at most the last 2. */
+    public function toggleSwapSelection(int $coreId): void
+    {
+        if (in_array($coreId, $this->swapSelection, true)) {
+            $this->swapSelection = array_values(array_filter($this->swapSelection, fn ($id) => $id !== $coreId));
+
+            return;
+        }
+
+        $this->swapSelection[] = $coreId;
+
+        if (count($this->swapSelection) > 2) {
+            array_shift($this->swapSelection);
+        }
+    }
+
+    public function swapPorts(FiberTopologyService $service): void
+    {
+        abort_unless(auth()->user()->can('network_infrastructure.manage'), 403);
+        abort_unless($this->targetType === FiberNode::class, 400);
+
+        if (count($this->swapSelection) !== 2) {
+            $this->addError('swapSelection', 'Pilih tepat dua core untuk ditukar.');
+
+            return;
+        }
+
+        $otb = FiberNode::findOrFail($this->targetId);
+
+        try {
+            $service->swapCorePorts($otb, $this->swapSelection[0], $this->swapSelection[1]);
+        } catch (InvalidArgumentException $e) {
+            $this->addError('swapSelection', $e->getMessage());
+
+            return;
+        }
+
+        // re-seed the port inputs so the table reflects the swapped values
+        foreach ($service->coresFromNode($otb) as $core) {
+            $this->portInputs[$core->id] = (string) ($core->port_number ?? '');
+            $this->oltDeviceInputs[$core->id] = (string) ($core->olt_device_id ?? '');
+            $this->oltPonInputs[$core->id] = (string) ($core->olt_pon_port_label ?? '');
+        }
+
+        $this->swapSelection = [];
+        session()->flash('port-status', 'Nomor port dua core berhasil ditukar.');
+    }
+
     public function updatedAccType(): void
     {
         $this->prefillAccessoryLoss();
@@ -259,8 +315,11 @@ class FiberNodeDetail extends Component
             ->reject(fn (FiberCore $c) => in_array($c->id, $takenIds, true))
             ->map(fn (FiberCore $c) => [
                 'id' => $c->id,
-                'label' => "T{$c->tube_number}/C{$c->core_number_in_tube}"
-                    .($c->core_color !== null ? " ({$c->core_color})" : ''),
+                // v0.16.1 Revisi B — full "Tube N (Warna) / Core M (Warna)"
+                // label; tube & core colour can differ when a core colour
+                // was overridden manually.
+                'label' => "Tube {$c->tube_number}".($c->tube_color !== null ? " ({$c->tube_color})" : '')
+                    ." / Core {$c->core_number_in_tube}".($c->core_color !== null ? " ({$c->core_color})" : ''),
             ])
             ->values()
             ->all();
@@ -328,6 +387,24 @@ class FiberNodeDetail extends Component
     }
 
     /**
+     * v0.16.1 Revisi C — delete a cable shown on this node's "Diagram
+     * Splice" (incoming or outgoing). Scoped: the cable must actually
+     * touch this node. Cores / splices / port logs / accessories /
+     * waypoints of the cable go with it via DB cascade.
+     */
+    public function deleteCable(int $cableId, FiberTopologyService $service): void
+    {
+        abort_unless(auth()->user()->can('network_infrastructure.manage'), 403);
+
+        $cable = FiberCable::findOrFail($cableId);
+
+        abort_unless($this->cableTouchesTarget($cable), 403);
+
+        $service->deleteCable($cable);
+        session()->flash('cable-status', 'Kabel beserta core, splice, waypoint, dan aksesori terkait sudah dihapus.');
+    }
+
+    /**
      * @return list<array{id: int, label: string}>
      */
     private function spliceCableOptions(FiberTopologyService $service): array
@@ -347,13 +424,32 @@ class FiberNodeDetail extends Component
         $data = $service->spliceDiagramData($target);
 
         $isOtb = $target instanceof FiberNode && $target->node_type === FiberNodeType::Otb;
-        $assignableCores = $isOtb ? $service->assignableOtbCores($target) : [];
+        $allAssignableCores = $isOtb ? $service->assignableOtbCores($target) : [];
 
-        foreach ($assignableCores as $core) {
+        foreach ($allAssignableCores as $core) {
             $this->portInputs[$core['core_id']] ??= (string) ($core['port_number'] ?? '');
             $this->oltDeviceInputs[$core['core_id']] ??= (string) ($core['olt_device_id'] ?? '');
             $this->oltPonInputs[$core['core_id']] ??= (string) ($core['olt_pon_port_label'] ?? '');
         }
+
+        // v0.16.1 Revisi E — filter the visible rows by port number, tube
+        // colour name, core colour name, "tube N", or the cable name.
+        $needle = mb_strtolower(trim($this->portSearch));
+        $assignableCores = $needle === ''
+            ? $allAssignableCores
+            : array_values(array_filter($allAssignableCores, function (array $c) use ($needle) {
+                $haystack = mb_strtolower(implode(' ', array_filter([
+                    (string) ($c['port_number'] ?? ''),
+                    'port '.(string) ($c['port_number'] ?? ''),
+                    'tube '.$c['tube_number'],
+                    'core '.$c['core_number_in_tube'],
+                    (string) ($c['tube_color'] ?? ''),
+                    (string) ($c['core_color'] ?? ''),
+                    (string) ($c['cable_description'] ?? ''),
+                ])));
+
+                return str_contains($haystack, $needle);
+            }));
 
         $spliceCableOptions = $isOtb ? [] : $this->spliceCableOptions($service);
 
@@ -364,7 +460,9 @@ class FiberNodeDetail extends Component
             'portCount' => $isOtb ? (int) ($target->port_count ?? 0) : 0,
             'portSimulation' => $isOtb ? $service->otbPortSimulation($target) : [],
             'assignableCores' => $assignableCores,
+            'hasAnyAssignableCore' => $isOtb && count($allAssignableCores) > 0,
             'oltOptions' => $isOtb ? $service->oltDeviceOptions() : [],
+            'oltPonCounts' => $isOtb ? $service->oltPonPortCounts() : [],
             'portLogs' => $isOtb ? $service->otbPortLogs($target, 3) : collect(),
             'accessoryTargets' => $service->accessoryTargetsForNode($target),
             'accessoryTypes' => FiberAccessoryType::cases(),

@@ -677,6 +677,20 @@ class FiberTopologyService
      *
      * @param  list<array{lat: float|string, lng: float|string}>  $points
      */
+    /**
+     * v0.16.1 Revisi C — delete a cable and everything hanging off it.
+     * The DB does the cascade (all confirmed ON DELETE CASCADE in their
+     * own migrations): fiber_cores → fiber_core_port_logs /
+     * fiber_core_splices (either side) / fiber_accessories(fiber_cable_id);
+     * plus fiber_cable_waypoints directly. A splice that used one of this
+     * cable's cores disappears WITH the cable (not blocked) — the physical
+     * cable is gone, so the through-splice at its end is meaningless.
+     */
+    public function deleteCable(FiberCable $cable): void
+    {
+        $cable->delete();
+    }
+
     public function replaceCableWaypoints(FiberCable $cable, array $points): void
     {
         DB::transaction(function () use ($cable, $points) {
@@ -1157,6 +1171,24 @@ class FiberTopologyService
     }
 
     /**
+     * v0.16.1 Revisi F — [olt_device_id => pon_port_count] for every OLT
+     * that has a manually-configured PON port count. The assign-port
+     * table uses this to switch olt_pon_port_label from a free-text field
+     * to a "PON 1".."PON N" dropdown for that device; a device absent
+     * from this map keeps the free-text input.
+     *
+     * @return array<int, int>
+     */
+    public function oltPonPortCounts(): array
+    {
+        return OltDevice::query()
+            ->whereNotNull('pon_port_count')
+            ->pluck('pon_port_count', 'id')
+            ->map(fn ($n) => (int) $n)
+            ->all();
+    }
+
+    /**
      * v0.16.0 Langkah 7 — the last few port-assignment changes on an OTB,
      * for the "riwayat singkat" under the Simulasi Port table.
      *
@@ -1206,6 +1238,40 @@ class FiberTopologyService
         });
 
         return $core->refresh();
+    }
+
+    /**
+     * v0.16.1 Revisi E — swap the OTB port_number of two cores in one
+     * atomic action (real-world case: a technician spliced two cores onto
+     * the wrong ports and just needs them exchanged). Each core keeps its
+     * OWN olt_device_id / olt_pon_port_label — only port_number is
+     * exchanged. Safe to do without an intermediate "clear one first"
+     * step: fiber_cores.port_number has NO DB unique index (it's a
+     * cross-table "port belongs to an OTB" concept, app-enforced only),
+     * so there's no transient constraint violation to dodge — the whole
+     * thing still runs in one transaction. Audit-logged per core via
+     * applyCoreAssignment().
+     */
+    public function swapCorePorts(FiberNode $otb, int $coreIdA, int $coreIdB): void
+    {
+        if ($coreIdA === $coreIdB) {
+            throw new InvalidArgumentException('Pilih dua core yang berbeda.');
+        }
+
+        $cores = $this->coresFromNode($otb)->keyBy('id');
+        $a = $cores->get($coreIdA);
+        $b = $cores->get($coreIdB);
+
+        if ($a === null || $b === null) {
+            throw new InvalidArgumentException('Salah satu core bukan dari kabel yang terhubung ke OTB ini.');
+        }
+
+        $aPort = $a->port_number;
+
+        DB::transaction(function () use ($a, $b, $otb, $aPort) {
+            $this->applyCoreAssignment($a, $otb, $b->port_number, $a->olt_device_id, $a->olt_pon_port_label);
+            $this->applyCoreAssignment($b, $otb, $aPort, $b->olt_device_id, $b->olt_pon_port_label);
+        });
     }
 
     /**

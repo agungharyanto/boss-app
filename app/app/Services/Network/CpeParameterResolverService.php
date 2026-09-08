@@ -4,6 +4,7 @@ namespace App\Services\Network;
 
 use App\Models\CpeDeviceModelCapability;
 use App\Models\CpeParameterMap;
+use Illuminate\Support\Collection;
 
 /**
  * Ties CpeParameterMap (which path, which formula) to a real GenieACS
@@ -45,10 +46,7 @@ class CpeParameterResolverService
             return [];
         }
 
-        $maps = CpeParameterMap::query()
-            ->where('oui', $oui)
-            ->where('product_class', $productClass)
-            ->get();
+        $maps = $this->mapsFor($oui, $productClass);
 
         $resolved = [];
 
@@ -133,13 +131,84 @@ class CpeParameterResolverService
     private const MAC_ALL_ZERO_PLACEHOLDER = '00:00:00:00:00:00';
 
     /**
-     * The one place MAC/RX/TX/uptime get pulled out of resolveForDevice()'s
-     * generic keyed-by-parameter_key result into the fixed shape every UI
+     * Objek optik yang MELAPORKAN NILAI SUDAH DALAM dBm (langsung pakai raw).
+     * Sumber: pola VirtualParameters GenieACS rekan Agung
+     * (`virtualParameters-2026-09-02...csv`) — Huawei/FiberHome/Nokia.
+     */
+    private const OPTICAL_DIRECT_OBJECTS = [
+        'X_GponInterafceConfig',     // Huawei (ejaan "Interafce" apa adanya)
+        'X_FH_GponInterfaceConfig',  // FiberHome
+    ];
+
+    /**
+     * Objek optik dengan RAW SFF-8472 (perlu 10*log10(raw * scale)). Sebagian
+     * firmware ZTE justru sudah melaporkan dBm di objek yang sama — ditandai
+     * oleh nilai NEGATIF, dalam hal itu raw dipakai langsung (persis logika
+     * VP `RXPower`: `if (zteval < 0) m = zteval`).
+     */
+    private const OPTICAL_SFF8472_OBJECTS = [
+        'X_CT-COM_GponInterfaceConfig',
+        'X_CT-COM_EponInterfaceConfig',
+        'X_CMCC_GponInterfaceConfig',
+        'X_CMCC_EponInterfaceConfig',
+        'X_ZTE-COM_WANPONInterfaceConfig',
+        'X_CU_WANEPONInterfaceConfig.OpticalTransceiver',
+        'X_CU_WANGPONInterfaceConfig.OpticalTransceiver',
+    ];
+
+    private const OPTICAL_SFF8472_SCALE = 0.0001;
+
+    /**
+     * `cpe_parameter_maps` yang cocok untuk (OUI, ProductClass) — dengan
+     * FALLBACK ke product_class saja kalau tidak ada baris untuk OUI persis
+     * itu (2026-09-02). Path/formula optik ditentukan oleh MODEL, bukan OUI
+     * (OUI cuma prefiks MAC pabrikan; model yang sama bisa dikirim dgn
+     * beberapa batch OUI). Fleet nyata: `M63X-XPON` / `GM220-S` / `H3-2s`
+     * masing-masing punya 5-15 OUI berbeda, `cpe_parameter_maps` hanya
+     * meng-cover sebagian → tanpa fallback ini, RX/TX kosong untuk mayoritas
+     * perangkat padahal datanya ADA di pohon.
+     *
+     * @return Collection<int, CpeParameterMap>
+     */
+    private function mapsFor(?string $oui, ?string $productClass)
+    {
+        if ($productClass === null) {
+            return collect();
+        }
+
+        $exact = CpeParameterMap::query()
+            ->where('oui', $oui)
+            ->where('product_class', $productClass)
+            ->get();
+
+        if ($exact->isNotEmpty()) {
+            return $exact;
+        }
+
+        // Satu baris per parameter_key (OUI mana pun) — path/formula per model
+        // konsisten di fleet ini.
+        return CpeParameterMap::query()
+            ->where('product_class', $productClass)
+            ->get()
+            ->unique('parameter_key')
+            ->values();
+    }
+
+    /**
+     * The one place MAC/RX/TX/uptime get pulled into the fixed shape every UI
      * surface actually wants — was originally duplicated inline in
-     * App\Livewire\Network\CpeDeviceIndex, extracted here once the
-     * DataTables list/detail endpoints needed the exact same four values
-     * too. Never throws — a null genieacs id, a resolve failure, or a
-     * missing catalog row all just come back as null fields.
+     * App\Livewire\Network\CpeDeviceIndex.
+     *
+     * 2026-09-02 (fill CPE data): tiap nilai punya RANTAI fallback, bukan
+     * hanya `cpe_parameter_maps` exact-OUI:
+     *   1. baris map (exact OUI+PC → PC-only, via mapsFor()),
+     *   2. penelusuran objek vendor generik (RX/TX: OPTICAL_*_OBJECTS;
+     *      MAC: WANPPPConnection/WANIPConnection/LAN; uptime: DeviceInfo.UpTime).
+     * Pola & daftar path diambil dari VirtualParameters GenieACS rekan Agung
+     * sebagai REFERENSI — logikanya diport ke resolver PHP ini, BUKAN
+     * dijadikan VirtualParameter GenieACS (lihat docs/genieacs-virtual-parameters-evaluation.md).
+     *
+     * Never throws — semua kegagalan → field null.
      *
      * @return array{mac_address: ?string, rx_power_dbm: ?float, tx_power_dbm: ?float, device_uptime_seconds: ?float}
      */
@@ -147,70 +216,179 @@ class CpeParameterResolverService
     {
         $empty = ['mac_address' => null, 'rx_power_dbm' => null, 'tx_power_dbm' => null, 'device_uptime_seconds' => null];
 
-        if ($genieAcsDeviceId === null) {
+        $device = $this->safeFindDevice($genieAcsDeviceId);
+
+        if ($device === null) {
             return $empty;
         }
 
-        try {
-            $resolved = $this->resolveForDevice($genieAcsDeviceId);
-        } catch (\Throwable) {
-            return $empty;
-        }
-
-        $mac = $resolved[self::MAC_PARAMETER_KEY]['raw_value'] ?? null;
-
-        if (! is_string($mac) || $mac === '') {
-            $mac = $this->resolveMacFallback($genieAcsDeviceId);
-        }
+        $oui = $device['_deviceId']['_OUI'] ?? null;
+        $productClass = $device['_deviceId']['_ProductClass'] ?? null;
+        $maps = $this->mapsFor($oui, $productClass)->keyBy('parameter_key');
 
         return [
-            'mac_address' => $mac,
-            'rx_power_dbm' => $resolved[self::RX_PARAMETER_KEY]['value'] ?? null,
-            'tx_power_dbm' => $resolved[self::TX_PARAMETER_KEY]['value'] ?? null,
-            'device_uptime_seconds' => $resolved[self::UPTIME_PARAMETER_KEY]['value'] ?? null,
+            'mac_address' => $this->rawFromMap($device, $maps->get(self::MAC_PARAMETER_KEY))
+                ?? $this->resolveMacFromDevice($device),
+            'rx_power_dbm' => $this->valueFromMap($device, $maps->get(self::RX_PARAMETER_KEY))
+                ?? $this->resolveOpticalDbm($device, 'RXPower'),
+            'tx_power_dbm' => $this->valueFromMap($device, $maps->get(self::TX_PARAMETER_KEY))
+                ?? $this->resolveOpticalDbm($device, 'TXPower'),
+            'device_uptime_seconds' => $this->valueFromMap($device, $maps->get(self::UPTIME_PARAMETER_KEY))
+                ?? $this->resolveUptimeSecondsFromDevice($device),
         ];
     }
 
     /**
-     * Walks every WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*
-     * instance actually present in the device's own tree (in ascending
-     * instance-number order, for deterministic results) and returns the
-     * first real MACAddress found. Only reached when no
-     * `cpe_parameter_maps` catalog row for `mac_address` exists/resolved
-     * for this device's OUI+ProductClass — this object is fixed/standard
-     * TR-069, so there's nothing to look up per-vendor here.
+     * @param  array<string, mixed>  $device
      */
-    private function resolveMacFallback(string $genieAcsDeviceId): ?string
+    private function valueFromMap(array $device, ?CpeParameterMap $map): ?float
     {
-        try {
-            $device = $this->genieAcsClient->findDeviceById($genieAcsDeviceId);
-        } catch (\Throwable) {
+        if ($map === null) {
             return null;
         }
 
-        if ($device === null) {
+        $result = $this->resolveOne($device, $map);
+
+        return isset($result['value']) && is_numeric($result['value']) ? (float) $result['value'] : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $device
+     */
+    private function rawFromMap(array $device, ?CpeParameterMap $map): ?string
+    {
+        if ($map === null) {
             return null;
         }
 
+        $raw = $this->resolveOne($device, $map)['raw_value'] ?? null;
+
+        return is_string($raw) && $raw !== '' ? $raw : null;
+    }
+
+    /**
+     * RX/TX optik dBm dari objek vendor apa pun yang ada di pohon perangkat
+     * — mirror logika VP `RXPower`: objek "direct" (Huawei/FiberHome/Nokia)
+     * dipakai apa adanya; objek SFF-8472 (CT-COM/CMCC/ZTE-COM/CU) → raw
+     * NEGATIF berarti sudah dBm (pakai langsung), raw POSITIF → 10*log10(raw
+     * * 0.0001), raw 0 = tidak ada sinyal (lewati, coba objek berikutnya).
+     *
+     * @param  array<string, mixed>  $device
+     * @param  'RXPower'|'TXPower'  $leaf
+     */
+    private function resolveOpticalDbm(array $device, string $leaf): ?float
+    {
         $wanDevices = $device['InternetGatewayDevice']['WANDevice'] ?? [];
 
         foreach ($this->sortedInstanceKeys($wanDevices) as $wanKey) {
-            $connectionDevices = $wanDevices[$wanKey]['WANConnectionDevice'] ?? [];
+            $base = "InternetGatewayDevice.WANDevice.{$wanKey}.";
 
-            foreach ($this->sortedInstanceKeys($connectionDevices) as $cdKey) {
-                $pppConnections = $connectionDevices[$cdKey]['WANPPPConnection'] ?? [];
+            foreach (self::OPTICAL_DIRECT_OBJECTS as $obj) {
+                $raw = $this->extractPath($device, $base.$obj.'.'.$leaf);
+                if (is_numeric($raw)) {
+                    return (float) $raw;
+                }
+            }
 
-                foreach ($this->sortedInstanceKeys($pppConnections) as $pppKey) {
-                    $mac = $pppConnections[$pppKey]['MACAddress']['_value'] ?? null;
+            foreach (self::OPTICAL_SFF8472_OBJECTS as $obj) {
+                $raw = $this->extractPath($device, $base.$obj.'.'.$leaf);
+                if (! is_numeric($raw)) {
+                    continue;
+                }
+                $raw = (float) $raw;
+                if ($raw < 0) {
+                    return $raw; // firmware sudah melaporkan dBm
+                }
+                if ($raw > 0) {
+                    return 10 * log10($raw * self::OPTICAL_SFF8472_SCALE);
+                }
+                // $raw === 0.0 → tidak ada sinyal di objek ini, coba objek lain
+            }
+        }
 
-                    if ($this->isUsableMac($mac)) {
-                        return $mac;
+        // Nokia/ALU — langsung di bawah InternetGatewayDevice, bukan WANDevice
+        $nokia = $this->extractPath($device, "InternetGatewayDevice.X_ALU_OntOpticalParam.{$leaf}");
+
+        return is_numeric($nokia) ? (float) $nokia : null;
+    }
+
+    /**
+     * Uptime detik dari `DeviceInfo.UpTime` (TR-098) atau `Device.DeviceInfo.
+     * UpTime` (TR-181 / MikroTik) — path standar, bukan per-vendor.
+     *
+     * @param  array<string, mixed>  $device
+     */
+    private function resolveUptimeSecondsFromDevice(array $device): ?float
+    {
+        foreach (['InternetGatewayDevice.DeviceInfo.UpTime', 'Device.DeviceInfo.UpTime'] as $path) {
+            $raw = $this->extractPath($device, $path);
+            if (is_numeric($raw)) {
+                return (float) $raw;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * MAC perangkat dari pohon TR-069 yang SUDAH di-fetch — rantai kandidat
+     * (2026-09-02, mengikuti VP `PonMac`/`pppoeMac` rekan Agung sebagai
+     * referensi):
+     *   1. WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.MACAddress
+     *   2. WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.MACAddress
+     *   3. LANDevice.*.LANEthernetInterfaceConfig.*.MACAddress
+     *   4. LANDevice.1.LANHostConfigManagement.MACAddress
+     *   5. DeviceInfo.X_CU_SerialNumber (sebagian ZTE lama = MAC di sini)
+     * Objek TR-069 standar (bukan per-vendor) → sengaja bukan baris
+     * `cpe_parameter_maps`. MAC all-zero diperlakukan sebagai "tidak ada".
+     *
+     * @param  array<string, mixed>  $device
+     */
+    private function resolveMacFromDevice(array $device): ?string
+    {
+        $wanDevices = $device['InternetGatewayDevice']['WANDevice'] ?? [];
+
+        foreach (['WANPPPConnection', 'WANIPConnection'] as $connType) {
+            foreach ($this->sortedInstanceKeys($wanDevices) as $wanKey) {
+                $connectionDevices = $wanDevices[$wanKey]['WANConnectionDevice'] ?? [];
+
+                foreach ($this->sortedInstanceKeys($connectionDevices) as $cdKey) {
+                    $conns = $connectionDevices[$cdKey][$connType] ?? [];
+
+                    foreach ($this->sortedInstanceKeys($conns) as $connKey) {
+                        $mac = $conns[$connKey]['MACAddress']['_value'] ?? null;
+
+                        if ($this->isUsableMac($mac)) {
+                            return $mac;
+                        }
                     }
                 }
             }
         }
 
-        return null;
+        $lanDevices = $device['InternetGatewayDevice']['LANDevice'] ?? [];
+
+        foreach ($this->sortedInstanceKeys($lanDevices) as $lanKey) {
+            $ifaces = $lanDevices[$lanKey]['LANEthernetInterfaceConfig'] ?? [];
+
+            foreach ($this->sortedInstanceKeys($ifaces) as $ifKey) {
+                $mac = $ifaces[$ifKey]['MACAddress']['_value'] ?? null;
+
+                if ($this->isUsableMac($mac)) {
+                    return $mac;
+                }
+            }
+
+            $mac = $lanDevices[$lanKey]['LANHostConfigManagement']['MACAddress']['_value'] ?? null;
+
+            if ($this->isUsableMac($mac)) {
+                return $mac;
+            }
+        }
+
+        $mac = $this->extractPath($device, 'InternetGatewayDevice.DeviceInfo.X_CU_SerialNumber');
+
+        return $this->isUsableMac($mac) ? $mac : null;
     }
 
     /**
@@ -364,6 +542,11 @@ class CpeParameterResolverService
 
                 foreach ($this->sortedInstanceKeys($pppConnections) as $pppKey) {
                     $conn = $pppConnections[$pppKey];
+
+                    if ($this->isBridgedConnection($conn)) {
+                        continue; // WAN bridged — Username/IP-nya milik router di belakang ONT, tidak berarti
+                    }
+
                     $username = $conn['Username']['_value'] ?? null;
 
                     if (is_string($username) && $username !== '') {
@@ -378,6 +561,21 @@ class CpeParameterResolverService
         }
 
         return null;
+    }
+
+    /**
+     * Koneksi WAN dalam mode bridge — `ConnectionType` == `PPPoE_Bridged`
+     * atau `bridge` (dari VP `pppoeUsername2`/`pppoeIP` rekan Agung).
+     * Username/ExternalIPAddress-nya bukan milik pelanggan (dial PPPoE ada
+     * di router di belakang ONT), jadi jangan disurfacekan.
+     *
+     * @param  array<string, mixed>  $conn
+     */
+    private function isBridgedConnection(array $conn): bool
+    {
+        $type = strtolower((string) ($conn['ConnectionType']['_value'] ?? ''));
+
+        return in_array($type, ['pppoe_bridged', 'bridge', 'ip_bridged'], true);
     }
 
     /**

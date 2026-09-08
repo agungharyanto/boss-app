@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\Internal\CpeDeviceActionController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDatatableController;
 use App\Http\Controllers\Api\Internal\CpeDeviceDetailController;
 use App\Http\Controllers\Api\Internal\OltDeviceDatatableController;
+use App\Http\Controllers\Api\Internal\UnboundGenieacsDeviceController;
 use App\Http\Controllers\Auth\ReferrerLoginController;
 use App\Http\Controllers\Billing\InvoicePrintController;
 use App\Http\Controllers\CommissionPaymentProofController;
@@ -43,6 +44,7 @@ use App\Livewire\Network\NetworkProfileGroupIndex;
 use App\Livewire\Network\OdpRouteCheck;
 use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\PppPackageIndex;
+use App\Livewire\Network\RemoteConfigSettings;
 use App\Livewire\Network\VpnScriptGenerator;
 use App\Livewire\Referrers\ReferrerIndex;
 use App\Livewire\Resellers\PackagePricingIndex;
@@ -162,6 +164,10 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
         Route::get('/cpe-devices', CpeDeviceIndex::class)->name('cpe-devices.index');
         Route::get('/cpe-devices/status-check', CpeDeviceStatusCheck::class)->name('cpe-devices.status-check');
 
+        // "Konfig Remote" — GenieACS Auto-WAN configurable (grup sidebar
+        // "Remote"). Singleton settings page, permission remote_config.*.
+        Route::get('/remote-config', RemoteConfigSettings::class)->name('remote-config.index');
+
         // Standalone detail page (2026-08-16, replaces the DataTables
         // child-row expand interaction — see CpeDeviceDetailController's
         // own docblock). Must be registered AFTER /cpe-devices/status-check
@@ -179,6 +185,8 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
         // auth + CSRF, not routes/api.php's stateless "api" group.
         Route::prefix('api/internal/cpe-devices')->name('cpe-devices.internal.')->group(function () {
             Route::get('/datatable', CpeDeviceDatatableController::class)->name('datatable');
+            // Section "Belum Ter-bind" — device GenieACS tanpa baris cpe_devices.
+            Route::get('/unbound-genieacs', UnboundGenieacsDeviceController::class)->name('unbound-genieacs');
             Route::get('/{cpe_device}/detail', [CpeDeviceDetailController::class, 'show'])->name('detail');
             Route::get('/{cpe_device}/pppoe-password', [CpeDeviceDetailController::class, 'pppoePassword'])->name('pppoe-password');
             Route::post('/{cpe_device}/reboot', [CpeDeviceActionController::class, 'reboot'])->name('reboot');

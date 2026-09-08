@@ -1590,6 +1590,29 @@ device itu), `wifi_provisioned_at` sengaja dibiarkan `null` — **tidak ada
 retry otomatis** untuk device yang sudah `online`, CS perlu push manual
 lewat tombol "Ganti WiFi" (v0.7.4) di `/cpe-devices`.
 
+## GenieACS Auto-WAN "Konfig Remote" (branch `genieacs-auto-wan-configurable`, halaman web, bukan REST API)
+
+VLAN + username/password default PPPoE untuk Auto-WAN provisioning GenieACS — dulu HARDCODED di provision
+script (`const targetVlan = 1000`), sekarang diatur dari `/remote-config` (`App\Livewire\Network\
+RemoteConfigSettings`, permission `remote_config.view`/`.manage`, tier-admin + `noc`). **Tidak ada endpoint
+REST** — singleton `remote_wan_configs` (id=1), tulis lewat `RemoteWanConfigService::save()` saja.
+
+Simpan → `SyncRemoteWanConfigToGenieAcsJob` (async) → `GenieAcsPresetService::syncAutoWanConfig()`:
+- `PUT http://genieacs-nbi:7557/provisions/default-wan` — isi script dari
+  `app/resources/genieacs/default-wan.js` (kanonik di repo). SELALU.
+- `enabled=true` → `PUT http://genieacs-nbi:7557/presets/boss-auto-wan` (preset TERPISAH, channel sendiri
+  — BUKAN `default`, yang fleet-wide + sudah bermasalah `too_many_commits`). `precondition` = union SN
+  `wan1_serial_allowlist` + `wan2_serial_allowlist` → `DeviceID.SerialNumber = "SN1" OR ...`, atau `"true"`
+  (fleet-wide) kalau kedua allowlist kosong. `configurations[0].args` = `RemoteWanConfig::toProvisionArgs()`
+  (8 elemen posisional, args[7] = CSV SN allowlist WAN2 in-script).
+- `enabled=false` → `DELETE http://genieacs-nbi:7557/presets/boss-auto-wan` (toleran 404).
+
+genieacs-nbi 1.2.16 **punya** endpoint `/presets/<id>` + `/provisions/<id>` (GET/PUT/DELETE) — dikonfirmasi
+live 2026-09-07 (komentar lama di `docker/genieacs/presets/apply.sh` yang menyatakan sebaliknya keliru).
+genieacs-cwmp me-refresh cache preset dari mongo tiap ~5,5 menit — perubahan `args` berlaku tanpa restart;
+provision `default-wan` yang benar-benar baru (deploy pertama) mungkin butuh `docker compose restart
+genieacs-cwmp` sekali.
+
 ## GenieACS Connected Clients (v0.7.6)
 
 Baca object TR-069 `LANDevice.{i}.Hosts.Host.{n}` (client yang terhubung ke

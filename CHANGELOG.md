@@ -3,7 +3,111 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## v0.9.0 — Commission: Approval + Clawback (branch `v0.9.0-commission-approval-clawback`, belum merge/tag)
+## v0.7.8 — GenieACS Resolver Multi-Vendor + Auto-WAN Configurable + Restrukturisasi Sidebar "Remote" (merged `develop`→`main`, tagged `v0.7.8`)
+
+**Status jujur: fitur BELUM sempurna tapi AMAN.** Di-merge dengan Auto-WAN **DISABLED by default**
+(`RemoteWanConfig.enabled = false` → preset `boss-auto-wan` TIDAK ada di GenieACS → NOL device fleet kena
+provisioning). Yang terverifikasi jalan: cabang WAN1 Huawei (script referensi) + guard idempoten CT-COM
+(skip device yang sudah dikonfig). Yang **KNOWN BUG**: provisioning WAN baru ke device CT-COM FRESH —
+instance number `WANPPPConnection` di-hardcode `.1`, device bikin di `.2` → `preset_loop`. VERIFIED BROKEN
+`CMDCA473F158` 2026-09-08 (lihat bagian bawah + blok "KNOWN BUG" di `default-wan.js`). Tag v0.7.8 sesuai
+slot ROADMAP (v0.7.7 sudah dipakai; penomoran slot, bukan kronologis — v0.9.x/v0.14.x/v0.16.0 sudah lebih
+dulu di-tag).
+
+Sesi GenieACS/OLT/ONT. **Langkah 0 — folding `fix-genieacs-pppoe-provision` (Opsi A, keputusan Agung):**
+branch itu sudah selesai + tested + DITERAPKAN LIVE ke GenieACS sejak 2026-09-02 (4 hari) tapi tidak
+pernah di-merge → `main` drift dari produksi. 7 file inti (resolver RX/TX/MAC/PPPoE multi-vendor +
+`docker/genieacs/presets/default-*.js` + `GENIEACS_MAX_COMMIT_ITERATIONS=128`) di-checkout apa adanya ke
+branch ini. Mongo GenieACS live sudah menjalankan versi ini — folding menutup drift, tidak mengubah state.
+
+**Langkah 1 — v0.7.6 Connected Clients diverifikasi** (backend): `cpe_connected_hosts` 16.817 baris, 267
+device punya client aktif, scheduler `cpe:sync-connected-hosts` jalan tiap 5 menit (`last_seen_at` terbaru
+< 5 menit). Data nyata (hostname `vivo-2007`/`realme-C30s`, MAC, IP). Genuinely bekerja end-to-end; belum
+diverifikasi Agung di browser.
+
+**Langkah 2 — GenieACS Auto-WAN Configurable (pendekatan b, keputusan Agung):**
+- **`default-wan` provision GenieACS** (`app/resources/genieacs/default-wan.js`) — adaptasi 2 script
+  provision referensi rekan Agung (`docs/genieacs-auto-wan-reference/`, `targetVlan` 1000 / `targetVlanWan2`
+  1200 HARDCODED) jadi SATU provision yang membaca `args` preset. Deteksi vendor (Huawei / CMCC / ZTE
+  generic) + guard idempoten dipertahankan PERSIS. WAN1 (internet PPPoE) + WAN2 (bridge kedua) dalam satu
+  provision, master switch `enabled`.
+- **`App\Services\Network\GenieAcsPresetService`** — menulis provision `default-wan` + preset **TERPISAH
+  `boss-auto-wan`** (BUKAN di-fold ke `default`) lewat **REST genieacs-nbi** (`PUT /provisions/<id>`,
+  `PUT /presets/<id>`, `DELETE /presets/<id>` — dikonfirmasi 2026-09-07 GENUINELY berfungsi di
+  genieacs-nbi 1.2.16, komentar lama di `apply.sh` yang bilang "tidak ada endpoint" keliru). Tidak perlu
+  mongosh / docker exec / driver Mongo di boss-app. Cache preset genieacs-cwmp di-refresh tiap ~5,5 menit
+  (`db.cache` `expire - timestamp` = 330s) → perubahan precondition/args berlaku otomatis tanpa restart.
+- **Preset `boss-auto-wan` di-SCOPE lewat `precondition`** — preset `default` fleet-wide (~414 device)
+  sudah punya masalah kronis `too_many_commits`/`too_many_rpcs` di ~68 device pohon-besar, menambah
+  provision ke situ berisiko. `enabled=false` → preset dihapus total; `enabled=true` + ada SN allowlist
+  (union wan1+wan2) → `precondition` = `DeviceID.SerialNumber = "SN1" OR ...` (HANYA SN itu); `enabled=true`
+  + allowlist kosong → `precondition "true"` (fleet-wide — state akhir "dilonggarkan").
+- **`remote_wan_configs`** (singleton id=1, platform-level — pola `payment_gateway_settings`). Kolom:
+  `enabled`, `wan1_enabled`/`wan1_vlan`/`wan1_pppoe_username`/`wan1_pppoe_password`/`wan1_serial_allowlist`,
+  `wan2_enabled`/`wan2_vlan`/`wan2_serial_allowlist`, `genieacs_sync_status`/`_synced_at`/`_sync_error`
+  (pola `mikrotik_sync_*`). `toProvisionArgs()` = kontrak args posisional (8 elemen, args[7] = CSV SN
+  allowlist WAN2 in-script).
+- **`App\Livewire\Network\RemoteConfigSettings`** (`/remote-config`) — halaman "Konfig Remote". Simpan →
+  `RemoteWanConfigService` men-dispatch `SyncRemoteWanConfigToGenieAcsJob` (async, retry 30s/2min/5min).
+  Badge status GenieACS + poll conditional + "State di GenieACS live" (baca balik preset via
+  `inspectAutoWanState()`).
+- **Permission `remote_config.view`/`.manage`** — tier-admin + `noc` (pola `monitoring.*`).
+  `RemoteWanConfigPolicy`.
+- **Sidebar "Perangkat CPE" → grup collapsible TOGGLE-MURNI "Remote"** (pola persis "Komisi"/"Profil
+  Paket": `toggle_only`, tanpa key `route`, `sidebar-subgroup-remote`). Isi: Perangkat CPE, Cek Status
+  Device, Konfig Remote.
+- **Guard berbasis ISI (bukan posisi)** — WAN1: skip kalau ada `WANPPPConnection` ber-Username di WCD
+  1-8 × inst 1-2 di posisi MANA PUN (script referensi cuma 1-5 × .1). WAN2: `bridgeWithTargetVlanExists`
+  — sapu WANConnectionDevice 1-2 × {WANIPConnection, WANPPPConnection} 1-3 cari ConnectionType `*bridg*`
+  + VLAN cocok di posisi mana pun (keputusan Agung: "0 device punya WAN2" cuma soal slot ke-2, sebagian
+  device mungkin sudah punya bridge di slot lain hasil konfig manual → guard cek-posisi bisa bikin dobel).
+- **Deploy bertahap (go-ahead Agung)** — provision `default-wan` di-push ke GenieACS live (siap),
+  `boss-auto-wan` preset `enabled=false` (tidak dibuat) sampai SN modem test masuk. Modem test (3-5,
+  BARU) dicolok khusus di ro-hotspot. Setelah SN diketahui → Agung isi allowlist + `enabled=true` →
+  preset scoped ke SN itu saja → restart genieacs-cwmp → ONT test auto-provision WAN1.
+
+**Langkah 3 — cabang CT-COM di `default-wan.js` (2026-09-07):** device pertama untuk test end-to-end
+(`CMDCA21C01E7`, CMDC H3-2S XPON) match NOL dari 3 cabang vendor lama. Investigasi: ~372/415 device fleet
+pakai data model `X_CT-COM_*` (ZTE F663NV3a/M63X, Fiberhome GM220-S, CMDC H3-2S). Cabang `isCTCom`
+ditambah (deteksi `X_CT-COM_UserInfo.UserName`; VLAN per-WAN di `X_CT-COM_WANGponLinkConfig.VLANIDMark`
+LEVEL-WCD; PPPoE user/pass field standar; `ConnectionType="IP_Routed"` routed / `"PPPoE_Bridged"` bridge;
+`X_CT-COM_ServiceList="INTERNET"`; LAN binding via `X_CT-COM_LanInterface` CSV path SSID). Guard idempoten
+CT-COM **TERVERIFIKASI** ke `CMDCA21C01E7` — 4+ Inform, cwmp log NOL SetParameterValues/fault, WAN tree
+identik.
+
+**Langkah 4 — VLAN9-TR069 di ro-hotspot dieksekusi via RouterOS API** (2026-09-07): `vlan9-TR069` (vlan-id
+9 tagged di ether2) + `10.1.16.1/20` (blok beda dari test-x86 `10.1.0.0/20`) + DHCP `dhcp-tr069` + Option
+43 (`http://genieacs.bajastu.id:7547`) + masquerade per-subnet `10.1.16.0/20` (ro-hotspot pakai masq
+per-subnet, bukan blanket SNAT). 235→235 PPP active nol drop, 4 VLAN + hotspot tak tersentuh.
+
+**Langkah 5 — section "Device GenieACS Belum Ter-bind" di `/cpe-devices`** (2026-09-07): device yang ADA di
+`db.devices` GenieACS tapi belum punya baris `cpe_devices`. `UnboundGenieacsDeviceService::list()` =
+diff bulk query GenieACS vs `CpeDevice` (cache pendek). Kolom Serial/Manufacturer/MAC/Pertama Terlihat/
+Terakhir Inform/ACS URL/Status BOSS App. Client-side DataTables + auto-reload dropdown. Endpoint internal
+`GET /api/internal/cpe-devices/unbound-genieacs` (session-auth). Nol permission baru (reuse `cpe_devices.*`).
+
+**Langkah 6 — test provisioning FRESH CT-COM = GAGAL (`preset_loop`)** (2026-09-08): modem test
+`CMDCA473F158` (CMDC H3-2S XPON, fw V1.1.20P1T4) bootstrap ke GenieACS setelah Agung betulkan ACS URL
+(`https://` → `http://...:7547`) + restart genieacs-cwmp. Preset `boss-auto-wan` mengeksekusi
+`SetParameterValues` — jalur end-to-end (URL → Inform → preset → tulis config) **terbukti**. TAPI cabang
+CT-COM stuck: nomor instance `WANPPPConnection` di-hardcode `.1`, device bikin di `.2`, `ctcFreeWcd()`
+cuma scan `.1` → cabang WAN1 & WAN2 rebut WCD.1, VLANIDMark ke-timpa 10→172, tidak konvergen → GenieACS
+raise `preset_loop` (retries=6) di 2 preset (`boss-auto-wan` + `default`). Kelas gotcha yang sudah dicatat
+CLAUDE.md di v0.7.6 (instance number TR-069 tidak stabil). **Kondisi device**: WAN TR-069 manajemen (WCD.2,
+`1_TR069_R_VID_9`, DHCP VLAN 9, `10.1.16.43`, Connected) UTUH; WCD.1 = 1 PPP setengah jadi (Enable=false,
+Username kosong, `Unconfigured` — tidak lewat traffic); WAN1/WAN2 internet TIDAK terbentuk. 500 di admin
+lokal modem (`net_lanmode_t.gch`) kemungkinan terkait. **Aksi mitigasi (nol perubahan kode, reversible)**:
+`enabled=false` → preset `boss-auto-wan` dihapus; 2 fault `preset_loop` dihapus; allowlist SN
+dipertahankan; provision `default-wan` tetap di GenieACS (harmless, tak direferensikan). Rekomendasi:
+factory-reset `CMDCA473F158`, fix instance-number bug, retest.
+
+Test: `GenieAcsPresetServiceTest` (10), `RemoteConfigSettingsLivewireTest` (9), `SidebarNavigationTest`
+(+3), `UnboundGenieacsDeviceServiceTest` (8), `UnboundGenieacsDeviceControllerTest` (8),
+`CpeParameterResolverServiceTest`, `CpeDeviceIndexLivewireTest` (+2). Full regression 1680 hijau
+(5109 assertions). Pint clean. Docs dokumentasi bug: `default-wan.js` (blok KNOWN BUG), CLAUDE.md
+("GenieACS Auto-WAN Configurable" — kronologi bug CT-COM), `docs/ROADMAP.md` (status v0.7.8).
+
+## v0.9.0 — Commission: Approval + Clawback (merged `develop`→`main`, tagged `v0.9.13`)
 
 Menutup sisa scope cluster Commission (v0.9.x). Eligibility (Pending→Eligible) sudah di v0.9.5, Payment
 (Eligible→Paid) di v0.9.11 — yang belum: **Approval** dan **Clawback**. `CommissionStatus` sudah punya

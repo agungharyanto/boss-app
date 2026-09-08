@@ -95,11 +95,17 @@
                         <p class="text-xs text-gray-400 mt-1">{{ __('ODP disimpan sebagai perangkat instalasi (tabel odps) — diedit lewat halaman ODP-nya sendiri, bukan form ini.') }}</p>
                     @endif
                 </div>
-                <div>
-                    <label for="fn-label" class="block text-sm font-medium text-gray-700">{{ __('Label') }}</label>
-                    <input id="fn-label" type="text" wire:model="localLabel" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
-                    @error('localLabel') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
-                </div>
+                {{-- v0.16.1 Revisi 3 B/C — "Label" (istilah lama, disamakan
+                     jadi "Nama Titik") hanya untuk OTB/Closure/ODC. Untuk
+                     ODP field ini disembunyikan (redundan dengan "Nama ODP"
+                     di bawah). --}}
+                @if ($nodeType !== 'odp')
+                    <div>
+                        <label for="fn-label" class="block text-sm font-medium text-gray-700">{{ __('Nama Titik') }}</label>
+                        <input id="fn-label" type="text" wire:model="localLabel" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                        @error('localLabel') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    </div>
+                @endif
             </div>
 
             @if ($nodeType === 'odp')
@@ -111,7 +117,7 @@
                     </div>
                     <div>
                         <label for="fn-odp-name" class="block text-sm font-medium text-gray-700">{{ __('Nama ODP') }} <span class="text-red-600">*</span></label>
-                        <input id="fn-odp-name" type="text" wire:model="odpName" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                        <input id="fn-odp-name" type="text" wire:model="odpName" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" placeholder="{{ __('Patokan Lokasi') }}">
                         @error('odpName') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                     </div>
                 </div>

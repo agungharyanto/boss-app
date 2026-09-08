@@ -224,21 +224,26 @@
                     </div>
                 @endif
 
-                {{-- Ringkasan core (bukan tabel penuh) --}}
-                <div class="grid grid-cols-3 gap-2 text-center">
-                    <div class="rounded-md border border-gray-200 p-2">
-                        <p class="text-lg font-semibold text-gray-800">{{ $markerPanel['cores']['used'] }}</p>
-                        <p class="text-[11px] text-gray-500">{{ __('Core terpakai') }}</p>
+                {{-- Ringkasan core per ARAH kabel (bukan tabel penuh). --}}
+                @php($cr = $markerPanel['cores'])
+                <dl class="rounded-md border border-gray-200 divide-y divide-gray-100 text-xs">
+                    <div class="flex items-center justify-between px-3 py-2">
+                        <dt class="text-gray-500">{{ __('Kabel Masuk') }}</dt>
+                        <dd class="text-gray-800 font-medium">{{ $cr['incoming_used'] }} / {{ $cr['incoming_total'] }} {{ __('core terpakai') }}</dd>
                     </div>
-                    <div class="rounded-md border border-gray-200 p-2">
-                        <p class="text-lg font-semibold text-gray-800">{{ $markerPanel['cores']['spare'] }}</p>
-                        <p class="text-[11px] text-gray-500">{{ __('Core cadangan') }}</p>
+                    <div class="flex items-center justify-between px-3 py-2">
+                        <dt class="text-gray-500">{{ __('Kabel Keluar') }}</dt>
+                        <dd class="text-gray-800 font-medium">{{ $cr['outgoing_used'] }} / {{ $cr['outgoing_total'] }} {{ __('core terpakai') }}</dd>
                     </div>
-                    <div class="rounded-md border border-gray-200 p-2">
-                        <p class="text-lg font-semibold text-gray-800">{{ $markerPanel['cores']['total'] }}</p>
-                        <p class="text-[11px] text-gray-500">{{ __('Total core') }}</p>
+                    <div class="flex items-center justify-between px-3 py-2">
+                        <dt class="text-gray-500">{{ __('Core tidak terpakai (masuk + keluar)') }}</dt>
+                        <dd class="text-gray-800 font-medium">{{ $cr['unused'] }}</dd>
                     </div>
-                </div>
+                    <div class="flex items-center justify-between px-3 py-2 bg-gray-50">
+                        <dt class="text-gray-500">{{ __('Total core (masuk + keluar)') }}</dt>
+                        <dd class="text-gray-800 font-semibold">{{ $cr['total'] }}</dd>
+                    </div>
+                </dl>
 
                 {{-- Badge kapasitas — warna BUKAN satu-satunya sinyal:
                      ada titik warna + label kata + angka persen/rasio. --}}

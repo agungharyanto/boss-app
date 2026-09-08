@@ -131,7 +131,7 @@ class FiberNodeForm extends Component
     {
         return [
             'nodeType' => 'Tipe Titik',
-            'localLabel' => 'Label',
+            'localLabel' => 'Nama Titik',
             'odpCode' => 'Kode ODP',
             'odpName' => 'Nama ODP',
             'lossInDb' => 'Redaman Masuk',

@@ -459,9 +459,10 @@ class FiberTopologyMapLivewireTest extends TestCase
         $this->assertStringContainsString('World_Imagery', $built);
     }
 
-    public function test_open_marker_panel_for_a_fiber_node_reports_core_summary_and_capacity(): void
+    public function test_open_marker_panel_for_a_fiber_node_reports_core_summary_split_by_direction_and_capacity(): void
     {
         [$tenant, $cable] = $this->cableWithCores(totalCores: 4);
+        // the cable runs OTB -> ODC, so for the OTB it's an OUTGOING cable.
         $otb = FiberNode::find($cable->from_id);
 
         // 1 of 4 cores used -> 25% -> "longgar"
@@ -477,13 +478,51 @@ class FiberTopologyMapLivewireTest extends TestCase
             ->test(FiberTopologyMap::class)
             ->call('openMarkerPanel', 'fiber_node', $otb->id)
             ->assertSet('markerPanel.kind', 'fiber_node')
-            ->assertSet('markerPanel.cores.used', 1)
-            ->assertSet('markerPanel.cores.spare', 3)
+            ->assertSet('markerPanel.cores.incoming_used', 0)
+            ->assertSet('markerPanel.cores.incoming_total', 0)
+            ->assertSet('markerPanel.cores.outgoing_used', 1)
+            ->assertSet('markerPanel.cores.outgoing_total', 4)
+            ->assertSet('markerPanel.cores.unused', 3)
             ->assertSet('markerPanel.cores.total', 4)
             ->assertSet('markerPanel.capacity.label', 'longgar')
             ->assertSet('markerPanel.photo_caption', 'Panel depan OTB')
+            ->assertSee('Kabel Masuk')
+            ->assertSee('Kabel Keluar')
             ->assertSee('Lihat Detail Lengkap')
             ->assertSeeHtml(route('web.fiber-nodes.detail', $otb->id));
+    }
+
+    public function test_open_marker_panel_sums_incoming_and_outgoing_cables_separately(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $closure = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'closure', 'latitude' => -6.2, 'longitude' => 106.8, 'port_count' => null]);
+        $up = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'otb', 'port_count' => 8, 'latitude' => -6.21, 'longitude' => 106.81]);
+        $down = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'odc', 'port_count' => null, 'loss_in_db' => 1, 'loss_out_db' => 1, 'latitude' => -6.22, 'longitude' => 106.82]);
+
+        $svc = app(FiberTopologyService::class);
+        $feeder = $svc->createCable([
+            'tenant_id' => $tenant->id,
+            'from_type' => FiberNode::class, 'from_id' => $up->id,
+            'to_type' => FiberNode::class, 'to_id' => $closure->id,
+            'total_cores' => 12, 'tube_count' => 2, 'cores_per_tube' => 6,
+        ]);
+        $dist = $svc->createCable([
+            'tenant_id' => $tenant->id,
+            'from_type' => FiberNode::class, 'from_id' => $closure->id,
+            'to_type' => FiberNode::class, 'to_id' => $down->id,
+            'total_cores' => 4, 'tube_count' => 1, 'cores_per_tube' => 4,
+        ]);
+        $feeder->cores()->limit(2)->update(['status' => 'used']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberTopologyMap::class)
+            ->call('openMarkerPanel', 'fiber_node', $closure->id)
+            ->assertSet('markerPanel.cores.incoming_used', 2)
+            ->assertSet('markerPanel.cores.incoming_total', 12)
+            ->assertSet('markerPanel.cores.outgoing_used', 0)
+            ->assertSet('markerPanel.cores.outgoing_total', 4)
+            ->assertSet('markerPanel.cores.unused', 14)   // (12-2) + (4-0)
+            ->assertSet('markerPanel.cores.total', 16);
     }
 
     public function test_open_marker_panel_for_an_odp_uses_port_capacity(): void

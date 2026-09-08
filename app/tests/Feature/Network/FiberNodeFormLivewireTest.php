@@ -534,6 +534,24 @@ class FiberNodeFormLivewireTest extends TestCase
             ->assertSee('Nama ODP')
             ->assertSee('Jumlah Port ODP')
             ->assertSee('Splitter')
-            ->assertDontSee('Jumlah Port OTB');
+            ->assertDontSee('Jumlah Port OTB')
+            // v0.16.1 Revisi 3 B — generic "Nama Titik" field hidden for ODP
+            ->assertDontSee('>Nama Titik<')
+            ->assertSeeHtml('placeholder="Patokan Lokasi"');
+    }
+
+    public function test_revisi3_c_otb_closure_odc_use_nama_titik_not_label(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeForm::class)
+            ->set('nodeType', 'otb')
+            ->assertSee('Nama Titik')
+            ->assertSeeHtml('for="fn-label"');
+
+        // the field label text is exactly "Nama Titik", never a bare "Label"
+        $html = $component->html();
+        $this->assertStringNotContainsString('>Label</label>', $html);
     }
 }

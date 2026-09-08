@@ -186,15 +186,7 @@ class FiberTopologyService
             throw new InvalidArgumentException('Nama ODP wajib diisi.');
         }
 
-        $codeTaken = Odp::query()
-            ->withoutGlobalScopes()
-            ->where('tenant_id', $tenantId)
-            ->where('code', $code)
-            ->exists();
-
-        if ($codeTaken) {
-            throw new InvalidArgumentException("Kode ODP \"{$code}\" sudah dipakai.");
-        }
+        $this->assertOdpCodeAvailable($tenantId, $code);
 
         return DB::transaction(function () use ($data, $photos, $splitter, $tenantId, $code, $name) {
             $odp = Odp::create([
@@ -222,6 +214,26 @@ class FiberTopologyService
 
             return $odp;
         });
+    }
+
+    /**
+     * v0.16.1 Revisi 3 A — one place for "an ODP code must be unique
+     * within its tenant" (the same rule StoreOdpRequest carries), shared
+     * by createOdpWithAttachments() and the OdpEdit page's rename. Pass
+     * $ignoreOdpId when editing so a row doesn't collide with itself.
+     */
+    public function assertOdpCodeAvailable(int $tenantId, string $code, ?int $ignoreOdpId = null): void
+    {
+        $taken = Odp::query()
+            ->withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->where('code', $code)
+            ->when($ignoreOdpId !== null, fn ($q) => $q->whereKeyNot($ignoreOdpId))
+            ->exists();
+
+        if ($taken) {
+            throw new InvalidArgumentException("Kode ODP \"{$code}\" sudah dipakai.");
+        }
     }
 
     /**
@@ -862,12 +874,13 @@ class FiberTopologyService
     }
 
     /**
-     * Odp's own v0.16.0-only fields (parent link + loss) — deliberately
-     * separate from StoreOdpRequest/UpdateOdpRequest (v0.5.0's own
-     * registration flow, which this Langkah does NOT touch at all). Used
-     * by the new App\Livewire\Installation\OdpEdit page.
+     * The Odp fields OdpEdit manages — parent link + loss (v0.16.0), plus
+     * code + name (v0.16.1 Revisi 3 A). Still deliberately separate from
+     * StoreOdpRequest/UpdateOdpRequest (v0.5.0's registration flow, not
+     * touched). Code-uniqueness is asserted by the caller via
+     * assertOdpCodeAvailable() before this runs.
      *
-     * @param  array{parent_type?: ?string, parent_id?: ?int, loss_in_db?: ?float, loss_out_db?: ?float}  $data
+     * @param  array{code?: string, name?: string, parent_type?: ?string, parent_id?: ?int, loss_in_db?: ?float, loss_out_db?: ?float}  $data
      */
     public function updateOdpTopologyFields(Odp $odp, array $data): Odp
     {
@@ -1728,7 +1741,7 @@ class FiberTopologyService
      * @return array{
      *   kind: string, id: int, title: string, subtitle: string,
      *   photo_url: ?string, photo_caption: ?string,
-     *   cores: array{used: int, spare: int, total: int},
+     *   cores: array{incoming_used: int, incoming_total: int, outgoing_used: int, outgoing_total: int, unused: int, total: int},
      *   capacity: array{percent: ?int, label: string, color: string, used: int, total: int},
      *   detail_url: string
      * }|null
@@ -1745,16 +1758,33 @@ class FiberTopologyService
             return null;
         }
 
-        $cableIds = $node->cablesAsFrom()->pluck('id')
-            ->concat($node->cablesAsTo()->pluck('id'))
-            ->unique();
+        // v0.16.1 Revisi 3 E — split the core count by cable DIRECTION.
+        // The old combined figure ("72 core" = 48 masuk + 24 keluar) read
+        // as a bug even though it wasn't — a Closure legitimately has an
+        // incoming feeder cable AND outgoing distribution cables.
+        $sumCores = function ($ids): array {
+            $statuses = FiberCore::query()->whereIn('fiber_cable_id', $ids)->pluck('status');
 
-        $statuses = FiberCore::query()
-            ->whereIn('fiber_cable_id', $cableIds)
-            ->pluck('status');
+            return [
+                'used' => $statuses->filter(fn ($s) => $s === FiberCoreStatus::Used)->count(),
+                'total' => $statuses->count(),
+            ];
+        };
 
-        $coreTotal = $statuses->count();
-        $coreUsed = $statuses->filter(fn ($s) => $s === FiberCoreStatus::Used)->count();
+        $in = $sumCores($node->cablesAsTo()->pluck('id'));
+        $out = $sumCores($node->cablesAsFrom()->pluck('id'));
+
+        $coreTotal = $in['total'] + $out['total'];
+        $coreUsed = $in['used'] + $out['used'];
+
+        $cores = [
+            'incoming_used' => $in['used'],
+            'incoming_total' => $in['total'],
+            'outgoing_used' => $out['used'],
+            'outgoing_total' => $out['total'],
+            'unused' => ($in['total'] - $in['used']) + ($out['total'] - $out['used']),
+            'total' => $coreTotal,
+        ];
 
         if ($kind === 'odp') {
             $cap = $this->odpCapacities()->get($id);
@@ -1784,7 +1814,7 @@ class FiberTopologyService
             'subtitle' => $subtitle,
             'photo_url' => $photo === null ? null : route('web.fiber-node-photos.show', $photo->id),
             'photo_caption' => $photo?->caption,
-            'cores' => ['used' => $coreUsed, 'spare' => $coreTotal - $coreUsed, 'total' => $coreTotal],
+            'cores' => $cores,
             'capacity' => $capacity,
             'detail_url' => $detailUrl,
         ];

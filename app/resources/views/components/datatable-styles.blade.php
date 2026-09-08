@@ -65,6 +65,35 @@
         margin-left: 0.5rem;
     }
 
+    /* v0.17.0 Langkah 2 — below md: DataTables' own default floats the
+       length control left and the search box right, which collide and
+       overflow the container on a phone. Unfloat and stack them so each
+       gets its own full-width row; the search input goes 100% wide with no
+       left margin so it doesn't push past the edge. At md: and up the
+       original side-by-side float layout is untouched. */
+    @media (max-width: 767.98px) {
+        .dataTables_wrapper .dataTables_length,
+        .dataTables_wrapper .dataTables_filter {
+            float: none;
+            text-align: left;
+            width: 100%;
+        }
+
+        .dataTables_wrapper .dataTables_filter label {
+            width: 100%;
+        }
+
+        .dataTables_wrapper .dataTables_filter input {
+            margin-left: 0;
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+
+        .dataTables_wrapper .dataTables_paginate {
+            flex-wrap: wrap;
+        }
+    }
+
     /* Info text + pagination row, below the table — same "give it room"
        treatment as the controls above. */
     .dataTables_wrapper .dataTables_info {

@@ -1,5 +1,5 @@
 <div class="p-6 max-w-4xl mx-auto">
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-6">
         <div>
             <h1 class="text-2xl font-semibold text-gray-800">{{ __('Work Order') }} #{{ $work_order->id }}</h1>
             <p class="text-sm text-gray-500">{{ $work_order->customer?->name ?? '—' }}</p>
@@ -26,7 +26,10 @@
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('SSID') }}</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Password') }}</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Provisioning') }}</th>
-                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Aksi') }}</th>
+                    {{-- v0.17.0 Langkah 2 — kolom Aksi ("Isi WiFi") dipatok di
+                         sisi kanan saat tabel di-scroll horizontal di HP, jadi
+                         tombolnya selalu terjangkau tanpa scroll penuh. --}}
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase sticky right-0 bg-gray-50 z-10">{{ __('Aksi') }}</th>
                 </tr>
             </thead>
             <tbody class="bg-white divide-y divide-gray-200">
@@ -49,7 +52,7 @@
                                 <span class="px-2 py-0.5 rounded-full text-xs bg-yellow-100 text-yellow-700">{{ __('Menunggu') }}</span>
                             @endif
                         </td>
-                        <td class="px-4 py-2 text-sm">
+                        <td class="px-4 py-2 text-sm whitespace-nowrap sticky right-0 bg-white z-10">
                             @if ($canManage)
                                 <button wire:click="openProvisioningForm({{ $device->id }})" class="text-primary hover:underline">
                                     {{ __('Isi WiFi') }}

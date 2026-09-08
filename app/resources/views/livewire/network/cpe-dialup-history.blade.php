@@ -30,8 +30,14 @@
                                     <span class="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-green-100 text-green-700">{{ __('Aktif') }}</span>
                                 @endif
                             </td>
-                            <td class="px-3 py-1.5 whitespace-nowrap text-gray-500">{{ $row['started_at']?->format('d M Y H:i:s') ?? '-' }}</td>
-                            <td class="px-3 py-1.5 whitespace-nowrap text-gray-500">{{ $row['stopped_at']?->format('d M Y H:i:s') ?? '-' }}</td>
+                            {{-- v0.17.0 Langkah 2 — tanggal diringkas d/m/y (dari "d M Y")
+                                 supaya 2 kolom ini lebih hemat lebar di HP; detik
+                                 DIPERTAHANKAN karena reconnect bisa terjadi dalam menit
+                                 yang sama (mulai vs berakhir cuma beda detik). Tabel tetap
+                                 overflow-x-auto, jadi ini pengurangan tekanan lebar, bukan
+                                 penghilang scroll. --}}
+                            <td class="px-3 py-1.5 whitespace-nowrap text-gray-500">{{ $row['started_at']?->format('d/m/y H:i:s') ?? '-' }}</td>
+                            <td class="px-3 py-1.5 whitespace-nowrap text-gray-500">{{ $row['stopped_at']?->format('d/m/y H:i:s') ?? '-' }}</td>
                             <td class="px-3 py-1.5 font-mono text-xs text-gray-500">{{ $row['nas_ip'] ?? '-' }}</td>
                             <td class="px-3 py-1.5 text-gray-700">{{ $this->formatBytes($row['upload_bytes']) }}</td>
                             <td class="px-3 py-1.5 text-gray-700">{{ $this->formatBytes($row['download_bytes']) }}</td>

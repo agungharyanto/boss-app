@@ -1,7 +1,7 @@
 {{--
-    v0.16.0 Core Network Infrastructure Management, Langkah 3. code/name
-    are shown READ-ONLY on purpose — editing them stays the job of the
-    existing v0.5.0 API (OdpController), never wired into this page.
+    v0.16.0 Core Network Infrastructure Management, Langkah 3.
+    v0.16.1 Revisi 3 A — code/name are now editable here (were read-only);
+    total_ports stays the v0.5.0 API's job.
 --}}
 <div class="p-6 max-w-3xl mx-auto">
     <div class="flex items-center justify-between mb-6">
@@ -25,18 +25,20 @@
     @endif
 
     <div class="p-4 border border-gray-200 rounded-md bg-gray-50 space-y-4 mb-6">
-        <div class="grid grid-cols-2 gap-3 text-sm">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-                <span class="block text-gray-500">{{ __('Kode ODP') }}</span>
-                <span class="font-medium">{{ $code }}</span>
+                <label class="block text-sm font-medium text-gray-700">{{ __('Kode ODP') }} <span class="text-red-600">*</span></label>
+                <input type="text" wire:model="code" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" placeholder="ODP-XXXX">
+                @error('code') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             </div>
             <div>
-                <span class="block text-gray-500">{{ __('Nama') }}</span>
-                <span class="font-medium">{{ $name }}</span>
+                <label class="block text-sm font-medium text-gray-700">{{ __('Nama ODP') }} <span class="text-red-600">*</span></label>
+                <input type="text" wire:model="name" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" placeholder="{{ __('Patokan Lokasi') }}">
+                @error('name') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             </div>
         </div>
         <p class="text-xs text-gray-500">
-            {{ __('Kode/nama/jumlah port ODP dikelola lewat alur registrasi ODP yang sudah ada, bukan di halaman ini.') }}
+            {{ __('Jumlah port ODP (total_ports) tetap dikelola lewat alur registrasi ODP v0.5.0, bukan di halaman ini.') }}
         </p>
 
         <div>

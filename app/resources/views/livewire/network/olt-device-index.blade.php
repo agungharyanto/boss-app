@@ -143,6 +143,14 @@
                 </div>
             </div>
 
+            {{-- v0.16.1 Revisi F — jumlah PON port fisik, manual, opsional --}}
+            <div>
+                <label class="block text-sm font-medium mb-1">{{ __('Jumlah PON Port (opsional)') }}</label>
+                <input type="number" min="1" max="1024" wire:model="ponPortCount" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                <p class="text-xs text-gray-400 mt-1">{{ __('Isi jumlah PON port fisik chassis ini. Kalau diisi, form "Assign Port ke Core" memakai dropdown "PON 1..N" untuk OLT ini; kalau dikosongkan, tetap teks bebas.') }}</p>
+                @error('ponPortCount') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+            </div>
+
             <div>
                 <label class="block text-sm font-medium mb-1">{{ __('Access Protocol') }}</label>
                 <select wire:model.live="accessProtocol" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm max-w-xs">

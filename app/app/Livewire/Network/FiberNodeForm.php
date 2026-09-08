@@ -8,6 +8,7 @@ use App\Models\Splitter;
 use App\Services\Network\FiberTopologyService;
 use App\Services\Network\SplitterLossReferenceService;
 use Illuminate\Validation\Rule;
+use InvalidArgumentException;
 use Livewire\Component;
 
 /**
@@ -37,6 +38,13 @@ class FiberNodeForm extends Component
     public string $nodeType = 'otb';
 
     public string $localLabel = '';
+
+    /* v0.16.1 Poin D — hanya dipakai saat nodeType === 'odp' (create-only;
+       edit ODP lewat OdpEdit). ODP disimpan ke tabel `odps` (v0.5.0),
+       bukan `fiber_nodes`. */
+    public string $odpCode = '';
+
+    public string $odpName = '';
 
     public string $parentId = '';
 
@@ -92,9 +100,15 @@ class FiberNodeForm extends Component
 
     protected function rules(): array
     {
+        $isOdp = $this->nodeType === 'odp';
+
         return [
-            'nodeType' => ['required', 'string', Rule::in(['otb', 'closure', 'odc'])],
+            // 'odp' only valid on create — FiberNode can't be turned into
+            // an Odp on edit (see save()).
+            'nodeType' => ['required', 'string', Rule::in($this->fiberNodeId === null ? ['otb', 'closure', 'odc', 'odp'] : ['otb', 'closure', 'odc'])],
             'localLabel' => ['nullable', 'string', 'max:255'],
+            'odpCode' => [$isOdp ? 'required' : 'nullable', 'string', 'max:50'],
+            'odpName' => [$isOdp ? 'required' : 'nullable', 'string', 'max:255'],
             'parentId' => ['nullable', 'integer'],
             'lossInDb' => ['nullable', 'numeric'],
             'lossOutDb' => ['nullable', 'numeric'],
@@ -105,8 +119,10 @@ class FiberNodeForm extends Component
             'newPhotos' => ['array'],
             'newPhotos.*' => ['image', 'max:20480'],
             ...($this->fiberNodeId === null ? [
-                'latitude' => ['nullable', 'numeric', 'between:-90,90'],
-                'longitude' => ['nullable', 'numeric', 'between:-180,180'],
+                // lat/long WAJIB untuk ODP (kolom odps NOT NULL), nullable
+                // untuk fiber_nodes.
+                'latitude' => [$isOdp ? 'required' : 'nullable', 'numeric', 'between:-90,90'],
+                'longitude' => [$isOdp ? 'required' : 'nullable', 'numeric', 'between:-180,180'],
             ] : []),
         ];
     }
@@ -115,7 +131,9 @@ class FiberNodeForm extends Component
     {
         return [
             'nodeType' => 'Tipe Titik',
-            'localLabel' => 'Label',
+            'localLabel' => 'Nama Titik',
+            'odpCode' => 'Kode ODP',
+            'odpName' => 'Nama ODP',
             'lossInDb' => 'Redaman Masuk',
             'lossOutDb' => 'Redaman Keluar',
             'latitude' => 'Latitude',
@@ -145,16 +163,27 @@ class FiberNodeForm extends Component
 
         $this->validate();
 
-        $isSplittingPoint = $this->nodeType === 'odc';
+        $isOdp = $this->nodeType === 'odp';
+        // v0.16.1 Poin D — a splitting point (loss WAJIB + splitter form)
+        // is ODC or ODP; OTB/Closure are not.
+        $isSplittingPoint = in_array($this->nodeType, ['odc', 'odp'], true);
         $isOtb = $this->nodeType === 'otb';
 
+        if ($isOdp && $this->fiberNodeId !== null) {
+            $this->addError('nodeType', 'Tidak bisa mengubah titik yang sudah ada menjadi ODP.');
+
+            return;
+        }
+
         if ($isSplittingPoint) {
+            $typeLabel = $isOdp ? 'ODP' : 'ODC';
+
             if ($this->lossInDb === '') {
-                $this->addError('lossInDb', 'Redaman masuk (loss in) wajib diisi untuk titik ODC.');
+                $this->addError('lossInDb', "Redaman masuk (loss in) wajib diisi untuk titik {$typeLabel}.");
             }
 
             if ($this->lossOutDb === '') {
-                $this->addError('lossOutDb', 'Redaman keluar (loss out) wajib diisi untuk titik ODC.');
+                $this->addError('lossOutDb', "Redaman keluar (loss out) wajib diisi untuk titik {$typeLabel}.");
             }
 
             if ($this->getErrorBag()->hasAny(['lossInDb', 'lossOutDb'])) {
@@ -164,6 +193,53 @@ class FiberNodeForm extends Component
 
         if ($isOtb && $this->portCount === '') {
             $this->addError('portCount', 'Jumlah port wajib diisi untuk titik OTB.');
+
+            return;
+        }
+
+        if ($isOdp && $this->portCount === '') {
+            $this->addError('portCount', 'Jumlah port wajib diisi untuk titik ODP.');
+
+            return;
+        }
+
+        // A splitter only ever makes sense on a splitting point (ODC/ODP)
+        // — ignore any stale ratio the field may still hold if the type
+        // was switched away before saving.
+        $splitter = ($isSplittingPoint && $this->splitterRatio !== '')
+            ? ['ratio' => $this->splitterRatio, 'model' => $this->splitterModel]
+            : null;
+
+        // v0.16.1 Poin D — ODP goes to the `odps` table (create-only;
+        // edit is App\Livewire\Installation\OdpEdit). Its own service
+        // path bundles the row + provisionPorts() + photos + splitter in
+        // ONE transaction, without touching StoreOdpRequest/OdpController
+        // (same posture as OdpEdit / updateOdpTopologyFields).
+        if ($isOdp) {
+            try {
+                $service->createOdpWithAttachments([
+                    'tenant_id' => auth()->user()->tenant_id,
+                    'code' => $this->odpCode,
+                    'name' => $this->odpName,
+                    'latitude' => (float) $this->latitude,
+                    'longitude' => (float) $this->longitude,
+                    'total_ports' => (int) $this->portCount,
+                    'loss_in_db' => (float) $this->lossInDb,
+                    'loss_out_db' => (float) $this->lossOutDb,
+                    'parent_type' => $this->parentId !== '' ? FiberNode::class : null,
+                    'parent_id' => $this->parentId !== '' ? (int) $this->parentId : null,
+                    'notes' => $this->notes !== '' ? $this->notes : null,
+                ], $this->newPhotos, $splitter);
+            } catch (InvalidArgumentException $e) {
+                $this->addError('odpCode', $e->getMessage());
+
+                return;
+            }
+
+            $this->newPhotos = [];
+            $this->dispatch('fiber-node-saved');
+            session()->flash('status', 'Titik ODP berhasil dibuat.');
+            $this->redirectRoute('web.fiber-nodes.index', navigate: true);
 
             return;
         }
@@ -178,13 +254,6 @@ class FiberNodeForm extends Component
             'port_count' => ($isOtb && $this->portCount !== '') ? (int) $this->portCount : null,
             'notes' => $this->notes !== '' ? $this->notes : null,
         ];
-
-        // A splitter only ever makes sense on a splitting point (ODC) —
-        // ignore any stale ratio the field may still hold if the type was
-        // switched away from ODC before saving.
-        $splitter = ($isSplittingPoint && $this->splitterRatio !== '')
-            ? ['ratio' => $this->splitterRatio, 'model' => $this->splitterModel]
-            : null;
 
         if ($this->fiberNodeId === null) {
             $data['latitude'] = $this->latitude !== '' ? (float) $this->latitude : null;

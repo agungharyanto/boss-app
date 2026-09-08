@@ -63,6 +63,7 @@
 | v0.15.0 | Operasional     | Management Ticketing          | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Sistem tiket untuk dukungan/komplain pelanggan. Decision-gate scope lengkap (alur, integrasi modul lain, siapa yang bisa buka/tutup tiket, dll) dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 | v0.16.0 | Network         | Core Network Infrastructure Management | Inventaris topologi fiber fleksibel (OTB/Closure/ODC self-referencing parent via `fiber_nodes`, ODP tetap di tabel `odps` v0.5.0 existing + kolom parent link tambahan) — GPS+foto per titik, kabel/tube/core (jumlah genap saja, warna TIA/EIA-598-C auto+override), splitter rasio bebas + redaman (in/out) dengan referensi non-blocking, aksesori (pin adaptor/connector/splice) dengan redaman terukur, visual splice-diagram (bukan tabel polos), klik koordinat→Google Maps direction, notifikasi fault-correlation ODP penuh ke OdpLocatorService, draft offline localStorage. Langkah 0-13 selesai (…Langkah 8: cluster sidebar "Topology Fiber", Peta Topologi Leaflet + waypoint; Langkah 9: peta per-kabel, satelit Esri, ekspor KMZ; Langkah 10: layer checklist + Pelanggan + filter KMZ; Langkah 11: OSRM routing self-hosted + Cek Jalur ke ODP + kapasitas ODP popup; Langkah 12: bind koordinat pelanggan manual + multi-select layer kabel; Langkah 13: CapacityReport hormati soft-delete + penamaan kabel deskriptif + scroll checklist; cleanup data test dieksekusi) — draft offline diverifikasi masih jalan di penutupan sprint. Merged `--no-ff` ke `develop` (merge commit `f10c2f9`) + tag `v0.16.0` | Selesai |
 | v0.17.0 | Operasional     | UI/UX Polish — Fondasi Responsif Mobile | Scope final (dipersempit dari "profesionalisasi tampilan menyeluruh" jadi **responsivitas mobile bertahap**, prioritas halaman lapangan teknisi/sales). **Fondasi:** hamburger + off-canvas drawer sidebar di bawah `md:` (desktop ≥md byte-for-byte tak berubah); standardisasi komponen `<x-modal>` (18 modal dikonversi — gutter `p-4` di backdrop + `max-h-[90vh] overflow-y-auto` di panel). **Per-halaman:** CPE Devices list (header flex-wrap, kolom Detail sticky) + detail (`<dl>` `grid-cols-1 sm:grid-cols-2`, tombol Ganti Modem keluar dari `<dd>`, Riwayat Dialup tanggal ringkas); WorkOrderShow (header flex-wrap, kolom Aksi sticky-right); Topology Fiber index/map/capacity (header & kontrol flex-wrap, kolom progress-bar `w-32 sm:w-64`); chrome DataTables stack di `<md`. **Bug fix:** Leaflet `invalidateSize()` on sidebar toggle (event `boss:sidebar-toggled`) + z-index stacking conflict drawer/backdrop/modal vs peta Leaflet (drawer `z-[1200]`, backdrop `z-[1100]`, modal `z-[1300]`, profile dropdown `z-[1250]` — di atas z-index Leaflet 1.9.4 max 1000). **Eksplisit DI LUAR scope (dicatat untuk sesi terpisah):** audit menu Subscriptions + "Registrasi Pelanggan" vs "+ Pelanggan Baru". | Selesai — merged `develop`→`main`, tagged `v0.17.0` |
+| v0.16.1 | Network         | Topology Refinements — FiberNodeDetail UI + Splice Continuity | Patch dari v0.16.0 (pola sama `v0.14.5.1`). Branch `v0.16.1-topology-refinements` dari `develop` (di atas v0.17.0 — penomoran slot, bukan kronologis). Scope: **(a)** fix bug Assign Port OTB — core yang lewat OTB tapi terus ke Closure/ODC (tidak berhenti di OLT) tidak bisa disimpan karena validasi memaksa `olt_device_id`/PON link terisi; buat genuinely opsional. **(b)** PON dropdown dari data monitoring (OltDevice/LibreNMS v0.8.1) kalau tersedia terstruktur — kalau tidak, pertahankan input bebas (jangan hardcode PON palsu). **(c)** Reorganisasi "Koneksi Core" di FiberNodeDetail — layout kolom per-tube (dinamis ikut `tube_count`), badge warna tube di header kolom. **(d)** Gabung section "Simulasi Port" ke "Koneksi Core" (satu section untuk OTB). **(e)** Section non-OTB (Closure/ODC/ODP): "Koneksi Core" + "Assign Core-to-Core" (splice continuity antar kabel — tabel baru `fiber_core_splices`, **polimorfik** `splice_node_type`/`splice_node_id` supaya jalan di ODP juga; dropdown 2-tahap Kabel→Tube+Core, guard "beda kabel"). **(f)** UX mobile Peta Topologi: mode edit rute (tap peta tambah waypoint di ujung + daftar waypoint reorder/hapus, drag-pin desktop tetap) + panel info ringkas saat marker di-tap (komponen baru, reuse pola CSS/z-index v0.17.0 L2.2, BUKAN drawer sidebar; 1 foto + ringkasan core + badge kapasitas + link detail). PON tetap teks bebas (poin b — tidak ada sumber PON terstruktur, dikonfirmasi Agung). Bagian A juga: `olt_pon_port_label` didecouple dari `olt_device_id` (dipakai catatan non-OLT mis. "Backbone Lintas A") + feeder core (kabel MASUK ke OTB) ikut assignable. **Revisi 1-4 (review Agung berulang, sama branch):** undo waypoint, label tube+warna penuh di dropdown splice, guard arah splice (masuk↔keluar) + multi-hop through-splice (`coreAlreadySplicedAtNode`), blokir hapus kabel yang punya splice aktif, cari + Tukar Port modal (mode Antar Core / Antar Tube), `olt_devices.pon_port_count` → dropdown PON, ODP sebagai Tipe Titik (create-only, `createOdpWithAttachments()`, loss WAJIB), edit Kode/Nama ODP di `OdpEdit`, unifikasi "Label"→"Nama Titik", **fix bug laten sejak v0.16.0: foto passive/ODP tidak pernah tampil** (`FiberNodePhotoController` return type), popup kapasitas peta 6 kotak terpisah per arah (tanpa angka gabungan). | Selesai — merged `develop`→`main`, tagged `v0.16.1` |
 | v0.18.0 | Billing & Finance | Accounting & Financial Reporting | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Modul akuntansi: laporan pemasukan harian, pemasukan per periode (mingguan/bulanan/custom range), laporan laba-rugi, pencatatan pengeluaran (expenses). Sinkronisasi dengan modul pajak yang sudah ada (Tax Components/Reseller Tax Policy, v0.3.3 Regulatory Tax Engine) — termasuk perhitungan BHP USO (kewajiban regulasi telekomunikasi Indonesia): berapa yang harus dibayar ISP sendiri, dan berapa yang harus dibayar tiap reseller. Decision-gate scope lengkap dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 | v0.19.0 | Operasional     | Feature Toggle / Module Management | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Halaman Pengaturan untuk enable/disable modul fitur besar (kandidat: GenieACS/TR-069, FreeRADIUS, WhatsApp Gateway, Payment Gateway, OLT/SmartOLT integration, Profil Paket live-push, dan modul lain — list final berdasarkan hasil audit Docker vs Monitoring, lihat CLAUDE.md). Tujuan: BOSS App direncanakan dijual sebagai SaaS ke ISP lain — saat onboarding tenant trial/demo baru, admin perlu kontrol modul mana yang aktif/ditampilkan, supaya trial user tidak melihat fitur setengah jadi atau tidak relevan buat mereka. Scope detail (termasuk apakah per-tenant atau global, dan mekanisme teknisnya) belum ditentukan — decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 | v0.20.0 | Network         | Template Halaman Isolir (Captive Page Non-Aktif) | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Halaman yang dilihat pelanggan saat browsing ketika statusnya isolir/non-aktif (belum bayar) — captive-page redirect. Dikustomisasi admin lewat Pengaturan **TANPA coding** — hanya ganti logo + teks, BUKAN editor HTML bebas. Kemungkinan terhubung ke infrastruktur "Profil Expired" per-NAS yang sudah dibangun di v0.14.4.1 (profile dengan pool terbatas) sebagai dasar teknis — perlu dikonfirmasi ulang saat scoping. Decision-gate scope lengkap terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
@@ -1765,6 +1766,188 @@ semua file yang disentuh. Permission `ppp_packages.view`/`.manage` di-seed ulang
 cukup).
 
 **Merged + tagged `v0.14.5`** — diverifikasi manual Agung lewat browser, lolos.
+
+## v0.16.1 — Topology Refinements (branch `v0.16.1-topology-refinements` dari `develop` di atas v0.17.0 — penomoran slot, bukan kronologis)
+
+Patch dari v0.16.0 (pola sama `v0.14.5.1`). Item 1-8 dari Agung, dikerjakan sebagai Bagian A-H.
+
+**Bagian A — fix bug Assign Port OTB.** Skenario persis (dikonfirmasi Agung): assign port TANPA OLT tapi
+field label/catatan PON di sampingnya diisi teks bebas (mis. "Backbone Lintas A", dipakai catatan non-OLT)
+→ simpan gagal / catatan terhapus. Root cause: `applyCoreAssignment()`/`assignCorePorts()` di
+`FiberTopologyService` nulling `olt_pon_port_label` setiap `olt_device_id` null. Fix: `olt_pon_port_label`
+di-decouple penuh dari `olt_device_id` — bebas diisi, cuma di-null saat port sendiri di-clear. Sekalian:
+core dari kabel yang MASUK ke OTB (feeder, `cablesAsTo` bukan `cablesAsFrom`) sekarang ikut muncul & bisa
+di-assign — `coresFromNode()` + `assertCoreBelongsToOtb()` menerima kabel yang menyentuh OTB di ujung mana
+pun; `coreCardData()` jadi direction-aware (`$relativeTo`).
+
+**Bagian B — `fiber_core_splices` (through-splice core-ke-core di Closure/ODC/ODP).** Dikonfirmasi Agung:
+skema **polimorfik** `splice_node_type`/`splice_node_id` (BUKAN FK `fiber_nodes`) — karena item #6 eksplisit
+minta Assign Core-to-Core jalan di ODP juga, dan ODP ada di tabel `odps` bukan `fiber_nodes`.
+`from_fiber_core_id`+`to_fiber_core_id` (FK cascadeOnDelete, masing-masing UNIQUE), `loss_db` decimal(5,2)
+nullable, `note` nullable, `performed_by` FK nullOnDelete. `App\Models\FiberCoreSplice` +
+`App\Services\Network\FiberCoreSpliceService` (guard: self, beda kabel wajib, loss >= 0, kabel menyentuh
+node di kedua ujung, core belum tersplice di kolom mana pun). `cascadeOnDelete` core FK otomatis
+membersihkan splice saat kabel/core dihapus.
+
+**Bagian C — reorganisasi "Koneksi Core" (OTB).** Layout kolom per-tube: N kolom = `tube_count` kabel
+(dinamis, bukan hardcode), baris = `cores_per_tube`, badge warna tube di header tiap kolom. Section
+"Simulasi Port" DIGABUNG ke "Koneksi Core" — satu section untuk OTB (Port N badge, tujuan, "Port terpakai:
+X/N", portLogs, form assign semua di dalamnya). `coreGridForNode(FiberNode|Odp, ?FiberNode $otb)` di
+service jadi satu sumber data grid tube + port + splice.
+
+**Bagian D — section non-OTB (Closure/ODC/ODP).** "Koneksi Core" (layout tube-grid sama) + "Assign
+Core-to-Core" baru. Dikonfirmasi Agung: dropdown **2-tahap** (pilih Kabel dulu, baru Tube+Core; satu
+dropdown gabungan bisa 48 opsi per kabel, susah di-scroll di HP — konsisten semangat Bagian E). Sisi 2
+otomatis mengecualikan kabel sisi 1, guard "beda kabel". Splice yang sudah ada tampil read-only dengan
+tombol hapus. Form muncul hanya kalau >= 2 kabel menyentuh node.
+
+**Bagian E — UX mobile Peta Topologi: edit waypoint.** Drag-pin (desktop) dipertahankan. Tambah toggle
+"Mode Edit Rute (tap peta)" → tap di peta menambah waypoint di UJUNG rute (bukan harus drag presisi ke
+segmen). Di bawah peta: daftar waypoint (nomor urut + lat/long) dengan tombol naik/turun (reorder) & hapus
+per baris. "Simpan Rute" tidak berubah (menimpa semua waypoint kabel itu). Semua di dalam `wire:ignore`
+`x-data="fiberTopologyMap"` yang sama — state `tapAddMode` + method `toggleTapAdd()`/`onMapTapForEdit()`/
+`moveWaypoint()`/`removeWaypointAt()`/`fmtLatLng()`.
+
+**Bagian F — UX mobile Peta Topologi: klik marker.** Dikonfirmasi Agung: **komponen baru terpisah**, hanya
+reuse pola visual (fixed + backdrop + z-index convention v0.17.0 Langkah 2.2: backdrop `z-[1100]`, panel
+`z-[1200]`) — BUKAN komponen drawer sidebar. Tap marker OTB/Closure/ODC/ODP → panel info ringkas (bottom
+sheet di HP / side panel di desktop): 1 foto utama, ringkasan core terpakai/cadangan/total (BUKAN tabel
+Koneksi Core penuh), badge kapasitas (reuse `capacityZone()` — ODP pakai kapasitas port `odpCapacities()`,
+fiber_node pakai rasio core terpakai; warna bukan satu-satunya sinyal: titik warna + label kata + rasio),
+link "Lihat Detail Lengkap" ke FiberNodeDetail. Popup Leaflet ODP lama (`odpPopupHtml`) dihapus — panel
+adalah supersetnya. `FiberTopologyService::markerInfoPanel(kind, id)` satu sumber data; marker
+`.on('click')` di app.js memanggil `$wire.openMarkerPanel(type, id)`.
+
+**Bagian G — regression + Pint.** Full suite dijalankan, Pint per-file yang disentuh (3 isu style
+pre-existing di file yang tidak disentuh — `LegacyDeviceMatcherService`, `bootstrap/providers.php`,
+`CpeDeviceDatatableControllerTest` — tidak diperbaiki sesuai disiplin codebase).
+
+**Status: Selesai — merged `--no-ff` ke `develop` lalu `develop`→`main` (pola v0.16.0/v0.17.0), tag annotated
+`v0.16.1` di commit merge `develop`→`main`. Verifikasi manual browser oleh Agung sepanjang sesi (4 putaran
+revisi).** DB dev sudah di-`migrate` (migration `fiber_core_splices` + `pon_port_count` dari revisi di
+bawah) — lebih maju dari `main`, closure harus segera menyusul (pelajaran v0.14.5.1).
+
+### Revisi (review Agung, sama branch, sebelum closure)
+
+**A — Undo cepat di Mode Edit Rute.** Tombol "Undo Titik Terakhir" di toolbar edit — sekali klik hapus
+waypoint yang paling baru ditambahkan, bisa diklik berkali-kali. Tetap client-side sampai "Simpan Rute".
+(`fiberTopologyMap.undoLastWaypoint()`.)
+
+**B — Label tube+warna penuh di dropdown Assign Core-to-Core.** "T1/C1 (Biru)" → "Tube 1 (Biru) / Core 1
+(Biru)" di kedua dropdown; warna tube DAN core dari nama tersimpan (bisa beda kalau core di-override).
+
+**C — Guard arah splice + hapus kabel.** `FiberCoreSpliceService::createSplice()` guard baru: splice WAJIB
+menghubungkan kabel MASUK (`fiber_cable.to_* == node`) dengan kabel KELUAR (`fiber_cable.from_* == node`)
+— tolak masuk+masuk / keluar+keluar. TIDAK ada batasan jumlah kabel per arah (boleh 2 masuk vs 1 keluar,
+dst) — guard cuma soal arah per-pasangan. **Hapus kabel**: tombol "Hapus" per kartu kabel di "Diagram
+Splice" (masuk & keluar), `wire:confirm` menjelaskan konsekuensi. Cascade DB sudah lengkap (`fiber_cores`
+→ `fiber_core_port_logs` / `fiber_core_splices` / `fiber_accessories`; `fiber_cable_waypoints` langsung) —
+splice aktif ikut terhapus via cascade, tidak diblokir. Titik anak di ujung kabel keluar tidak ikut.
+
+**D — ODP di form "Titik Baru" — SELESAI (10 keputusan dikonfirmasi Agung).** "ODP" jadi opsi Tipe Titik
+di `FiberNodeForm` **hanya saat create** (edit ODP tetap lewat `OdpEdit`). Field kondisional saat
+Tipe=ODP: "Kode ODP" (wajib, unik per tenant), "Nama ODP" (wajib), lat/long WAJIB (kolom `odps` NOT
+NULL), "Jumlah Port ODP" (→ `odps.total_ports`, field OTB `port_count` disembunyikan), loss in/out
+**WAJIB** (konsisten `OdpEdit` + keputusan arsitektur v0.16.0 L3 "WAJIB untuk Odp"), splitter form muncul
+juga. Simpan → `FiberTopologyService::createOdpWithAttachments()` (baru): `Odp::create()` +
+`provisionPorts()` + foto + splitter dalam 1 transaction, `reseller_id = null`, **tidak menyentuh
+`StoreOdpRequest`/`OdpController`** (pola `OdpEdit`/`updateOdpTopologyFields`). Gate tetap
+`network_infrastructure.manage` (dikonfirmasi lolos untuk tier-admin, sama seperti `OdpPolicy::create`).
+
+**E — Cari + tukar cepat di "Assign Port ke Core" (OTB).** Field cari (nomor port / nama tube / warna
+core / kabel — filter di `render()`). Aksi "Tukar Port": pilih 2 baris core (checkbox) →
+`FiberTopologyService::swapCorePorts()` menukar `port_number` dua core dalam satu transaction (aman tanpa
+langkah kosongkan-dulu — `fiber_cores.port_number` tidak punya unique DB, cuma app-enforced). Tiap core
+tetap pegang OLT/PON-nya sendiri, cuma `port_number` yang ditukar. Gate form pakai flag "ada core
+assignable" (bukan hasil filter) supaya kotak cari tidak ikut hilang saat 0 hasil.
+
+**F — OLT/PON dropdown terstruktur (tanpa monitoring live).** Kolom baru `olt_devices.pon_port_count`
+(unsignedInteger nullable), diisi MANUAL admin di form OLT ("Jumlah PON Port (opsional)"). Di form
+assign-port: OLT yang `pon_port_count`-nya terisi → `olt_pon_port_label` jadi dropdown "PON 1".."PON N";
+yang null tetap teks bebas (tidak dipaksa). Data lama tidak dimigrasikan paksa.
+
+**Test revisi**: `FiberCoreSpliceServiceTest` +3, `FiberNodeDetailLivewireTest` +12,
+`FiberTopologyMapLivewireTest` +1, `OltDeviceIndexLivewireTest` +2, `FiberNodeFormLivewireTest` +7 (D).
+Full regression suite + Pint per-file.
+
+### Revisi 2 (review Agung terhadap hasil revisi 1)
+
+**A — BALIK keputusan hapus-kabel dari Bagian C (sengaja, demi keamanan data).** Sebelumnya: hapus kabel
+dengan splice aktif diizinkan, splice ikut cascade. Sekarang: kabel yang masih punya >= 1
+`fiber_core_splices` aktif (core dari kabel itu jadi `from_` ATAU `to_` di splice mana pun) **DIBLOKIR** —
+`FiberTopologyService::deleteCable()` throw `InvalidArgumentException` + jumlah splice penghalang;
+`FiberNodeDetail` tangkap → flash `cable-error` (banner merah). Cascade lain (`fiber_core_port_logs`,
+`fiber_accessories`, `fiber_cable_waypoints`) TETAP. Hapus splice-nya dulu → kabel baru bisa dihapus.
+
+**B — Filter dropdown "Assign Core-to-Core" per arah (bukan cuma validasi setelah submit).** Label "Kabel
+sisi awal/akhir" → **"Kabel Masuk" / "Kabel Keluar"**. Dropdown "Kabel Masuk" HANYA kabel `to_*==node`
+(`spliceIncomingCableOptions`); "Kabel Keluar" HANYA `from_*==node` (`spliceOutgoingCableOptions`). Kabel
+salah arah tidak muncul sebagai opsi sama sekali — user tidak bisa salah pilih. Guard arah di
+`FiberCoreSpliceService` (Bagian C revisi 1) tetap sebagai lapis kedua. Gate form: butuh minimal satu
+kabel masuk DAN satu kabel keluar (`$canSplice`).
+
+**C — "Tukar Port" checkbox+inline → modal 2-tingkat** (mekanisme lama ribet, terutama di HP). Tombol
+"Tukar Port" buka modal. Tahap 1: pilih mode.
+- **Antar Tube**: pilih kabel → tube sumber → tube tujuan. `FiberTopologyService::swapCoreTubes()` menukar
+  SEMUA core di posisi yang sama (T-x/C-n ⇄ T-y/C-n) dalam 1 transaction; nilai di-capture sebelum mutasi
+  supaya swap dua-pass aman.
+- **Antar Core**: 2 dropdown (dengan search) pilih core sumber & tujuan individual → `swapCorePorts()`.
+
+Kolom checkbox "Tukar" **dihapus** dari tabel utama; field cari tetap untuk kegunaan biasa.
+`swapCorePorts()` sekarang menukar SELURUH assignment (`port_number` + `olt_device_id` +
+`olt_pon_port_label`) sebagai satu unit — patch OLT/PON milik PORT, bukan core.
+
+**Test revisi 2**: `FiberNodeDetailLivewireTest` (rewrite E-swap jadi modal + B-direction + A-block + tube
+swap), `FiberTopologyServiceTest` +5.
+
+### Revisi 3 Bagian 2 (5 perbaikan UI; Bagian 1 "override destinasi per-core" = investigasi, STOP & lapor terpisah)
+
+**A — Kode/Nama ODP bisa diedit di `OdpEdit`** (dulu read-only sepenuhnya — `OdpEdit` cuma pegang field
+topologi, dan v0.5.0 tidak pernah punya halaman web untuk kode/nama). Validasi unik-per-tenant reuse
+`FiberTopologyService::assertOdpCodeAvailable($tenantId, $code, ?$ignoreOdpId)` — diekstrak dari
+`createOdpWithAttachments()` jadi shared, tidak diduplikat. `code`/`name` juga wajib.
+
+**B — Form "Perangkat Passive Baru" saat Tipe Titik = ODP**: field "Label" generik **disembunyikan**
+(redundan dengan "Nama ODP"). "Nama ODP" dapat placeholder **"Patokan Lokasi"**.
+
+**C — Unifikasi istilah "Label" vs "Nama"**: field "Label" untuk OTB/Closure/ODC → **"Nama Titik"** (teks
+label + `validationAttributes`; kolom DB `local_label` tidak berubah).
+
+**D — Bug foto tidak muncul di popup peta / GpsPhotoCapture / OdpEdit — AKAR MASALAH ditemukan**:
+`FiberNodePhotoController::show()` return type `Illuminate\Http\Response`, tapi
+`Storage::disk('local')->response()` mengembalikan `StreamedResponse` → `TypeError` → **500 → broken
+`<img>` di SEMUA tempat foto ditampilkan, sejak v0.16.0** (tidak pernah ada HTTP test untuk endpoint ini).
+Fix: return type → `Symfony\Component\HttpFoundation\Response` (parent bersama) — persis fix yang sudah
+dipakai `CommissionPaymentProofController` (docblock-nya sejak v0.9.11 mencatat kontras ini tapi
+`FiberNodePhotoController` tidak pernah ikut diperbaiki). `FiberNodePhotoControllerTest` baru.
+
+**E — Info kapasitas popup peta dipecah per arah kabel** (yang bikin "72 Core" gabungan tampak aneh —
+sebenarnya 48 core kabel masuk + 24 kabel keluar). *Direvisi lagi di Revisi 4 B — lihat di bawah.*
+
+### Revisi 4 (review Agung terhadap hasil Revisi 3)
+
+**A — Dropdown "Tube / Core sisi masuk" kelihatan cuma 0-1 opsi — AKAR MASALAH: bukan `<select>` collapsed,
+tapi genuinely 0 core tersedia.** `spliceCoreOptions()` + `FiberCoreSpliceService::assertValid()` menolak
+core yang ada di splice **mana pun (kolom mana pun, node mana pun)**. Padahal core yang di-through-splice di
+SATU ujung kabelnya (contoh riil: kabel 24-core #9 di-splice di Closure-48-Lapang sebagai sisi *keluar*)
+**masih boleh di-splice lagi di ujung SATUNYA** (di Closure perempatan Balaidesa sebagai sisi *masuk*) —
+itu multi-hop through path yang sah, dan DB memang mengizinkannya (`unique(from_fiber_core_id)` /
+`unique(to_fiber_core_id)` terpisah). **Fix**: filter/guard sekarang pakai
+`FiberCoreSpliceService::coreAlreadySplicedAtNode($coreId, $node)` — hanya blokir kalau core sudah punya
+splice **di node ini**. Node #17 riil: dropdown MASUK 0 → 24 opsi setelah fix. Label dropdown dapat teks
+**"(N core tersedia)"** + pesan amber kalau 0. Arah logic (from/to inherent dari `from_type`/`to_type`
+kabel) dikonfirmasi benar, tidak diubah.
+
+**B — Popup kapasitas peta jadi 6 kotak TOTAL terpisah** (bukan 4 kotak dengan angka gabungan
+masuk+keluar). Baris atas "Kabel Masuk": Core Terpakai / Core Cadangan / Total Core (murni kabel masuk).
+Baris bawah "Kabel Keluar": idem (murni kabel keluar). **TIDAK ada angka gabungan masuk+keluar sama
+sekali** — "core tidak terpakai gabungan" & "total gabungan" dihapus. Badge status (Longgar/Hampir
+Penuh/Penuh) dihitung **terpisah per arah** — 2 badge independen. `markerInfoPanel()`: `cores` →
+`{incoming: {used, spare, total}, outgoing: {...}}`, `capacity_incoming`, `capacity_outgoing`,
+`port_capacity` (khusus ODP, dipertahankan sebagai badge ke-3).
+
+**Test Revisi 4**: `FiberCoreSpliceServiceTest` +1 (multi-hop), `FiberNodeDetailLivewireTest` +1
+(cross-node dropdown), `FiberTopologyMapLivewireTest` (marker panel shape + 2 test).
 
 ## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile — SELESAI & DI-TAG (branch `v0.17.0-responsive-foundation`)
 

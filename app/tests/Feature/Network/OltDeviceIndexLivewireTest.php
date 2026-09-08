@@ -691,4 +691,68 @@ class OltDeviceIndexLivewireTest extends TestCase
             ->assertSet('oltManufacturerId', null)
             ->assertSet('oltModelId', null);
     }
+
+    public function test_revisi_f_pon_port_count_is_saved_and_reloaded_on_edit(): void
+    {
+        $this->bindGateway(reachable: true);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $manufacturer = OltManufacturer::factory()->create();
+        $model = OltModel::factory()->create(['olt_manufacturer_id' => $manufacturer->id, 'supported_pon_type' => OltPonType::Gpon]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(OltDeviceIndex::class)
+            ->call('create')
+            ->set('name', 'OLT dengan PON')
+            ->set('nasId', $nas->id)
+            ->set('ipAddress', '10.1.1.5')
+            ->set('oltModelId', $model->id)
+            ->set('accessProtocol', 'telnet')
+            ->set('telnetPort', 2333)
+            ->set('telnetUsername', 'admin')
+            ->set('snmpVersion', 'v2c')
+            ->set('snmpPort', 2161)
+            ->set('snmpRoCommunity', 'public')
+            ->set('ponPortCount', 16)
+            ->call('testConnection')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $olt = OltDevice::where('name', 'OLT dengan PON')->firstOrFail();
+        $this->assertSame(16, $olt->pon_port_count);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(OltDeviceIndex::class)
+            ->call('edit', $olt->id)
+            ->assertSet('ponPortCount', 16);
+    }
+
+    public function test_revisi_f_pon_port_count_defaults_to_null_and_stays_optional(): void
+    {
+        $this->bindGateway(reachable: true);
+        $tenant = Tenant::factory()->create();
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $manufacturer = OltManufacturer::factory()->create();
+        $model = OltModel::factory()->create(['olt_manufacturer_id' => $manufacturer->id, 'supported_pon_type' => OltPonType::Gpon]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(OltDeviceIndex::class)
+            ->call('create')
+            ->assertSet('ponPortCount', null)
+            ->set('name', 'OLT tanpa PON')
+            ->set('nasId', $nas->id)
+            ->set('ipAddress', '10.1.1.5')
+            ->set('oltModelId', $model->id)
+            ->set('accessProtocol', 'telnet')
+            ->set('telnetPort', 2333)
+            ->set('telnetUsername', 'admin')
+            ->set('snmpVersion', 'v2c')
+            ->set('snmpPort', 2161)
+            ->set('snmpRoCommunity', 'public')
+            ->call('testConnection')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $this->assertNull(OltDevice::where('name', 'OLT tanpa PON')->firstOrFail()->pon_port_count);
+    }
 }

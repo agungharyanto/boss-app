@@ -86,15 +86,42 @@
                         <option value="otb">{{ __('OTB') }}</option>
                         <option value="closure">{{ __('Closure') }}</option>
                         <option value="odc">{{ __('ODC') }}</option>
+                        @if ($fiberNodeId === null)
+                            <option value="odp">{{ __('ODP') }}</option>
+                        @endif
                     </select>
                     @error('nodeType') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    @if ($nodeType === 'odp')
+                        <p class="text-xs text-gray-400 mt-1">{{ __('ODP disimpan sebagai perangkat instalasi (tabel odps) — diedit lewat halaman ODP-nya sendiri, bukan form ini.') }}</p>
+                    @endif
                 </div>
-                <div>
-                    <label for="fn-label" class="block text-sm font-medium text-gray-700">{{ __('Label') }}</label>
-                    <input id="fn-label" type="text" wire:model="localLabel" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
-                    @error('localLabel') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
-                </div>
+                {{-- v0.16.1 Revisi 3 B/C — "Label" (istilah lama, disamakan
+                     jadi "Nama Titik") hanya untuk OTB/Closure/ODC. Untuk
+                     ODP field ini disembunyikan (redundan dengan "Nama ODP"
+                     di bawah). --}}
+                @if ($nodeType !== 'odp')
+                    <div>
+                        <label for="fn-label" class="block text-sm font-medium text-gray-700">{{ __('Nama Titik') }}</label>
+                        <input id="fn-label" type="text" wire:model="localLabel" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                        @error('localLabel') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    </div>
+                @endif
             </div>
+
+            @if ($nodeType === 'odp')
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                        <label for="fn-odp-code" class="block text-sm font-medium text-gray-700">{{ __('Kode ODP') }} <span class="text-red-600">*</span></label>
+                        <input id="fn-odp-code" type="text" wire:model="odpCode" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" placeholder="ODP-XXXX">
+                        @error('odpCode') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    </div>
+                    <div>
+                        <label for="fn-odp-name" class="block text-sm font-medium text-gray-700">{{ __('Nama ODP') }} <span class="text-red-600">*</span></label>
+                        <input id="fn-odp-name" type="text" wire:model="odpName" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm" placeholder="{{ __('Patokan Lokasi') }}">
+                        @error('odpName') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    </div>
+                </div>
+            @endif
 
             <div>
                 <label for="fn-parent" class="block text-sm font-medium text-gray-700">{{ __('Titik Induk (Parent)') }}</label>
@@ -111,7 +138,7 @@
                 <div>
                     <label for="fn-loss-in" class="block text-sm font-medium text-gray-700">
                         {{ __('Redaman Masuk (loss in, dB)') }}
-                        @if ($nodeType === 'odc') <span class="text-red-600">*</span> @endif
+                        @if (in_array($nodeType, ['odc', 'odp'])) <span class="text-red-600">*</span> @endif
                     </label>
                     <input id="fn-loss-in" type="text" inputmode="decimal" wire:model="lossInDb" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                     @error('lossInDb') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
@@ -119,7 +146,7 @@
                 <div>
                     <label for="fn-loss-out" class="block text-sm font-medium text-gray-700">
                         {{ __('Redaman Keluar (loss out, dB)') }}
-                        @if ($nodeType === 'odc') <span class="text-red-600">*</span> @endif
+                        @if (in_array($nodeType, ['odc', 'odp'])) <span class="text-red-600">*</span> @endif
                     </label>
                     <input id="fn-loss-out" type="text" inputmode="decimal" wire:model="lossOutDb" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                     @error('lossOutDb') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
@@ -129,10 +156,19 @@
             @if ($nodeType === 'otb')
                 <div>
                     <label for="fn-port-count" class="block text-sm font-medium text-gray-700">
-                        {{ __('Jumlah Port') }} <span class="text-red-600">*</span>
+                        {{ __('Jumlah Port OTB') }} <span class="text-red-600">*</span>
                     </label>
                     <input id="fn-port-count" type="number" min="1" max="1000" wire:model="portCount" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                     <p class="text-xs text-gray-400 mt-1">{{ __('Jumlah port fisik panel OTB ini — dipakai untuk Simulasi Port di halaman detail.') }}</p>
+                    @error('portCount') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                </div>
+            @elseif ($nodeType === 'odp')
+                <div>
+                    <label for="fn-port-count" class="block text-sm font-medium text-gray-700">
+                        {{ __('Jumlah Port ODP') }} <span class="text-red-600">*</span>
+                    </label>
+                    <input id="fn-port-count" type="number" min="1" max="1000" wire:model="portCount" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                    <p class="text-xs text-gray-400 mt-1">{{ __('Jumlah port ODP (total_ports) — port dibuat otomatis 1..N setelah disimpan.') }}</p>
                     @error('portCount') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                 </div>
             @endif
@@ -144,8 +180,8 @@
             </div>
         </fieldset>
 
-        {{-- Splitter — hanya untuk ODC (OTB/Closure bukan titik splitting) --}}
-        @if ($nodeType === 'odc')
+        {{-- Splitter — untuk ODC & ODP (OTB/Closure bukan titik splitting) --}}
+        @if (in_array($nodeType, ['odc', 'odp']))
             <fieldset class="space-y-4 p-4 border border-gray-200 rounded-md bg-gray-50">
                 <legend class="text-sm font-semibold text-gray-700 px-1">{{ __('Splitter') }}</legend>
                 <p class="text-xs text-gray-500">
@@ -212,12 +248,12 @@
 
                 <div class="grid grid-cols-2 gap-3">
                     <div>
-                        <label for="fn-lat" class="block text-sm font-medium text-gray-700">{{ __('Latitude') }}</label>
+                        <label for="fn-lat" class="block text-sm font-medium text-gray-700">{{ __('Latitude') }} @if ($nodeType === 'odp') <span class="text-red-600">*</span> @endif</label>
                         <input id="fn-lat" type="text" inputmode="decimal" wire:model="latitude" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                         @error('latitude') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                     </div>
                     <div>
-                        <label for="fn-lng" class="block text-sm font-medium text-gray-700">{{ __('Longitude') }}</label>
+                        <label for="fn-lng" class="block text-sm font-medium text-gray-700">{{ __('Longitude') }} @if ($nodeType === 'odp') <span class="text-red-600">*</span> @endif</label>
                         <input id="fn-lng" type="text" inputmode="decimal" wire:model="longitude" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                         @error('longitude') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                     </div>

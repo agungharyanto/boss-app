@@ -41,11 +41,26 @@ class FiberNodeDetail extends Component
     /** @var array<int, string> coreId => PON port label */
     public array $oltPonInputs = [];
 
-    /* v0.16.1 Revisi E — cari + tukar cepat di tabel "Assign Port ke Core" */
+    /* v0.16.1 Revisi E — cari baris di tabel "Assign Port ke Core" */
     public string $portSearch = '';
 
-    /** @var list<int> core ids picked for a port swap (max 2) */
-    public array $swapSelection = [];
+    /* v0.16.1 Revisi 2 C — "Tukar Port" modal 2-tingkat (mode Antar Core
+       / Antar Tube). Menggantikan checkbox+swap inline dari Revisi E. */
+    public bool $showSwapModal = false;
+
+    public string $swapMode = '';        // '' | 'core' | 'tube'
+
+    public string $swapCableId = '';     // tube mode: kabel mana
+
+    public string $swapSourceTube = '';
+
+    public string $swapTargetTube = '';
+
+    public string $swapCoreSearch = '';  // core mode: filter dropdown
+
+    public string $swapSourceCore = '';
+
+    public string $swapTargetCore = '';
 
     public bool $showAccessoryForm = false;
 
@@ -174,54 +189,124 @@ class FiberNodeDetail extends Component
         session()->flash('port-status', 'Semua patching port disimpan.');
     }
 
-    /* ---- v0.16.1 Revisi E — search + swap in "Assign Port ke Core" ---- */
+    /* ---- v0.16.1 Revisi 2 C — "Tukar Port" modal 2-tingkat ---- */
 
-    /** Pick / unpick a core row for a swap; keep at most the last 2. */
-    public function toggleSwapSelection(int $coreId): void
+    public function openSwapModal(): void
     {
-        if (in_array($coreId, $this->swapSelection, true)) {
-            $this->swapSelection = array_values(array_filter($this->swapSelection, fn ($id) => $id !== $coreId));
+        abort_unless($this->targetType === FiberNode::class, 400);
 
-            return;
-        }
-
-        $this->swapSelection[] = $coreId;
-
-        if (count($this->swapSelection) > 2) {
-            array_shift($this->swapSelection);
-        }
+        $this->resetSwapModal();
+        $this->showSwapModal = true;
     }
 
-    public function swapPorts(FiberTopologyService $service): void
+    public function closeSwapModal(): void
+    {
+        $this->resetSwapModal();
+        $this->showSwapModal = false;
+    }
+
+    private function resetSwapModal(): void
+    {
+        $this->swapMode = '';
+        $this->swapCableId = '';
+        $this->swapSourceTube = '';
+        $this->swapTargetTube = '';
+        $this->swapCoreSearch = '';
+        $this->swapSourceCore = '';
+        $this->swapTargetCore = '';
+        $this->resetErrorBag(['swapCableId', 'swapSourceTube', 'swapTargetTube', 'swapSourceCore', 'swapTargetCore']);
+    }
+
+    public function chooseSwapMode(string $mode): void
+    {
+        $this->swapMode = in_array($mode, ['core', 'tube'], true) ? $mode : '';
+        $this->swapCableId = '';
+        $this->swapSourceTube = '';
+        $this->swapTargetTube = '';
+        $this->swapSourceCore = '';
+        $this->swapTargetCore = '';
+    }
+
+    public function updatedSwapCableId(): void
+    {
+        $this->swapSourceTube = '';
+        $this->swapTargetTube = '';
+    }
+
+    public function updatedSwapSourceTube(): void
+    {
+        $this->swapTargetTube = '';
+    }
+
+    public function confirmSwapCores(FiberTopologyService $service): void
     {
         abort_unless(auth()->user()->can('network_infrastructure.manage'), 403);
         abort_unless($this->targetType === FiberNode::class, 400);
 
-        if (count($this->swapSelection) !== 2) {
-            $this->addError('swapSelection', 'Pilih tepat dua core untuk ditukar.');
-
-            return;
-        }
+        $this->validate([
+            'swapSourceCore' => ['required', 'integer'],
+            'swapTargetCore' => ['required', 'integer', 'different:swapSourceCore'],
+        ], [
+            'swapTargetCore.different' => 'Core sumber dan core tujuan harus berbeda.',
+        ], [
+            'swapSourceCore' => 'Core sumber',
+            'swapTargetCore' => 'Core tujuan',
+        ]);
 
         $otb = FiberNode::findOrFail($this->targetId);
 
         try {
-            $service->swapCorePorts($otb, $this->swapSelection[0], $this->swapSelection[1]);
+            $service->swapCorePorts($otb, (int) $this->swapSourceCore, (int) $this->swapTargetCore);
         } catch (InvalidArgumentException $e) {
-            $this->addError('swapSelection', $e->getMessage());
+            $this->addError('swapTargetCore', $e->getMessage());
 
             return;
         }
 
-        // re-seed the port inputs so the table reflects the swapped values
+        $this->reseedPortInputs($service, $otb);
+        $this->closeSwapModal();
+        session()->flash('port-status', 'Port dua core berhasil ditukar.');
+    }
+
+    public function confirmSwapTubes(FiberTopologyService $service): void
+    {
+        abort_unless(auth()->user()->can('network_infrastructure.manage'), 403);
+        abort_unless($this->targetType === FiberNode::class, 400);
+
+        $this->validate([
+            'swapCableId' => ['required', 'integer'],
+            'swapSourceTube' => ['required', 'integer'],
+            'swapTargetTube' => ['required', 'integer', 'different:swapSourceTube'],
+        ], [
+            'swapTargetTube.different' => 'Tube sumber dan tube tujuan harus berbeda.',
+        ], [
+            'swapCableId' => 'Kabel',
+            'swapSourceTube' => 'Tube sumber',
+            'swapTargetTube' => 'Tube tujuan',
+        ]);
+
+        $otb = FiberNode::findOrFail($this->targetId);
+
+        try {
+            $service->swapCoreTubes($otb, (int) $this->swapCableId, (int) $this->swapSourceTube, (int) $this->swapTargetTube);
+        } catch (InvalidArgumentException $e) {
+            $this->addError('swapTargetTube', $e->getMessage());
+
+            return;
+        }
+
+        $this->reseedPortInputs($service, $otb);
+        $this->closeSwapModal();
+        session()->flash('port-status', 'Semua port di tube tersebut berhasil ditukar.');
+    }
+
+    private function reseedPortInputs(FiberTopologyService $service, FiberNode $otb): void
+    {
         foreach ($service->coresFromNode($otb) as $core) {
             $this->portInputs[$core->id] = (string) ($core->port_number ?? '');
             $this->oltDeviceInputs[$core->id] = (string) ($core->olt_device_id ?? '');
             $this->oltPonInputs[$core->id] = (string) ($core->olt_pon_port_label ?? '');
         }
-
-        $this->swapSelection = [];
-        session()->flash('port-status', 'Nomor port dua core berhasil ditukar.');
     }
 
     public function updatedAccType(): void
@@ -337,12 +422,12 @@ class FiberNodeDetail extends Component
             'spliceLoss' => ['nullable', 'numeric', 'min:0'],
             'spliceNote' => ['nullable', 'string', 'max:255'],
         ], [
-            'spliceCableB.different' => 'Pilih dua kabel yang berbeda.',
+            'spliceCableB.different' => 'Kabel masuk dan kabel keluar harus berbeda.',
         ], [
-            'spliceCableA' => 'Kabel sisi awal',
-            'spliceCoreA' => 'Core sisi awal',
-            'spliceCableB' => 'Kabel sisi akhir',
-            'spliceCoreB' => 'Core sisi akhir',
+            'spliceCableA' => 'Kabel Masuk',
+            'spliceCoreA' => 'Core sisi masuk',
+            'spliceCableB' => 'Kabel Keluar',
+            'spliceCoreB' => 'Core sisi keluar',
             'spliceLoss' => 'Redaman',
         ]);
 
@@ -400,19 +485,41 @@ class FiberNodeDetail extends Component
 
         abort_unless($this->cableTouchesTarget($cable), 403);
 
-        $service->deleteCable($cable);
-        session()->flash('cable-status', 'Kabel beserta core, splice, waypoint, dan aksesori terkait sudah dihapus.');
+        try {
+            $service->deleteCable($cable);
+        } catch (InvalidArgumentException $e) {
+            session()->flash('cable-error', $e->getMessage());
+
+            return;
+        }
+
+        session()->flash('cable-status', 'Kabel beserta core, waypoint, penempatan port, dan aksesori terkait sudah dihapus.');
+    }
+
+    /**
+     * v0.16.1 Revisi 2 B — the "Kabel Masuk" dropdown only ever lists
+     * cables whose `to_*` end IS this node (arah masuk); "Kabel Keluar"
+     * only lists cables whose `from_*` end IS this node. A wrong-direction
+     * cable never appears as an option at all — the user can't pick it to
+     * be rejected later. FiberCoreSpliceService's orientation guard stays
+     * as a second layer.
+     *
+     * @return list<array{id: int, label: string}>
+     */
+    private function spliceIncomingCableOptions(FiberTopologyService $service): array
+    {
+        return $this->target()->cablesAsTo
+            ->map(fn (FiberCable $c) => ['id' => $c->id, 'label' => $service->describeCable($c)])
+            ->values()
+            ->all();
     }
 
     /**
      * @return list<array{id: int, label: string}>
      */
-    private function spliceCableOptions(FiberTopologyService $service): array
+    private function spliceOutgoingCableOptions(FiberTopologyService $service): array
     {
-        $target = $this->target();
-
-        return $target->cablesAsFrom->concat($target->cablesAsTo)
-            ->unique('id')
+        return $this->target()->cablesAsFrom
             ->map(fn (FiberCable $c) => ['id' => $c->id, 'label' => $service->describeCable($c)])
             ->values()
             ->all();
@@ -451,7 +558,44 @@ class FiberNodeDetail extends Component
                 return str_contains($haystack, $needle);
             }));
 
-        $spliceCableOptions = $isOtb ? [] : $this->spliceCableOptions($service);
+        // v0.16.1 Revisi 2 B — direction-scoped dropdowns.
+        $spliceIncomingCableOptions = $isOtb ? [] : $this->spliceIncomingCableOptions($service);
+        $spliceOutgoingCableOptions = $isOtb ? [] : $this->spliceOutgoingCableOptions($service);
+        $canSplice = ! $isOtb && $spliceIncomingCableOptions !== [] && $spliceOutgoingCableOptions !== [];
+
+        // v0.16.1 Revisi 2 C — "Tukar Port" modal data.
+        $swapCableOptions = [];
+        $swapCoreOptions = [];
+
+        if ($isOtb) {
+            $swapCableOptions = $target->cablesAsFrom->concat($target->cablesAsTo)
+                ->unique('id')
+                ->map(fn (FiberCable $c) => [
+                    'id' => $c->id,
+                    'label' => $service->describeCable($c),
+                    'tube_count' => (int) $c->tube_count,
+                ])
+                ->values()
+                ->all();
+
+            $swapNeedle = mb_strtolower(trim($this->swapCoreSearch));
+            $swapCoreOptions = collect($allAssignableCores)
+                ->map(fn (array $c) => [
+                    'id' => $c['core_id'],
+                    'label' => $c['cable_description']
+                        .' — Tube '.$c['tube_number'].' ('.($c['tube_color'] ?? '?').')'
+                        .' / Core '.$c['core_number_in_tube'].' ('.($c['core_color'] ?? '?').')'
+                        .($c['port_number'] !== null ? ' — Port '.$c['port_number'] : ' — belum di-port'),
+                ])
+                ->filter(fn (array $o) => $swapNeedle === '' || str_contains(mb_strtolower($o['label']), $swapNeedle))
+                ->values()
+                ->all();
+        }
+
+        $swapCable = ($isOtb && $this->swapCableId !== '')
+            ? collect($swapCableOptions)->firstWhere('id', (int) $this->swapCableId)
+            : null;
+        $swapTubeCount = $swapCable['tube_count'] ?? 0;
 
         return view('livewire.network.fiber-node-detail', [
             ...$data,
@@ -468,9 +612,14 @@ class FiberNodeDetail extends Component
             'accessoryTypes' => FiberAccessoryType::cases(),
             'coreGrid' => $service->coreGridForNode($target, $isOtb ? $target : null),
             'splices' => $isOtb ? collect() : app(FiberCoreSpliceService::class)->splicesForNode($target),
-            'spliceCableOptions' => $spliceCableOptions,
+            'spliceIncomingCableOptions' => $spliceIncomingCableOptions,
+            'spliceOutgoingCableOptions' => $spliceOutgoingCableOptions,
+            'canSplice' => $canSplice,
             'spliceCoreAOptions' => (! $isOtb && $this->spliceCableA !== '') ? $this->spliceCoreOptions((int) $this->spliceCableA) : [],
             'spliceCoreBOptions' => (! $isOtb && $this->spliceCableB !== '') ? $this->spliceCoreOptions((int) $this->spliceCableB) : [],
+            'swapCableOptions' => $swapCableOptions,
+            'swapCoreOptions' => $swapCoreOptions,
+            'swapTubeCount' => $swapTubeCount,
             'topologyService' => $service,
         ]);
     }

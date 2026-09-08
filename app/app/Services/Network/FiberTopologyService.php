@@ -747,16 +747,30 @@ class FiberTopologyService
      * @param  list<array{lat: float|string, lng: float|string}>  $points
      */
     /**
-     * v0.16.1 Revisi C — delete a cable and everything hanging off it.
-     * The DB does the cascade (all confirmed ON DELETE CASCADE in their
-     * own migrations): fiber_cores → fiber_core_port_logs /
-     * fiber_core_splices (either side) / fiber_accessories(fiber_cable_id);
-     * plus fiber_cable_waypoints directly. A splice that used one of this
-     * cable's cores disappears WITH the cable (not blocked) — the physical
-     * cable is gone, so the through-splice at its end is meaningless.
+     * v0.16.1 Revisi C / Revisi 2 A — delete a cable and its dependents.
+     * fiber_core_port_logs / fiber_accessories(fiber_cable_id) /
+     * fiber_cable_waypoints still cascade via their own ON DELETE CASCADE.
+     * BUT an active fiber_core_splices row that uses one of this cable's
+     * cores (as `from_` OR `to_`) now BLOCKS the delete (Revisi 2 —
+     * deliberate reversal of the earlier "cascade the splice too": a
+     * splice is manual field data an admin should remove explicitly, not
+     * lose silently when a cable is deleted).
      */
     public function deleteCable(FiberCable $cable): void
     {
+        $coreIds = $cable->cores()->pluck('id');
+
+        $blockingSplices = FiberCoreSplice::query()
+            ->where(fn ($q) => $q->whereIn('from_fiber_core_id', $coreIds)
+                ->orWhereIn('to_fiber_core_id', $coreIds))
+            ->count();
+
+        if ($blockingSplices > 0) {
+            throw new InvalidArgumentException(
+                "Kabel ini masih punya {$blockingSplices} splice core-to-core aktif — hapus splice-nya dulu sebelum menghapus kabel."
+            );
+        }
+
         $cable->delete();
     }
 
@@ -1310,16 +1324,15 @@ class FiberTopologyService
     }
 
     /**
-     * v0.16.1 Revisi E — swap the OTB port_number of two cores in one
-     * atomic action (real-world case: a technician spliced two cores onto
-     * the wrong ports and just needs them exchanged). Each core keeps its
-     * OWN olt_device_id / olt_pon_port_label — only port_number is
-     * exchanged. Safe to do without an intermediate "clear one first"
-     * step: fiber_cores.port_number has NO DB unique index (it's a
-     * cross-table "port belongs to an OTB" concept, app-enforced only),
-     * so there's no transient constraint violation to dodge — the whole
-     * thing still runs in one transaction. Audit-logged per core via
-     * applyCoreAssignment().
+     * v0.16.1 Revisi E / Revisi 2 C — swap the OTB port assignment of two
+     * cores in one atomic action (real-world case: a technician spliced
+     * two cores onto the wrong ports). The WHOLE assignment moves as a
+     * unit — port_number AND olt_device_id AND olt_pon_port_label — since
+     * the OLT/PON patch belongs to the OTB PORT, not the core. Safe
+     * without an intermediate "clear one first" step: fiber_cores.
+     * port_number has NO DB unique index (it's a cross-table "port
+     * belongs to an OTB" concept, app-enforced only). One transaction,
+     * audit-logged per core via applyCoreAssignment().
      */
     public function swapCorePorts(FiberNode $otb, int $coreIdA, int $coreIdB): void
     {
@@ -1335,11 +1348,70 @@ class FiberTopologyService
             throw new InvalidArgumentException('Salah satu core bukan dari kabel yang terhubung ke OTB ini.');
         }
 
-        $aPort = $a->port_number;
+        $aVals = [$a->port_number, $a->olt_device_id, $a->olt_pon_port_label];
 
-        DB::transaction(function () use ($a, $b, $otb, $aPort) {
-            $this->applyCoreAssignment($a, $otb, $b->port_number, $a->olt_device_id, $a->olt_pon_port_label);
-            $this->applyCoreAssignment($b, $otb, $aPort, $b->olt_device_id, $b->olt_pon_port_label);
+        DB::transaction(function () use ($a, $b, $otb, $aVals) {
+            $this->applyCoreAssignment($a, $otb, $b->port_number, $b->olt_device_id, $b->olt_pon_port_label);
+            $this->applyCoreAssignment($b, $otb, $aVals[0], $aVals[1], $aVals[2]);
+        });
+    }
+
+    /**
+     * v0.16.1 Revisi 2 C — swap the port assignment of EVERY core in
+     * $sourceTube with the core at the SAME core_number_in_tube in
+     * $targetTube, within one cable (real-world: a whole tube was spliced
+     * onto the wrong block of ports). Like swapCorePorts() the whole
+     * assignment (port + OLT/PON) moves as a unit. Position pairing is by
+     * core_number_in_tube; a source core with no same-numbered partner in
+     * the target tube is skipped (leaves both untouched). Every value is
+     * captured BEFORE any write so the two-pass swap can't read a
+     * half-mutated row. One transaction.
+     */
+    public function swapCoreTubes(FiberNode $otb, int $cableId, int $sourceTube, int $targetTube): void
+    {
+        if ($sourceTube === $targetTube) {
+            throw new InvalidArgumentException('Tube sumber dan tube tujuan harus berbeda.');
+        }
+
+        $cable = FiberCable::with('cores')->find($cableId);
+
+        if ($cable === null) {
+            throw new InvalidArgumentException('Kabel tidak ditemukan.');
+        }
+
+        if ($cable->cores->isEmpty()) {
+            throw new InvalidArgumentException('Kabel ini tidak punya core.');
+        }
+
+        $this->assertCoreBelongsToOtb($cable->cores->first(), $otb);
+
+        $source = $cable->cores->where('tube_number', $sourceTube)->values();
+        $target = $cable->cores->where('tube_number', $targetTube)->keyBy('core_number_in_tube');
+
+        if ($source->isEmpty() || $target->isEmpty()) {
+            throw new InvalidArgumentException('Tube sumber atau tube tujuan tidak ditemukan di kabel ini.');
+        }
+
+        $pairs = [];
+        foreach ($source as $sc) {
+            $tc = $target->get($sc->core_number_in_tube);
+
+            if ($tc === null) {
+                continue;
+            }
+
+            $pairs[] = [
+                $sc, $tc,
+                [$sc->port_number, $sc->olt_device_id, $sc->olt_pon_port_label],
+                [$tc->port_number, $tc->olt_device_id, $tc->olt_pon_port_label],
+            ];
+        }
+
+        DB::transaction(function () use ($pairs, $otb) {
+            foreach ($pairs as [$sc, $tc, $scVals, $tcVals]) {
+                $this->applyCoreAssignment($sc, $otb, $tcVals[0], $tcVals[1], $tcVals[2]);
+                $this->applyCoreAssignment($tc, $otb, $scVals[0], $scVals[1], $scVals[2]);
+            }
         });
     }
 

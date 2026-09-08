@@ -7,11 +7,14 @@ use App\Models\Customer;
 use App\Models\FiberCable;
 use App\Models\FiberCore;
 use App\Models\FiberNode;
+use App\Models\Nas;
 use App\Models\Odp;
 use App\Models\OdpPort;
+use App\Models\OltDevice;
 use App\Models\Splitter;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\Network\FiberCoreSpliceService;
 use App\Services\Network\FiberTopologyService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -343,6 +346,90 @@ class FiberTopologyServiceTest extends TestCase
 
         $this->expectException(InvalidArgumentException::class);
         app(FiberTopologyService::class)->assignCorePort($cable->cores()->first(), $otherOtb, 1);
+    }
+
+    public function test_swap_core_ports_moves_the_whole_assignment_port_and_olt_link(): void
+    {
+        [$otb, $cable] = $this->otbCable(8);
+        $service = app(FiberTopologyService::class);
+        $cores = $cable->cores()->orderBy('tube_number')->orderBy('core_number_in_tube')->get();
+        $olt = OltDevice::factory()->create([
+            'nas_id' => Nas::factory()->create(['tenant_id' => $otb->tenant_id])->id,
+        ]);
+
+        $service->assignCorePort($cores[0], $otb, 3, $olt->id, 'PON 2');
+        $service->assignCorePort($cores[1], $otb, 6);
+
+        $service->swapCorePorts($otb, $cores[0]->id, $cores[1]->id);
+
+        $this->assertSame(6, $cores[0]->fresh()->port_number);
+        $this->assertNull($cores[0]->fresh()->olt_device_id);
+        $this->assertSame(3, $cores[1]->fresh()->port_number);
+        $this->assertSame($olt->id, $cores[1]->fresh()->olt_device_id);
+        $this->assertSame('PON 2', $cores[1]->fresh()->olt_pon_port_label);
+    }
+
+    public function test_swap_core_tubes_exchanges_every_position_matched_core_in_one_transaction(): void
+    {
+        [$otb, $cable] = $this->otbCable(8); // tube_count 2, cores_per_tube 2
+        $service = app(FiberTopologyService::class);
+        $byPos = $cable->cores()->get()->keyBy(fn ($c) => "T{$c->tube_number}C{$c->core_number_in_tube}");
+
+        $service->assignCorePort($byPos['T1C1'], $otb, 1);
+        $service->assignCorePort($byPos['T1C2'], $otb, 2);
+        $service->assignCorePort($byPos['T2C1'], $otb, 7);
+        $service->assignCorePort($byPos['T2C2'], $otb, 8);
+
+        $service->swapCoreTubes($otb, $cable->id, 1, 2);
+
+        $this->assertSame(7, $byPos['T1C1']->fresh()->port_number);
+        $this->assertSame(8, $byPos['T1C2']->fresh()->port_number);
+        $this->assertSame(1, $byPos['T2C1']->fresh()->port_number);
+        $this->assertSame(2, $byPos['T2C2']->fresh()->port_number);
+    }
+
+    public function test_swap_core_tubes_rejects_the_same_tube(): void
+    {
+        [$otb, $cable] = $this->otbCable(8);
+
+        $this->expectException(InvalidArgumentException::class);
+        app(FiberTopologyService::class)->swapCoreTubes($otb, $cable->id, 1, 1);
+    }
+
+    public function test_delete_cable_is_blocked_by_an_active_core_splice(): void
+    {
+        [$otb, $cableA] = $this->otbCable(4);
+        $tenant = $otb->tenant_id;
+        $downstream = FiberNode::factory()->create(['tenant_id' => $tenant, 'node_type' => 'closure', 'port_count' => null]);
+        $service = app(FiberTopologyService::class);
+
+        // cableA: otb -> closure(dest). Add cableB: closure(dest) -> downstream,
+        // so a splice AT dest between cableA(in) and cableB(out) is legal.
+        $dest = FiberNode::find($cableA->to_id);
+        $cableB = $service->createCable([
+            'tenant_id' => $tenant,
+            'from_type' => FiberNode::class, 'from_id' => $dest->id,
+            'to_type' => FiberNode::class, 'to_id' => $downstream->id,
+            'total_cores' => 4, 'tube_count' => 2, 'cores_per_tube' => 2,
+        ]);
+
+        $this->actingAs(User::factory()->create(['tenant_id' => $tenant]));
+        $splice = app(FiberCoreSpliceService::class)->createSplice(
+            $dest, $cableA->cores()->first(), $cableB->cores()->first()
+        );
+
+        try {
+            $service->deleteCable($cableA);
+            $this->fail('expected the delete to be blocked');
+        } catch (InvalidArgumentException $e) {
+            $this->assertStringContainsString('splice core-to-core aktif', $e->getMessage());
+        }
+
+        $this->assertDatabaseHas('fiber_cables', ['id' => $cableA->id]);
+
+        app(FiberCoreSpliceService::class)->deleteSplice($splice->fresh());
+        $service->deleteCable($cableA->fresh());
+        $this->assertDatabaseMissing('fiber_cables', ['id' => $cableA->id]);
     }
 
     public function test_otb_port_simulation_shape_mixes_empty_and_occupied_rows(): void

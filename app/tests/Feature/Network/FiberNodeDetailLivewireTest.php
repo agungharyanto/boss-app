@@ -474,7 +474,7 @@ class FiberNodeDetailLivewireTest extends TestCase
         $this->assertDatabaseMissing('fiber_core_splices', ['id' => $splice->id]);
     }
 
-    public function test_splice_form_is_hidden_when_fewer_than_two_cables_touch_the_node(): void
+    public function test_splice_form_is_hidden_without_at_least_one_incoming_and_one_outgoing_cable(): void
     {
         $tenant = Tenant::factory()->create();
         $odc = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'odc', 'port_count' => null]);
@@ -482,11 +482,27 @@ class FiberNodeDetailLivewireTest extends TestCase
         Livewire::actingAs($this->admin($tenant))
             ->test(FiberNodeDetail::class, ['fiber_node' => $odc])
             ->assertSee('Assign Core-to-Core')
-            ->assertSee('Butuh minimal 2 kabel')
+            ->assertSee('kabel MASUK dan satu kabel KELUAR')
             ->assertDontSee('Sambungkan');
     }
 
     /* ---------- v0.16.1 Revisi ---------- */
+
+    public function test_revisi2_b_splice_dropdowns_are_scoped_by_direction(): void
+    {
+        $tenant = Tenant::factory()->create();
+        // cableA runs a -> closure (closure is `to` = INCOMING),
+        // cableB runs closure -> b (closure is `from` = OUTGOING).
+        [$closure, $cableA, $cableB] = $this->closureWithTwoCables($tenant);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeDetail::class, ['fiber_node' => $closure->fresh()])
+            ->assertViewHas('spliceIncomingCableOptions', fn ($o) => collect($o)->pluck('id')->all() === [$cableA->id])
+            ->assertViewHas('spliceOutgoingCableOptions', fn ($o) => collect($o)->pluck('id')->all() === [$cableB->id])
+            ->assertViewHas('canSplice', true)
+            ->assertSee('Kabel Masuk')
+            ->assertSee('Kabel Keluar');
+    }
 
     public function test_revisi_b_splice_core_dropdown_uses_full_tube_and_core_colour_labels(): void
     {
@@ -516,7 +532,7 @@ class FiberNodeDetailLivewireTest extends TestCase
         $this->assertSame(0, FiberCore::whereIn('id', $coreIds)->count());
     }
 
-    public function test_revisi_c_delete_cable_with_an_active_splice_cascades_the_splice_not_blocked(): void
+    public function test_revisi2_a_delete_cable_is_blocked_while_it_has_an_active_splice_then_allowed_after_removal(): void
     {
         $tenant = Tenant::factory()->create();
         [$closure, $cableA, $cableB] = $this->closureWithTwoCables($tenant);
@@ -527,15 +543,23 @@ class FiberNodeDetailLivewireTest extends TestCase
             $cableB->cores()->first(),
         );
 
+        // 1) blocked — clear message, splice + cable both stay
         Livewire::actingAs($this->admin($tenant))
             ->test(FiberNodeDetail::class, ['fiber_node' => $closure->fresh()])
             ->call('deleteCable', $cableA->id)
-            ->assertHasNoErrors();
+            ->assertSee('splice core-to-core aktif');
+
+        $this->assertDatabaseHas('fiber_cables', ['id' => $cableA->id]);
+        $this->assertDatabaseHas('fiber_core_splices', ['id' => $splice->id]);
+
+        // 2) remove the splice, then the cable deletes fine
+        app(FiberCoreSpliceService::class)->deleteSplice($splice->fresh());
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeDetail::class, ['fiber_node' => $closure->fresh()])
+            ->call('deleteCable', $cableA->id);
 
         $this->assertDatabaseMissing('fiber_cables', ['id' => $cableA->id]);
-        $this->assertDatabaseMissing('fiber_core_splices', ['id' => $splice->id]);
-        // the OTHER cable and its cores are untouched
-        $this->assertDatabaseHas('fiber_cables', ['id' => $cableB->id]);
     }
 
     public function test_revisi_c_delete_cable_rejects_a_cable_that_does_not_touch_this_node(): void
@@ -552,29 +576,48 @@ class FiberNodeDetailLivewireTest extends TestCase
         $this->assertDatabaseHas('fiber_cables', ['id' => $strangerCable->id]);
     }
 
-    public function test_revisi_e_swap_ports_exchanges_two_cores_port_numbers(): void
+    public function test_revisi2_c_no_swap_checkbox_column_in_the_assign_table(): void
+    {
+        $tenant = Tenant::factory()->create();
+        [$otb] = $this->otbWithOutgoingCable($tenant, 8);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeDetail::class, ['fiber_node' => $otb->fresh()])
+            ->assertDontSeeHtml('wire:click="toggleSwapSelection')
+            ->assertSee('Tukar Port')                       // the modal trigger
+            ->assertSeeHtml('wire:click="openSwapModal"');
+    }
+
+    public function test_revisi2_c_swap_antar_core_via_modal_exchanges_the_whole_port_assignment(): void
     {
         $tenant = Tenant::factory()->create();
         [$otb, $dest, $cable] = $this->otbWithOutgoingCable($tenant, 8);
+        $olt = $this->oltDeviceForTenant($tenant, null);
         $cores = $cable->cores()->orderBy('tube_number')->orderBy('core_number_in_tube')->get();
 
         $topo = app(FiberTopologyService::class);
-        $topo->assignCorePort($cores[0], $otb, 3);
+        $topo->assignCorePort($cores[0], $otb, 3, $olt->id, 'PON 1');
         $topo->assignCorePort($cores[1], $otb, 7);
 
         Livewire::actingAs($this->admin($tenant))
             ->test(FiberNodeDetail::class, ['fiber_node' => $otb->fresh()])
-            ->call('toggleSwapSelection', $cores[0]->id)
-            ->call('toggleSwapSelection', $cores[1]->id)
-            ->call('swapPorts')
+            ->call('openSwapModal')
+            ->call('chooseSwapMode', 'core')
+            ->set('swapSourceCore', (string) $cores[0]->id)
+            ->set('swapTargetCore', (string) $cores[1]->id)
+            ->call('confirmSwapCores')
             ->assertHasNoErrors()
-            ->assertSet('swapSelection', []);
+            ->assertSet('showSwapModal', false);
 
+        // port_number AND the OLT/PON link move together
         $this->assertSame(7, $cores[0]->fresh()->port_number);
+        $this->assertNull($cores[0]->fresh()->olt_device_id);
         $this->assertSame(3, $cores[1]->fresh()->port_number);
+        $this->assertSame($olt->id, $cores[1]->fresh()->olt_device_id);
+        $this->assertSame('PON 1', $cores[1]->fresh()->olt_pon_port_label);
     }
 
-    public function test_revisi_e_swap_requires_exactly_two_selected_cores(): void
+    public function test_revisi2_c_swap_antar_core_rejects_the_same_core_on_both_sides(): void
     {
         $tenant = Tenant::factory()->create();
         [$otb, $dest, $cable] = $this->otbWithOutgoingCable($tenant, 8);
@@ -582,26 +625,59 @@ class FiberNodeDetailLivewireTest extends TestCase
 
         Livewire::actingAs($this->admin($tenant))
             ->test(FiberNodeDetail::class, ['fiber_node' => $otb->fresh()])
-            ->call('toggleSwapSelection', $core->id)
-            ->call('swapPorts')
-            ->assertHasErrors('swapSelection');
+            ->call('openSwapModal')
+            ->call('chooseSwapMode', 'core')
+            ->set('swapSourceCore', (string) $core->id)
+            ->set('swapTargetCore', (string) $core->id)
+            ->call('confirmSwapCores')
+            ->assertHasErrors('swapTargetCore');
     }
 
-    public function test_revisi_e_toggle_swap_selection_caps_at_two(): void
+    public function test_revisi2_c_swap_antar_tube_via_modal_swaps_every_position_matched_core_in_one_go(): void
+    {
+        $tenant = Tenant::factory()->create();
+        // tube_count 2, cores_per_tube 2 -> T1/C1, T1/C2, T2/C1, T2/C2
+        [$otb, $dest, $cable] = $this->otbWithOutgoingCable($tenant, 8);
+        $byPos = $cable->cores()->get()->keyBy(fn ($c) => "T{$c->tube_number}C{$c->core_number_in_tube}");
+
+        $topo = app(FiberTopologyService::class);
+        $topo->assignCorePort($byPos['T1C1'], $otb, 1);
+        $topo->assignCorePort($byPos['T1C2'], $otb, 2);
+        $topo->assignCorePort($byPos['T2C1'], $otb, 5);
+        $topo->assignCorePort($byPos['T2C2'], $otb, 6);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeDetail::class, ['fiber_node' => $otb->fresh()])
+            ->call('openSwapModal')
+            ->call('chooseSwapMode', 'tube')
+            ->set('swapCableId', (string) $cable->id)
+            ->set('swapSourceTube', '1')
+            ->set('swapTargetTube', '2')
+            ->call('confirmSwapTubes')
+            ->assertHasNoErrors()
+            ->assertSet('showSwapModal', false);
+
+        // position-matched exchange, nothing lost
+        $this->assertSame(5, $byPos['T1C1']->fresh()->port_number);
+        $this->assertSame(6, $byPos['T1C2']->fresh()->port_number);
+        $this->assertSame(1, $byPos['T2C1']->fresh()->port_number);
+        $this->assertSame(2, $byPos['T2C2']->fresh()->port_number);
+    }
+
+    public function test_revisi2_c_swap_antar_tube_rejects_the_same_tube_on_both_sides(): void
     {
         $tenant = Tenant::factory()->create();
         [$otb, $dest, $cable] = $this->otbWithOutgoingCable($tenant, 8);
-        $cores = $cable->cores()->orderBy('id')->get();
 
-        $component = Livewire::actingAs($this->admin($tenant))
+        Livewire::actingAs($this->admin($tenant))
             ->test(FiberNodeDetail::class, ['fiber_node' => $otb->fresh()])
-            ->call('toggleSwapSelection', $cores[0]->id)
-            ->call('toggleSwapSelection', $cores[1]->id)
-            ->call('toggleSwapSelection', $cores[2]->id);
-
-        $selection = $component->get('swapSelection');
-        $this->assertCount(2, $selection);
-        $this->assertSame([$cores[1]->id, $cores[2]->id], $selection);
+            ->call('openSwapModal')
+            ->call('chooseSwapMode', 'tube')
+            ->set('swapCableId', (string) $cable->id)
+            ->set('swapSourceTube', '1')
+            ->set('swapTargetTube', '1')
+            ->call('confirmSwapTubes')
+            ->assertHasErrors('swapTargetTube');
     }
 
     public function test_revisi_e_port_search_filters_the_assign_table(): void

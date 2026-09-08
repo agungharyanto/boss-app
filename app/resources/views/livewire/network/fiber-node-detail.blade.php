@@ -41,6 +41,9 @@
         @if (session('cable-status'))
             <div class="mb-3 p-2 bg-green-50 border border-green-200 text-green-800 text-xs rounded-md">{{ session('cable-status') }}</div>
         @endif
+        @if (session('cable-error'))
+            <div class="mb-3 p-2 bg-red-50 border border-red-200 text-red-800 text-xs rounded-md">{{ session('cable-error') }}</div>
+        @endif
 
         <div class="flex flex-col lg:flex-row items-stretch gap-4 min-w-[720px]">
             {{-- Incoming --}}
@@ -55,7 +58,7 @@
                             <button
                                 type="button"
                                 wire:click="deleteCable({{ $cable->id }})"
-                                wire:confirm="{{ __('Hapus kabel ini? Semua core, splice core-to-core, waypoint rute, penempatan port, dan aksesori yang terkait kabel ini ikut terhapus permanen.') }}"
+                                wire:confirm="{{ __('Hapus kabel ini? Semua core, waypoint rute, penempatan port, dan aksesori yang terkait kabel ini ikut terhapus permanen. Kabel yang masih punya splice core-to-core aktif tidak bisa dihapus — hapus splice-nya dulu.') }}"
                                 class="mt-2 text-xs text-red-600 hover:underline"
                             >{{ __('Hapus') }}</button>
                         @endif
@@ -122,7 +125,7 @@
                                         <button
                                             type="button"
                                             wire:click="deleteCable({{ $cable->id }})"
-                                            wire:confirm="{{ __('Hapus kabel ini? Semua core, splice core-to-core, waypoint rute, penempatan port, dan aksesori yang terkait kabel ini ikut terhapus permanen. (Titik anak di ujung kabel TIDAK ikut terhapus.)') }}"
+                                            wire:confirm="{{ __('Hapus kabel ini? Semua core, waypoint rute, penempatan port, dan aksesori yang terkait kabel ini ikut terhapus permanen. Splice core-to-core aktif harus dihapus lebih dulu. (Titik anak di ujung kabel TIDAK ikut terhapus.)') }}"
                                             class="text-xs text-red-600 hover:underline"
                                         >{{ __('Hapus kabel') }}</button>
                                     </div>
@@ -245,107 +248,195 @@
         @endif
 
         @if ($isOtb && auth()->user()->can('network_infrastructure.manage') && $portCount > 0 && $hasAnyAssignableCore)
-            <form wire:submit="saveAllPorts" class="pt-3 border-t border-gray-200 space-y-3">
-                <h3 class="text-xs font-semibold uppercase text-gray-400">{{ __('Assign Port ke Core') }}</h3>
-
-                {{-- v0.16.1 Revisi E — cari/filter + tukar port --}}
-                <div class="flex flex-wrap items-center gap-2">
-                    <input
-                        type="search"
-                        wire:model.live.debounce.300ms="portSearch"
-                        placeholder="{{ __('Cari: nomor port / nama tube / warna core / kabel') }}"
-                        class="w-full sm:w-80 rounded-md border-gray-300 shadow-sm text-sm"
-                        aria-label="{{ __('Cari baris core') }}"
-                    >
-                    <button
-                        type="button"
-                        wire:click="swapPorts"
-                        @disabled(count($swapSelection) !== 2)
-                        class="text-sm px-3 py-1.5 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >{{ __('Tukar Port') }} @if(count($swapSelection) > 0)<span class="text-gray-400">({{ count($swapSelection) }}/2)</span>@endif</button>
-                    @if (count($swapSelection) > 0)
-                        <button type="button" wire:click="$set('swapSelection', [])" class="text-xs text-gray-500 hover:underline">{{ __('Batal pilih') }}</button>
-                    @endif
+            <div class="pt-3 border-t border-gray-200 space-y-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h3 class="text-xs font-semibold uppercase text-gray-400">{{ __('Assign Port ke Core') }}</h3>
+                    <button type="button" wire:click="openSwapModal" class="text-sm px-3 py-1.5 border border-gray-300 rounded-md hover:bg-gray-50">{{ __('Tukar Port') }}</button>
                 </div>
-                @error('swapSelection') <p class="text-xs text-red-600">{{ $message }}</p> @enderror
 
-                <div class="overflow-x-auto">
-                    <table class="min-w-full divide-y divide-gray-200 text-sm">
-                        <thead>
-                            <tr>
-                                <th class="px-2 py-2 text-left font-medium text-gray-500 text-xs w-10">{{ __('Tukar') }}</th>
-                                <th class="px-3 py-2 text-left font-medium text-gray-500 text-xs">{{ __('Core') }}</th>
-                                <th class="px-3 py-2 text-left font-medium text-gray-500 text-xs">{{ __('Tujuan') }}</th>
-                                <th class="px-3 py-2 text-left font-medium text-gray-500 text-xs w-24">{{ __('Port') }}</th>
-                                <th class="px-3 py-2 text-left font-medium text-gray-500 text-xs">{{ __('OLT (opsional) & catatan port') }}</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-gray-100">
-                            @forelse ($assignableCores as $core)
-                                @php
-                                    $cHex = $colorService->hexForName($core['core_color']);
-                                    $selOltId = ($oltDeviceInputs[$core['core_id']] ?? '') !== '' ? (int) $oltDeviceInputs[$core['core_id']] : null;
-                                    $selPonCount = $selOltId !== null ? ($oltPonCounts[$selOltId] ?? null) : null;
-                                @endphp
-                                <tr class="{{ in_array($core['core_id'], $swapSelection, true) ? 'bg-amber-50' : '' }}">
-                                    <td class="px-2 py-2">
-                                        <input
-                                            type="checkbox"
-                                            wire:click="toggleSwapSelection({{ $core['core_id'] }})"
-                                            @checked(in_array($core['core_id'], $swapSelection, true))
-                                            class="rounded border-gray-300 text-primary focus:ring-primary"
-                                            aria-label="{{ __('Pilih core ini untuk ditukar portnya') }}"
-                                        >
-                                    </td>
-                                    <td class="px-3 py-2">
-                                        <span class="inline-flex items-center gap-1.5">
-                                            <span class="inline-block w-3 h-3 rounded-full border border-gray-300 shrink-0" style="background-color: {{ $cHex ?? '#D1D5DB' }};" role="img" aria-label="{{ __('Warna core') }}: {{ $core['core_color'] ?? __('tidak diketahui') }}"></span>
-                                            <span>{{ $core['cable_description'] }} — Tube {{ $core['tube_number'] }} ({{ $core['tube_color'] ?? '?' }}) / Core {{ $core['core_number_in_tube'] }} ({{ $core['core_color'] ?? '?' }})</span>
-                                        </span>
-                                    </td>
-                                    <td class="px-3 py-2 text-gray-500">{{ $core['destination'] }}</td>
-                                    <td class="px-3 py-2">
-                                        <div class="flex items-center gap-1">
-                                            <input type="number" min="1" max="{{ $portCount }}" wire:model="portInputs.{{ $core['core_id'] }}" class="w-16 rounded-md border-gray-300 shadow-sm text-sm" aria-label="{{ __('Nomor port untuk core ini') }}">
-                                            <button type="button" wire:click="assignPort({{ $core['core_id'] }})" class="text-xs px-2 py-1 border border-gray-300 rounded-md hover:bg-gray-50" title="{{ __('Simpan baris ini saja') }}">{{ __('Simpan') }}</button>
-                                        </div>
-                                        @error('portInputs.'.$core['core_id']) <span class="block text-xs text-red-600 mt-1">{{ $message }}</span> @enderror
-                                    </td>
-                                    <td class="px-3 py-2">
-                                        <div class="flex items-center gap-1">
-                                            <select wire:model.live="oltDeviceInputs.{{ $core['core_id'] }}" class="rounded-md border-gray-300 shadow-sm text-xs" aria-label="{{ __('Perangkat OLT') }}">
-                                                <option value="">{{ __('— bukan OLT —') }}</option>
-                                                @foreach ($oltOptions as $olt)
-                                                    <option value="{{ $olt['id'] }}">{{ $olt['label'] }}</option>
-                                                @endforeach
-                                            </select>
-                                            @if ($selPonCount)
-                                                <select wire:model="oltPonInputs.{{ $core['core_id'] }}" class="w-32 rounded-md border-gray-300 shadow-sm text-xs" aria-label="{{ __('PON port') }}">
-                                                    <option value="">{{ __('-- PON --') }}</option>
-                                                    @for ($p = 1; $p <= $selPonCount; $p++)
-                                                        <option value="PON {{ $p }}">{{ __('PON') }} {{ $p }}</option>
-                                                    @endfor
-                                                </select>
-                                            @else
-                                                <input type="text" wire:model="oltPonInputs.{{ $core['core_id'] }}" placeholder="{{ __('PON 1 / catatan') }}" class="w-32 rounded-md border-gray-300 shadow-sm text-xs" aria-label="{{ __('Label PON / catatan port') }}">
-                                            @endif
-                                        </div>
-                                    </td>
+                {{-- v0.16.1 Revisi E — cari baris (tetap dipakai untuk cari biasa) --}}
+                <input
+                    type="search"
+                    wire:model.live.debounce.300ms="portSearch"
+                    placeholder="{{ __('Cari: nomor port / nama tube / warna core / kabel') }}"
+                    class="w-full sm:w-80 rounded-md border-gray-300 shadow-sm text-sm"
+                    aria-label="{{ __('Cari baris core') }}"
+                >
+
+                <form wire:submit="saveAllPorts" class="space-y-3">
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200 text-sm">
+                            <thead>
+                                <tr>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-500 text-xs">{{ __('Core') }}</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-500 text-xs">{{ __('Tujuan') }}</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-500 text-xs w-24">{{ __('Port') }}</th>
+                                    <th class="px-3 py-2 text-left font-medium text-gray-500 text-xs">{{ __('OLT (opsional) & catatan port') }}</th>
                                 </tr>
-                            @empty
-                                <tr><td colspan="5" class="px-3 py-3 text-xs text-gray-400 italic">{{ __('Tidak ada core yang cocok dengan pencarian.') }}</td></tr>
-                            @endforelse
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100">
+                                @forelse ($assignableCores as $core)
+                                    @php
+                                        $cHex = $colorService->hexForName($core['core_color']);
+                                        $selOltId = ($oltDeviceInputs[$core['core_id']] ?? '') !== '' ? (int) $oltDeviceInputs[$core['core_id']] : null;
+                                        $selPonCount = $selOltId !== null ? ($oltPonCounts[$selOltId] ?? null) : null;
+                                    @endphp
+                                    <tr>
+                                        <td class="px-3 py-2">
+                                            <span class="inline-flex items-center gap-1.5">
+                                                <span class="inline-block w-3 h-3 rounded-full border border-gray-300 shrink-0" style="background-color: {{ $cHex ?? '#D1D5DB' }};" role="img" aria-label="{{ __('Warna core') }}: {{ $core['core_color'] ?? __('tidak diketahui') }}"></span>
+                                                <span>{{ $core['cable_description'] }} — Tube {{ $core['tube_number'] }} ({{ $core['tube_color'] ?? '?' }}) / Core {{ $core['core_number_in_tube'] }} ({{ $core['core_color'] ?? '?' }})</span>
+                                            </span>
+                                        </td>
+                                        <td class="px-3 py-2 text-gray-500">{{ $core['destination'] }}</td>
+                                        <td class="px-3 py-2">
+                                            <div class="flex items-center gap-1">
+                                                <input type="number" min="1" max="{{ $portCount }}" wire:model="portInputs.{{ $core['core_id'] }}" class="w-16 rounded-md border-gray-300 shadow-sm text-sm" aria-label="{{ __('Nomor port untuk core ini') }}">
+                                                <button type="button" wire:click="assignPort({{ $core['core_id'] }})" class="text-xs px-2 py-1 border border-gray-300 rounded-md hover:bg-gray-50" title="{{ __('Simpan baris ini saja') }}">{{ __('Simpan') }}</button>
+                                            </div>
+                                            @error('portInputs.'.$core['core_id']) <span class="block text-xs text-red-600 mt-1">{{ $message }}</span> @enderror
+                                        </td>
+                                        <td class="px-3 py-2">
+                                            <div class="flex items-center gap-1">
+                                                <select wire:model.live="oltDeviceInputs.{{ $core['core_id'] }}" class="rounded-md border-gray-300 shadow-sm text-xs" aria-label="{{ __('Perangkat OLT') }}">
+                                                    <option value="">{{ __('— bukan OLT —') }}</option>
+                                                    @foreach ($oltOptions as $olt)
+                                                        <option value="{{ $olt['id'] }}">{{ $olt['label'] }}</option>
+                                                    @endforeach
+                                                </select>
+                                                @if ($selPonCount)
+                                                    <select wire:model="oltPonInputs.{{ $core['core_id'] }}" class="w-32 rounded-md border-gray-300 shadow-sm text-xs" aria-label="{{ __('PON port') }}">
+                                                        <option value="">{{ __('-- PON --') }}</option>
+                                                        @for ($p = 1; $p <= $selPonCount; $p++)
+                                                            <option value="PON {{ $p }}">{{ __('PON') }} {{ $p }}</option>
+                                                        @endfor
+                                                    </select>
+                                                @else
+                                                    <input type="text" wire:model="oltPonInputs.{{ $core['core_id'] }}" placeholder="{{ __('PON 1 / catatan') }}" class="w-32 rounded-md border-gray-300 shadow-sm text-xs" aria-label="{{ __('Label PON / catatan port') }}">
+                                                @endif
+                                            </div>
+                                        </td>
+                                    </tr>
+                                @empty
+                                    <tr><td colspan="4" class="px-3 py-3 text-xs text-gray-400 italic">{{ __('Tidak ada core yang cocok dengan pencarian.') }}</td></tr>
+                                @endforelse
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button type="submit" wire:loading.attr="disabled" wire:target="saveAllPorts" class="px-4 py-2 bg-primary text-white text-sm rounded-md hover:opacity-90 disabled:opacity-50">
+                            <span wire:loading.remove wire:target="saveAllPorts">{{ __('Simpan Semua') }}</span>
+                            <span wire:loading wire:target="saveAllPorts">{{ __('Menyimpan…') }}</span>
+                        </button>
+                        <p class="text-xs text-gray-400">{{ __('Kosongkan nomor port untuk melepas core. Label boleh diisi bebas (mis. "Backbone Lintas A") meski tanpa OLT. Untuk menukar penempatan port (antar core atau antar tube), pakai tombol "Tukar Port" di atas. Semua baris disimpan sekaligus — kalau ada yang error, tidak ada yang tersimpan.') }}</p>
+                    </div>
+                </form>
+            </div>
+
+            {{-- v0.16.1 Revisi 2 C — modal "Tukar Port" 2-tingkat (DI LUAR
+                 <form> di atas). Tahap 1 pilih mode; tahap 2/3 sesuai mode. --}}
+            @if ($showSwapModal)
+                <div class="fixed inset-0 z-[1100] bg-black/40" wire:click="closeSwapModal" aria-hidden="true"></div>
+                <div class="fixed inset-x-0 bottom-0 z-[1200] bg-white rounded-t-2xl shadow-2xl max-h-[85vh] overflow-y-auto
+                            md:inset-0 md:m-auto md:h-fit md:max-w-lg md:rounded-2xl"
+                     role="dialog" aria-modal="true" aria-label="{{ __('Tukar Port') }}">
+                    <div class="flex items-center justify-between p-4 border-b border-gray-100">
+                        <p class="text-base font-semibold text-gray-800">{{ __('Tukar Port') }}</p>
+                        <button type="button" wire:click="closeSwapModal" class="w-8 h-8 inline-flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-500 text-lg" aria-label="{{ __('Tutup') }}">&times;</button>
+                    </div>
+
+                    <div class="p-4 space-y-4">
+                        {{-- Tahap 1 — pilih mode --}}
+                        @if ($swapMode === '')
+                            <p class="text-sm text-gray-600">{{ __('Pilih cara menukar:') }}</p>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <button type="button" wire:click="chooseSwapMode('core')" class="p-3 border border-gray-200 rounded-md text-left hover:border-primary hover:bg-primary/5">
+                                    <span class="block text-sm font-medium text-gray-800">{{ __('Tukar Antar Core') }}</span>
+                                    <span class="block text-xs text-gray-500 mt-0.5">{{ __('Pilih dua core individual, tukar penempatan portnya.') }}</span>
+                                </button>
+                                <button type="button" wire:click="chooseSwapMode('tube')" class="p-3 border border-gray-200 rounded-md text-left hover:border-primary hover:bg-primary/5">
+                                    <span class="block text-sm font-medium text-gray-800">{{ __('Tukar Antar Tube') }}</span>
+                                    <span class="block text-xs text-gray-500 mt-0.5">{{ __('Tukar seluruh tube — tiap core ditukar dengan core di posisi yang sama.') }}</span>
+                                </button>
+                            </div>
+                        @endif
+
+                        {{-- Mode: Antar Core --}}
+                        @if ($swapMode === 'core')
+                            <button type="button" wire:click="chooseSwapMode('')" class="text-xs text-primary hover:underline">&larr; {{ __('Ganti mode') }}</button>
+                            <input type="search" wire:model.live.debounce.300ms="swapCoreSearch" placeholder="{{ __('Cari core (tube / warna / port / kabel)') }}" class="w-full rounded-md border-gray-300 shadow-sm text-sm">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">{{ __('Core sumber') }}</label>
+                                <select wire:model="swapSourceCore" class="w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                    <option value="">{{ __('-- Pilih core --') }}</option>
+                                    @foreach ($swapCoreOptions as $opt)
+                                        <option value="{{ $opt['id'] }}">{{ $opt['label'] }}</option>
+                                    @endforeach
+                                </select>
+                                @error('swapSourceCore') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">{{ __('Core tujuan') }}</label>
+                                <select wire:model="swapTargetCore" class="w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                    <option value="">{{ __('-- Pilih core --') }}</option>
+                                    @foreach ($swapCoreOptions as $opt)
+                                        @if ((string) $opt['id'] !== $swapSourceCore)
+                                            <option value="{{ $opt['id'] }}">{{ $opt['label'] }}</option>
+                                        @endif
+                                    @endforeach
+                                </select>
+                                @error('swapTargetCore') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+                            </div>
+                            <button type="button" wire:click="confirmSwapCores" @disabled($swapSourceCore === '' || $swapTargetCore === '') class="w-full px-4 py-2 bg-primary text-white text-sm rounded-md hover:opacity-90 disabled:opacity-50">{{ __('Tukar Dua Core Ini') }}</button>
+                        @endif
+
+                        {{-- Mode: Antar Tube --}}
+                        @if ($swapMode === 'tube')
+                            <button type="button" wire:click="chooseSwapMode('')" class="text-xs text-primary hover:underline">&larr; {{ __('Ganti mode') }}</button>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">{{ __('Kabel') }}</label>
+                                <select wire:model.live="swapCableId" class="w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                    <option value="">{{ __('-- Pilih kabel --') }}</option>
+                                    @foreach ($swapCableOptions as $opt)
+                                        <option value="{{ $opt['id'] }}">{{ $opt['label'] }} ({{ $opt['tube_count'] }} tube)</option>
+                                    @endforeach
+                                </select>
+                                @error('swapCableId') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+                            </div>
+
+                            @if ($swapCableId !== '' && $swapTubeCount > 0)
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">{{ __('Tube sumber') }}</label>
+                                    <select wire:model.live="swapSourceTube" class="w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                        <option value="">{{ __('-- Pilih tube --') }}</option>
+                                        @for ($t = 1; $t <= $swapTubeCount; $t++)
+                                            <option value="{{ $t }}">{{ __('Tube') }} {{ $t }}</option>
+                                        @endfor
+                                    </select>
+                                    @error('swapSourceTube') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+                                </div>
+
+                                @if ($swapSourceTube !== '')
+                                    <div>
+                                        <label class="block text-xs font-medium text-gray-600 mb-1">{{ __('Tube tujuan') }}</label>
+                                        <select wire:model="swapTargetTube" class="w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                            <option value="">{{ __('-- Pilih tube --') }}</option>
+                                            @for ($t = 1; $t <= $swapTubeCount; $t++)
+                                                @if ((string) $t !== $swapSourceTube)
+                                                    <option value="{{ $t }}">{{ __('Tube') }} {{ $t }}</option>
+                                                @endif
+                                            @endfor
+                                        </select>
+                                        @error('swapTargetTube') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+                                    </div>
+                                    <p class="text-xs text-gray-400">{{ __('Tiap core di tube sumber ditukar dengan core di posisi yang sama di tube tujuan (T-x/C-1 ⇄ T-y/C-1, dst).') }}</p>
+                                    <button type="button" wire:click="confirmSwapTubes" @disabled($swapTargetTube === '') class="w-full px-4 py-2 bg-primary text-white text-sm rounded-md hover:opacity-90 disabled:opacity-50">{{ __('Tukar Seluruh Tube') }}</button>
+                                @endif
+                            @endif
+                        @endif
+                    </div>
                 </div>
-                <div class="flex items-center gap-3">
-                    <button type="submit" wire:loading.attr="disabled" wire:target="saveAllPorts" class="px-4 py-2 bg-primary text-white text-sm rounded-md hover:opacity-90 disabled:opacity-50">
-                        <span wire:loading.remove wire:target="saveAllPorts">{{ __('Simpan Semua') }}</span>
-                        <span wire:loading wire:target="saveAllPorts">{{ __('Menyimpan…') }}</span>
-                    </button>
-                    <p class="text-xs text-gray-400">{{ __('Kosongkan nomor port untuk melepas core. Label boleh diisi bebas (mis. "Backbone Lintas A") meski tanpa OLT. "Tukar Port" menukar nomor port dua core terpilih dalam satu langkah. Semua baris disimpan sekaligus — kalau ada yang error, tidak ada yang tersimpan.') }}</p>
-                </div>
-            </form>
+            @endif
         @endif
     </div>
 
@@ -400,22 +491,22 @@
             @endif
 
             @if (auth()->user()->can('network_infrastructure.manage'))
-                @if (count($spliceCableOptions) < 2)
-                    <p class="text-xs text-gray-400">{{ __('Butuh minimal 2 kabel berbeda yang menyentuh titik ini untuk membuat splice.') }}</p>
+                @if (! $canSplice)
+                    <p class="text-xs text-gray-400">{{ __('Butuh minimal satu kabel MASUK dan satu kabel KELUAR di titik ini untuk membuat splice.') }}</p>
                 @else
                     <form wire:submit="createSplice" class="pt-3 border-t border-gray-200 grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
-                            <label class="block text-xs font-medium text-gray-700">{{ __('Kabel sisi awal') }}</label>
+                            <label class="block text-xs font-medium text-gray-700">{{ __('Kabel Masuk') }}</label>
                             <select wire:model.live="spliceCableA" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm">
-                                <option value="">{{ __('-- Pilih kabel --') }}</option>
-                                @foreach ($spliceCableOptions as $opt)
+                                <option value="">{{ __('-- Pilih kabel masuk --') }}</option>
+                                @foreach ($spliceIncomingCableOptions as $opt)
                                     <option value="{{ $opt['id'] }}">{{ $opt['label'] }}</option>
                                 @endforeach
                             </select>
                             @error('spliceCableA') <span class="block text-xs text-red-600">{{ $message }}</span> @enderror
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-gray-700">{{ __('Tube / Core sisi awal') }}</label>
+                            <label class="block text-xs font-medium text-gray-700">{{ __('Tube / Core sisi masuk') }}</label>
                             <select wire:model="spliceCoreA" @disabled($spliceCableA === '') class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm disabled:bg-gray-100">
                                 <option value="">{{ $spliceCableA === '' ? __('pilih kabel dulu') : __('-- Pilih core --') }}</option>
                                 @foreach ($spliceCoreAOptions as $opt)
@@ -425,10 +516,10 @@
                             @error('spliceCoreA') <span class="block text-xs text-red-600">{{ $message }}</span> @enderror
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-gray-700">{{ __('Kabel sisi akhir') }}</label>
+                            <label class="block text-xs font-medium text-gray-700">{{ __('Kabel Keluar') }}</label>
                             <select wire:model.live="spliceCableB" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm">
-                                <option value="">{{ __('-- Pilih kabel --') }}</option>
-                                @foreach ($spliceCableOptions as $opt)
+                                <option value="">{{ __('-- Pilih kabel keluar --') }}</option>
+                                @foreach ($spliceOutgoingCableOptions as $opt)
                                     @if ((string) $opt['id'] !== $spliceCableA)
                                         <option value="{{ $opt['id'] }}">{{ $opt['label'] }}</option>
                                     @endif
@@ -437,7 +528,7 @@
                             @error('spliceCableB') <span class="block text-xs text-red-600">{{ $message }}</span> @enderror
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-gray-700">{{ __('Tube / Core sisi akhir') }}</label>
+                            <label class="block text-xs font-medium text-gray-700">{{ __('Tube / Core sisi keluar') }}</label>
                             <select wire:model="spliceCoreB" @disabled($spliceCableB === '') class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm disabled:bg-gray-100">
                                 <option value="">{{ $spliceCableB === '' ? __('pilih kabel dulu') : __('-- Pilih core --') }}</option>
                                 @foreach ($spliceCoreBOptions as $opt)

@@ -39,7 +39,11 @@
     'backdrop' => 'bg-black/40',
 ])
 
-<div {{ $attributes->merge(['class' => 'fixed inset-0 '.$backdrop.' flex items-center justify-center p-4 z-50']) }}>
+{{-- v0.17.0 Langkah 2.2 — z-[1300] (was z-50): a modal must sit above
+     EVERYTHING, including the mobile sidebar drawer (z-[1200]) and a Leaflet
+     map's own controls (up to z-1000). See the z-index note in
+     components/sidebar.blade.php. --}}
+<div {{ $attributes->merge(['class' => 'fixed inset-0 '.$backdrop.' flex items-center justify-center p-4 z-[1300]']) }}>
     <div class="bg-white w-full {{ $maxWidth }} max-h-[90vh] overflow-y-auto {{ $panelClass }}">
         {{ $slot }}
     </div>

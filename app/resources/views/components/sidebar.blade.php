@@ -277,12 +277,21 @@
      experience is byte-for-byte unchanged. No `!important` needed: Tailwind
      emits `md:` variants after the base utilities, so `md:translate-x-0` /
      `md:static` / `md:z-auto` win the cascade at >=768px over the
-     unprefixed `-translate-x-full` / `fixed` / `z-40`. `-translate-x-full`
+     unprefixed `-translate-x-full` / `fixed` / `z-[1200]`. `-translate-x-full`
      is a STATIC class so there's no pre-Alpine flash of an open drawer on
-     mobile; Alpine's object :class removes it while the drawer is open. --}}
+     mobile; Alpine's object :class removes it while the drawer is open.
+
+     v0.17.0 Langkah 2.2 — z-[1200] (was z-40) so the drawer stacks ABOVE a
+     Leaflet map on the same page: Leaflet (1.9.4) injects its own z-index up
+     to 1000 on `.leaflet-top`/`.leaflet-bottom` (zoom / layer controls) and
+     up to 700 on its tile/marker/popup panes, all in the SAME stacking
+     context as this <aside> (the map container makes no stacking context of
+     its own), so z-40 rendered the drawer BEHIND the map. Backdrop is
+     z-[1100], <x-modal> is z-[1300] — see layouts/app.blade.php. `md:z-auto`
+     still resets this to auto at >=md where the map isn't an issue. --}}
 <aside
     class="w-64 shrink-0 bg-gray-50 border-r border-gray-200 min-h-screen p-4 overflow-y-auto
-           fixed inset-y-0 left-0 z-40 -translate-x-full transition-transform duration-200 ease-in-out
+           fixed inset-y-0 left-0 z-[1200] -translate-x-full transition-transform duration-200 ease-in-out
            md:static md:z-auto md:translate-x-0 md:transition-none md:overflow-visible"
     x-bind:class="{ '-translate-x-full': ! sidebarOpen }"
     aria-label="{{ __('Navigasi utama') }}"

@@ -47,13 +47,17 @@
                 x-init="$watch('sidebarOpen', () => setTimeout(() => window.dispatchEvent(new CustomEvent('boss:sidebar-toggled')), 260))"
             >
                 <div class="flex">
-                    {{-- Mobile drawer backdrop — md:hidden. Tap to close. --}}
+                    {{-- Mobile drawer backdrop — md:hidden. Tap to close.
+                         z-[1100] (was z-30) — see the z-index note in
+                         components/sidebar.blade.php: must sit above a
+                         Leaflet map's own panes/controls (up to z-1000) but
+                         below the drawer <aside> at z-[1200]. --}}
                     <div
                         x-show="sidebarOpen"
                         x-cloak
                         x-transition.opacity
                         x-on:click="sidebarOpen = false"
-                        class="fixed inset-0 bg-black/40 z-30 md:hidden"
+                        class="fixed inset-0 bg-black/40 z-[1100] md:hidden"
                         aria-hidden="true"
                     ></div>
 
@@ -84,10 +88,15 @@
                                 {{ strtoupper(substr(auth()->user()->name, 0, 1)) }}
                             </button>
 
+                            {{-- z-[1250] (was z-50) — same Leaflet stacking
+                                 conflict as the drawer: on a map page this
+                                 dropdown opens down over the map area and
+                                 z-50 put it behind Leaflet's panes/controls.
+                                 Above the drawer, below <x-modal> (z-[1300]). --}}
                             <div
                                 x-show="profileMenuOpen"
                                 x-cloak
-                                class="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-md shadow-lg z-50 py-1"
+                                class="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-md shadow-lg z-[1250] py-1"
                             >
                                 <p class="px-4 py-2 text-sm font-medium text-gray-700 border-b border-gray-100 truncate">
                                     {{ auth()->user()->name }}

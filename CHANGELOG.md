@@ -3,6 +3,59 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.16.1 — Topology Refinements (branch `v0.16.1-topology-refinements`, BELUM di-merge/tag — menunggu verifikasi manual Agung)
+
+Patch dari v0.16.0 (pola `v0.14.5.1`). Item 1-8 Agung → Bagian A-H. Branch dari `develop` di atas v0.17.0
+(penomoran slot, bukan kronologis).
+
+**Bagian A — fix bug Assign Port OTB (`76a929d`).** Skenario: assign port TANPA OLT tapi field catatan PON
+diisi teks bebas (mis. "Backbone Lintas A" untuk catatan non-OLT) → catatan terhapus saat simpan. Root
+cause: `FiberTopologyService::applyCoreAssignment()`/`assignCorePorts()` nulling `olt_pon_port_label`
+setiap `olt_device_id` null. Fix: `olt_pon_port_label` di-decouple penuh dari `olt_device_id` — cuma
+di-null saat port sendiri di-clear. Sekalian: feeder core (kabel MASUK ke OTB, `cablesAsTo`) ikut
+assignable — `coresFromNode()`/`assertCoreBelongsToOtb()` menerima kabel yang menyentuh OTB di ujung mana
+pun; `coreCardData($core, ?$relativeTo)` direction-aware.
+
+**Bagian B — `fiber_core_splices` (`0ce03cf`).** Through-splice core-ke-core di Closure/ODC/ODP. Skema
+**polimorfik** `splice_node_type`/`splice_node_id` (dikonfirmasi Agung — item #6 minta jalan di ODP, yang
+ada di tabel `odps` bukan `fiber_nodes`). `from_fiber_core_id`+`to_fiber_core_id` (FK cascadeOnDelete,
+masing-masing UNIQUE), `loss_db` decimal(5,2) nullable, `note` nullable, `performed_by` FK nullOnDelete.
+`FiberCoreSplice` model + `FiberCoreSpliceService` (guard: self, beda kabel wajib, loss >= 0, kabel
+menyentuh node di kedua ujung, core belum tersplice).
+
+**Bagian C — reorganisasi "Koneksi Core" OTB (`a039427`).** Layout kolom per-tube: N kolom = `tube_count`
+(dinamis), baris = `cores_per_tube`, badge warna tube di header kolom. Section "Simulasi Port" DIGABUNG ke
+"Koneksi Core" — satu section untuk OTB. `coreGridForNode(FiberNode|Odp, ?FiberNode $otb)` satu sumber
+data grid + port + splice.
+
+**Bagian D — section non-OTB Closure/ODC/ODP (`a039427`).** "Koneksi Core" (layout sama) + "Assign
+Core-to-Core". Dropdown **2-tahap** (Kabel dulu, baru Tube+Core — dikonfirmasi Agung, 1 dropdown gabungan
+bisa 48 opsi, susah di HP). Sisi 2 otomatis mengecualikan kabel sisi 1, guard "beda kabel". Splice existing
+read-only + tombol hapus. Form muncul hanya kalau >= 2 kabel menyentuh node.
+
+**Bagian E — Peta Topologi, edit waypoint mobile (`e6afc14`).** Drag-pin desktop tetap. Toggle "Mode Edit
+Rute (tap peta)" → tap peta menambah waypoint di ujung rute. Daftar waypoint di bawah peta (nomor + lat/
+long) dengan reorder naik/turun + hapus per baris. "Simpan Rute" tak berubah. `fiberTopologyMap` factory:
+`tapAddMode` + `toggleTapAdd()`/`onMapTapForEdit()`/`moveWaypoint()`/`removeWaypointAt()`/`fmtLatLng()`.
+
+**Bagian F — Peta Topologi, klik marker (`02997cc`).** **Komponen baru terpisah** (dikonfirmasi Agung),
+reuse pola CSS/z-index v0.17.0 L2.2 (backdrop `z-[1100]`, panel `z-[1200]`) — BUKAN drawer sidebar. Tap
+marker OTB/Closure/ODC/ODP → panel ringkas (bottom sheet HP / side panel desktop): 1 foto utama, ringkasan
+core terpakai/cadangan/total (BUKAN tabel penuh), badge kapasitas (reuse `capacityZone()` — ODP: kapasitas
+port `odpCapacities()`; fiber_node: rasio core terpakai; warna bukan satu-satunya sinyal), link "Lihat
+Detail Lengkap". Popup Leaflet ODP lama (`odpPopupHtml`) dihapus — panel supersetnya.
+`FiberTopologyService::markerInfoPanel(kind, id)` satu sumber data.
+
+**Bagian b (PON dropdown) — tidak dikerjakan, dikonfirmasi Agung.** Tidak ada sumber PON terstruktur dari
+OltDevice/LibreNMS — PON label tetap input teks bebas (dan sekarang genuinely independen dari OLT, lihat
+Bagian A).
+
+**Verifikasi:** test scoped hijau tiap bagian (`FiberTopologyServiceTest`/`FiberCoreSpliceServiceTest`/
+`FiberNodeDetailLivewireTest`/`FiberTopologyMapLivewireTest`), `npm run build` + `FrontendBuildTest` hijau,
+full regression suite dijalankan sebelum closure, Pint per-file yang disentuh. Nol browser/screenshot tool
+— verifikasi struktural; hasil visual menunggu Agung manual sebelum merge → develop → main → tag `v0.16.1`.
+DB dev sudah di-`migrate` (`fiber_core_splices`) — lebih maju dari `main`.
+
 ## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile (merged `develop`→`main`, tagged `v0.17.0`)
 
 Scope dipersempit dari "profesionalisasi tampilan menyeluruh" jadi **responsivitas mobile bertahap**,

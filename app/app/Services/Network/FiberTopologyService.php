@@ -971,7 +971,7 @@ class FiberTopologyService
             $core = $byPort->get($port);
             $rows[] = [
                 'port' => $port,
-                'core' => $core === null ? null : $this->coreCardData($core),
+                'core' => $core === null ? null : $this->coreCardData($core, $otb),
             ];
         }
 
@@ -979,17 +979,21 @@ class FiberTopologyService
     }
 
     /**
-     * Every FiberCore belonging to a cable that ORIGINATES FROM $node —
-     * i.e. the cores a technician can patch onto $node's own OTB ports.
-     * Deliberately outgoing-only (unchanged from Langkah 6) — a Langkah 7
-     * OLT link is additive metadata on one of these same cores, not a new
-     * class of "portless uplink".
+     * Every FiberCore of any cable that TOUCHES $node — either end
+     * (`from` OR `to`). These are the cores a technician can patch onto
+     * $node's OTB ports: v0.16.1 widened this from outgoing-only (Langkah
+     * 6) because a FEEDER core arriving into the OTB is just as
+     * patch-worthy as one leaving it (a backbone-lintas core landing on a
+     * port, then patch-corded onward). A Langkah 7 OLT link is still
+     * additive metadata on one of these same cores.
      *
      * @return Collection<int, FiberCore>
      */
     public function coresFromNode(FiberNode|Odp $node): Collection
     {
-        $cableIds = $node->cablesAsFrom()->pluck('id');
+        $cableIds = $node->cablesAsFrom()->pluck('id')
+            ->concat($node->cablesAsTo()->pluck('id'))
+            ->unique();
 
         return FiberCore::query()
             ->whereIn('fiber_cable_id', $cableIds)
@@ -1001,25 +1005,40 @@ class FiberTopologyService
     }
 
     /**
-     * v0.16.0 Langkah 6 — every outgoing core of an OTB, shaped for the
-     * port-assignment table (colours + destination + current port + OLT).
+     * v0.16.0 Langkah 6 / v0.16.1 — every core of a cable touching an OTB
+     * (either end), shaped for the port-assignment table (colours +
+     * destination + current port + OLT). `destination` is resolved
+     * relative to the OTB, so a feeder core shows its far (upstream) end.
      *
      * @return list<array<string, mixed>>
      */
     public function assignableOtbCores(FiberNode $otb): array
     {
         return $this->coresFromNode($otb)
-            ->map(fn (FiberCore $core) => $this->coreCardData($core))
+            ->map(fn (FiberCore $core) => $this->coreCardData($core, $otb))
             ->all();
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function coreCardData(FiberCore $core): array
+    private function coreCardData(FiberCore $core, ?FiberNode $relativeTo = null): array
     {
         $cable = $core->fiberCable;
         $oltLabel = $this->oltLabelFor($core);
+
+        // Far end = the cable end that ISN'T $relativeTo (so a feeder core
+        // viewed from an OTB reports its upstream source, not the OTB
+        // itself). Falls back to the `to` end when no context is given.
+        $farType = $cable?->to_type;
+        $farId = $cable !== null ? (int) $cable->to_id : null;
+        if ($cable !== null && $relativeTo !== null
+            && $cable->to_type === FiberNode::class && (int) $cable->to_id === $relativeTo->id) {
+            $farType = $cable->from_type;
+            $farId = (int) $cable->from_id;
+        }
+
+        $ponNote = trim((string) $core->olt_pon_port_label);
 
         return [
             'core_id' => $core->id,
@@ -1033,8 +1052,11 @@ class FiberTopologyService
             'olt_device_id' => $core->olt_device_id,
             'olt_pon_port_label' => $core->olt_pon_port_label,
             'connects_to_olt' => $oltLabel !== null,
+            // v0.16.1 — free-text label kept even without an OLT (a
+            // non-OLT patch note, e.g. "Backbone Lintas A").
+            'port_note' => ($oltLabel === null && $ponNote !== '') ? $ponNote : null,
             'destination' => $oltLabel ?? ($cable !== null
-                ? $this->labelForMorph($cable->to_type, $cable->to_id)
+                ? $this->labelForMorph($farType, $farId)
                 : 'Tujuan tidak diketahui'),
         ];
     }
@@ -1172,7 +1194,7 @@ class FiberTopologyService
                 continue;
             }
 
-            $parsed[$coreId] = ['port' => $port, 'olt_device_id' => $oltId, 'olt_pon_port_label' => $port === null ? null : $ponLabel, 'reset_olt' => $oltId === null];
+            $parsed[$coreId] = ['port' => $port, 'olt_device_id' => $port === null ? null : $oltId, 'olt_pon_port_label' => $port === null ? null : $ponLabel];
 
             if ($port !== null) {
                 $portToCores[$port][] = $coreId;
@@ -1197,8 +1219,8 @@ class FiberTopologyService
                     $cores->get($coreId),
                     $otb,
                     $data['port'],
-                    $data['reset_olt'] ? null : $data['olt_device_id'],
-                    $data['reset_olt'] ? null : $data['olt_pon_port_label'],
+                    $data['olt_device_id'],
+                    $data['olt_pon_port_label'],
                 );
             }
         });
@@ -1210,8 +1232,17 @@ class FiberTopologyService
     {
         $cable = $core->fiberCable;
 
-        if ($cable === null || $cable->from_type !== FiberNode::class || (int) $cable->from_id !== $otb->id) {
-            throw new InvalidArgumentException('Core ini bukan berasal dari OTB tersebut.');
+        if ($cable === null) {
+            throw new InvalidArgumentException('Core ini tidak punya kabel.');
+        }
+
+        // v0.16.1 — either end: a feeder core arriving into the OTB is
+        // patchable too, not just an outgoing one.
+        $touchesFrom = $cable->from_type === FiberNode::class && (int) $cable->from_id === $otb->id;
+        $touchesTo = $cable->to_type === FiberNode::class && (int) $cable->to_id === $otb->id;
+
+        if (! $touchesFrom && ! $touchesTo) {
+            throw new InvalidArgumentException('Core ini bukan dari kabel yang terhubung ke OTB tersebut.');
         }
     }
 
@@ -1252,7 +1283,11 @@ class FiberTopologyService
         $core->update([
             'port_number' => $portNumber,
             'olt_device_id' => $portNumber === null ? null : $oltDeviceId,
-            'olt_pon_port_label' => ($portNumber === null || $oltDeviceId === null) ? null : $oltPonPortLabel,
+            // v0.16.1 — the label persists for ANY patched port, whether
+            // or not an OLT is linked (it doubles as a free-text patch
+            // note like "Backbone Lintas A"). Only a portless core (no
+            // patch at all) clears it.
+            'olt_pon_port_label' => $portNumber === null ? null : ($oltPonPortLabel ?: null),
         ]);
         $core->refresh();
 

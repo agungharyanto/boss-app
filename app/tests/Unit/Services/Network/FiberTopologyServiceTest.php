@@ -475,4 +475,90 @@ class FiberTopologyServiceTest extends TestCase
         $this->assertNull($marker['capacity']['percent']);
         $this->assertSame('kapasitas tidak diketahui', $marker['capacity']['zone_label']);
     }
+
+    /* ---- v0.16.1 Bagian A ---- */
+
+    public function test_pon_label_persists_on_a_patched_port_without_an_olt(): void
+    {
+        // The reported bug: patch a port, type a free-text note in the
+        // PON/label field, leave OLT empty -> the note used to be wiped.
+        [$otb, $cable] = $this->otbCable(4);
+        $core = $cable->cores()->first();
+
+        app(FiberTopologyService::class)->assignCorePort($core, $otb, 2, null, 'Backbone Lintas A');
+
+        $core->refresh();
+        $this->assertSame(2, $core->port_number);
+        $this->assertNull($core->olt_device_id);
+        $this->assertSame('Backbone Lintas A', $core->olt_pon_port_label);
+    }
+
+    public function test_bulk_save_keeps_the_pon_label_without_an_olt(): void
+    {
+        [$otb, $cable] = $this->otbCable(6);
+        $cores = $cable->cores()->orderBy('id')->get();
+
+        $errors = app(FiberTopologyService::class)->assignCorePorts($otb, [
+            $cores[0]->id => ['port' => '1', 'olt_device_id' => '', 'olt_pon_port_label' => 'Backbone Lintas B'],
+        ]);
+
+        $this->assertSame([], $errors);
+        $this->assertSame(1, $cores[0]->fresh()->port_number);
+        $this->assertNull($cores[0]->fresh()->olt_device_id);
+        $this->assertSame('Backbone Lintas B', $cores[0]->fresh()->olt_pon_port_label);
+    }
+
+    public function test_clearing_a_port_also_clears_its_label(): void
+    {
+        [$otb, $cable] = $this->otbCable(4);
+        $core = $cable->cores()->first();
+        $service = app(FiberTopologyService::class);
+
+        $service->assignCorePort($core, $otb, 2, null, 'Catatan');
+        $service->assignCorePort($core, $otb, null);
+
+        $this->assertNull($core->fresh()->port_number);
+        $this->assertNull($core->fresh()->olt_pon_port_label);
+    }
+
+    public function test_a_feeder_core_arriving_into_the_otb_is_assignable_to_a_port(): void
+    {
+        // Cable Closure -> OTB (the OTB is the `to` end). Its cores are a
+        // feeder arriving into the OTB and must be patchable too.
+        $tenant = Tenant::factory()->create();
+        $otb = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'otb', 'port_count' => 8]);
+        $upstream = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'closure', 'port_count' => null]);
+
+        $feeder = app(FiberTopologyService::class)->createCable([
+            'tenant_id' => $tenant->id,
+            'from_type' => FiberNode::class, 'from_id' => $upstream->id,
+            'to_type' => FiberNode::class, 'to_id' => $otb->id,
+            'total_cores' => 4, 'tube_count' => 2, 'cores_per_tube' => 2,
+        ]);
+        $core = $feeder->cores()->first();
+
+        app(FiberTopologyService::class)->assignCorePort($core, $otb, 5);
+
+        $this->assertSame(5, $core->fresh()->port_number);
+
+        $ids = collect(app(FiberTopologyService::class)->assignableOtbCores($otb->fresh()))->pluck('core_id');
+        $this->assertContains($core->id, $ids->all());
+    }
+
+    public function test_assignable_otb_cores_shows_a_feeder_cores_upstream_end_as_its_destination(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $otb = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'otb', 'port_count' => 8]);
+        $upstream = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'closure', 'local_label' => 'Closure-Hulu', 'port_count' => null]);
+
+        app(FiberTopologyService::class)->createCable([
+            'tenant_id' => $tenant->id,
+            'from_type' => FiberNode::class, 'from_id' => $upstream->id,
+            'to_type' => FiberNode::class, 'to_id' => $otb->id,
+            'total_cores' => 2, 'tube_count' => 1, 'cores_per_tube' => 2,
+        ]);
+
+        $card = collect(app(FiberTopologyService::class)->assignableOtbCores($otb->fresh()))->first();
+        $this->assertSame('Closure-Hulu', $card['destination']);
+    }
 }

@@ -8685,6 +8685,33 @@ re-run this investigation** — the answer is: coordinates are entered going for
 `App\Livewire\Customers\CustomerCoordinateFill` (`/customers/lengkapi-koordinat`, a manual per-customer
 pin-drop that writes ONLY `latitude`/`longitude`, deliberately no ODP link) or the registration form.
 
+## v0.16.1 Topology Refinements — SELESAI, MENUNGGU VERIFIKASI MANUAL AGUNG (branch `v0.16.1-topology-refinements`, JANGAN ditinggalkan >1 sesi)
+
+**Status: seluruh scope (Bagian A-H) selesai + full regression suite 1701 hijau + Pint clean di file yang
+disentuh. BELUM di-merge/tag** — menunggu Agung cek manual di browser (BOSS-RULES: merge hanya setelah
+verifikasi manual). Branch dari `develop` di atas v0.17.0 (penomoran slot). 6 commit di atas
+`85e7a2e` (`76a929d` A / `0ce03cf` B / `a039427` C+D / `e6afc14` E / `02997cc` F / `a36f0f3` docs).
+
+- **A** `FiberTopologyService` — `olt_pon_port_label` didecouple dari `olt_device_id` (bebas diisi utk
+  catatan non-OLT, cuma di-null saat port di-clear); feeder core (`cablesAsTo` ke OTB) ikut assignable;
+  `coreCardData($core, ?$relativeTo)` direction-aware.
+- **B** migration `2026_09_08_100000_create_fiber_core_splices_table` (**SUDAH `migrate` di DB dev — DB dev
+  lebih maju dari `main`**). Polimorfik `splice_node_type`/`splice_node_id` (jalan di ODP, yang di tabel
+  `odps`). `App\Models\FiberCoreSplice` + `App\Services\Network\FiberCoreSpliceService` (5 guard).
+- **C+D** `FiberNodeDetail` blade rewrite — "Koneksi Core" kolom per-tube dinamis (`tube_count`),
+  "Simulasi Port" digabung (OTB). Non-OTB: "Assign Core-to-Core" dropdown 2-tahap (Kabel→Tube+Core, guard
+  beda kabel). `coreGridForNode(FiberNode|Odp, ?FiberNode $otb)` satu sumber data.
+- **E** `fiberTopologyMap` factory (`app.js`) + blade — mode edit rute mobile (tap peta tambah waypoint di
+  ujung + daftar waypoint reorder/hapus). Drag-pin desktop tetap.
+- **F** `FiberTopologyService::markerInfoPanel(kind, id)` + `FiberTopologyMap::openMarkerPanel()`/
+  `closeMarkerPanel()` + panel blade (bottom sheet/side panel, z-[1100]/z-[1200] konvensi v0.17.0 L2.2,
+  BUKAN drawer). Popup Leaflet ODP lama (`odpPopupHtml`) DIHAPUS — panel supersetnya.
+- **b (PON dropdown)** tidak dikerjakan — tidak ada sumber PON terstruktur, PON tetap teks bebas
+  (dikonfirmasi Agung sejak instruksi awal).
+
+Kalau sesi ini berakhir sebelum Agung verifikasi: closure (merge `--no-ff` → develop → full suite → main →
+tag `v0.16.1` di merge commit develop→main) HARUS dikerjakan sesi berikutnya, jangan biarkan drift.
+
 ## Migrasi whatsmeow — Baileys Resmi Pensiun (branch `migrasi-whatsmeow`, selesai 2026-09-05)
 
 **Gateway WhatsApp pindah total dari Node.js/Baileys ke Go/whatsmeow.** `whatsapp-gateway/` sekarang

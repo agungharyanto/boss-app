@@ -1899,6 +1899,33 @@ Kolom checkbox "Tukar" **dihapus** dari tabel utama; field cari tetap untuk kegu
 **Test revisi 2**: `FiberNodeDetailLivewireTest` (rewrite E-swap jadi modal + B-direction + A-block + tube
 swap), `FiberTopologyServiceTest` +5.
 
+### Revisi 3 Bagian 2 (5 perbaikan UI; Bagian 1 "override destinasi per-core" = investigasi, STOP & lapor terpisah)
+
+**A — Kode/Nama ODP bisa diedit di `OdpEdit`** (dulu read-only sepenuhnya — `OdpEdit` cuma pegang field
+topologi, dan v0.5.0 tidak pernah punya halaman web untuk kode/nama). Validasi unik-per-tenant reuse
+`FiberTopologyService::assertOdpCodeAvailable($tenantId, $code, ?$ignoreOdpId)` — diekstrak dari
+`createOdpWithAttachments()` jadi shared, tidak diduplikat. `code`/`name` juga wajib.
+
+**B — Form "Perangkat Passive Baru" saat Tipe Titik = ODP**: field "Label" generik **disembunyikan**
+(redundan dengan "Nama ODP"). "Nama ODP" dapat placeholder **"Patokan Lokasi"**.
+
+**C — Unifikasi istilah "Label" vs "Nama"**: field "Label" untuk OTB/Closure/ODC → **"Nama Titik"** (teks
+label + `validationAttributes`; kolom DB `local_label` tidak berubah).
+
+**D — Bug foto tidak muncul di popup peta / GpsPhotoCapture / OdpEdit — AKAR MASALAH ditemukan**:
+`FiberNodePhotoController::show()` return type `Illuminate\Http\Response`, tapi
+`Storage::disk('local')->response()` mengembalikan `StreamedResponse` → `TypeError` → **500 → broken
+`<img>` di SEMUA tempat foto ditampilkan, sejak v0.16.0** (tidak pernah ada HTTP test untuk endpoint ini).
+Fix: return type → `Symfony\Component\HttpFoundation\Response` (parent bersama) — persis fix yang sudah
+dipakai `CommissionPaymentProofController` (docblock-nya sejak v0.9.11 mencatat kontras ini tapi
+`FiberNodePhotoController` tidak pernah ikut diperbaiki). `FiberNodePhotoControllerTest` baru.
+
+**E — Info kapasitas popup peta dipecah per arah kabel** (yang bikin "72 Core" gabungan tampak aneh —
+sebenarnya 48 core kabel masuk + 24 kabel keluar). `markerInfoPanel()['cores']` sekarang:
+`incoming_used`/`incoming_total`, `outgoing_used`/`outgoing_total`, `unused` (masuk+keluar), `total`
+(masuk+keluar). Panel: "Kabel Masuk: X/total terpakai", "Kabel Keluar: Y/total", "Core tidak terpakai
+(masuk+keluar): Z", "Total core (masuk+keluar): T".
+
 ## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile — SELESAI & DI-TAG (branch `v0.17.0-responsive-foundation`)
 
 Scope dipersempit dari "profesionalisasi tampilan menyeluruh" (reservasi slot asli) jadi **responsivitas

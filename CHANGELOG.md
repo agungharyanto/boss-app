@@ -100,6 +100,21 @@ DB dev sudah di-`migrate` (`fiber_core_splices`) — lebih maju dari `main`.
 - Test revisi 2: `FiberNodeDetailLivewireTest` (rewrite E-swap→modal + B + A-block + tube swap),
   `FiberTopologyServiceTest` +5.
 
+**Revisi 3 Bagian 2 (5 perbaikan UI; Bagian 1 override destinasi per-core = investigasi, STOP & lapor):**
+- **A** — Kode/Nama ODP editable di `OdpEdit` (dulu read-only). `FiberTopologyService::assertOdpCodeAvailable()`
+  di-share dengan `createOdpWithAttachments()`.
+- **B** — form "Titik Baru" Tipe=ODP: field "Label" generik disembunyikan; "Nama ODP" placeholder
+  "Patokan Lokasi".
+- **C** — "Label" → "Nama Titik" untuk OTB/Closure/ODC (istilah, bukan kolom DB).
+- **D** — **bug foto broken di popup peta/GpsPhotoCapture/OdpEdit sejak v0.16.0**:
+  `FiberNodePhotoController::show()` return type salah (`Illuminate\Http\Response` vs `StreamedResponse`
+  dari `Storage::disk('local')->response()`) → 500 → broken `<img>`. Fix return type →
+  `Symfony\Component\HttpFoundation\Response`. `FiberNodePhotoControllerTest` baru.
+- **E** — info kapasitas popup peta dipecah per arah: Kabel Masuk X/total, Kabel Keluar Y/total, tidak
+  terpakai Z, total T. `markerInfoPanel()['cores']` shape berubah.
+- Test: `FiberTopologyMapLivewireTest` (marker panel shape), `OdpEditLivewireTest` +4,
+  `FiberNodeFormLivewireTest` +1, `FiberNodePhotoControllerTest` baru.
+
 ## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile (merged `develop`→`main`, tagged `v0.17.0`)
 
 Scope dipersempit dari "profesionalisasi tampilan menyeluruh" jadi **responsivitas mobile bertahap**,

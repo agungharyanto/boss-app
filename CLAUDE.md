@@ -8731,6 +8731,29 @@ E `FiberTopologyService::swapCorePorts()` + field cari di "Assign Port ke Core";
   dari tabel. `swapCorePorts()` sekarang menukar SELURUH assignment (port + `olt_device_id` +
   `olt_pon_port_label`) sebagai satu unit — patch OLT/PON milik PORT bukan core.
 
+**Revisi 3 (review Agung, commit `897e6c6` = Bagian 2; Bagian 1 = investigasi/STOP)**:
+- **Bagian 2 A** — Kode/Nama ODP editable di `OdpEdit` (dulu read-only). `FiberTopologyService::
+  assertOdpCodeAvailable($tenantId, $code, ?$ignoreOdpId)` shared antara `createOdpWithAttachments()` dan
+  `OdpEdit::save()`.
+- **Bagian 2 B/C** — form "Titik Baru": field "Label" disembunyikan saat Tipe=ODP (redundan dengan "Nama
+  ODP", yang dapat placeholder "Patokan Lokasi"); "Label" → **"Nama Titik"** untuk OTB/Closure/ODC (istilah
+  tampilan saja, kolom `local_label` tidak berubah).
+- **Bagian 2 D — BUG LATEN sejak v0.16.0, foto passive/ODP TIDAK PERNAH tampil di UI mana pun.**
+  `FiberNodePhotoController::show()` return type `Illuminate\Http\Response` tapi
+  `Storage::disk('local')->response()` mengembalikan `StreamedResponse` (di server ini DAN
+  `Storage::fake`) → `TypeError` → 500 → broken `<img>` di GpsPhotoCapture / OdpEdit / panel marker Peta
+  Topologi. Fix: return type → `Symfony\Component\HttpFoundation\Response` (persis `CommissionPaymentProofController`
+  yang docblock-nya sudah lama mencatat kontras ini). **`FiberNodePhotoControllerTest` baru — sebelumnya
+  nol HTTP test untuk endpoint ini.** `CommissionPaymentProofController` docblock premisnya ("real local
+  disk mengembalikan `Illuminate\Http\Response`") ternyata KELIRU untuk versi Flysystem/Laravel ini —
+  `StreamedResponse` di kedua kasus.
+- **Bagian 2 E** — `markerInfoPanel()['cores']` shape berubah: `incoming_used`/`incoming_total`/
+  `outgoing_used`/`outgoing_total`/`unused`/`total` (dipecah per arah kabel `cablesAsTo`/`cablesAsFrom`)
+  — ganti gabungan `used`/`spare`/`total` yang lama (yang bikin "72 Core" tampak aneh).
+- **Bagian 1 (override destinasi per-core: `fiber_cores.override_to_type`/`override_to_id`) — BELUM
+  dikerjakan, STOP & lapor.** Investigasi titik sentuh `fiber_cable.to_type`/`to_id` selesai (lihat
+  laporan). Menunggu konfirmasi Agung untuk desain final sebelum eksekusi.
+
 **Revisi poin D (ODP di form `FiberNodeForm` "Titik Baru") — SELESAI (commit terpisah, 10 keputusan
 dikonfirmasi Agung).** "ODP" jadi opsi Tipe Titik **hanya saat create** (`@if ($fiberNodeId === null)`;
 `nodeType` rule `Rule::in` tolak 'odp' saat edit + guard `save()`). Field kondisional Tipe=ODP: `odpCode`

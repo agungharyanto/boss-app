@@ -71,8 +71,7 @@
     {{-- PROVISIONING MODAL — partial update sungguhan: kosongkan salah satu
          field artinya "tidak diubah sekarang", bukan "hapus". --}}
     @if ($provisioningDeviceId !== null)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeProvisioningForm">
-            <div class="bg-white rounded-md p-6 w-full max-w-md space-y-4">
+        <x-modal wire:click.self="closeProvisioningForm" max-width="max-w-md" panel-class="rounded-md p-6 space-y-4">
                 <h2 class="font-medium">{{ __('Isi Kredensial WiFi') }}</h2>
                 <p class="text-xs text-gray-500">
                     {{ __('Kosongkan field yang belum diketahui — tidak akan menghapus nilai yang sudah tersimpan.') }}
@@ -99,7 +98,6 @@
                         {{ __('Batal') }}
                     </button>
                 </div>
-            </div>
-        </div>
+        </x-modal>
     @endif
 </div>

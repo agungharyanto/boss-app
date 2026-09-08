@@ -27,11 +27,41 @@
     </head>
     <body>
         @auth
-            <div class="flex">
-                <x-sidebar />
+            {{-- v0.17.0 — `sidebarOpen` drives the off-canvas drawer below the
+                 md breakpoint only. At md and up the sidebar is a plain inline
+                 flex child exactly as before (see the md-prefixed overrides in
+                 components/sidebar.blade.php) and this state is never read.
+                 Drawer always starts closed on every page load — no
+                 localStorage (unlike the accordion cluster state inside the
+                 sidebar, which is deliberately persistent). --}}
+            <div x-data="{ sidebarOpen: false }" x-on:keydown.escape.window="sidebarOpen = false">
+                <div class="flex">
+                    {{-- Mobile drawer backdrop — md:hidden. Tap to close. --}}
+                    <div
+                        x-show="sidebarOpen"
+                        x-cloak
+                        x-transition.opacity
+                        x-on:click="sidebarOpen = false"
+                        class="fixed inset-0 bg-black/40 z-30 md:hidden"
+                        aria-hidden="true"
+                    ></div>
 
-                <div class="flex-1 min-w-0">
-                    <div class="flex justify-end items-center gap-3 p-3">
+                    <x-sidebar />
+
+                    <div class="flex-1 min-w-0">
+                        <div class="flex justify-end items-center gap-3 p-3">
+                            {{-- Hamburger — md:hidden. Opens the drawer. --}}
+                            <button
+                                type="button"
+                                x-on:click="sidebarOpen = true"
+                                class="md:hidden inline-flex items-center justify-center w-9 h-9 rounded-md text-gray-600 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary"
+                                aria-label="{{ __('Buka menu navigasi') }}"
+                            >
+                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                                </svg>
+                            </button>
+
                         <x-language-switcher />
 
                         <div class="relative" x-data="{ profileMenuOpen: false }" x-on:click.outside="profileMenuOpen = false">
@@ -61,7 +91,8 @@
                         </div>
                     </div>
 
-                    {{ $slot }}
+                        {{ $slot }}
+                    </div>
                 </div>
             </div>
         @else

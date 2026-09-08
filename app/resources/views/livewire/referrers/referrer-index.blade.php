@@ -199,8 +199,7 @@
     </div>
 
     @if ($linkingReferrerId)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="cancelLinkUser">
-            <div class="bg-white rounded-md shadow-lg p-6 w-full max-w-md space-y-4">
+        <x-modal wire:click.self="cancelLinkUser" max-width="max-w-md" panel-class="rounded-md shadow-lg p-6 space-y-4">
                 <h2 class="text-lg font-semibold text-gray-800">{{ __('Hubungkan User Existing') }}</h2>
                 <div>
                     <label class="block text-sm font-medium text-gray-700">{{ __('Pilih User') }}</label>
@@ -216,7 +215,6 @@
                     <button type="button" wire:click="cancelLinkUser" class="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50">{{ __('Batal') }}</button>
                     <button type="button" wire:click="confirmLinkUser" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90">{{ __('Hubungkan') }}</button>
                 </div>
-            </div>
-        </div>
+        </x-modal>
     @endif
 </div>

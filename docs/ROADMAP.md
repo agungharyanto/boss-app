@@ -62,7 +62,7 @@
 | v0.14.7 | Network         | Rollout Produksi — Verifikasi Kesiapan `test-x86-bajastu` | **BUKAN migrasi massal.** Murni verifikasi bahwa `test-x86-bajastu` (NAS id=1, 218 sesi PPPoE production aktif) aman dipakai sebagai target sistem Profil Paket untuk **pelanggan BARU** ke depan. Langkah 0: inventaris namespace router (`docs/test-x86-bajastu-namespace-inventory.md`, acuan hindari collision). Langkah 1: uji tulis terkontrol via BOSS App (BW Profile + IP Pool `192.0.2.x` + Grup Profil PPP tanpa PPPoE-server binding + Profil PPP, label `TEST-ROLLOUT-HAPUS-SAYA`) → push → verifikasi 0 gangguan ke 218 sesi aktif (218→218→218) + 0 object existing berubah → hapus semua, router bersih 100%. **295 pelanggan existing TIDAK dimigrasikan** (tetap mixradius/local secret). | Selesai — merged + tagged `v0.14.7` |
 | v0.15.0 | Operasional     | Management Ticketing          | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Sistem tiket untuk dukungan/komplain pelanggan. Decision-gate scope lengkap (alur, integrasi modul lain, siapa yang bisa buka/tutup tiket, dll) dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 | v0.16.0 | Network         | Core Network Infrastructure Management | Inventaris topologi fiber fleksibel (OTB/Closure/ODC self-referencing parent via `fiber_nodes`, ODP tetap di tabel `odps` v0.5.0 existing + kolom parent link tambahan) — GPS+foto per titik, kabel/tube/core (jumlah genap saja, warna TIA/EIA-598-C auto+override), splitter rasio bebas + redaman (in/out) dengan referensi non-blocking, aksesori (pin adaptor/connector/splice) dengan redaman terukur, visual splice-diagram (bukan tabel polos), klik koordinat→Google Maps direction, notifikasi fault-correlation ODP penuh ke OdpLocatorService, draft offline localStorage. Langkah 0-13 selesai (…Langkah 8: cluster sidebar "Topology Fiber", Peta Topologi Leaflet + waypoint; Langkah 9: peta per-kabel, satelit Esri, ekspor KMZ; Langkah 10: layer checklist + Pelanggan + filter KMZ; Langkah 11: OSRM routing self-hosted + Cek Jalur ke ODP + kapasitas ODP popup; Langkah 12: bind koordinat pelanggan manual + multi-select layer kabel; Langkah 13: CapacityReport hormati soft-delete + penamaan kabel deskriptif + scroll checklist; cleanup data test dieksekusi) — draft offline diverifikasi masih jalan di penutupan sprint. Merged `--no-ff` ke `develop` (merge commit `f10c2f9`) + tag `v0.16.0` | Selesai |
-| v0.17.0 | Operasional     | UI/UX Polish — Profesionalisasi Tampilan BOSS App | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Perbaikan visual menyeluruh (warna, tipografi, spacing, komponen) memakai skill `ui-ux-pro-max` (terinstal `2026-08-31`, lihat catatan instalasi di bawah), target stack Laravel Blade/Livewire yang dipakai BOSS App. Halaman/area prioritas mana yang dipoles duluan akan di-decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini. **Catatan spesifik dari Agung untuk sesi ini: audit menu yang membingungkan/redundan** — contoh konkret yang sudah diflag: (1) menu "Subscriptions" — fungsinya tidak jelas bagi Agung sendiri saat review, cek apakah masih relevan/perlu dijelaskan lebih baik di UI atau memang belum ada gunanya sampai sekarang (subscriptions memang sengaja belum diaktifkan penuh, lihat konstrain v0.9.4–v0.9.6); (2) "Registrasi Pelanggan" vs "+ Pelanggan Baru" — dua entry poin yang terasa tumpang tindih, perlu diperjelas bedanya atau digabung. Fokus sesi ini: audit MENU yang tidak perlu/membingungkan, bukan cuma kosmetik visual | Backlog |
+| v0.17.0 | Operasional     | UI/UX Polish — Fondasi Responsif Mobile | Scope final (dipersempit dari "profesionalisasi tampilan menyeluruh" jadi **responsivitas mobile bertahap**, prioritas halaman lapangan teknisi/sales). **Fondasi:** hamburger + off-canvas drawer sidebar di bawah `md:` (desktop ≥md byte-for-byte tak berubah); standardisasi komponen `<x-modal>` (18 modal dikonversi — gutter `p-4` di backdrop + `max-h-[90vh] overflow-y-auto` di panel). **Per-halaman:** CPE Devices list (header flex-wrap, kolom Detail sticky) + detail (`<dl>` `grid-cols-1 sm:grid-cols-2`, tombol Ganti Modem keluar dari `<dd>`, Riwayat Dialup tanggal ringkas); WorkOrderShow (header flex-wrap, kolom Aksi sticky-right); Topology Fiber index/map/capacity (header & kontrol flex-wrap, kolom progress-bar `w-32 sm:w-64`); chrome DataTables stack di `<md`. **Bug fix:** Leaflet `invalidateSize()` on sidebar toggle (event `boss:sidebar-toggled`) + z-index stacking conflict drawer/backdrop/modal vs peta Leaflet (drawer `z-[1200]`, backdrop `z-[1100]`, modal `z-[1300]`, profile dropdown `z-[1250]` — di atas z-index Leaflet 1.9.4 max 1000). **Eksplisit DI LUAR scope (dicatat untuk sesi terpisah):** audit menu Subscriptions + "Registrasi Pelanggan" vs "+ Pelanggan Baru". | Selesai — merged `develop`→`main`, tagged `v0.17.0` |
 | v0.18.0 | Billing & Finance | Accounting & Financial Reporting | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Modul akuntansi: laporan pemasukan harian, pemasukan per periode (mingguan/bulanan/custom range), laporan laba-rugi, pencatatan pengeluaran (expenses). Sinkronisasi dengan modul pajak yang sudah ada (Tax Components/Reseller Tax Policy, v0.3.3 Regulatory Tax Engine) — termasuk perhitungan BHP USO (kewajiban regulasi telekomunikasi Indonesia): berapa yang harus dibayar ISP sendiri, dan berapa yang harus dibayar tiap reseller. Decision-gate scope lengkap dilakukan terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 | v0.19.0 | Operasional     | Feature Toggle / Module Management | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Halaman Pengaturan untuk enable/disable modul fitur besar (kandidat: GenieACS/TR-069, FreeRADIUS, WhatsApp Gateway, Payment Gateway, OLT/SmartOLT integration, Profil Paket live-push, dan modul lain — list final berdasarkan hasil audit Docker vs Monitoring, lihat CLAUDE.md). Tujuan: BOSS App direncanakan dijual sebagai SaaS ke ISP lain — saat onboarding tenant trial/demo baru, admin perlu kontrol modul mana yang aktif/ditampilkan, supaya trial user tidak melihat fitur setengah jadi atau tidak relevan buat mereka. Scope detail (termasuk apakah per-tenant atau global, dan mekanisme teknisnya) belum ditentukan — decision-gate terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
 | v0.20.0 | Network         | Template Halaman Isolir (Captive Page Non-Aktif) | **Reservasi slot nomor + nama saja — scope detail BELUM ditentukan.** Halaman yang dilihat pelanggan saat browsing ketika statusnya isolir/non-aktif (belum bayar) — captive-page redirect. Dikustomisasi admin lewat Pengaturan **TANPA coding** — hanya ganti logo + teks, BUKAN editor HTML bebas. Kemungkinan terhubung ke infrastruktur "Profil Expired" per-NAS yang sudah dibangun di v0.14.4.1 (profile dengan pool terbatas) sebagai dasar teknis — perlu dikonfirmasi ulang saat scoping. Decision-gate scope lengkap terpisah saat sprint ini benar-benar dimulai (BOSS-003) — jangan asumsikan detail apa pun dari baris ini | Backlog |
@@ -1765,6 +1765,52 @@ semua file yang disentuh. Permission `ppp_packages.view`/`.manage` di-seed ulang
 cukup).
 
 **Merged + tagged `v0.14.5`** — diverifikasi manual Agung lewat browser, lolos.
+
+## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile — SELESAI & DI-TAG (branch `v0.17.0-responsive-foundation`)
+
+Scope dipersempit dari "profesionalisasi tampilan menyeluruh" (reservasi slot asli) jadi **responsivitas
+mobile bertahap** — BOSS App harus enak dibuka dari browser HP, prioritas halaman yang dipakai teknisi/sales
+di lapangan. 4 commit di atas `main`, semua diverifikasi manual Agung di HP asli sebelum merge:
+
+- **Langkah 0 (audit read-only, `39c5b87` mendahului):** inventaris breakpoint (Tailwind v4 default, `md:`
+  768px breakpoint utama), audit sidebar (nol pola mobile), audit halaman lapangan, verifikasi Topology
+  Fiber, daftar halaman desktop-only. Tanpa perubahan kode.
+- **Langkah 1 — Fondasi (`39c5b87`):**
+  - Hamburger + off-canvas drawer sidebar di bawah `md:` (fixed, slide-in, backdrop). `sidebarOpen` Alpine
+    x-data di wrapper `@auth` layout. Di `md:` ke atas: `md:static md:z-auto md:translate-x-0
+    md:transition-none` menarik `<aside>` kembali jadi flex child inline persis seperti sebelumnya —
+    desktop byte-for-byte tak berubah, nol `!important` (cascade source-order). Klik link menutup drawer.
+  - Komponen `<x-modal>` baru (`resources/views/components/modal.blade.php`) — 2 fix mobile konsisten:
+    `p-4` gutter di backdrop, `max-h-[90vh] overflow-y-auto` di panel. 18 modal di 13 file dikonversi
+    (isi/`wire:model`/handler tak disentuh, `@if($showFoo)` tetap di caller).
+- **Langkah 2 — Per-halaman (`825cc4d`):**
+  - CPE Devices list: header `flex-wrap gap-3`; kolom "Detail" (paling kiri) `sticky left-0`; kolom Serial
+    tabel "Belum Ter-bind" idem; chrome DataTables (length/search/pagination) unfloat + stack di `<md`.
+  - CPE Devices detail: kedua `<dl grid-cols-2>` → `grid-cols-1 sm:grid-cols-2`; tombol "Ganti Modem"
+    dipindah keluar `<dd>` Serial Number jadi tombol tersendiri; Riwayat Dialup tanggal `d M Y` → `d/m/y`
+    (detik dipertahankan).
+  - WorkOrderShow: header `flex-wrap gap-2`; kolom "Aksi" (Isi WiFi) `sticky right-0`.
+  - Topology Fiber: `fiber-node-index` header flex-wrap; `fiber-topology-map` grup kontrol header + baris
+    "Tampilkan kabel di peta" flex-wrap; `capacity-report` kolom progress-bar `w-64` → `w-32 sm:w-64`.
+- **Langkah 2.1 — Bug fix Leaflet invalidateSize (`79883cd`):** layout broadcast `boss:sidebar-toggled`
+  260ms setelah drawer toggle; registry `liveLeafletMaps` di `resources/js/app.js` + satu listener global
+  panggil `invalidateSize()` pada semua peta hidup (guard `_container.isConnected`). Ketiga factory
+  (`fiberLocationMap`/`fiberTopologyMap`/`odpRouteMap`) register saat init, unregister di `destroy()`.
+- **Langkah 2.2 — Bug fix z-index stacking (`b07a4a9`):** root cause dikonfirmasi dari `leaflet.css` 1.9.4 —
+  Leaflet menyuntik z-index sampai 1000 (`.leaflet-top`/`.leaflet-bottom` kontrol) + 700 (pane), semua di
+  stacking context yang sama dengan `<aside>` drawer. Drawer `z-40` + backdrop `z-30` → drawer ke-render
+  DI BELAKANG peta. Fix: backdrop `z-[1100]`, drawer `z-[1200]`, profile dropdown `z-[1250]`, `<x-modal>`
+  `z-[1300]`. Urutan akhir: konten+peta (≤1000) < backdrop < drawer < profile dropdown < modal.
+
+**Verifikasi:** full regression 1680 hijau (5109 assertions) di branch, `npm run build` sukses,
+`FrontendBuildTest` hijau, `view:cache` sukses, HTTP check semua halaman yang disentuh 200 + class baru
+terkonfirmasi di output. **Keterbatasan sepanjang sprint:** nol browser/screenshot tool — verifikasi
+otomatis bersifat struktural (HTTP + class hadir); hasil visual & 2 bug fix runtime diverifikasi Agung
+manual di HP asli sebelum izin merge.
+
+**Di luar scope, dicatat eksplisit untuk sesi terpisah:** audit menu Subscriptions (fungsinya belum jelas,
+subscriptions sengaja belum aktif penuh — lihat konstrain v0.9.4–v0.9.6) + "Registrasi Pelanggan" vs
+"+ Pelanggan Baru" (dua entry point yang terasa tumpang tindih).
 
 ## v0.17.0 — Slot didaftarkan, skill `ui-ux-pro-max` terinstal (2026-08-31)
 

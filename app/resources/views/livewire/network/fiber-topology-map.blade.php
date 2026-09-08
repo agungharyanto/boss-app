@@ -167,4 +167,107 @@
     <p class="text-xs text-gray-400">
         {{ __('Ganti lapisan Peta / Satelit dan nyalakan / matikan kategori lewat kontrol di pojok kanan atas peta. Klik satu garis kabel untuk mengeditnya. Desktop: seret titik di peta untuk memindah, klik garis untuk sisip titik, klik dua kali titik untuk hapus. HP: nyalakan "Mode Edit Rute" lalu tap di peta untuk menambah titik di ujung rute, dan pakai daftar di bawah peta untuk urut / hapus. Lalu "Simpan Rute" (menimpa semua waypoint kabel itu).') }}
     </p>
+
+    {{--
+        v0.16.1 Bagian F — panel info ringkas saat marker OTB/Closure/ODC/
+        ODP di-tap. DI LUAR wire:ignore (Livewire yang render), bottom sheet
+        di HP / side panel di desktop, memakai konvensi fixed + backdrop +
+        z-index dari v0.17.0 Langkah 2.2 (backdrop z-[1100], panel z-[1200])
+        — BUKAN komponen drawer sidebar. Bukan seluruh tabel Koneksi Core:
+        1 foto, ringkasan core terpakai/cadangan, badge kapasitas, dan link
+        "Lihat Detail Lengkap" ke FiberNodeDetail.
+    --}}
+    @if ($markerPanel)
+        <div
+            class="fixed inset-0 z-[1100] bg-black/40"
+            wire:click="closeMarkerPanel"
+            aria-hidden="true"
+        ></div>
+        <div
+            class="fixed z-[1200] bg-white shadow-2xl overflow-y-auto flex flex-col
+                   inset-x-0 bottom-0 max-h-[80vh] rounded-t-2xl
+                   md:inset-y-0 md:right-0 md:left-auto md:w-96 md:max-h-none md:rounded-none"
+            role="dialog" aria-modal="true"
+            aria-label="{{ __('Info titik topologi') }}"
+        >
+            <div class="flex items-start justify-between gap-3 p-4 border-b border-gray-100">
+                <div>
+                    <p class="text-base font-semibold text-gray-800">{{ $markerPanel['title'] }}</p>
+                    <p class="text-xs text-gray-500">{{ $markerPanel['subtitle'] }}</p>
+                </div>
+                <button
+                    type="button"
+                    wire:click="closeMarkerPanel"
+                    class="w-8 h-8 shrink-0 inline-flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-500 text-lg"
+                    aria-label="{{ __('Tutup panel') }}"
+                >&times;</button>
+            </div>
+
+            <div class="p-4 space-y-4">
+                {{-- Foto utama --}}
+                @if ($markerPanel['photo_url'])
+                    <figure class="space-y-1">
+                        <img
+                            src="{{ $markerPanel['photo_url'] }}"
+                            alt="{{ $markerPanel['photo_caption'] ?: __('Foto :titik', ['titik' => $markerPanel['title']]) }}"
+                            class="w-full rounded-md border border-gray-200 object-cover max-h-56"
+                            loading="lazy"
+                        >
+                        @if ($markerPanel['photo_caption'])
+                            <figcaption class="text-xs text-gray-500">{{ $markerPanel['photo_caption'] }}</figcaption>
+                        @endif
+                    </figure>
+                @else
+                    <div class="w-full rounded-md border border-dashed border-gray-200 bg-gray-50 py-8 text-center text-xs text-gray-400">
+                        {{ __('Belum ada foto') }}
+                    </div>
+                @endif
+
+                {{-- Ringkasan core (bukan tabel penuh) --}}
+                <div class="grid grid-cols-3 gap-2 text-center">
+                    <div class="rounded-md border border-gray-200 p-2">
+                        <p class="text-lg font-semibold text-gray-800">{{ $markerPanel['cores']['used'] }}</p>
+                        <p class="text-[11px] text-gray-500">{{ __('Core terpakai') }}</p>
+                    </div>
+                    <div class="rounded-md border border-gray-200 p-2">
+                        <p class="text-lg font-semibold text-gray-800">{{ $markerPanel['cores']['spare'] }}</p>
+                        <p class="text-[11px] text-gray-500">{{ __('Core cadangan') }}</p>
+                    </div>
+                    <div class="rounded-md border border-gray-200 p-2">
+                        <p class="text-lg font-semibold text-gray-800">{{ $markerPanel['cores']['total'] }}</p>
+                        <p class="text-[11px] text-gray-500">{{ __('Total core') }}</p>
+                    </div>
+                </div>
+
+                {{-- Badge kapasitas — warna BUKAN satu-satunya sinyal:
+                     ada titik warna + label kata + angka persen/rasio. --}}
+                @php($cap = $markerPanel['capacity'])
+                <div class="flex items-center gap-2 rounded-md border border-gray-200 p-3">
+                    <span
+                        class="w-3 h-3 rounded-full shrink-0 border border-black/10"
+                        style="background-color: {{ $cap['color'] }};"
+                        aria-hidden="true"
+                    ></span>
+                    <span class="text-sm font-medium text-gray-700 capitalize">{{ $cap['label'] }}</span>
+                    <span class="ml-auto text-xs text-gray-500">
+                        @if ($markerPanel['kind'] === 'odp')
+                            {{ $cap['used'] }}/{{ $cap['total'] }} {{ __('port') }}
+                        @else
+                            {{ $cap['used'] }}/{{ $cap['total'] }} {{ __('core') }}
+                        @endif
+                        @if (! is_null($cap['percent']))
+                            &middot; {{ $cap['percent'] }}%
+                        @endif
+                    </span>
+                </div>
+            </div>
+
+            <div class="mt-auto p-4 border-t border-gray-100">
+                <a
+                    href="{{ $markerPanel['detail_url'] }}"
+                    class="block w-full text-center px-4 py-2 bg-primary text-white text-sm rounded-md hover:opacity-90"
+                >{{ __('Lihat Detail Lengkap') }} &rarr;</a>
+            </div>
+        </div>
+    @endif
 </div>

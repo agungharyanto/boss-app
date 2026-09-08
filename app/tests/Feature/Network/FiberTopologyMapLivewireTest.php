@@ -7,7 +7,9 @@ use App\Models\Customer;
 use App\Models\FiberCable;
 use App\Models\FiberCableWaypoint;
 use App\Models\FiberNode;
+use App\Models\FiberNodePhoto;
 use App\Models\Odp;
+use App\Models\OdpPort;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\Network\FiberColorService;
@@ -455,5 +457,71 @@ class FiberTopologyMapLivewireTest extends TestCase
 
         $this->assertStringContainsString('server.arcgisonline.com', $built);
         $this->assertStringContainsString('World_Imagery', $built);
+    }
+
+    public function test_open_marker_panel_for_a_fiber_node_reports_core_summary_and_capacity(): void
+    {
+        [$tenant, $cable] = $this->cableWithCores(totalCores: 4);
+        $otb = FiberNode::find($cable->from_id);
+
+        // 1 of 4 cores used -> 25% -> "longgar"
+        $cable->cores()->first()->update(['status' => 'used']);
+
+        FiberNodePhoto::factory()->create([
+            'owner_type' => FiberNode::class,
+            'owner_id' => $otb->id,
+            'caption' => 'Panel depan OTB',
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberTopologyMap::class)
+            ->call('openMarkerPanel', 'fiber_node', $otb->id)
+            ->assertSet('markerPanel.kind', 'fiber_node')
+            ->assertSet('markerPanel.cores.used', 1)
+            ->assertSet('markerPanel.cores.spare', 3)
+            ->assertSet('markerPanel.cores.total', 4)
+            ->assertSet('markerPanel.capacity.label', 'longgar')
+            ->assertSet('markerPanel.photo_caption', 'Panel depan OTB')
+            ->assertSee('Lihat Detail Lengkap')
+            ->assertSeeHtml(route('web.fiber-nodes.detail', $otb->id));
+    }
+
+    public function test_open_marker_panel_for_an_odp_uses_port_capacity(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $odp = Odp::factory()->create(['tenant_id' => $tenant->id, 'total_ports' => 8, 'latitude' => -6.2, 'longitude' => 106.8]);
+        OdpPort::factory()->count(7)->for($odp)->create(['status' => 'used']);
+        OdpPort::factory()->for($odp)->create(['status' => 'available']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberTopologyMap::class)
+            ->call('openMarkerPanel', 'odp', $odp->id)
+            ->assertSet('markerPanel.kind', 'odp')
+            ->assertSet('markerPanel.subtitle', 'ODP')
+            ->assertSet('markerPanel.capacity.used', 7)
+            ->assertSet('markerPanel.capacity.total', 8)
+            ->assertSet('markerPanel.capacity.label', 'penuh'); // 88% > 80
+    }
+
+    public function test_close_marker_panel_clears_it(): void
+    {
+        [$tenant, $cable] = $this->cableWithCores();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberTopologyMap::class)
+            ->call('openMarkerPanel', 'fiber_node', $cable->from_id)
+            ->assertSet('markerPanel.kind', 'fiber_node')
+            ->call('closeMarkerPanel')
+            ->assertSet('markerPanel', null);
+    }
+
+    public function test_open_marker_panel_for_a_missing_marker_is_a_no_op(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberTopologyMap::class)
+            ->call('openMarkerPanel', 'fiber_node', 999999)
+            ->assertSet('markerPanel', null);
     }
 }

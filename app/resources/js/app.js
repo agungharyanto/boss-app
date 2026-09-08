@@ -257,12 +257,15 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
                     .addTo(group)
                     .bindTooltip(m.label, { direction: 'top' });
 
-                // v0.16.0 Langkah 11 Bagian E — ODP marker popup shows the
-                // same "X/Y port terpakai" + traffic-light badge as the
-                // Capacity Report (data comes straight from
-                // FiberTopologyService::odpCapacities()).
-                if (m.node_type === 'odp') {
-                    marker.bindPopup(this.odpPopupHtml(m));
+                // v0.16.1 Bagian F — tapping any node/ODP marker opens the
+                // compact info panel (bottom sheet / side panel), rendered
+                // by Livewire OUTSIDE this wire:ignore subtree. Replaces
+                // the old Leaflet ODP popup (the panel is a superset — it
+                // also carries a photo, core summary and a detail link).
+                if (this.$wire) {
+                    marker.on('click', () => {
+                        this.$wire.call('openMarkerPanel', m.type, m.id);
+                    });
                 }
             });
 
@@ -311,18 +314,6 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
             return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
                 '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
             })[c]);
-        },
-
-        odpPopupHtml(m) {
-            let html = '<strong>' + this.esc(m.label) + '</strong>';
-            const cap = m.capacity;
-            if (!cap) {
-                return html + '<br><span style="color:#9ca3af">Kapasitas port belum diatur</span>';
-            }
-            const badge = '<span style="display:inline-block;padding:1px 6px;border-radius:9999px;font-size:11px;color:#fff;background:' +
-                cap.zone_color + '">' + this.esc(cap.zone_label) +
-                (cap.percent === null ? '' : ' · ' + cap.percent + '%') + '</span>';
-            return html + '<br>' + cap.used + '/' + cap.total + ' port terpakai ' + badge;
         },
 
         fullPoints(line) {

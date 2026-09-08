@@ -1508,6 +1508,81 @@ class FiberTopologyService
         };
     }
 
+    /**
+     * v0.16.1 Bagian F — the compact info panel shown when a topology
+     * marker (OTB / Closure / ODC / ODP) is tapped on "Peta Topologi".
+     * Deliberately NOT the full "Koneksi Core" table (that stays on
+     * FiberNodeDetail, linked to via `detail_url`): one main photo, a
+     * used/spare core count, and the same traffic-light capacity badge
+     * the Capacity Report uses (`capacityZone()`).
+     *
+     * $kind is the marker's `type` field: 'fiber_node' or 'odp'.
+     *
+     * @return array{
+     *   kind: string, id: int, title: string, subtitle: string,
+     *   photo_url: ?string, photo_caption: ?string,
+     *   cores: array{used: int, spare: int, total: int},
+     *   capacity: array{percent: ?int, label: string, color: string, used: int, total: int},
+     *   detail_url: string
+     * }|null
+     */
+    public function markerInfoPanel(string $kind, int $id): ?array
+    {
+        $node = match ($kind) {
+            'fiber_node' => FiberNode::find($id),
+            'odp' => Odp::find($id),
+            default => null,
+        };
+
+        if ($node === null) {
+            return null;
+        }
+
+        $cableIds = $node->cablesAsFrom()->pluck('id')
+            ->concat($node->cablesAsTo()->pluck('id'))
+            ->unique();
+
+        $statuses = FiberCore::query()
+            ->whereIn('fiber_cable_id', $cableIds)
+            ->pluck('status');
+
+        $coreTotal = $statuses->count();
+        $coreUsed = $statuses->filter(fn ($s) => $s === FiberCoreStatus::Used)->count();
+
+        if ($kind === 'odp') {
+            $cap = $this->odpCapacities()->get($id);
+            $capacity = $cap === null
+                ? ['percent' => null, 'label' => $this->capacityZone(null)['label'], 'color' => $this->capacityZone(null)['color'], 'used' => 0, 'total' => 0]
+                : ['percent' => $cap['percent'], 'label' => $cap['zone_label'], 'color' => $cap['zone_color'], 'used' => $cap['used'], 'total' => $cap['total']];
+
+            $title = "{$node->code} - {$node->name}";
+            $subtitle = 'ODP';
+            $detailUrl = route('web.odps.detail', $node->id);
+        } else {
+            $percent = $coreTotal > 0 ? (int) round($coreUsed / $coreTotal * 100) : null;
+            $zone = $this->capacityZone($percent);
+            $capacity = ['percent' => $percent, 'label' => $zone['label'], 'color' => $zone['color'], 'used' => $coreUsed, 'total' => $coreTotal];
+
+            $title = $node->local_label ?? $node->node_type->label();
+            $subtitle = $node->node_type->label();
+            $detailUrl = route('web.fiber-nodes.detail', $node->id);
+        }
+
+        $photo = $node->photos()->latest('id')->first();
+
+        return [
+            'kind' => $kind,
+            'id' => $id,
+            'title' => $title,
+            'subtitle' => $subtitle,
+            'photo_url' => $photo === null ? null : route('web.fiber-node-photos.show', $photo->id),
+            'photo_caption' => $photo?->caption,
+            'cores' => ['used' => $coreUsed, 'spare' => $coreTotal - $coreUsed, 'total' => $coreTotal],
+            'capacity' => $capacity,
+            'detail_url' => $detailUrl,
+        ];
+    }
+
     public function capacityReport(?string $search = null): array
     {
         // ODP has no soft-delete (only FiberNode does), and the map shows

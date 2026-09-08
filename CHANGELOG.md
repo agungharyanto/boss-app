@@ -56,6 +56,28 @@ full regression suite dijalankan sebelum closure, Pint per-file yang disentuh. N
 — verifikasi struktural; hasil visual menunggu Agung manual sebelum merge → develop → main → tag `v0.16.1`.
 DB dev sudah di-`migrate` (`fiber_core_splices`) — lebih maju dari `main`.
 
+**Revisi (review Agung, sama branch, sebelum closure):**
+- **A** — tombol "Undo Titik Terakhir" di toolbar Mode Edit Rute Peta Topologi (pop waypoint terbaru, bisa
+  berkali-kali; tetap client-side sampai "Simpan Rute").
+- **B** — dropdown Assign Core-to-Core: label "T1/C1 (Biru)" → "Tube 1 (Biru) / Core 1 (Biru)" di kedua
+  sisi, warna tube DAN core dari nama tersimpan.
+- **C** — `FiberCoreSpliceService`: guard arah — splice WAJIB menghubungkan kabel MASUK (`to_* == node`)
+  dengan kabel KELUAR (`from_* == node`); tolak masuk+masuk / keluar+keluar; tanpa batasan jumlah kabel
+  per arah. + fitur hapus kabel (tombol "Hapus" per kartu kabel di "Diagram Splice", `wire:confirm`; core
+  / splice / port log / aksesori / waypoint ikut via cascade DB yang sudah lengkap; splice aktif tidak
+  memblokir, ikut terhapus).
+- **D** — ODP di form "Titik Baru": **STOP & lapor** — bentrok constraint `StoreOdpRequest` / skema `odps`
+  (`code` wajib+unik, `name` wajib, `latitude`/`longitude` wajib, `total_ports` vs `port_count`, splitter
+  morph). Belum dikerjakan, menunggu keputusan desain Agung.
+- **E** — "Assign Port ke Core" (OTB): field cari (nomor port / nama tube / warna core / kabel) + aksi
+  "Tukar Port" (`FiberTopologyService::swapCorePorts()` — tukar `port_number` dua core dalam satu
+  transaction; aman tanpa langkah kosongkan-dulu, `fiber_cores.port_number` tidak punya unique DB).
+- **F** — kolom `olt_devices.pon_port_count` (unsignedInteger nullable, manual di form OLT). Di form
+  assign-port: OLT yang punya `pon_port_count` → `olt_pon_port_label` jadi dropdown "PON 1".."PON N"; yang
+  null tetap teks bebas. Data lama tidak dimigrasikan paksa. DB dev sudah `migrate`.
+- Test revisi: `FiberCoreSpliceServiceTest` +3, `FiberNodeDetailLivewireTest` +12,
+  `FiberTopologyMapLivewireTest` +1, `OltDeviceIndexLivewireTest` +2.
+
 ## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile (merged `develop`→`main`, tagged `v0.17.0`)
 
 Scope dipersempit dari "profesionalisasi tampilan menyeluruh" jadi **responsivitas mobile bertahap**,

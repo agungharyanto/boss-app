@@ -8706,8 +8706,26 @@ verifikasi manual). Branch dari `develop` di atas v0.17.0 (penomoran slot). 6 co
 - **F** `FiberTopologyService::markerInfoPanel(kind, id)` + `FiberTopologyMap::openMarkerPanel()`/
   `closeMarkerPanel()` + panel blade (bottom sheet/side panel, z-[1100]/z-[1200] konvensi v0.17.0 L2.2,
   BUKAN drawer). Popup Leaflet ODP lama (`odpPopupHtml`) DIHAPUS — panel supersetnya.
-- **b (PON dropdown)** tidak dikerjakan — tidak ada sumber PON terstruktur, PON tetap teks bebas
-  (dikonfirmasi Agung sejak instruksi awal).
+- **b (PON dropdown)** — awalnya tidak dikerjakan; **revisi F** kemudian menambahkan `olt_devices.pon_port_count`
+  (diisi manual admin, TANPA monitoring live) → di form assign-port jadi dropdown "PON 1".."PON N" kalau
+  device-nya dikonfigurasi, fallback teks bebas kalau null.
+
+**Revisi (review Agung, sama branch, commit `cfdda38`)**: A undo waypoint di Mode Edit Rute; B label
+"Tube N (Warna) / Core M (Warna)" di dropdown splice; C guard arah splice (`FiberCoreSpliceService`:
+kabel MASUK `to_*==node` ↔ kabel KELUAR `from_*==node`, tolak masuk+masuk/keluar+keluar, tanpa batasan
+jumlah) + `FiberTopologyService::deleteCable()` + tombol "Hapus" per kartu kabel di Diagram Splice
+(cascade DB sudah lengkap — splice aktif ikut, tidak diblokir); E `FiberTopologyService::swapCorePorts()`
++ field cari di "Assign Port ke Core"; F `olt_devices.pon_port_count` (**migration `2026_09_08_120000`
+sudah di-`migrate` di DB dev**).
+
+**Revisi poin D (ODP di form `FiberNodeForm` "Titik Baru") — BELUM DIKERJAKAN, STOP & lapor.** Bentrok
+nyata dengan `StoreOdpRequest`/skema `odps`: `code` (wajib, unik `(tenant_id,code)`) & `name` (wajib)
+tidak ada field-nya di `FiberNodeForm` (cuma `local_label` opsional); `latitude`/`longitude` NOT NULL
+untuk `odps` tapi nullable di form create; `total_ports` (wajib, `odps`) ≠ `fiber_nodes.port_count`
+(OTB-only); splitter owner morph ke `Odp` (`attachSplitter` sudah terima `Odp` tapi
+`createNodeWithAttachments` FiberNode-only); `Odp::provisionPorts()` wajib dipanggil (aturan CLAUDE.md);
+`OdpPolicy::create` vs `network_infrastructure.manage` (dua-duanya tier-admin jadi bukan blocker keras).
+Menunggu keputusan desain Agung — jangan improvisasi.
 
 Kalau sesi ini berakhir sebelum Agung verifikasi: closure (merge `--no-ff` → develop → full suite → main →
 tag `v0.16.1` di merge commit develop→main) HARUS dikerjakan sesi berikutnya, jangan biarkan drift.

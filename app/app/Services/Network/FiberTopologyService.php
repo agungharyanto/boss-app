@@ -12,6 +12,7 @@ use App\Models\FiberCable;
 use App\Models\FiberCableWaypoint;
 use App\Models\FiberCore;
 use App\Models\FiberCorePortLog;
+use App\Models\FiberCoreSplice;
 use App\Models\FiberNode;
 use App\Models\FiberNodePhoto;
 use App\Models\Odp;
@@ -373,18 +374,25 @@ class FiberTopologyService
     }
 
     /**
-     * v0.16.0 Langkah 8/9 — every cable touching $node (incoming AND
-     * outgoing), each with its full core list, for the FiberNodeDetail
-     * "Koneksi Core" table. The "Lihat di peta" link is per-CABLE (one
-     * physical route per cable), not per-core — `mappable` and
-     * `cable_id`/`from_label`/`to_label` live at the cable level here.
+     * v0.16.0 Langkah 8/9 / v0.16.1 Bagian C — every cable touching $node
+     * (incoming AND outgoing), each core grouped BY TUBE (one column per
+     * tube on the page), for the FiberNodeDetail "Koneksi Core" section.
+     * The "Lihat di peta" link is per-CABLE (one physical route), not
+     * per-core.
      *
-     * @return list<array{cable_id: int, description: string, from_label: string, to_label: string, total_cores: int, mappable: bool, cores: list<array{core_id: int, tube_number: int, core_number_in_tube: int, tube_color: ?string, core_color: ?string}>}>
+     * When $otb is given (the node IS an OTB), each core also carries its
+     * patched `port_number` + `destination` + OLT link. `spliced_to` is
+     * set for a core that's in a core-to-core splice AT $node.
+     *
+     * @return list<array<string, mixed>>
      */
-    public function cableCoreConnections(FiberNode|Odp $node): array
+    public function coreGridForNode(FiberNode|Odp $node, ?FiberNode $otb = null): array
     {
-        $cables = $node->cablesAsFrom()->with('cores')->get()
-            ->concat($node->cablesAsTo()->with('cores')->get());
+        $cables = $node->cablesAsFrom()->with('cores.oltDevice')->get()
+            ->concat($node->cablesAsTo()->with('cores.oltDevice')->get())
+            ->unique('id');
+
+        $spliceLabels = $this->splicePartnerLabels($node);
 
         $groups = [];
 
@@ -392,25 +400,81 @@ class FiberTopologyService
             $mappable = $this->morphCoords($cable->from_type, $cable->from_id) !== null
                 && $this->morphCoords($cable->to_type, $cable->to_id) !== null;
 
+            $tubes = [];
+            foreach ($cable->cores->sortBy(['tube_number', 'core_number_in_tube']) as $core) {
+                $t = (int) $core->tube_number;
+
+                if (! isset($tubes[$t])) {
+                    $tubes[$t] = [
+                        'tube_number' => $t,
+                        'tube_color' => $core->tube_color,
+                        'tube_hex' => $this->colorService->hexForName($core->tube_color),
+                        'cores' => [],
+                    ];
+                }
+
+                $card = $otb !== null ? $this->coreCardData($core, $otb) : [];
+
+                $tubes[$t]['cores'][] = [
+                    'core_id' => $core->id,
+                    'tube_number' => $t,
+                    'core_number_in_tube' => (int) $core->core_number_in_tube,
+                    'tube_color' => $core->tube_color,
+                    'core_color' => $core->core_color,
+                    'core_hex' => $this->colorService->hexForName($core->core_color),
+                    'port_number' => $otb !== null ? $core->port_number : null,
+                    'destination' => $card['destination'] ?? null,
+                    'connects_to_olt' => $card['connects_to_olt'] ?? false,
+                    'port_note' => $card['port_note'] ?? null,
+                    'spliced_to' => $spliceLabels[$core->id] ?? null,
+                ];
+            }
+
             $groups[] = [
                 'cable_id' => $cable->id,
                 'description' => $this->describeCable($cable),
-                'from_label' => $this->labelForMorph($cable->from_type, $cable->from_id),
-                'to_label' => $this->labelForMorph($cable->to_type, $cable->to_id),
-                'total_cores' => $cable->total_cores,
+                'from_label' => $this->labelForMorph($cable->from_type, (int) $cable->from_id),
+                'to_label' => $this->labelForMorph($cable->to_type, (int) $cable->to_id),
+                'total_cores' => (int) $cable->total_cores,
+                'tube_count' => (int) $cable->tube_count,
+                'cores_per_tube' => (int) $cable->cores_per_tube,
                 'mappable' => $mappable,
-                'cores' => $cable->cores->sortBy(['tube_number', 'core_number_in_tube'])
-                    ->map(fn (FiberCore $core) => [
-                        'core_id' => $core->id,
-                        'tube_number' => $core->tube_number,
-                        'core_number_in_tube' => $core->core_number_in_tube,
-                        'tube_color' => $core->tube_color,
-                        'core_color' => $core->core_color,
-                    ])->values()->all(),
+                'tubes' => array_values($tubes),
             ];
         }
 
         return $groups;
+    }
+
+    /**
+     * coreId => "Kabel … · T2/C3" for every core that is in a splice AT
+     * $node — the partner core's cable + tube/core position.
+     *
+     * @return array<int, string>
+     */
+    private function splicePartnerLabels(FiberNode|Odp $node): array
+    {
+        $rows = FiberCoreSplice::query()
+            ->where('splice_node_type', $node::class)
+            ->where('splice_node_id', $node->id)
+            ->with(['fromCore.fiberCable', 'toCore.fiberCable'])
+            ->get();
+
+        $out = [];
+
+        foreach ($rows as $row) {
+            foreach ([[$row->fromCore, $row->toCore], [$row->toCore, $row->fromCore]] as [$self, $partner]) {
+                if ($self === null || $partner === null) {
+                    continue;
+                }
+
+                $cable = $partner->fiberCable;
+                $desc = $cable !== null ? $this->describeCable($cable) : 'Kabel dihapus';
+                $out[$self->id] = $desc.' · T'.$partner->tube_number.'/C'.$partner->core_number_in_tube;
+            }
+        }
+
+        return $out;
     }
 
     /**

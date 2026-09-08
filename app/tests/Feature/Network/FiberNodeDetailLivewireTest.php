@@ -12,6 +12,7 @@ use App\Models\OltModel;
 use App\Models\Splitter;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\Network\FiberCoreSpliceService;
 use App\Services\Network\FiberTopologyService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -177,8 +178,10 @@ class FiberNodeDetailLivewireTest extends TestCase
         return [$otb, $dest, $cable];
     }
 
-    public function test_port_simulation_renders_empty_and_occupied_ports_for_an_otb(): void
+    public function test_koneksi_core_shows_the_patched_port_and_its_destination_for_an_otb(): void
     {
+        // v0.16.1 Bagian C — "Simulasi Port" merged into "Koneksi Core":
+        // a patched core carries a "Port N" badge + its destination.
         $tenant = Tenant::factory()->create();
         [$otb, $dest, $cable] = $this->otbWithOutgoingCable($tenant, 4);
 
@@ -188,12 +191,14 @@ class FiberNodeDetailLivewireTest extends TestCase
         Livewire::actingAs($this->admin($tenant))
             ->test(FiberNodeDetail::class, ['fiber_node' => $otb->fresh()])
             ->assertOk()
-            ->assertSee('Simulasi Port')
+            ->assertSee('Koneksi Core')
+            ->assertDontSee('Simulasi Port')
+            ->assertSee('Port 1')
             ->assertSee('Closure-Kaliwungu-1')   // destination of the patched core
-            ->assertSee('belum dipatch');         // the other 3 empty ports
+            ->assertSee('Port terpakai: 1 / 4');
     }
 
-    public function test_port_simulation_section_is_absent_for_a_non_otb_node(): void
+    public function test_non_otb_node_shows_assign_core_to_core_not_the_port_form(): void
     {
         $tenant = Tenant::factory()->create();
         $odc = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'odc', 'local_label' => 'ODC-1', 'port_count' => null]);
@@ -201,6 +206,8 @@ class FiberNodeDetailLivewireTest extends TestCase
         Livewire::actingAs($this->admin($tenant))
             ->test(FiberNodeDetail::class, ['fiber_node' => $odc])
             ->assertOk()
+            ->assertSee('Assign Core-to-Core')
+            ->assertDontSee('Assign Port ke Core')
             ->assertDontSee('Simulasi Port');
     }
 
@@ -373,5 +380,107 @@ class FiberNodeDetailLivewireTest extends TestCase
             ->assertHasErrors('accMeasuredLoss');
 
         $this->assertDatabaseCount('fiber_accessories', 0);
+    }
+
+    /* ---- v0.16.1 Bagian D — Assign Core-to-Core ---- */
+
+    /**
+     * @return array{0: FiberNode, 1: FiberCable, 2: FiberCable}
+     */
+    private function closureWithTwoCables(Tenant $tenant): array
+    {
+        $closure = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'closure', 'port_count' => null]);
+        $a = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'otb', 'port_count' => 8]);
+        $b = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'odc', 'port_count' => null]);
+
+        $topo = app(FiberTopologyService::class);
+        $cableA = $topo->createCable([
+            'tenant_id' => $tenant->id,
+            'from_type' => FiberNode::class, 'from_id' => $a->id,
+            'to_type' => FiberNode::class, 'to_id' => $closure->id,
+            'total_cores' => 4, 'tube_count' => 2, 'cores_per_tube' => 2,
+        ]);
+        $cableB = $topo->createCable([
+            'tenant_id' => $tenant->id,
+            'from_type' => FiberNode::class, 'from_id' => $closure->id,
+            'to_type' => FiberNode::class, 'to_id' => $b->id,
+            'total_cores' => 4, 'tube_count' => 2, 'cores_per_tube' => 2,
+        ]);
+
+        return [$closure, $cableA, $cableB];
+    }
+
+    public function test_create_splice_from_the_detail_page_persists_a_row(): void
+    {
+        $tenant = Tenant::factory()->create();
+        [$closure, $cableA, $cableB] = $this->closureWithTwoCables($tenant);
+        $a = $cableA->cores()->first();
+        $b = $cableB->cores()->first();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeDetail::class, ['fiber_node' => $closure->fresh()])
+            ->set('spliceCableA', (string) $cableA->id)
+            ->set('spliceCoreA', (string) $a->id)
+            ->set('spliceCableB', (string) $cableB->id)
+            ->set('spliceCoreB', (string) $b->id)
+            ->set('spliceLoss', '0.12')
+            ->call('createSplice')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('fiber_core_splices', [
+            'splice_node_type' => FiberNode::class,
+            'splice_node_id' => $closure->id,
+            'from_fiber_core_id' => $a->id,
+            'to_fiber_core_id' => $b->id,
+        ]);
+    }
+
+    public function test_create_splice_rejects_the_same_cable_on_both_sides(): void
+    {
+        $tenant = Tenant::factory()->create();
+        [$closure, $cableA] = $this->closureWithTwoCables($tenant);
+        $cores = $cableA->cores()->orderBy('id')->get();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeDetail::class, ['fiber_node' => $closure->fresh()])
+            ->set('spliceCableA', (string) $cableA->id)
+            ->set('spliceCoreA', (string) $cores[0]->id)
+            ->set('spliceCableB', (string) $cableA->id)
+            ->set('spliceCoreB', (string) $cores[1]->id)
+            ->call('createSplice')
+            ->assertHasErrors('spliceCableB');
+
+        $this->assertDatabaseCount('fiber_core_splices', 0);
+    }
+
+    public function test_remove_splice_from_the_detail_page(): void
+    {
+        $tenant = Tenant::factory()->create();
+        [$closure, $cableA, $cableB] = $this->closureWithTwoCables($tenant);
+
+        $splice = app(FiberCoreSpliceService::class)->createSplice(
+            $closure->fresh(),
+            $cableA->cores()->first(),
+            $cableB->cores()->first(),
+        );
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeDetail::class, ['fiber_node' => $closure->fresh()])
+            ->call('removeSplice', $splice->id)
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseMissing('fiber_core_splices', ['id' => $splice->id]);
+    }
+
+    public function test_splice_form_is_hidden_when_fewer_than_two_cables_touch_the_node(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $odc = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'odc', 'port_count' => null]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeDetail::class, ['fiber_node' => $odc])
+            ->assertSee('Assign Core-to-Core')
+            ->assertSee('Butuh minimal 2 kabel')
+            ->assertDontSee('Sambungkan');
     }
 }

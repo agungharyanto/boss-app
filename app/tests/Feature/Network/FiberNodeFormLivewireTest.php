@@ -5,6 +5,7 @@ namespace Tests\Feature\Network;
 use App\Livewire\Network\FiberNodeForm;
 use App\Models\FiberNode;
 use App\Models\FiberNodePhoto;
+use App\Models\Odp;
 use App\Models\Splitter;
 use App\Models\Tenant;
 use App\Models\User;
@@ -159,7 +160,7 @@ class FiberNodeFormLivewireTest extends TestCase
         $this->assertStringNotContainsString('GPS & foto tersedia setelah titik ini disimpan', $createHtml);
     }
 
-    public function test_splitter_section_is_only_shown_for_an_odc_node(): void
+    public function test_splitter_section_is_shown_for_splitting_points_odc_and_odp_only(): void
     {
         $tenant = Tenant::factory()->create();
 
@@ -170,6 +171,8 @@ class FiberNodeFormLivewireTest extends TestCase
             ->set('nodeType', 'closure')
             ->assertDontSee('splitter-ratio-suggestions')
             ->set('nodeType', 'odc')
+            ->assertSee('splitter-ratio-suggestions')
+            ->set('nodeType', 'odp')
             ->assertSee('splitter-ratio-suggestions');
     }
 
@@ -249,7 +252,7 @@ class FiberNodeFormLivewireTest extends TestCase
             ->assertSet('galleryPhotos', []);
     }
 
-    public function test_port_count_is_required_for_an_otb_and_the_field_only_shows_for_otb(): void
+    public function test_port_count_is_required_for_an_otb_and_the_field_is_hidden_for_closure(): void
     {
         $tenant = Tenant::factory()->create();
 
@@ -375,5 +378,143 @@ class FiberNodeFormLivewireTest extends TestCase
         // per-form localStorage key: distinct for new vs a specific node
         $this->assertStringContainsString('fiber_node_draft_new', $createHtml);
         $this->assertStringContainsString('fiber_node_draft_'.$node->id, $editHtml);
+    }
+
+    /* ---------- v0.16.1 Poin D — ODP di form "Titik Baru" ---------- */
+
+    public function test_odp_option_is_only_offered_on_create_not_edit(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $node = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'otb']);
+
+        $createHtml = Livewire::actingAs($this->admin($tenant))->test(FiberNodeForm::class)->html();
+        $editHtml = Livewire::actingAs($this->admin($tenant))->test(FiberNodeForm::class, ['fiber_node' => $node])->html();
+
+        $this->assertStringContainsString('<option value="odp">', $createHtml);
+        $this->assertStringNotContainsString('<option value="odp">', $editHtml);
+    }
+
+    public function test_creating_an_odp_writes_to_the_odps_table_and_provisions_ports(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeForm::class)
+            ->set('nodeType', 'odp')
+            ->set('odpCode', 'ODP-KLW-01')
+            ->set('odpName', 'ODP Kaliwungu 01')
+            ->set('portCount', '8')
+            ->set('lossInDb', '0.9')
+            ->set('lossOutDb', '1.1')
+            ->set('latitude', '-6.9000')
+            ->set('longitude', '109.6500')
+            ->call('save')
+            ->assertHasNoErrors()
+            ->assertRedirect(route('web.fiber-nodes.index'));
+
+        $odp = Odp::withoutGlobalScopes()->where('code', 'ODP-KLW-01')->firstOrFail();
+        $this->assertSame($tenant->id, $odp->tenant_id);
+        $this->assertNull($odp->reseller_id);
+        $this->assertSame(8, $odp->total_ports);
+        $this->assertSame('0.90', (string) $odp->loss_in_db);
+        $this->assertSame('1.10', (string) $odp->loss_out_db);
+        // provisionPorts() ran
+        $this->assertSame(8, $odp->ports()->count());
+        // NOT written to fiber_nodes
+        $this->assertDatabaseMissing('fiber_nodes', ['local_label' => 'ODP Kaliwungu 01']);
+    }
+
+    public function test_creating_an_odp_without_loss_values_is_rejected_consistent_with_odpedit(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeForm::class)
+            ->set('nodeType', 'odp')
+            ->set('odpCode', 'ODP-NOLOSS')
+            ->set('odpName', 'ODP tanpa loss')
+            ->set('portCount', '8')
+            ->set('latitude', '-6.9')
+            ->set('longitude', '109.65')
+            ->call('save')
+            ->assertHasErrors(['lossInDb', 'lossOutDb']);
+
+        $this->assertDatabaseMissing('odps', ['code' => 'ODP-NOLOSS']);
+    }
+
+    public function test_creating_an_odp_requires_code_name_coords_and_port_count(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeForm::class)
+            ->set('nodeType', 'odp')
+            ->set('lossInDb', '1')
+            ->set('lossOutDb', '1')
+            ->call('save')
+            ->assertHasErrors(['odpCode', 'odpName', 'latitude', 'longitude']);
+
+        $this->assertSame(0, Odp::withoutGlobalScopes()->count());
+    }
+
+    public function test_creating_an_odp_rejects_a_duplicate_code_within_the_tenant(): void
+    {
+        $tenant = Tenant::factory()->create();
+        Odp::factory()->create(['tenant_id' => $tenant->id, 'code' => 'ODP-DUP', 'reseller_id' => null]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeForm::class)
+            ->set('nodeType', 'odp')
+            ->set('odpCode', 'ODP-DUP')
+            ->set('odpName', 'ODP duplikat')
+            ->set('portCount', '8')
+            ->set('lossInDb', '1')
+            ->set('lossOutDb', '1')
+            ->set('latitude', '-6.9')
+            ->set('longitude', '109.65')
+            ->call('save')
+            ->assertHasErrors('odpCode');
+
+        $this->assertSame(1, Odp::withoutGlobalScopes()->where('code', 'ODP-DUP')->count());
+    }
+
+    public function test_creating_an_odp_with_a_splitter_persists_it_on_the_odp(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeForm::class)
+            ->set('nodeType', 'odp')
+            ->set('odpCode', 'ODP-SPL')
+            ->set('odpName', 'ODP dengan splitter')
+            ->set('portCount', '16')
+            ->set('lossInDb', '1')
+            ->set('lossOutDb', '1')
+            ->set('latitude', '-6.9')
+            ->set('longitude', '109.65')
+            ->set('splitterRatio', '1:16')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $odp = Odp::withoutGlobalScopes()->where('code', 'ODP-SPL')->firstOrFail();
+        $this->assertDatabaseHas('splitters', [
+            'owner_type' => Odp::class,
+            'owner_id' => $odp->id,
+            'ratio' => '1:16',
+        ]);
+    }
+
+    public function test_odp_form_shows_code_name_and_splitter_fields_when_type_is_odp(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeForm::class)
+            ->set('nodeType', 'odp')
+            ->assertSee('Kode ODP')
+            ->assertSee('Nama ODP')
+            ->assertSee('Jumlah Port ODP')
+            ->assertSee('Splitter')
+            ->assertDontSee('Jumlah Port OTB');
     }
 }

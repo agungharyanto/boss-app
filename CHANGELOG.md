@@ -66,9 +66,13 @@ DB dev sudah di-`migrate` (`fiber_core_splices`) — lebih maju dari `main`.
   per arah. + fitur hapus kabel (tombol "Hapus" per kartu kabel di "Diagram Splice", `wire:confirm`; core
   / splice / port log / aksesori / waypoint ikut via cascade DB yang sudah lengkap; splice aktif tidak
   memblokir, ikut terhapus).
-- **D** — ODP di form "Titik Baru": **STOP & lapor** — bentrok constraint `StoreOdpRequest` / skema `odps`
-  (`code` wajib+unik, `name` wajib, `latitude`/`longitude` wajib, `total_ports` vs `port_count`, splitter
-  morph). Belum dikerjakan, menunggu keputusan desain Agung.
+- **D** — ODP di form "Titik Baru" (10 keputusan dikonfirmasi Agung): "ODP" jadi opsi Tipe Titik di
+  `FiberNodeForm` **hanya create** (edit lewat `OdpEdit`). Field kondisional saat Tipe=ODP: Kode ODP
+  (wajib, unik per tenant), Nama ODP (wajib), lat/long WAJIB, "Jumlah Port ODP" → `odps.total_ports`
+  (field OTB `port_count` disembunyikan), loss in/out **WAJIB** (konsisten `OdpEdit` + keputusan
+  arsitektur v0.16.0 L3), splitter form muncul. `FiberTopologyService::createOdpWithAttachments()` baru —
+  `Odp::create()` + `provisionPorts()` + foto + splitter dalam 1 transaction, `reseller_id = null`, TIDAK
+  menyentuh `StoreOdpRequest`/`OdpController` (pola `OdpEdit`). Gate tetap `network_infrastructure.manage`.
 - **E** — "Assign Port ke Core" (OTB): field cari (nomor port / nama tube / warna core / kabel) + aksi
   "Tukar Port" (`FiberTopologyService::swapCorePorts()` — tukar `port_number` dua core dalam satu
   transaction; aman tanpa langkah kosongkan-dulu, `fiber_cores.port_number` tidak punya unique DB).
@@ -76,7 +80,8 @@ DB dev sudah di-`migrate` (`fiber_core_splices`) — lebih maju dari `main`.
   assign-port: OLT yang punya `pon_port_count` → `olt_pon_port_label` jadi dropdown "PON 1".."PON N"; yang
   null tetap teks bebas. Data lama tidak dimigrasikan paksa. DB dev sudah `migrate`.
 - Test revisi: `FiberCoreSpliceServiceTest` +3, `FiberNodeDetailLivewireTest` +12,
-  `FiberTopologyMapLivewireTest` +1, `OltDeviceIndexLivewireTest` +2.
+  `FiberTopologyMapLivewireTest` +1, `OltDeviceIndexLivewireTest` +2, `FiberNodeFormLivewireTest` +7 (D —
+  termasuk regresi eksplisit: ODP tanpa loss ditolak, konsisten `OdpEdit`).
 
 ## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile (merged `develop`→`main`, tagged `v0.17.0`)
 

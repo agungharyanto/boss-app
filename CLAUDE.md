@@ -8718,14 +8718,18 @@ jumlah) + `FiberTopologyService::deleteCable()` + tombol "Hapus" per kartu kabel
 + field cari di "Assign Port ke Core"; F `olt_devices.pon_port_count` (**migration `2026_09_08_120000`
 sudah di-`migrate` di DB dev**).
 
-**Revisi poin D (ODP di form `FiberNodeForm` "Titik Baru") — BELUM DIKERJAKAN, STOP & lapor.** Bentrok
-nyata dengan `StoreOdpRequest`/skema `odps`: `code` (wajib, unik `(tenant_id,code)`) & `name` (wajib)
-tidak ada field-nya di `FiberNodeForm` (cuma `local_label` opsional); `latitude`/`longitude` NOT NULL
-untuk `odps` tapi nullable di form create; `total_ports` (wajib, `odps`) ≠ `fiber_nodes.port_count`
-(OTB-only); splitter owner morph ke `Odp` (`attachSplitter` sudah terima `Odp` tapi
-`createNodeWithAttachments` FiberNode-only); `Odp::provisionPorts()` wajib dipanggil (aturan CLAUDE.md);
-`OdpPolicy::create` vs `network_infrastructure.manage` (dua-duanya tier-admin jadi bukan blocker keras).
-Menunggu keputusan desain Agung — jangan improvisasi.
+**Revisi poin D (ODP di form `FiberNodeForm` "Titik Baru") — SELESAI (commit terpisah, 10 keputusan
+dikonfirmasi Agung).** "ODP" jadi opsi Tipe Titik **hanya saat create** (`@if ($fiberNodeId === null)`;
+`nodeType` rule `Rule::in` tolak 'odp' saat edit + guard `save()`). Field kondisional Tipe=ODP: `odpCode`
+(wajib, unik `(tenant_id,code)` — guard di service), `odpName` (wajib), lat/long WAJIB (kolom `odps` NOT
+NULL, `rules()` conditional), "Jumlah Port ODP" pakai prop `portCount` yang sama tapi ditulis ke
+`odps.total_ports` (field `port_count` OTB disembunyikan saat non-OTB), loss in/out **WAJIB** (konsisten
+`OdpEdit` + `isLossRequired()` — `save()` addError kalau kosong, sama pola ODC), splitter form muncul
+(`$isSplittingPoint = in_array($nodeType, ['odc','odp'])`). **`FiberTopologyService::createOdpWithAttachments($data,
+$photos, $splitter)`** baru: guard code kosong/duplikat → `InvalidArgumentException`, lalu `Odp::create()`
++ `provisionPorts()` + `addPhoto()` + `attachSplitter()` dalam 1 `DB::transaction`, `reseller_id = null`.
+TIDAK menyentuh `StoreOdpRequest`/`OdpController` (pola `OdpEdit`/`updateOdpTopologyFields`). Gate tetap
+`network_infrastructure.manage` (dikonfirmasi lolos tier-admin sama seperti `OdpPolicy::create`).
 
 Kalau sesi ini berakhir sebelum Agung verifikasi: closure (merge `--no-ff` → develop → full suite → main →
 tag `v0.16.1` di merge commit develop→main) HARUS dikerjakan sesi berikutnya, jangan biarkan drift.

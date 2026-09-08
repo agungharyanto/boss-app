@@ -156,6 +156,75 @@ class FiberTopologyService
     }
 
     /**
+     * v0.16.1 Poin D — create an Odp (tabel `odps`, v0.5.0) from
+     * FiberNodeForm's "Titik Baru" form when Tipe Titik = ODP. Bundles
+     * the row + Odp::provisionPorts() + photos + an optional splitter,
+     * all in ONE transaction. Deliberately does NOT go through
+     * StoreOdpRequest/OdpController (same posture as
+     * updateOdpTopologyFields() / the OdpEdit page).
+     *
+     * `latitude`/`longitude`/`total_ports`/`loss_in_db`/`loss_out_db` are
+     * all REQUIRED for an Odp (the caller validates them — isLossRequired()
+     * returns true for Odp, same as OdpEdit enforces). `code` uniqueness
+     * per tenant is guarded here (the same rule StoreOdpRequest carries).
+     *
+     * @param  array{tenant_id: int, code: string, name: string, latitude: float, longitude: float, total_ports: int, loss_in_db: float, loss_out_db: float, parent_type?: ?string, parent_id?: ?int, notes?: ?string}  $data
+     * @param  iterable<int, UploadedFile>  $photos
+     * @param  array{ratio?: ?string, model?: ?string}|null  $splitter
+     */
+    public function createOdpWithAttachments(array $data, iterable $photos = [], ?array $splitter = null): Odp
+    {
+        $tenantId = (int) ($data['tenant_id'] ?? Auth::user()?->tenant_id);
+        $code = trim((string) ($data['code'] ?? ''));
+        $name = trim((string) ($data['name'] ?? ''));
+
+        if ($code === '') {
+            throw new InvalidArgumentException('Kode ODP wajib diisi.');
+        }
+
+        if ($name === '') {
+            throw new InvalidArgumentException('Nama ODP wajib diisi.');
+        }
+
+        $codeTaken = Odp::query()
+            ->withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->where('code', $code)
+            ->exists();
+
+        if ($codeTaken) {
+            throw new InvalidArgumentException("Kode ODP \"{$code}\" sudah dipakai.");
+        }
+
+        return DB::transaction(function () use ($data, $photos, $splitter, $tenantId, $code, $name) {
+            $odp = Odp::create([
+                'tenant_id' => $tenantId,
+                'reseller_id' => null,
+                'code' => $code,
+                'name' => $name,
+                'latitude' => $data['latitude'],
+                'longitude' => $data['longitude'],
+                'total_ports' => (int) $data['total_ports'],
+                'loss_in_db' => $data['loss_in_db'],
+                'loss_out_db' => $data['loss_out_db'],
+                'parent_type' => $data['parent_type'] ?? null,
+                'parent_id' => $data['parent_id'] ?? null,
+                'notes' => $data['notes'] ?? null,
+            ]);
+
+            $odp->provisionPorts();
+
+            foreach ($photos as $photo) {
+                $this->addPhoto($odp, $photo);
+            }
+
+            $this->attachSplitter($odp, $splitter);
+
+            return $odp;
+        });
+    }
+
+    /**
      * No-op when $splitter is null or its ratio is blank — callers pass
      * the raw form values straight through and let this decide.
      *

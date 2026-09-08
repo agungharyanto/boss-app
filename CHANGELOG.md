@@ -83,6 +83,23 @@ DB dev sudah di-`migrate` (`fiber_core_splices`) — lebih maju dari `main`.
   `FiberTopologyMapLivewireTest` +1, `OltDeviceIndexLivewireTest` +2, `FiberNodeFormLivewireTest` +7 (D —
   termasuk regresi eksplisit: ODP tanpa loss ditolak, konsisten `OdpEdit`).
 
+**Revisi 2 (review Agung terhadap hasil revisi 1):**
+- **A** — BALIK keputusan Bagian C (sengaja, demi keamanan data): hapus kabel yang masih punya >= 1
+  `fiber_core_splices` aktif kini **DIBLOKIR** — `FiberTopologyService::deleteCable()` throw + jumlah
+  splice penghalang, `FiberNodeDetail` flash `cable-error` (banner merah). Cascade lain
+  (`fiber_core_port_logs` / `fiber_accessories` / `fiber_cable_waypoints`) tetap. Hapus splice dulu →
+  kabel bisa dihapus.
+- **B** — dropdown "Assign Core-to-Core" difilter per arah: "Kabel Masuk" hanya `to_*==node`, "Kabel
+  Keluar" hanya `from_*==node`. Label "sisi awal/akhir" → "Masuk/Keluar". Guard `FiberCoreSpliceService`
+  tetap sebagai lapis 2. Gate form: butuh min 1 masuk + 1 keluar (`$canSplice`).
+- **C** — "Tukar Port" checkbox+inline → **modal 2-tingkat**. Mode "Antar Tube"
+  (`FiberTopologyService::swapCoreTubes()` — tukar semua core posisi-sama T-x/C-n ⇄ T-y/C-n, 1
+  transaction) / mode "Antar Core" (2 dropdown+search → `swapCorePorts()`). Kolom checkbox "Tukar"
+  dihapus dari tabel; field cari tetap. `swapCorePorts()` kini menukar seluruh assignment (port +
+  OLT/PON) sebagai satu unit.
+- Test revisi 2: `FiberNodeDetailLivewireTest` (rewrite E-swap→modal + B + A-block + tube swap),
+  `FiberTopologyServiceTest` +5.
+
 ## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile (merged `develop`→`main`, tagged `v0.17.0`)
 
 Scope dipersempit dari "profesionalisasi tampilan menyeluruh" jadi **responsivitas mobile bertahap**,

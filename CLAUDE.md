@@ -8710,13 +8710,26 @@ verifikasi manual). Branch dari `develop` di atas v0.17.0 (penomoran slot). 6 co
   (diisi manual admin, TANPA monitoring live) → di form assign-port jadi dropdown "PON 1".."PON N" kalau
   device-nya dikonfigurasi, fallback teks bebas kalau null.
 
-**Revisi (review Agung, sama branch, commit `cfdda38`)**: A undo waypoint di Mode Edit Rute; B label
+**Revisi 1 (review Agung, commit `cfdda38`)**: A undo waypoint di Mode Edit Rute; B label
 "Tube N (Warna) / Core M (Warna)" di dropdown splice; C guard arah splice (`FiberCoreSpliceService`:
 kabel MASUK `to_*==node` ↔ kabel KELUAR `from_*==node`, tolak masuk+masuk/keluar+keluar, tanpa batasan
-jumlah) + `FiberTopologyService::deleteCable()` + tombol "Hapus" per kartu kabel di Diagram Splice
-(cascade DB sudah lengkap — splice aktif ikut, tidak diblokir); E `FiberTopologyService::swapCorePorts()`
-+ field cari di "Assign Port ke Core"; F `olt_devices.pon_port_count` (**migration `2026_09_08_120000`
-sudah di-`migrate` di DB dev**).
+jumlah) + `FiberTopologyService::deleteCable()` + tombol "Hapus" per kartu kabel di Diagram Splice;
+E `FiberTopologyService::swapCorePorts()` + field cari di "Assign Port ke Core"; F
+`olt_devices.pon_port_count` (**migration `2026_09_08_120000` sudah di-`migrate` di DB dev**).
+
+**Revisi 2 (review Agung terhadap hasil revisi 1, commit `830c798`)**:
+- **A — BALIK keputusan hapus-kabel** (sengaja, demi keamanan data): `deleteCable()` sekarang **memblokir**
+  kalau kabel masih punya >= 1 `fiber_core_splices` aktif (core jadi `from_` ATAU `to_`) →
+  `InvalidArgumentException` + jumlah splice; `FiberNodeDetail::deleteCable()` flash `cable-error`. Cascade
+  lain (`fiber_core_port_logs`/`fiber_accessories`/`fiber_cable_waypoints`) tetap. Hapus splice dulu baru
+  kabel bisa dihapus. **JANGAN kembalikan ke cascade — ini keputusan final.**
+- **B — filter dropdown splice per arah**: `spliceIncomingCableOptions` (`to_*==node`) /
+  `spliceOutgoingCableOptions` (`from_*==node`); label "Kabel Masuk"/"Kabel Keluar". Guard service tetap
+  lapis 2. Gate `$canSplice` = min 1 masuk + 1 keluar.
+- **C — "Tukar Port" jadi modal 2-tingkat**: mode "Antar Tube" (`swapCoreTubes()` — semua core posisi-sama
+  T-x/C-n ⇄ T-y/C-n dalam 1 transaction) / "Antar Core" (`swapCorePorts()`). Kolom checkbox "Tukar" dihapus
+  dari tabel. `swapCorePorts()` sekarang menukar SELURUH assignment (port + `olt_device_id` +
+  `olt_pon_port_label`) sebagai satu unit — patch OLT/PON milik PORT bukan core.
 
 **Revisi poin D (ODP di form `FiberNodeForm` "Titik Baru") — SELESAI (commit terpisah, 10 keputusan
 dikonfirmasi Agung).** "ODP" jadi opsi Tipe Titik **hanya saat create** (`@if ($fiberNodeId === null)`;

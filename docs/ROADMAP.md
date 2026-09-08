@@ -1869,6 +1869,36 @@ yang null tetap teks bebas (tidak dipaksa). Data lama tidak dimigrasikan paksa.
 `FiberTopologyMapLivewireTest` +1, `OltDeviceIndexLivewireTest` +2, `FiberNodeFormLivewireTest` +7 (D).
 Full regression suite + Pint per-file.
 
+### Revisi 2 (review Agung terhadap hasil revisi 1)
+
+**A — BALIK keputusan hapus-kabel dari Bagian C (sengaja, demi keamanan data).** Sebelumnya: hapus kabel
+dengan splice aktif diizinkan, splice ikut cascade. Sekarang: kabel yang masih punya >= 1
+`fiber_core_splices` aktif (core dari kabel itu jadi `from_` ATAU `to_` di splice mana pun) **DIBLOKIR** —
+`FiberTopologyService::deleteCable()` throw `InvalidArgumentException` + jumlah splice penghalang;
+`FiberNodeDetail` tangkap → flash `cable-error` (banner merah). Cascade lain (`fiber_core_port_logs`,
+`fiber_accessories`, `fiber_cable_waypoints`) TETAP. Hapus splice-nya dulu → kabel baru bisa dihapus.
+
+**B — Filter dropdown "Assign Core-to-Core" per arah (bukan cuma validasi setelah submit).** Label "Kabel
+sisi awal/akhir" → **"Kabel Masuk" / "Kabel Keluar"**. Dropdown "Kabel Masuk" HANYA kabel `to_*==node`
+(`spliceIncomingCableOptions`); "Kabel Keluar" HANYA `from_*==node` (`spliceOutgoingCableOptions`). Kabel
+salah arah tidak muncul sebagai opsi sama sekali — user tidak bisa salah pilih. Guard arah di
+`FiberCoreSpliceService` (Bagian C revisi 1) tetap sebagai lapis kedua. Gate form: butuh minimal satu
+kabel masuk DAN satu kabel keluar (`$canSplice`).
+
+**C — "Tukar Port" checkbox+inline → modal 2-tingkat** (mekanisme lama ribet, terutama di HP). Tombol
+"Tukar Port" buka modal. Tahap 1: pilih mode.
+- **Antar Tube**: pilih kabel → tube sumber → tube tujuan. `FiberTopologyService::swapCoreTubes()` menukar
+  SEMUA core di posisi yang sama (T-x/C-n ⇄ T-y/C-n) dalam 1 transaction; nilai di-capture sebelum mutasi
+  supaya swap dua-pass aman.
+- **Antar Core**: 2 dropdown (dengan search) pilih core sumber & tujuan individual → `swapCorePorts()`.
+
+Kolom checkbox "Tukar" **dihapus** dari tabel utama; field cari tetap untuk kegunaan biasa.
+`swapCorePorts()` sekarang menukar SELURUH assignment (`port_number` + `olt_device_id` +
+`olt_pon_port_label`) sebagai satu unit — patch OLT/PON milik PORT, bukan core.
+
+**Test revisi 2**: `FiberNodeDetailLivewireTest` (rewrite E-swap jadi modal + B-direction + A-block + tube
+swap), `FiberTopologyServiceTest` +5.
+
 ## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile — SELESAI & DI-TAG (branch `v0.17.0-responsive-foundation`)
 
 Scope dipersempit dari "profesionalisasi tampilan menyeluruh" (reservasi slot asli) jadi **responsivitas

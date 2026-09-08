@@ -442,7 +442,7 @@ class FiberNodeFormLivewireTest extends TestCase
         $this->assertDatabaseMissing('odps', ['code' => 'ODP-NOLOSS']);
     }
 
-    public function test_creating_an_odp_requires_code_name_coords_and_port_count(): void
+    public function test_creating_an_odp_requires_code_name_and_coords(): void
     {
         $tenant = Tenant::factory()->create();
 
@@ -453,6 +453,25 @@ class FiberNodeFormLivewireTest extends TestCase
             ->set('lossOutDb', '1')
             ->call('save')
             ->assertHasErrors(['odpCode', 'odpName', 'latitude', 'longitude']);
+
+        $this->assertSame(0, Odp::withoutGlobalScopes()->count());
+    }
+
+    public function test_creating_an_odp_requires_a_port_count(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeForm::class)
+            ->set('nodeType', 'odp')
+            ->set('odpCode', 'ODP-NOPORT')
+            ->set('odpName', 'ODP tanpa port')
+            ->set('lossInDb', '1')
+            ->set('lossOutDb', '1')
+            ->set('latitude', '-6.9')
+            ->set('longitude', '109.65')
+            ->call('save')
+            ->assertHasErrors('portCount');
 
         $this->assertSame(0, Odp::withoutGlobalScopes()->count());
     }

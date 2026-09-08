@@ -34,7 +34,18 @@
                  Drawer always starts closed on every page load — no
                  localStorage (unlike the accordion cluster state inside the
                  sidebar, which is deliberately persistent). --}}
-            <div x-data="{ sidebarOpen: false }" x-on:keydown.escape.window="sidebarOpen = false">
+            {{-- v0.17.0 Langkah 2.1 — setiap kali drawer dibuka/ditutup,
+                 broadcast `boss:sidebar-toggled` SETELAH animasi slide
+                 selesai (drawer pakai transition-transform duration-200 →
+                 260ms aman). Peta Leaflet (di halaman mana pun) listen event
+                 ini dan panggil invalidateSize() supaya tile tidak
+                 pecah/kolaps setelah drawer menutupi/melepas area peta di HP.
+                 Halaman tanpa peta: event ini no-op. --}}
+            <div
+                x-data="{ sidebarOpen: false }"
+                x-on:keydown.escape.window="sidebarOpen = false"
+                x-init="$watch('sidebarOpen', () => setTimeout(() => window.dispatchEvent(new CustomEvent('boss:sidebar-toggled')), 260))"
+            >
                 <div class="flex">
                     {{-- Mobile drawer backdrop — md:hidden. Tap to close. --}}
                     <div

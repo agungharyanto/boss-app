@@ -58,6 +58,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedCpeParameterMapPermissions();
         $this->seedOltDevicePermissions();
         $this->seedMonitoringPermissions();
+        $this->seedRemoteConfigPermissions();
         $this->seedReferrerPermissions();
         $this->seedCommissionRatePermissions();
         $this->seedCommissionLedgerPermissions();
@@ -374,6 +375,23 @@ class RolesAndPermissionsSeeder extends Seeder
 
         foreach ([...self::ADMIN_TIER_ROLES, 'noc'] as $role) {
             Role::findByName($role, 'web')->givePermissionTo(['monitoring.view', 'monitoring.manage']);
+        }
+    }
+
+    /**
+     * "Konfig Remote" (GenieACS Auto-WAN configurable, branch
+     * genieacs-auto-wan-configurable) — VLAN/username/password WAN yang
+     * dulu hardcoded di provision script sekarang diatur dari UI. Sama
+     * posture `monitoring.*`: tier-admin + `noc` (keputusan provisioning
+     * jaringan = tugas operasional NOC). Platform-level, tidak per-tenant.
+     */
+    private function seedRemoteConfigPermissions(): void
+    {
+        Permission::firstOrCreate(['name' => 'remote_config.view', 'guard_name' => 'web']);
+        Permission::firstOrCreate(['name' => 'remote_config.manage', 'guard_name' => 'web']);
+
+        foreach ([...self::ADMIN_TIER_ROLES, 'noc'] as $role) {
+            Role::findByName($role, 'web')->givePermissionTo(['remote_config.view', 'remote_config.manage']);
         }
     }
 

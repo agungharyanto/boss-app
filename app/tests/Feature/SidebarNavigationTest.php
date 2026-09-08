@@ -286,4 +286,42 @@ class SidebarNavigationTest extends TestCase
         $response->assertDontSee('Grup Profil');
         $response->assertDontSee('Profil Hotspot');
     }
+
+    public function test_remote_is_a_pure_toggle_group_holding_cpe_and_konfig_remote(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $html = $this->actingAs($user)->get('/invoices')->getContent();
+
+        // Parent "Remote" is a <button> toggle (no href), same pola as Profil Paket / Komisi.
+        $this->assertMatchesRegularExpression(
+            '/<button[^>]*aria-controls="sidebar-subgroup-remote"[^>]*>\s*<span>Remote<\/span>/s',
+            $html
+        );
+        $this->assertStringContainsString(route('web.cpe-devices.index'), $html);
+        $this->assertStringContainsString(route('web.cpe-devices.status-check'), $html);
+        $this->assertStringContainsString(route('web.remote-config.index'), $html);
+        $this->assertStringContainsString('Konfig Remote', $html);
+    }
+
+    public function test_noc_sees_konfig_remote_but_not_cpe_status_check(): void
+    {
+        // noc has remote_config.* + monitoring.* but not cpe_devices.view.
+        $user = $this->userWithRole('noc');
+
+        $html = $this->actingAs($user)->get('/monitoring')->getContent();
+
+        $this->assertStringContainsString(route('web.remote-config.index'), $html);
+        $this->assertStringContainsString('Konfig Remote', $html);
+    }
+
+    public function test_non_admin_non_noc_user_does_not_see_the_remote_menu(): void
+    {
+        $user = $this->userWithRole('customer_service');
+
+        $html = $this->actingAs($user)->get('/customers')->getContent();
+
+        $this->assertStringNotContainsString('sidebar-subgroup-remote', $html);
+        $this->assertStringNotContainsString('Konfig Remote', $html);
+    }
 }

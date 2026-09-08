@@ -26,6 +26,18 @@ class CpeDevicePolicy
         return $user->can('cpe_devices.view') || $user->can('cpe_devices.manage') || $this->belongsToAnyReseller($user);
     }
 
+    /**
+     * Section "Device GenieACS Belum Ter-bind" di /cpe-devices — admin/NOC
+     * only, TANPA carve-out reseller (triage device belum-ter-bind bukan
+     * tugas reseller; device unbound belum di-attribusi ke siapa pun).
+     * Sama posture halaman /cpe-devices/status-check yang juga
+     * cpe_devices.view admin-only.
+     */
+    public function viewUnbound(User $user): bool
+    {
+        return $user->can('cpe_devices.view') || $user->can('cpe_devices.manage');
+    }
+
     public function view(User $user, CpeDevice $cpeDevice): bool
     {
         if ($user->can('cpe_devices.view') || $user->can('cpe_devices.manage')) {

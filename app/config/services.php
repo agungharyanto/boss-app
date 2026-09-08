@@ -178,6 +178,12 @@ return [
         'nbi_url' => env('GENIEACS_NBI_URL', 'http://genieacs-nbi:7557'),
         'cwmp_internal_ip' => env('GENIEACS_CWMP_INTERNAL_IP'),
         'nbi_internal_ip' => env('GENIEACS_NBI_INTERNAL_IP'),
+        // TTL cache untuk daftar identitas SEMUA device GenieACS yang
+        // dipakai section "Belum Ter-bind" di /cpe-devices
+        // (UnboundGenieacsDeviceService). Section itu di-auto-reload
+        // (poll 5s-5m), jadi satu query bulk ke genieacs-nbi di-share
+        // antar request selama window pendek ini. 0 = matikan cache.
+        'unbound_cache_ttl' => (int) env('GENIEACS_UNBOUND_CACHE_TTL', 15),
     ],
 
     // Ambang batas status online/offline CPE (CpeDeviceStatusSyncService).

@@ -109,6 +109,53 @@
             <tbody></tbody>
         </table>
     </div>
+
+    {{-- "Belum Ter-bind" — device yang ADA di GenieACS tapi belum punya
+         baris cpe_devices sama sekali. Menunggu auto-matcher / reconcile /
+         bind manual dari halaman pelanggan. Admin/NOC only
+         (CpeDevicePolicy::viewUnbound); reseller tidak melihat section ini.
+         Client-side DataTables (dataset kecil, dihitung dari diff GenieACS
+         vs cpe_devices) + auto-reload sendiri, terpisah dari tabel utama. --}}
+    @can('viewUnbound', \App\Models\CpeDevice::class)
+        <div class="mt-10">
+            <div class="flex flex-wrap items-start justify-between gap-3 mb-3">
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-800">{{ __('Device GenieACS Belum Ter-bind') }}</h2>
+                    <p class="text-xs text-gray-500 mt-0.5 max-w-2xl">
+                        {{ __('Device yang sudah Inform ke GenieACS tapi belum tertaut ke Perangkat CPE mana pun. Menunggu auto-matcher, reconcile, atau bind manual dari halaman pelanggan. "Serial dikenal" = BOSS App sudah punya baris CPE untuk serial ini (tinggal reconcile); "Belum dikenal" = perlu dibuatkan/ditautkan ke pelanggan.') }}
+                    </p>
+                </div>
+                <div class="flex items-center gap-2 text-sm shrink-0">
+                    <label for="unboundPollInterval" class="text-gray-500">{{ __('Auto-reload') }}</label>
+                    <select id="unboundPollInterval" class="rounded-md border-gray-300 shadow-sm text-sm">
+                        @foreach ($this->pollIntervalOptions() as $value => $label)
+                            <option value="{{ $value }}">{{ $label }}</option>
+                        @endforeach
+                    </select>
+                </div>
+            </div>
+
+            <p id="unbound-genieacs-error"
+               class="hidden mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2"></p>
+
+            <div class="overflow-x-auto border border-gray-200 rounded-md">
+                <table id="unbound-genieacs-table" class="min-w-full divide-y divide-gray-200 text-xs">
+                    <thead class="bg-gray-50 text-gray-500 uppercase tracking-wider">
+                        <tr>
+                            <th>{{ __('Serial Number') }}</th>
+                            <th>{{ __('Manufacturer / Product Class') }}</th>
+                            <th>{{ __('MAC Address') }}</th>
+                            <th>{{ __('Pertama Terlihat') }}</th>
+                            <th>{{ __('Terakhir Inform') }}</th>
+                            <th>{{ __('ACS URL (Option 43)') }}</th>
+                            <th>{{ __('Status di BOSS App') }}</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    @endcan
 </div>
 
 @push('scripts')
@@ -204,6 +251,110 @@
                     pollTimer = setInterval(() => table.ajax.reload(null, false), seconds * 1000);
                 }
             });
+
+            // --- Section "Belum Ter-bind" (admin/NOC only — policy-gated in
+            // the markup, so the table element is simply absent for reseller
+            // users). Client-side DataTables: the endpoint returns the whole
+            // (small) unbound set as {data:[...]}, computed from a GenieACS
+            // vs cpe_devices diff — no server-side pagination to wire up.
+            const unboundEl = document.getElementById('unbound-genieacs-table');
+            if (unboundEl) {
+                const errBox = document.getElementById('unbound-genieacs-error');
+                const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => (
+                    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
+                ));
+                const fmtTime = (iso) => {
+                    if (!iso) return '<span class="text-gray-400">-</span>';
+                    const d = new Date(iso);
+                    if (Number.isNaN(d.getTime())) return '<span class="text-gray-400">-</span>';
+                    return d.toLocaleString('id-ID', {
+                        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+                    });
+                };
+
+                const unboundTable = $('#unbound-genieacs-table').DataTable({
+                    processing: true,
+                    serverSide: false,
+                    autoWidth: false,
+                    ajax: {
+                        url: '{{ route('web.cpe-devices.internal.unbound-genieacs') }}',
+                        dataSrc: function (json) {
+                            if (json && json.error) {
+                                errBox.textContent = json.error;
+                                errBox.classList.remove('hidden');
+                            } else {
+                                errBox.classList.add('hidden');
+                            }
+                            return (json && json.data) || [];
+                        },
+                    },
+                    lengthMenu: [10, 25, 50, 100],
+                    pageLength: 25,
+                    order: [[4, 'desc']],
+                    language: {
+                        emptyTable: '{{ __('Tidak ada device GenieACS yang belum ter-bind.') }}',
+                        zeroRecords: '{{ __('Tidak ada yang cocok dengan pencarian.') }}',
+                        processing: '{{ __('Memuat…') }}',
+                    },
+                    columns: [
+                        {
+                            data: 'serial_number',
+                            render: (d, type) => {
+                                if (type !== 'display') return d ?? '';
+                                return d ? `<span class="font-mono" title="${esc(d)}">${esc(d)}</span>` : '-';
+                            },
+                        },
+                        {
+                            data: null, orderable: true,
+                            render: (row, type) => {
+                                const text = [row.manufacturer, row.product_class].filter(Boolean).join(' ') || '-';
+                                return type === 'display' ? `<span title="${esc(text)}">${esc(text)}</span>` : text;
+                            },
+                        },
+                        {
+                            data: 'mac_address', orderable: false,
+                            render: (d, type) => {
+                                if (type !== 'display') return d ?? '';
+                                return d
+                                    ? `<span class="font-mono">${esc(d)}</span>`
+                                    : '<span class="text-gray-400">-</span>';
+                            },
+                        },
+                        { data: 'registered_at', render: (d, type) => type === 'display' ? fmtTime(d) : (d || '') },
+                        { data: 'last_inform_at', render: (d, type) => type === 'display' ? fmtTime(d) : (d || '') },
+                        {
+                            data: 'acs_url', orderable: false,
+                            render: function (url, type) {
+                                if (type !== 'display') return url ?? '';
+                                if (!url) {
+                                    return '<span class="text-amber-600" title="ManagementServer.URL kosong — Option 43 tidak terbaca perangkat ini / perlu set manual">— kosong (manual)</span>';
+                                }
+                                return `<span class="font-mono text-green-700 inline-block max-w-[220px] truncate align-bottom" title="${esc(url)}">${esc(url)}</span>`;
+                            },
+                        },
+                        {
+                            data: 'boss_state',
+                            render: function (state, type, row) {
+                                if (type !== 'display') return state ?? '';
+                                if (state === 'serial_known') {
+                                    const who = row.boss_customer ? ` · ${esc(row.boss_customer)}` : '';
+                                    return `<span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700" title="BOSS App sudah punya baris CPE untuk serial ini — tinggal reconcile / auto-match">serial dikenal${who}</span>`;
+                                }
+                                return '<span class="px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700" title="Belum ada baris CPE untuk serial ini — perlu dibuatkan / ditautkan ke pelanggan">belum dikenal</span>';
+                            },
+                        },
+                    ],
+                });
+
+                let unboundTimer = null;
+                document.getElementById('unboundPollInterval').addEventListener('change', function (e) {
+                    if (unboundTimer) clearInterval(unboundTimer);
+                    const seconds = parseInt(e.target.value, 10);
+                    if (!Number.isNaN(seconds) && seconds > 0) {
+                        unboundTimer = setInterval(() => unboundTable.ajax.reload(null, false), seconds * 1000);
+                    }
+                });
+            }
         })();
     </script>
 @endpush

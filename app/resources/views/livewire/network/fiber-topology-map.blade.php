@@ -124,7 +124,11 @@
             <span class="text-gray-600">{{ __('Mengedit rute') }}: <span class="font-medium" x-text="editLabel"></span></span>
             <span class="text-gray-400" x-text="editWaypoints.length + ' {{ __('titik belok') }}'"></span>
             <template x-if="canManage">
-                <span class="inline-flex gap-2">
+                <span class="inline-flex flex-wrap gap-2">
+                    <button type="button" x-on:click="toggleTapAdd()" x-bind:class="tapAddMode ? 'bg-primary text-white border-primary' : 'border-gray-300 hover:bg-gray-50'" class="px-3 py-1 border rounded-md">
+                        <span x-show="!tapAddMode">{{ __('Mode Edit Rute (tap peta)') }}</span>
+                        <span x-show="tapAddMode">{{ __('Mode Edit AKTIF — tap peta untuk tambah titik') }}</span>
+                    </button>
                     <button type="button" x-on:click="persistRoute()" class="px-3 py-1 bg-primary text-white rounded-md hover:opacity-90">{{ __('Simpan Rute') }}</button>
                     <button type="button" x-on:click="resetRoute()" class="px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50">{{ __('Batalkan perubahan') }}</button>
                     <button type="button" x-on:click="stopEditing()" class="px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50">{{ __('Selesai') }}</button>
@@ -136,7 +140,31 @@
         </div>
     </div>
 
+    {{-- v0.16.1 Bagian E — daftar waypoint di bawah peta: reorder & hapus
+         per baris tanpa perlu drag presisi di layar kecil. Di dalam
+         wire:ignore x-data yang sama dengan peta (Alpine yang kelola). --}}
+    <div x-show="editCableId !== null && canManage" x-cloak class="border border-gray-200 rounded-md">
+        <div class="px-3 py-2 bg-gray-50 border-b border-gray-100 text-xs font-medium text-gray-600 flex items-center justify-between">
+            <span>{{ __('Titik Belok Rute') }} (<span x-text="editWaypoints.length"></span>)</span>
+            <span class="text-gray-400 font-normal">{{ __('urutan = arah rute') }}</span>
+        </div>
+        <template x-if="editWaypoints.length === 0">
+            <p class="px-3 py-3 text-xs text-gray-400 italic">{{ __('Belum ada titik belok. Nyalakan "Mode Edit Rute" lalu tap di peta, atau seret garis di peta.') }}</p>
+        </template>
+        <ul class="divide-y divide-gray-100">
+            <template x-for="(wp, idx) in editWaypoints" :key="idx">
+                <li class="px-3 py-2 flex items-center gap-2 text-xs">
+                    <span class="w-6 text-gray-400" x-text="'#' + (idx + 1)"></span>
+                    <span class="flex-1 font-mono text-gray-600" x-text="fmtLatLng(wp)"></span>
+                    <button type="button" x-on:click="moveWaypoint(idx, -1)" x-bind:disabled="idx === 0" class="w-7 h-7 inline-flex items-center justify-center border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed" aria-label="{{ __('Naikkan urutan') }}">&uarr;</button>
+                    <button type="button" x-on:click="moveWaypoint(idx, 1)" x-bind:disabled="idx === editWaypoints.length - 1" class="w-7 h-7 inline-flex items-center justify-center border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed" aria-label="{{ __('Turunkan urutan') }}">&darr;</button>
+                    <button type="button" x-on:click="removeWaypointAt(idx)" class="w-7 h-7 inline-flex items-center justify-center border border-red-200 text-red-600 rounded-md hover:bg-red-50" aria-label="{{ __('Hapus titik ini') }}">&times;</button>
+                </li>
+            </template>
+        </ul>
+    </div>
+
     <p class="text-xs text-gray-400">
-        {{ __('Ganti lapisan Peta / Satelit dan nyalakan / matikan kategori lewat kontrol di pojok kanan atas peta. Klik satu garis kabel untuk mengeditnya: klik di sepanjang garis untuk menambah titik belok, seret titik yang ada untuk memindah, klik dua kali titik untuk menghapus, lalu "Simpan Rute" (menimpa semua waypoint kabel itu).') }}
+        {{ __('Ganti lapisan Peta / Satelit dan nyalakan / matikan kategori lewat kontrol di pojok kanan atas peta. Klik satu garis kabel untuk mengeditnya. Desktop: seret titik di peta untuk memindah, klik garis untuk sisip titik, klik dua kali titik untuk hapus. HP: nyalakan "Mode Edit Rute" lalu tap di peta untuk menambah titik di ujung rute, dan pakai daftar di bawah peta untuk urut / hapus. Lalu "Simpan Rute" (menimpa semua waypoint kabel itu).') }}
     </p>
 </div>

@@ -197,6 +197,7 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
         editWaypoints: [],
         editServerWaypoints: [],
         editEndpoints: [],
+        tapAddMode: false, // v0.16.1 Bagian E
 
         init() {
             const anchor = (markers || [])[0] || (customers || [])[0];
@@ -286,6 +287,11 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
 
             this.renderLines(lines || []);
 
+            // v0.16.1 Bagian E — tap-to-add waypoint (mobile-friendly
+            // alternative to dragging handles). Only acts while a cable is
+            // being edited AND "Mode Edit Rute" is on.
+            this.map.on('click', (e) => this.onMapTapForEdit(e.latlng));
+
             if (this.$wire) {
                 this.$wire.on('topology-lines-updated', (payload) => {
                     const next = Array.isArray(payload) ? payload[0]?.lines : payload?.lines;
@@ -363,6 +369,7 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
             this.editServerWaypoints = line.waypoints.map((p) => [p[0], p[1]]);
             this.editWaypoints = this.editServerWaypoints.map((p) => [p[0], p[1]]);
             this.editEndpoints = [line.endpoints[0], line.endpoints[1]];
+            this.tapAddMode = false;
             this.redrawEdit();
         },
 
@@ -371,6 +378,7 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
             this.editLabel = '';
             this.editWaypoints = [];
             this.editServerWaypoints = [];
+            this.tapAddMode = false;
             if (this.editLayer) {
                 this.editLayer.clearLayers();
             }
@@ -379,6 +387,41 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
         resetRoute() {
             this.editWaypoints = this.editServerWaypoints.map((p) => [p[0], p[1]]);
             this.redrawEdit();
+        },
+
+        /* v0.16.1 Bagian E — mobile waypoint editing without drag precision. */
+        toggleTapAdd() {
+            this.tapAddMode = !this.tapAddMode;
+        },
+
+        onMapTapForEdit(latlng) {
+            if (this.editCableId === null || !this.tapAddMode) {
+                return;
+            }
+            // append at the END of the route — the list below lets the user
+            // reorder afterwards, so no need to guess an insertion segment.
+            this.editWaypoints.push([latlng.lat, latlng.lng]);
+            this.redrawEdit();
+        },
+
+        moveWaypoint(idx, dir) {
+            const j = idx + dir;
+            if (j < 0 || j >= this.editWaypoints.length) {
+                return;
+            }
+            const tmp = this.editWaypoints[idx];
+            this.editWaypoints[idx] = this.editWaypoints[j];
+            this.editWaypoints[j] = tmp;
+            this.redrawEdit();
+        },
+
+        removeWaypointAt(idx) {
+            this.editWaypoints.splice(idx, 1);
+            this.redrawEdit();
+        },
+
+        fmtLatLng(p) {
+            return Number(p[0]).toFixed(6) + ', ' + Number(p[1]).toFixed(6);
         },
 
         editFullPoints() {

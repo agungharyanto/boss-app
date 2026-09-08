@@ -1921,10 +1921,32 @@ dipakai `CommissionPaymentProofController` (docblock-nya sejak v0.9.11 mencatat 
 `FiberNodePhotoController` tidak pernah ikut diperbaiki). `FiberNodePhotoControllerTest` baru.
 
 **E — Info kapasitas popup peta dipecah per arah kabel** (yang bikin "72 Core" gabungan tampak aneh —
-sebenarnya 48 core kabel masuk + 24 kabel keluar). `markerInfoPanel()['cores']` sekarang:
-`incoming_used`/`incoming_total`, `outgoing_used`/`outgoing_total`, `unused` (masuk+keluar), `total`
-(masuk+keluar). Panel: "Kabel Masuk: X/total terpakai", "Kabel Keluar: Y/total", "Core tidak terpakai
-(masuk+keluar): Z", "Total core (masuk+keluar): T".
+sebenarnya 48 core kabel masuk + 24 kabel keluar). *Direvisi lagi di Revisi 4 B — lihat di bawah.*
+
+### Revisi 4 (review Agung terhadap hasil Revisi 3)
+
+**A — Dropdown "Tube / Core sisi masuk" kelihatan cuma 0-1 opsi — AKAR MASALAH: bukan `<select>` collapsed,
+tapi genuinely 0 core tersedia.** `spliceCoreOptions()` + `FiberCoreSpliceService::assertValid()` menolak
+core yang ada di splice **mana pun (kolom mana pun, node mana pun)**. Padahal core yang di-through-splice di
+SATU ujung kabelnya (contoh riil: kabel 24-core #9 di-splice di Closure-48-Lapang sebagai sisi *keluar*)
+**masih boleh di-splice lagi di ujung SATUNYA** (di Closure perempatan Balaidesa sebagai sisi *masuk*) —
+itu multi-hop through path yang sah, dan DB memang mengizinkannya (`unique(from_fiber_core_id)` /
+`unique(to_fiber_core_id)` terpisah). **Fix**: filter/guard sekarang pakai
+`FiberCoreSpliceService::coreAlreadySplicedAtNode($coreId, $node)` — hanya blokir kalau core sudah punya
+splice **di node ini**. Node #17 riil: dropdown MASUK 0 → 24 opsi setelah fix. Label dropdown dapat teks
+**"(N core tersedia)"** + pesan amber kalau 0. Arah logic (from/to inherent dari `from_type`/`to_type`
+kabel) dikonfirmasi benar, tidak diubah.
+
+**B — Popup kapasitas peta jadi 6 kotak TOTAL terpisah** (bukan 4 kotak dengan angka gabungan
+masuk+keluar). Baris atas "Kabel Masuk": Core Terpakai / Core Cadangan / Total Core (murni kabel masuk).
+Baris bawah "Kabel Keluar": idem (murni kabel keluar). **TIDAK ada angka gabungan masuk+keluar sama
+sekali** — "core tidak terpakai gabungan" & "total gabungan" dihapus. Badge status (Longgar/Hampir
+Penuh/Penuh) dihitung **terpisah per arah** — 2 badge independen. `markerInfoPanel()`: `cores` →
+`{incoming: {used, spare, total}, outgoing: {...}}`, `capacity_incoming`, `capacity_outgoing`,
+`port_capacity` (khusus ODP, dipertahankan sebagai badge ke-3).
+
+**Test Revisi 4**: `FiberCoreSpliceServiceTest` +1 (multi-hop), `FiberNodeDetailLivewireTest` +1
+(cross-node dropdown), `FiberTopologyMapLivewireTest` (marker panel shape + 2 test).
 
 ## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile — SELESAI & DI-TAG (branch `v0.17.0-responsive-foundation`)
 

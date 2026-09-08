@@ -115,6 +115,19 @@ DB dev sudah di-`migrate` (`fiber_core_splices`) — lebih maju dari `main`.
 - Test: `FiberTopologyMapLivewireTest` (marker panel shape), `OdpEditLivewireTest` +4,
   `FiberNodeFormLivewireTest` +1, `FiberNodePhotoControllerTest` baru.
 
+**Revisi 4 (review Agung terhadap Revisi 3):**
+- **A** — AKAR MASALAH dropdown "Tube/Core sisi masuk" 0-1 opsi: `spliceCoreOptions()` +
+  `FiberCoreSpliceService::assertValid()` menolak core yang ada di splice **mana pun** (node mana pun),
+  padahal core through-spliced di satu ujung kabel masih boleh di-splice di ujung satunya (multi-hop, DB
+  mengizinkan via `unique(from_)`/`unique(to_)` terpisah). Fix: `coreAlreadySplicedAtNode($coreId, $node)`
+  — cuma blokir kalau core sudah spliced **di node ini**. Contoh riil: dropdown MASUK 0 → 24. + label
+  "(N core tersedia)" + pesan amber kalau 0.
+- **B** — popup kapasitas peta: 6 kotak TOTAL terpisah (Kabel Masuk: Terpakai/Cadangan/Total; Kabel
+  Keluar: idem), **tanpa angka gabungan masuk+keluar sama sekali** (dihapus). Badge status per arah (2
+  badge independen). `markerInfoPanel()['cores']` → `{incoming:{used,spare,total}, outgoing:{...}}` +
+  `capacity_incoming`/`capacity_outgoing` + `port_capacity` (ODP).
+- Test: `FiberCoreSpliceServiceTest` +1, `FiberNodeDetailLivewireTest` +1, `FiberTopologyMapLivewireTest` +2.
+
 ## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile (merged `develop`→`main`, tagged `v0.17.0`)
 
 Scope dipersempit dari "profesionalisasi tampilan menyeluruh" jadi **responsivitas mobile bertahap**,

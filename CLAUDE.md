@@ -8754,6 +8754,22 @@ E `FiberTopologyService::swapCorePorts()` + field cari di "Assign Port ke Core";
   dikerjakan, STOP & lapor.** Investigasi titik sentuh `fiber_cable.to_type`/`to_id` selesai (lihat
   laporan). Menunggu konfirmasi Agung untuk desain final sebelum eksekusi.
 
+**Revisi 4 (review Agung terhadap Revisi 3, commit `cb5d223`)**:
+- **A — bug filter core splice "sudah dipakai".** `FiberCoreSpliceService::coreAlreadySpliced()` (cek core
+  di splice mana pun, kolom mana pun) diganti **`coreAlreadySplicedAtNode($coreId, $node)`** (cek `where
+  splice_node_* = node` + either column). Dipakai `assertValid()` DAN
+  `FiberNodeDetail::spliceCoreOptions()`. **Alasan**: sebuah core boleh di-through-splice di KEDUA ujung
+  kabelnya (multi-hop path: cableA -(node X)- cableB -(node Y)- cableC). DB sudah membatasi ke sekali-per-
+  kolom via `unique(from_fiber_core_id)`/`unique(to_fiber_core_id)` terpisah — filter lama lebih ketat
+  dari yang diperlukan & menyembunyikan semua core yang sudah di-splice di ujung lain. Dropdown "Tube /
+  Core sisi masuk/keluar" dapat label "(N core tersedia)" + pesan amber kalau 0. `test_rejects_a_core_that_is_already_spliced_on_either_side`
+  tetap hijau (core yang spliced sebagai `to_` di node X tetap ditolak untuk splice lagi DI node X).
+- **B — popup kapasitas peta 6 kotak.** `markerInfoPanel()['cores']` **shape berubah lagi**:
+  `{incoming: {used, spare, total}, outgoing: {used, spare, total}}` — TANPA `unused`/`total` gabungan
+  (Revisi 3 E punya `incoming_used`/`unused`/dll flat + `capacity` gabungan; Revisi 4 hapus semua angka
+  gabungan). + `capacity_incoming` / `capacity_outgoing` (badge per arah) + `port_capacity` (khusus ODP,
+  nullable).
+
 **Revisi poin D (ODP di form `FiberNodeForm` "Titik Baru") — SELESAI (commit terpisah, 10 keputusan
 dikonfirmasi Agung).** "ODP" jadi opsi Tipe Titik **hanya saat create** (`@if ($fiberNodeId === null)`;
 `nodeType` rule `Rule::in` tolak 'odp' saat edit + guard `save()`). Field kondisional Tipe=ODP: `odpCode`

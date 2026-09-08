@@ -43,8 +43,11 @@
 //     (bukan instance ke-2 di WCD.1). Diverifikasi 2026-09-07 dari
 //     template CMDCA21C01E7 (di-konfig manual: WAN1 PPPoE VID 111 +
 //     WAN2 bridge VID 172 + multi-SSID). GUARD idempoten CT-COM SUDAH
-//     dites ke device asli; PROVISIONING WAN BARU CT-COM belum (butuh
-//     device fresh) — lihat komentar per-cabang.
+//     dites ke device asli (skip semua). PROVISIONING WAN BARU CT-COM ke
+//     device FRESH = **KNOWN BUG** (instance number hardcoded `.1`,
+//     device bikin di `.2` → `preset_loop`). VERIFIED BROKEN pada
+//     CMDCA473F158 2026-09-08 — lihat blok "KNOWN BUG" tepat sebelum
+//     definisi ctcFreeWcd(). Fitur DISABLED by default, AMAN untuk fleet.
 //
 // IDEMPOTEN — cek BERDASARKAN ISI, bukan posisi:
 //   WAN1: skip kalau SUDAH ada WANPPPConnection.*.1.Username terisi di
@@ -95,6 +98,44 @@ if (enabled) {
   const isCTCom = !isHuawei && !isCMCC && !isZTEGeneric && ctcUser.size && ctcUser.value[0] !== undefined;
 
   const wanDevicePath = "InternetGatewayDevice.WANDevice.1";
+
+  // ══════════════════════════════════════════════════════════════════════
+  // KNOWN BUG — cabang isCTCom PROVISIONING (WAN1 + WAN2): instance number
+  // WANPPPConnection di-HARDCODE `.1` (lihat `const basePath = ...".1"`).
+  // Device CT-COM nyata bisa membuat instance di nomor MANA PUN (mis. `.2`)
+  // setelah `declare("${path}.*", null, { path: 1 })` — nomor instance
+  // TR-069 di objek dinamis TIDAK stabil/berurutan (persis gotcha yang
+  // sudah dicatat CLAUDE.md untuk Hosts.Host.{n}, v0.7.6).
+  //
+  // Akibatnya:
+  //  - Username / X_CT-COM_ServiceList / X_CT-COM_LanInterface ditulis ke
+  //    `.1` yang tidak ada → tidak pernah ter-set.
+  //  - `ctcFreeWcd()` di bawah cuma memindai instance `.1` → WCD yang sudah
+  //    kepakai (di instance `.2`) tetap terlihat "kosong" → cabang WAN1 &
+  //    WAN2 sama-sama merebut WCD yang sama, VLANIDMark ke-timpa
+  //    (wan1Vlan → wan2Vlan).
+  //  - Script re-run tiap Inform, tidak pernah konvergen → GenieACS raise
+  //    fault `preset_loop`.
+  //
+  // VERIFIED BROKEN pada CMDCA473F158 (CMDC H3-2S XPON, fw V1.1.20P1T4),
+  // 2026-09-08 — device fresh, provisioning menghasilkan 1 WANPPPConnection
+  // setengah jadi di WCD.1 instance 2 (Enable=false, Username kosong,
+  // VLANIDMark=172) + 2 fault `preset_loop` (boss-auto-wan + default).
+  //
+  // FIX yang diperlukan (belum dikerjakan):
+  //  1. Setelah `declare("${path}.*", null, { path: 1 })` + `commit()`,
+  //     RE-READ nomor instance sebenarnya (`declare("${path}.*", { value: 1 })`
+  //     lalu ambil key numerik pertama) — jangan asumsikan `.1`.
+  //  2. `ctcFreeWcd()` harus memindai SEMUA instance per WCD (pakai
+  //     `WANPPPConnectionNumberOfEntries` / `WANIPConnectionNumberOfEntries`
+  //     + loop instance), bukan cuma `.1`.
+  //  3. Retest ke device CT-COM yang sudah di-factory-reset.
+  //
+  // MITIGASI SEKARANG: fitur ini DISABLED by default
+  // (RemoteWanConfig.enabled = false → preset `boss-auto-wan` tidak dibuat,
+  // NOL device fleet kena). SN allowlist in-script (args[7]) = jaring
+  // pengaman tambahan selama fase testing. AMAN untuk fleet apa adanya.
+  // ══════════════════════════════════════════════════════════════════════
 
   // CT-COM: VLAN tiap WAN ada di X_CT-COM_WANGponLinkConfig LEVEL-WCD
   // (`WANConnectionDevice.{N}.X_CT-COM_WANGponLinkConfig.VLANIDMark`),
@@ -223,9 +264,11 @@ if (enabled) {
         //  - X_CT-COM_ServiceList = "INTERNET"
         //  - X_CT-COM_LanInterface = CSV path SSID (default SSID1+SSID5 =
         //    wifi rumah), X_CT-COM_LanInterface-DHCPEnable = true (LAN mode)
-        // BELUM DIVERIFIKASI ke device CT-COM fresh — hanya guard idempoten
-        // yang sudah dites (2026-09-07). Butuh device kosong utk uji
-        // provisioning nyata.
+        // ⚠️ VERIFIED BROKEN ke device CT-COM fresh (CMDCA473F158,
+        // 2026-09-08): `${wan1PppPath}.1` di bawah = instance hardcoded,
+        // device bikin di `.2` → writes ke `.1` hilang → `preset_loop`.
+        // Lihat blok "KNOWN BUG" sebelum ctcFreeWcd(). Guard idempoten
+        // (skip device yang sudah dikonfig) sudah OK.
         const w1Wcd = ctcFreeWcd();
         const wcdPath = `${wanDevicePath}.WANConnectionDevice.${w1Wcd}`;
         const wan1PppPath = `${wcdPath}.WANPPPConnection`;
@@ -397,7 +440,11 @@ if (enabled) {
       //  - X_CT-COM_ServiceList = "INTERNET"
       //  - X_CT-COM_LanInterface = SSID4+SSID8 (default "TOKEN WIFI" /
       //    hotspot bridged), X_CT-COM_LanInterface-DHCPEnable = false (WAN mode)
-      // BELUM DIVERIFIKASI ke device fresh — hanya guard idempoten yang dites.
+      // ⚠️ VERIFIED BROKEN ke device CT-COM fresh (CMDCA473F158,
+      // 2026-09-08): sama akar bugnya dengan WAN1 — `ctcFreeWcd()` cuma
+      // scan instance `.1`, jadi WCD yang WAN1 sudah pakai (di `.2`) masih
+      // terlihat kosong → WAN2 rebut WCD yang sama, VLANIDMark ke-timpa
+      // (wan1Vlan → wan2Vlan). Lihat blok "KNOWN BUG" sebelum ctcFreeWcd().
       const w2Wcd = ctcFreeWcd();
       const wcdPath = `${wanDevicePath}.WANConnectionDevice.${w2Wcd}`;
       const wan2PppPath = `${wcdPath}.WANPPPConnection`;

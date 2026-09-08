@@ -2122,7 +2122,12 @@ also no "look up WorkOrder by device serial number" endpoint —
 `index()` only filters by `status`. Both are real gaps to close as part of
 `v0.12.0`, not something to design/build yet.
 
-## GenieACS Auto-WAN Configurable + Sidebar "Remote" (branch `genieacs-auto-wan-configurable`, belum merge/tag)
+## GenieACS Auto-WAN Configurable + Sidebar "Remote" (v0.7.8 — merged/tagged 2026-09-08)
+
+**Di-merge dengan fitur Auto-WAN BELUM sempurna tapi AMAN** — `RemoteWanConfig.enabled = false` by
+default → preset `boss-auto-wan` TIDAK dibuat di GenieACS → NOL device fleet kena provisioning apa pun.
+Provisioning WAN baru ke device **CT-COM fresh = KNOWN BUG** (`preset_loop`, lihat bagian
+"KNOWN BUG — provisioning CT-COM fresh" di bawah). Tag `v0.7.8` = slot ROADMAP (bukan kronologis).
 
 **Folding `fix-genieacs-pppoe-provision` (Opsi A, keputusan Agung 2026-09-07)** — branch itu selesai +
 tested + DITERAPKAN LIVE ke GenieACS sejak 2026-09-02 (provision `default-pppoe` + `default-optical`
@@ -2288,6 +2293,54 @@ WAN tree device (WCD.1-4, VLAN 0/9/111/172, `testppoe`) **identik** sebelum/sesu
 provisioning ditandai eksplisit "BELUM DIVERIFIKASI" di komentar script. Setelah test, `RemoteWanConfig`
 di-revert `enabled=false` (preset dihapus, `wan2_serial_allowlist=CMDCA21C01E7` dipertahankan untuk
 re-enable cepat). `default-wan` provision tetap di GenieACS (harmless, tak direferensikan).
+
+### KNOWN BUG — provisioning CT-COM fresh (`preset_loop`), VERIFIED BROKEN `CMDCA473F158` 2026-09-08
+
+**Test provisioning WAN BARU ke device CT-COM FRESH pertama kali — GAGAL.** Modem test `CMDCA473F158`
+(CMDC `H3-2S XPON`, fw `V1.1.20P1T4`, di ro-hotspot VLAN9) bootstrap ke GenieACS 2026-09-07 23:52 WIB
+setelah Agung memperbaiki ACS URL modem (dia sempat isi `https://genieacs.bajastu.id` — SALAH; harus
+`http://genieacs.bajastu.id:7547`, HTTP + port 7547, karena 443 = web UI BOSS App, genieacs-cwmp HTTP-only
+di 7547 via nginx stream). Setelah URL benar + `docker compose restart genieacs-cwmp` (preset `boss-auto-wan`
+= dokumen baru, butuh masuk cache worker), preset **mengeksekusi `SetParameterValues` ke device** — jadi
+jalur end-to-end (URL benar → Inform → preset kena → tulis config) **TERBUKTI berfungsi**.
+
+**Tapi cabang CT-COM stuck `preset_loop`** (2 fault: `boss-auto-wan` + `default`, retries=6). Root cause:
+**nomor instance `WANPPPConnection` di-HARDCODE `.1`** di cabang `isCTCom` (`const basePath = "${wan1PppPath}.1"`).
+Device H3-2S CT-COM ini membuat instance di `.2` setelah `declare("${path}.*", null, { path: 1 })` —
+nomor instance TR-069 di objek dinamis TIDAK stabil/berurutan (persis gotcha `Hosts.Host.{n}` yang sudah
+dicatat di section GenieACS Connected Clients v0.7.6). Akibatnya:
+- `Username` / `X_CT-COM_ServiceList` / `X_CT-COM_LanInterface` ditulis ke `.1` yang tidak ada → tidak
+  pernah ter-set (semua kosong di tree).
+- `ctcFreeWcd()` cuma memindai instance `.1` → WCD.1 yang sudah kepakai (di `.2`) tetap terlihat "kosong"
+  → cabang WAN1 & WAN2 sama-sama merebut WCD.1, `X_CT-COM_WANGponLinkConfig.VLANIDMark` ke-timpa
+  `wan1Vlan (10)` → `wan2Vlan (172)`.
+- Script re-run tiap Inform, tidak pernah konvergen → GenieACS raise `preset_loop`.
+
+**Kondisi device sekarang** (setelah mitigasi): WAN TR-069 manajemen (WCD.2, `WANIPConnection.1` Name
+`1_TR069_R_VID_9`, DHCP VLAN 9, IP `10.1.16.43`, GW `10.1.16.1`, `X_CT-COM_ServiceList=TR069`, `Connected`,
+uptime ~7 jam) **UTUH, tidak tersentuh**. WCD.1 = 1 `WANPPPConnection.2` setengah jadi (`Enable=false`,
+`Username=""`, `X_CT-COM_ServiceList=""`, `VLANIDMark=172`, `ConnectionStatus=Unconfigured`) — sampah, tapi
+tidak lewat traffic (disabled). **WAN1 (PPPoE internet VLAN 10) TIDAK terbentuk; WAN2 bridge TIDAK
+terbentuk.** 500 di admin lokal modem (`10.1.16.43/start.ghtml`, template `net_lanmode_t.gch`) kemungkinan
+besar TERKAIT (tulisan berulang ke param LAN-binding + pembuatan multi-WAN meninggalkan config LAN-mode
+di state yang template web modem sendiri tidak bisa render) — tidak bisa 100% dipastikan.
+
+**Mitigasi yang sudah dilakukan (nol perubahan kode, reversible)**: `RemoteWanConfig.enabled=false` →
+`GenieAcsPresetService::syncAutoWanConfig()` → `DELETE /presets/boss-auto-wan` (preset dihapus dari
+GenieACS, NOL device kena); 2 fault `preset_loop` dihapus via `DELETE /faults/<id>` (supaya preset
+`default` lanjut normal untuk device ini); `wan1/wan2_serial_allowlist=CMDCA473F158` DIPERTAHANKAN untuk
+re-enable cepat setelah fix; provision `default-wan` tetap di GenieACS (harmless).
+
+**FIX yang diperlukan (belum dikerjakan — butuh device CT-COM yang sudah di-factory-reset untuk retest)**:
+1. Setelah `declare("${path}.*", null, { path: 1 })` + `commit()`, **RE-READ nomor instance sebenarnya**
+   (`declare("${path}.*", { value: 1 })` lalu ambil key numerik pertama) — jangan asumsi `.1`.
+2. `ctcFreeWcd()` harus memindai SEMUA instance per WCD (pakai `WANPPPConnectionNumberOfEntries` /
+   `WANIPConnectionNumberOfEntries` + loop instance), bukan cuma `.1`.
+3. Retest ke device CT-COM fresh; verifikasi WAN1 (PPPoE VLAN 10) + WAN2 (bridge VLAN target) terbentuk +
+   guard idempoten skip di Inform berikutnya + NOL `preset_loop`.
+
+Blok komentar "KNOWN BUG" lengkap ada di `app/resources/genieacs/default-wan.js` tepat sebelum definisi
+`ctcFreeWcd()`, plus penanda `⚠️ VERIFIED BROKEN` di kedua cabang provisioning (WAN1 & WAN2).
 
 ## Network Navigation Restructure & OLT Credential Registry (v0.8.1)
 

@@ -19,8 +19,10 @@ use InvalidArgumentException;
  *   - the two cores must be on DIFFERENT cables
  *   - each core's cable must actually touch $node (either end) — a splice
  *     only makes physical sense where both cables terminate
- *   - neither core may already be in a splice (on either side) — the
- *     per-column DB UNIQUE is only a partial backstop for this
+ *   - neither core may already be in a splice AT THIS NODE (Revisi 4 A —
+ *     a core CAN still be spliced at its cable's other end, a multi-hop
+ *     through path; the DB's separate unique(from_)/unique(to_) indexes
+ *     cap it at once-per-column)
  *   - loss_db, if given, must be >= 0
  */
 class FiberCoreSpliceService
@@ -84,8 +86,16 @@ class FiberCoreSpliceService
                 throw new InvalidArgumentException("Core sisi \"{$side}\" bukan dari kabel yang terhubung ke titik ini.");
             }
 
-            if ($this->coreAlreadySpliced($core->id)) {
-                throw new InvalidArgumentException("Core sisi \"{$side}\" sudah tersambung ke core lain — lepas dulu splice yang lama.");
+            // v0.16.1 Revisi 4 A — a core may only be spliced ONCE AT A
+            // GIVEN NODE. It CAN still be spliced at its cable's OTHER end
+            // (a multi-hop through path: cable A core -(node X)- cable B
+            // core -(node Y)- cable C core). The old check rejected a core
+            // that was in ANY splice on either side, which wrongly hid
+            // every already-through-spliced core from the next node's
+            // dropdown. The DB's own separate unique(from_)/unique(to_)
+            // indexes are what actually cap it at once-per-column.
+            if ($this->coreAlreadySplicedAtNode($core->id, $node)) {
+                throw new InvalidArgumentException("Core sisi \"{$side}\" sudah tersambung ke core lain di titik ini — lepas dulu splice yang lama.");
             }
         }
 
@@ -120,11 +130,12 @@ class FiberCoreSpliceService
             || ($cable->to_type === $node::class && (int) $cable->to_id === $node->id);
     }
 
-    private function coreAlreadySpliced(int $coreId): bool
+    public function coreAlreadySplicedAtNode(int $coreId, FiberNode|Odp $node): bool
     {
         return FiberCoreSplice::query()
-            ->where('from_fiber_core_id', $coreId)
-            ->orWhere('to_fiber_core_id', $coreId)
+            ->where('splice_node_type', $node::class)
+            ->where('splice_node_id', $node->id)
+            ->where(fn ($q) => $q->where('from_fiber_core_id', $coreId)->orWhere('to_fiber_core_id', $coreId))
             ->exists();
     }
 }

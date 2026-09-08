@@ -478,16 +478,26 @@ class FiberTopologyMapLivewireTest extends TestCase
             ->test(FiberTopologyMap::class)
             ->call('openMarkerPanel', 'fiber_node', $otb->id)
             ->assertSet('markerPanel.kind', 'fiber_node')
-            ->assertSet('markerPanel.cores.incoming_used', 0)
-            ->assertSet('markerPanel.cores.incoming_total', 0)
-            ->assertSet('markerPanel.cores.outgoing_used', 1)
-            ->assertSet('markerPanel.cores.outgoing_total', 4)
-            ->assertSet('markerPanel.cores.unused', 3)
-            ->assertSet('markerPanel.cores.total', 4)
-            ->assertSet('markerPanel.capacity.label', 'longgar')
+            // 6-box shape: incoming + outgoing each {used, spare, total}
+            ->assertSet('markerPanel.cores.incoming.used', 0)
+            ->assertSet('markerPanel.cores.incoming.spare', 0)
+            ->assertSet('markerPanel.cores.incoming.total', 0)
+            ->assertSet('markerPanel.cores.outgoing.used', 1)
+            ->assertSet('markerPanel.cores.outgoing.spare', 3)
+            ->assertSet('markerPanel.cores.outgoing.total', 4)
+            // NO combined figure at all
+            ->assertSet('markerPanel.cores.total', null)
+            ->assertSet('markerPanel.cores.unused', null)
+            // two independent badges
+            ->assertSet('markerPanel.capacity_incoming.label', 'kapasitas tidak diketahui')  // 0/0
+            ->assertSet('markerPanel.capacity_outgoing.label', 'longgar')                     // 25%
+            ->assertSet('markerPanel.capacity_outgoing.percent', 25)
             ->assertSet('markerPanel.photo_caption', 'Panel depan OTB')
             ->assertSee('Kabel Masuk')
             ->assertSee('Kabel Keluar')
+            ->assertSee('Core Terpakai')
+            ->assertSee('Core Cadangan')
+            ->assertDontSee('masuk + keluar')
             ->assertSee('Lihat Detail Lengkap')
             ->assertSeeHtml(route('web.fiber-nodes.detail', $otb->id));
     }
@@ -517,15 +527,17 @@ class FiberTopologyMapLivewireTest extends TestCase
         Livewire::actingAs($this->admin($tenant))
             ->test(FiberTopologyMap::class)
             ->call('openMarkerPanel', 'fiber_node', $closure->id)
-            ->assertSet('markerPanel.cores.incoming_used', 2)
-            ->assertSet('markerPanel.cores.incoming_total', 12)
-            ->assertSet('markerPanel.cores.outgoing_used', 0)
-            ->assertSet('markerPanel.cores.outgoing_total', 4)
-            ->assertSet('markerPanel.cores.unused', 14)   // (12-2) + (4-0)
-            ->assertSet('markerPanel.cores.total', 16);
+            ->assertSet('markerPanel.cores.incoming.used', 2)
+            ->assertSet('markerPanel.cores.incoming.spare', 10)
+            ->assertSet('markerPanel.cores.incoming.total', 12)
+            ->assertSet('markerPanel.cores.outgoing.used', 0)
+            ->assertSet('markerPanel.cores.outgoing.spare', 4)
+            ->assertSet('markerPanel.cores.outgoing.total', 4)
+            // NEVER a masuk+keluar sum
+            ->assertSet('markerPanel.cores.total', null);
     }
 
-    public function test_open_marker_panel_for_an_odp_uses_port_capacity(): void
+    public function test_open_marker_panel_for_an_odp_keeps_the_port_capacity_badge(): void
     {
         $tenant = Tenant::factory()->create();
         $odp = Odp::factory()->create(['tenant_id' => $tenant->id, 'total_ports' => 8, 'latitude' => -6.2, 'longitude' => 106.8]);
@@ -537,9 +549,19 @@ class FiberTopologyMapLivewireTest extends TestCase
             ->call('openMarkerPanel', 'odp', $odp->id)
             ->assertSet('markerPanel.kind', 'odp')
             ->assertSet('markerPanel.subtitle', 'ODP')
-            ->assertSet('markerPanel.capacity.used', 7)
-            ->assertSet('markerPanel.capacity.total', 8)
-            ->assertSet('markerPanel.capacity.label', 'penuh'); // 88% > 80
+            ->assertSet('markerPanel.port_capacity.used', 7)
+            ->assertSet('markerPanel.port_capacity.total', 8)
+            ->assertSet('markerPanel.port_capacity.label', 'penuh'); // 88% > 80
+    }
+
+    public function test_open_marker_panel_for_a_fiber_node_has_no_port_capacity(): void
+    {
+        [$tenant, $cable] = $this->cableWithCores();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(FiberTopologyMap::class)
+            ->call('openMarkerPanel', 'fiber_node', $cable->from_id)
+            ->assertSet('markerPanel.port_capacity', null);
     }
 
     public function test_close_marker_panel_clears_it(): void

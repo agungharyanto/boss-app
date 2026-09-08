@@ -375,8 +375,11 @@ class FiberNodeDetail extends Component
     }
 
     /**
-     * Cores of $cableId that are NOT already in a splice — the options
-     * for one side of the "Sambungkan" form.
+     * Cores of $cableId that are NOT already spliced AT THIS NODE — the
+     * options for one side of the "Sambungkan" form. v0.16.1 Revisi 4 A —
+     * a core that was through-spliced at its cable's OTHER end is still
+     * offered here (that's a valid multi-hop path), it's only hidden once
+     * it has a splice at THIS node.
      *
      * @return list<array{id: int, label: string}>
      */
@@ -388,16 +391,12 @@ class FiberNodeDetail extends Component
             return [];
         }
 
-        $takenIds = FiberCoreSplice::query()
-            ->where(fn ($q) => $q->whereIn('from_fiber_core_id', $cable->cores->pluck('id'))
-                ->orWhereIn('to_fiber_core_id', $cable->cores->pluck('id')))
-            ->get()
-            ->flatMap(fn (FiberCoreSplice $s) => [$s->from_fiber_core_id, $s->to_fiber_core_id])
-            ->all();
+        $spliceService = app(FiberCoreSpliceService::class);
+        $node = $this->target();
 
         return $cable->cores
             ->sortBy(['tube_number', 'core_number_in_tube'])
-            ->reject(fn (FiberCore $c) => in_array($c->id, $takenIds, true))
+            ->reject(fn (FiberCore $c) => $spliceService->coreAlreadySplicedAtNode($c->id, $node))
             ->map(fn (FiberCore $c) => [
                 'id' => $c->id,
                 // v0.16.1 Revisi B — full "Tube N (Warna) / Core M (Warna)"

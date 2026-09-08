@@ -1741,8 +1741,10 @@ class FiberTopologyService
      * @return array{
      *   kind: string, id: int, title: string, subtitle: string,
      *   photo_url: ?string, photo_caption: ?string,
-     *   cores: array{incoming_used: int, incoming_total: int, outgoing_used: int, outgoing_total: int, unused: int, total: int},
-     *   capacity: array{percent: ?int, label: string, color: string, used: int, total: int},
+     *   cores: array{incoming: array{used: int, spare: int, total: int}, outgoing: array{used: int, spare: int, total: int}},
+     *   capacity_incoming: array{percent: ?int, label: string, color: string},
+     *   capacity_outgoing: array{percent: ?int, label: string, color: string},
+     *   port_capacity: null|array{percent: ?int, label: string, color: string, used: int, total: int},
      *   detail_url: string
      * }|null
      */
@@ -1758,37 +1760,33 @@ class FiberTopologyService
             return null;
         }
 
-        // v0.16.1 Revisi 3 E — split the core count by cable DIRECTION.
-        // The old combined figure ("72 core" = 48 masuk + 24 keluar) read
-        // as a bug even though it wasn't — a Closure legitimately has an
-        // incoming feeder cable AND outgoing distribution cables.
+        // v0.16.1 Revisi 3 E / Revisi 4 B — core counts are kept STRICTLY
+        // separate by cable direction: no masuk+keluar sum anywhere (the
+        // combined "72 core" figure only ever confused). A Closure
+        // legitimately has an incoming feeder AND outgoing distribution
+        // cables; each gets its own 3 boxes + its own traffic-light badge.
         $sumCores = function ($ids): array {
             $statuses = FiberCore::query()->whereIn('fiber_cable_id', $ids)->pluck('status');
+            $used = $statuses->filter(fn ($s) => $s === FiberCoreStatus::Used)->count();
+            $total = $statuses->count();
 
-            return [
-                'used' => $statuses->filter(fn ($s) => $s === FiberCoreStatus::Used)->count(),
-                'total' => $statuses->count(),
-            ];
+            return ['used' => $used, 'spare' => $total - $used, 'total' => $total];
         };
 
         $in = $sumCores($node->cablesAsTo()->pluck('id'));
         $out = $sumCores($node->cablesAsFrom()->pluck('id'));
 
-        $coreTotal = $in['total'] + $out['total'];
-        $coreUsed = $in['used'] + $out['used'];
+        $zoneFor = function (array $side): array {
+            $percent = $side['total'] > 0 ? (int) round($side['used'] / $side['total'] * 100) : null;
+            $zone = $this->capacityZone($percent);
 
-        $cores = [
-            'incoming_used' => $in['used'],
-            'incoming_total' => $in['total'],
-            'outgoing_used' => $out['used'],
-            'outgoing_total' => $out['total'],
-            'unused' => ($in['total'] - $in['used']) + ($out['total'] - $out['used']),
-            'total' => $coreTotal,
-        ];
+            return ['percent' => $percent, 'label' => $zone['label'], 'color' => $zone['color']];
+        };
 
+        $portCapacity = null;
         if ($kind === 'odp') {
             $cap = $this->odpCapacities()->get($id);
-            $capacity = $cap === null
+            $portCapacity = $cap === null
                 ? ['percent' => null, 'label' => $this->capacityZone(null)['label'], 'color' => $this->capacityZone(null)['color'], 'used' => 0, 'total' => 0]
                 : ['percent' => $cap['percent'], 'label' => $cap['zone_label'], 'color' => $cap['zone_color'], 'used' => $cap['used'], 'total' => $cap['total']];
 
@@ -1796,10 +1794,6 @@ class FiberTopologyService
             $subtitle = 'ODP';
             $detailUrl = route('web.odps.detail', $node->id);
         } else {
-            $percent = $coreTotal > 0 ? (int) round($coreUsed / $coreTotal * 100) : null;
-            $zone = $this->capacityZone($percent);
-            $capacity = ['percent' => $percent, 'label' => $zone['label'], 'color' => $zone['color'], 'used' => $coreUsed, 'total' => $coreTotal];
-
             $title = $node->local_label ?? $node->node_type->label();
             $subtitle = $node->node_type->label();
             $detailUrl = route('web.fiber-nodes.detail', $node->id);
@@ -1814,8 +1808,10 @@ class FiberTopologyService
             'subtitle' => $subtitle,
             'photo_url' => $photo === null ? null : route('web.fiber-node-photos.show', $photo->id),
             'photo_caption' => $photo?->caption,
-            'cores' => $cores,
-            'capacity' => $capacity,
+            'cores' => ['incoming' => $in, 'outgoing' => $out],
+            'capacity_incoming' => $zoneFor($in),
+            'capacity_outgoing' => $zoneFor($out),
+            'port_capacity' => $portCapacity,
             'detail_url' => $detailUrl,
         ];
     }

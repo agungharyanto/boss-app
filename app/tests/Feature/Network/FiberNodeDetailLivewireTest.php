@@ -514,7 +514,43 @@ class FiberNodeDetailLivewireTest extends TestCase
             ->set('spliceCableA', (string) $cableA->id)
             ->assertSee('Tube 1 (Biru) / Core 1 (Biru)')
             ->assertSee('Tube 1 (Biru) / Core 2 (Orange)')
-            ->assertDontSee('T1/C1 (Biru)');
+            ->assertDontSee('T1/C1 (Biru)')
+            // v0.16.1 Revisi 4 A — "(N core tersedia)" hint
+            ->assertSee('(4 core tersedia)');
+    }
+
+    public function test_revisi4_a_a_core_through_spliced_at_another_node_is_still_offered_here(): void
+    {
+        $tenant = Tenant::factory()->create();
+        // closure <-(cableA)- otb ;  closure -(cableB)-> $b(odc)
+        [$closure, $cableA, $cableB] = $this->closureWithTwoCables($tenant);
+        $b = FiberNode::find($cableB->to_id); // odc — cableB is INCOMING here
+
+        // give $b an outgoing cable so the splice form shows at all
+        $topo = app(FiberTopologyService::class);
+        $down = FiberNode::factory()->create(['tenant_id' => $tenant->id, 'node_type' => 'odc', 'port_count' => null]);
+        $cableC = $topo->createCable([
+            'tenant_id' => $tenant->id,
+            'from_type' => FiberNode::class, 'from_id' => $b->id,
+            'to_type' => FiberNode::class, 'to_id' => $down->id,
+            'total_cores' => 4, 'tube_count' => 2, 'cores_per_tube' => 2,
+        ]);
+
+        // through-splice EVERY cableB core at the closure (as the `to_`/keluar side)
+        foreach ($cableB->cores as $i => $bc) {
+            app(FiberCoreSpliceService::class)
+                ->createSplice($closure->fresh(), $cableA->cores[$i], $bc);
+        }
+
+        // at node $b, cableB is incoming — all 4 cores must still be
+        // available even though they're all spliced at the closure.
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(FiberNodeDetail::class, ['fiber_node' => $b->fresh()])
+            ->set('spliceCableA', (string) $cableB->id)
+            ->set('spliceCableB', (string) $cableC->id);
+
+        $this->assertCount(4, $component->viewData('spliceCoreAOptions'));
+        $component->assertSee('(4 core tersedia)');
     }
 
     public function test_revisi_c_delete_cable_removes_the_cable_and_its_cores(): void

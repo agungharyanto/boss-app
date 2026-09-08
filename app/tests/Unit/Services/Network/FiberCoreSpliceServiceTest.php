@@ -3,6 +3,7 @@
 namespace Tests\Unit\Services\Network;
 
 use App\Models\FiberCable;
+use App\Models\FiberCoreSplice;
 use App\Models\FiberNode;
 use App\Models\Odp;
 use App\Models\Tenant;
@@ -118,13 +119,43 @@ class FiberCoreSpliceServiceTest extends TestCase
             $this->assertStringContainsString('sudah tersambung', $e->getMessage());
         }
 
-        // b1 is the `to` of the existing row — reusing it on the `from` side must also fail
+        // b1 is the `to` of the existing row — reusing it AT THIS NODE on
+        // the `from` side must also fail
         try {
             $this->service->createSplice($closure, $b1, $a2);
-            $this->fail('expected reject: b1 already spliced');
+            $this->fail('expected reject: b1 already spliced at this node');
         } catch (InvalidArgumentException $e) {
             $this->assertStringContainsString('sudah tersambung', $e->getMessage());
         }
+    }
+
+    public function test_revisi4_a_a_through_spliced_core_can_be_spliced_again_at_its_cables_other_end(): void
+    {
+        // otb -(cableA)- closure -(cableB)- odp -(cableC)- downstream
+        [$closure, $cableA, $cableB] = $this->nodeWithTwoCables();
+        $odp = Odp::withoutGlobalScopes()->findOrFail($cableB->to_id); // cableB runs closure -> odp
+
+        $downstream = FiberNode::factory()->create(['tenant_id' => $closure->tenant_id, 'node_type' => 'odc', 'port_count' => null]);
+        $cableC = app(FiberTopologyService::class)->createCable([
+            'tenant_id' => $closure->tenant_id,
+            'from_type' => Odp::class, 'from_id' => $odp->id,
+            'to_type' => FiberNode::class, 'to_id' => $downstream->id,
+            'total_cores' => 4, 'tube_count' => 2, 'cores_per_tube' => 2,
+        ]);
+
+        $aCore = $cableA->cores()->first();
+        $bCore = $cableB->cores()->first();
+        $cCore = $cableC->cores()->first();
+
+        // hop 1 — splice at the closure: cableA (masuk) -> cableB (keluar)
+        $this->service->createSplice($closure, $aCore, $bCore);
+
+        // hop 2 — at the ODP, cableB is masuk, cableC is keluar. bCore is
+        // already `to_` in the closure splice; that must NOT block it here.
+        $splice = $this->service->createSplice($odp, $bCore->fresh(), $cCore);
+
+        $this->assertDatabaseHas('fiber_core_splices', ['id' => $splice->id, 'from_fiber_core_id' => $bCore->id]);
+        $this->assertSame(2, FiberCoreSplice::count());
     }
 
     public function test_rejects_a_node_that_no_cable_of_the_core_touches(): void

@@ -506,13 +506,21 @@
                             @error('spliceCableA') <span class="block text-xs text-red-600">{{ $message }}</span> @enderror
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-gray-700">{{ __('Tube / Core sisi masuk') }}</label>
+                            <label class="block text-xs font-medium text-gray-700">
+                                {{ __('Tube / Core sisi masuk') }}
+                                @if ($spliceCableA !== '')
+                                    <span class="text-gray-400 font-normal">({{ count($spliceCoreAOptions) }} {{ __('core tersedia') }})</span>
+                                @endif
+                            </label>
                             <select wire:model="spliceCoreA" @disabled($spliceCableA === '') class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm disabled:bg-gray-100">
                                 <option value="">{{ $spliceCableA === '' ? __('pilih kabel dulu') : __('-- Pilih core --') }}</option>
                                 @foreach ($spliceCoreAOptions as $opt)
                                     <option value="{{ $opt['id'] }}">{{ $opt['label'] }}</option>
                                 @endforeach
                             </select>
+                            @if ($spliceCableA !== '' && count($spliceCoreAOptions) === 0)
+                                <span class="block text-xs text-amber-600 mt-1">{{ __('Semua core kabel ini sudah dipakai splice lain di titik ini.') }}</span>
+                            @endif
                             @error('spliceCoreA') <span class="block text-xs text-red-600">{{ $message }}</span> @enderror
                         </div>
                         <div>
@@ -528,13 +536,21 @@
                             @error('spliceCableB') <span class="block text-xs text-red-600">{{ $message }}</span> @enderror
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-gray-700">{{ __('Tube / Core sisi keluar') }}</label>
+                            <label class="block text-xs font-medium text-gray-700">
+                                {{ __('Tube / Core sisi keluar') }}
+                                @if ($spliceCableB !== '')
+                                    <span class="text-gray-400 font-normal">({{ count($spliceCoreBOptions) }} {{ __('core tersedia') }})</span>
+                                @endif
+                            </label>
                             <select wire:model="spliceCoreB" @disabled($spliceCableB === '') class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm disabled:bg-gray-100">
                                 <option value="">{{ $spliceCableB === '' ? __('pilih kabel dulu') : __('-- Pilih core --') }}</option>
                                 @foreach ($spliceCoreBOptions as $opt)
                                     <option value="{{ $opt['id'] }}">{{ $opt['label'] }}</option>
                                 @endforeach
                             </select>
+                            @if ($spliceCableB !== '' && count($spliceCoreBOptions) === 0)
+                                <span class="block text-xs text-amber-600 mt-1">{{ __('Semua core kabel ini sudah dipakai splice lain di titik ini.') }}</span>
+                            @endif
                             @error('spliceCoreB') <span class="block text-xs text-red-600">{{ $message }}</span> @enderror
                         </div>
                         <div>

@@ -224,48 +224,53 @@
                     </div>
                 @endif
 
-                {{-- Ringkasan core per ARAH kabel (bukan tabel penuh). --}}
+                {{-- v0.16.1 Revisi 4 B — kapasitas core dipecah TOTAL per
+                     arah kabel: 3 kotak "Kabel Masuk" + 3 kotak "Kabel
+                     Keluar", tidak ada angka gabungan masuk+keluar sama
+                     sekali. Badge status juga terpisah per arah. --}}
                 @php($cr = $markerPanel['cores'])
-                <dl class="rounded-md border border-gray-200 divide-y divide-gray-100 text-xs">
-                    <div class="flex items-center justify-between px-3 py-2">
-                        <dt class="text-gray-500">{{ __('Kabel Masuk') }}</dt>
-                        <dd class="text-gray-800 font-medium">{{ $cr['incoming_used'] }} / {{ $cr['incoming_total'] }} {{ __('core terpakai') }}</dd>
+                @foreach ([['Kabel Masuk', $cr['incoming'], $markerPanel['capacity_incoming']], ['Kabel Keluar', $cr['outgoing'], $markerPanel['capacity_outgoing']]] as [$dirLabel, $side, $zone])
+                    <div class="space-y-2">
+                        <div class="flex items-center gap-2">
+                            <p class="text-xs font-semibold uppercase text-gray-400">{{ __($dirLabel) }}</p>
+                            <span class="inline-flex items-center gap-1 text-[11px]">
+                                <span class="w-2.5 h-2.5 rounded-full border border-black/10" style="background-color: {{ $zone['color'] }};" aria-hidden="true"></span>
+                                <span class="capitalize text-gray-600">{{ $zone['label'] }}</span>
+                                @if (! is_null($zone['percent']))
+                                    <span class="text-gray-400">&middot; {{ $zone['percent'] }}%</span>
+                                @endif
+                            </span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2 text-center">
+                            <div class="rounded-md border border-gray-200 p-2">
+                                <p class="text-base font-semibold text-gray-800">{{ $side['used'] }}</p>
+                                <p class="text-[11px] text-gray-500">{{ __('Core Terpakai') }}</p>
+                            </div>
+                            <div class="rounded-md border border-gray-200 p-2">
+                                <p class="text-base font-semibold text-gray-800">{{ $side['spare'] }}</p>
+                                <p class="text-[11px] text-gray-500">{{ __('Core Cadangan') }}</p>
+                            </div>
+                            <div class="rounded-md border border-gray-200 p-2">
+                                <p class="text-base font-semibold text-gray-800">{{ $side['total'] }}</p>
+                                <p class="text-[11px] text-gray-500">{{ __('Total Core') }}</p>
+                            </div>
+                        </div>
                     </div>
-                    <div class="flex items-center justify-between px-3 py-2">
-                        <dt class="text-gray-500">{{ __('Kabel Keluar') }}</dt>
-                        <dd class="text-gray-800 font-medium">{{ $cr['outgoing_used'] }} / {{ $cr['outgoing_total'] }} {{ __('core terpakai') }}</dd>
-                    </div>
-                    <div class="flex items-center justify-between px-3 py-2">
-                        <dt class="text-gray-500">{{ __('Core tidak terpakai (masuk + keluar)') }}</dt>
-                        <dd class="text-gray-800 font-medium">{{ $cr['unused'] }}</dd>
-                    </div>
-                    <div class="flex items-center justify-between px-3 py-2 bg-gray-50">
-                        <dt class="text-gray-500">{{ __('Total core (masuk + keluar)') }}</dt>
-                        <dd class="text-gray-800 font-semibold">{{ $cr['total'] }}</dd>
-                    </div>
-                </dl>
+                @endforeach
 
-                {{-- Badge kapasitas — warna BUKAN satu-satunya sinyal:
-                     ada titik warna + label kata + angka persen/rasio. --}}
-                @php($cap = $markerPanel['capacity'])
-                <div class="flex items-center gap-2 rounded-md border border-gray-200 p-3">
-                    <span
-                        class="w-3 h-3 rounded-full shrink-0 border border-black/10"
-                        style="background-color: {{ $cap['color'] }};"
-                        aria-hidden="true"
-                    ></span>
-                    <span class="text-sm font-medium text-gray-700 capitalize">{{ $cap['label'] }}</span>
-                    <span class="ml-auto text-xs text-gray-500">
-                        @if ($markerPanel['kind'] === 'odp')
-                            {{ $cap['used'] }}/{{ $cap['total'] }} {{ __('port') }}
-                        @else
-                            {{ $cap['used'] }}/{{ $cap['total'] }} {{ __('core') }}
-                        @endif
-                        @if (! is_null($cap['percent']))
-                            &middot; {{ $cap['percent'] }}%
-                        @endif
-                    </span>
-                </div>
+                @if ($markerPanel['kind'] === 'odp' && $markerPanel['port_capacity'])
+                    @php($pc = $markerPanel['port_capacity'])
+                    <div class="flex items-center gap-2 rounded-md border border-gray-200 p-3">
+                        <span class="w-3 h-3 rounded-full shrink-0 border border-black/10" style="background-color: {{ $pc['color'] }};" aria-hidden="true"></span>
+                        <span class="text-sm font-medium text-gray-700 capitalize">{{ $pc['label'] }}</span>
+                        <span class="ml-auto text-xs text-gray-500">
+                            {{ $pc['used'] }}/{{ $pc['total'] }} {{ __('port') }}
+                            @if (! is_null($pc['percent']))
+                                &middot; {{ $pc['percent'] }}%
+                            @endif
+                        </span>
+                    </div>
+                @endif
             </div>
 
             <div class="mt-auto p-4 border-t border-gray-100">

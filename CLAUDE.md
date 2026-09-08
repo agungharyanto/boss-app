@@ -8685,12 +8685,23 @@ re-run this investigation** — the answer is: coordinates are entered going for
 `App\Livewire\Customers\CustomerCoordinateFill` (`/customers/lengkapi-koordinat`, a manual per-customer
 pin-drop that writes ONLY `latitude`/`longitude`, deliberately no ODP link) or the registration form.
 
-## v0.16.1 Topology Refinements — SELESAI, MENUNGGU VERIFIKASI MANUAL AGUNG (branch `v0.16.1-topology-refinements`, JANGAN ditinggalkan >1 sesi)
+## v0.16.1 Topology Refinements — SELESAI, MERGED + TAGGED (branch `v0.16.1-topology-refinements`, dipertahankan)
 
-**Status: seluruh scope (Bagian A-H) selesai + full regression suite 1701 hijau + Pint clean di file yang
-disentuh. BELUM di-merge/tag** — menunggu Agung cek manual di browser (BOSS-RULES: merge hanya setelah
-verifikasi manual). Branch dari `develop` di atas v0.17.0 (penomoran slot). 6 commit di atas
-`85e7a2e` (`76a929d` A / `0ce03cf` B / `a039427` C+D / `e6afc14` E / `02997cc` F / `a36f0f3` docs).
+**Status: MERGED `--no-ff` ke `develop` lalu `develop`→`main` (pola v0.16.0/v0.17.0), tag annotated
+`v0.16.1` di commit merge `develop`→`main`, pushed.** Full regression suite hijau sebelum tiap merge
+(branch: 1743 · develop pasca-merge · main pasca-merge). Verifikasi manual browser oleh Agung sepanjang
+sesi (4 putaran review+fix). Branch TIDAK dihapus (kebiasaan proyek). Semua migration DB dev sudah setara
+`main` sekarang (`fiber_core_splices`, `olt_devices.pon_port_count`).
+
+**Isi (Bagian A-H + Revisi 1-4):** fix bug OTB assign-port (`olt_pon_port_label` independen dari OLT) +
+feeder core assignable; `fiber_core_splices` polimorfik (Closure/ODC/ODP) dengan guard arah masuk↔keluar +
+multi-hop through-splice (`coreAlreadySplicedAtNode`); reorganisasi "Koneksi Core" per-tube; "Simulasi
+Port" digabung ke OTB; ODP sebagai Tipe Titik di form "Titik Baru" (create-only,
+`createOdpWithAttachments()`); edit Kode/Nama ODP di `OdpEdit`; unifikasi "Label"→"Nama Titik"; mode edit
+rute mobile (tap peta + daftar waypoint + undo); panel info marker peta (6 kotak kapasitas per arah);
+"Tukar Port" modal (Antar Core / Antar Tube); blokir hapus kabel dgn splice aktif; `olt_devices.pon_port_count`
+→ dropdown PON; **fix bug laten sejak v0.16.0: `FiberNodePhotoController` return type salah → foto passive/ODP
+tidak pernah tampil di UI mana pun**. Detail per-revisi di bawah + `CHANGELOG.md`.
 
 - **A** `FiberTopologyService` — `olt_pon_port_label` didecouple dari `olt_device_id` (bebas diisi utk
   catatan non-OLT, cuma di-null saat port di-clear); feeder core (`cablesAsTo` ke OTB) ikut assignable;
@@ -8783,8 +8794,7 @@ $photos, $splitter)`** baru: guard code kosong/duplikat → `InvalidArgumentExce
 TIDAK menyentuh `StoreOdpRequest`/`OdpController` (pola `OdpEdit`/`updateOdpTopologyFields`). Gate tetap
 `network_infrastructure.manage` (dikonfirmasi lolos tier-admin sama seperti `OdpPolicy::create`).
 
-Kalau sesi ini berakhir sebelum Agung verifikasi: closure (merge `--no-ff` → develop → full suite → main →
-tag `v0.16.1` di merge commit develop→main) HARUS dikerjakan sesi berikutnya, jangan biarkan drift.
+**Closure selesai** — merged `develop`→`main`, tag `v0.16.1` di merge commit `develop`→`main`, semua di-push.
 
 ## Migrasi whatsmeow — Baileys Resmi Pensiun (branch `migrasi-whatsmeow`, selesai 2026-09-05)
 

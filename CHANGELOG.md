@@ -3,7 +3,7 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## v0.16.1 — Topology Refinements (branch `v0.16.1-topology-refinements`, BELUM di-merge/tag — menunggu verifikasi manual Agung)
+## v0.16.1 — Topology Refinements (merged `develop`→`main`, tagged `v0.16.1`)
 
 Patch dari v0.16.0 (pola `v0.14.5.1`). Item 1-8 Agung → Bagian A-H. Branch dari `develop` di atas v0.17.0
 (penomoran slot, bukan kronologis).

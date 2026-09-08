@@ -120,8 +120,7 @@
 
     {{-- ---------- Modal Perpanjang Langganan ---------- --}}
     @if ($renewModalOpen && $renewCustomer)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" wire:click.self="closeRenew">
-            <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-5 space-y-4">
+        <x-modal wire:click.self="closeRenew" max-width="max-w-md" panel-class="rounded-lg shadow-xl p-5 space-y-4">
                 <h3 class="text-base font-semibold text-gray-800">{{ __('Perpanjang Langganan') }}</h3>
 
                 <div class="text-sm text-gray-700 space-y-1 bg-gray-50 border border-gray-200 rounded-md p-3">
@@ -241,7 +240,6 @@
                     </button>
                 </div>
                 @endif
-            </div>
-        </div>
+        </x-modal>
     @endif
 </div>

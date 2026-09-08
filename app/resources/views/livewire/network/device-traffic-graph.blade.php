@@ -36,8 +36,7 @@
     @endif
 
     @if ($showHistoryModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeHistoryModal">
-            <div class="bg-white rounded-md p-5 w-full max-w-3xl space-y-4">
+        <x-modal wire:click.self="closeHistoryModal" max-width="max-w-3xl" panel-class="rounded-md p-5 space-y-4">
                 <div class="flex items-center justify-between">
                     <h3 class="font-medium text-sm text-gray-700">{{ __('Riwayat Traffic — :interface', ['interface' => $selectedIfName]) }}</h3>
                     <button type="button" wire:click="closeHistoryModal" class="text-gray-400 hover:text-gray-600 text-sm">&#10005;</button>
@@ -59,7 +58,6 @@
                         <canvas x-ref="canvas" height="140"></canvas>
                     </div>
                 @endif
-            </div>
-        </div>
+        </x-modal>
     @endif
 </div>

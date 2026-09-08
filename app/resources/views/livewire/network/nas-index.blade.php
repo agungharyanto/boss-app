@@ -135,8 +135,7 @@
          for why this used to be conflated with nas.api_username/
          api_password and caused a real credential-rotation bug. --}}
     @if ($showProvisionApiModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeProvisionApiModal">
-            <div class="bg-white rounded-md p-6 w-full max-w-md space-y-4">
+        <x-modal wire:click.self="closeProvisionApiModal" max-width="max-w-md" panel-class="rounded-md p-6 space-y-4">
                 <h2 class="font-medium">Buat / Perbarui User API</h2>
                 <p class="text-xs text-gray-500">
                     Masukkan username &amp; password ADMIN ASLI router ini (bukan user API BOSS App).
@@ -170,8 +169,7 @@
                         Tutup
                     </button>
                 </div>
-            </div>
-        </div>
+        </x-modal>
     @endif
 
     {{-- PROFIL PELANGGAN EXPIRED MODAL (Revisi Grup Profil, Langkah 3) —
@@ -179,8 +177,7 @@
          rate-limit (local-address terbatas, remote-address kosong) —
          lihat NasService::updateExpiredIpPool()/PushExpiredProfileToMikrotikJob. --}}
     @if ($showExpiredProfileModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeExpiredProfileModal">
-            <div class="bg-white rounded-md p-6 w-full max-w-md space-y-4">
+        <x-modal wire:click.self="closeExpiredProfileModal" max-width="max-w-md" panel-class="rounded-md p-6 space-y-4">
                 <h2 class="font-medium">Profil Pelanggan Expired</h2>
                 <p class="text-xs text-gray-500">
                     Pilih IP Pool untuk fallback pelanggan yang belum/tidak bayar. Sistem akan push
@@ -207,14 +204,12 @@
                         Tutup
                     </button>
                 </div>
-            </div>
-        </div>
+        </x-modal>
     @endif
 
     {{-- v0.16 — Cek Koneksi RADIUS diagnostic --}}
     @if ($showRadiusDiagnosticModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" wire:click.self="closeRadiusDiagnosticModal">
-            <div class="bg-white rounded-md p-6 w-full max-w-lg space-y-4 max-h-[90vh] overflow-y-auto">
+        <x-modal wire:click.self="closeRadiusDiagnosticModal" max-width="max-w-lg" panel-class="rounded-md p-6 space-y-4">
                 <div class="flex items-center justify-between">
                     <h2 class="font-medium">Cek Koneksi RADIUS</h2>
                     <button wire:click="closeRadiusDiagnosticModal" type="button" class="text-sm text-gray-400 hover:text-gray-700">&times;</button>
@@ -283,8 +278,7 @@
                         <button wire:click="closeRadiusDiagnosticModal" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">Tutup</button>
                     </div>
                 @endif
-            </div>
-        </div>
+        </x-modal>
     @endif
 
     {{-- LIST --}}

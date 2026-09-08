@@ -1,7 +1,6 @@
 <div>
     @if ($showModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeModal">
-            <div class="bg-white rounded-md p-5 w-full max-w-4xl space-y-4">
+        <x-modal wire:click.self="closeModal" max-width="max-w-4xl" panel-class="rounded-md p-5 space-y-4">
                 <div class="flex items-center justify-between">
                     <h3 class="font-medium text-sm text-gray-700">{{ __('Log — :name', ['name' => $deviceName]) }}</h3>
                     <button type="button" wire:click="closeModal" class="text-gray-400 hover:text-gray-600 text-sm">&#10005;</button>
@@ -61,7 +60,6 @@
                         </table>
                     </div>
                 @endif
-            </div>
-        </div>
+        </x-modal>
     @endif
 </div>

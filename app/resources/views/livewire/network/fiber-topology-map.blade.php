@@ -14,7 +14,7 @@
 <div class="p-6 max-w-6xl mx-auto space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
         <h1 class="text-2xl font-semibold text-gray-800">{{ __('Peta Topologi') }}</h1>
-        <div class="flex items-center gap-3">
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
             <button
                 type="button"
                 wire:click="$toggle('showExportPanel')"
@@ -60,7 +60,7 @@
 
     {{-- Cable multi-select checklist --}}
     <div class="border border-gray-200 rounded-md p-3 space-y-2">
-        <div class="flex items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center justify-between gap-2">
             <span class="text-xs font-medium text-gray-700">{{ __('Tampilkan kabel di peta') }} ({{ count($selectedCableIds) }})</span>
             @if (count($cableOptions) > 0)
                 <button type="button" wire:click="toggleAllCables" class="text-xs text-primary hover:underline">

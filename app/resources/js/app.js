@@ -16,6 +16,46 @@ L.Icon.Default.mergeOptions({
     shadowUrl: markerShadow,
 });
 
+// v0.17.0 Langkah 2.1 — mobile off-canvas sidebar drawer fix.
+//
+// Animating the drawer (transform: translateX, transition-transform
+// duration-200 — see layouts/app.blade.php + components/sidebar.blade.php)
+// over a Leaflet map on a phone can leave the map's tiles half-rendered /
+// grey: Leaflet only re-lays-out tiles on its own `resize` listener or an
+// explicit invalidateSize(), and a drawer slide is neither a window resize
+// nor something Leaflet observes. `layouts/app.blade.php` dispatches the
+// `boss:sidebar-toggled` window event ~260ms after every open/close (once
+// the slide transition has finished); every live Leaflet map on the page
+// registers itself here so this ONE listener can nudge all of them at once,
+// instead of each of the 3 map factories below wiring its own listener.
+// A page with no map registers nothing — the listener is then a no-op.
+const liveLeafletMaps = new Set();
+
+function registerLeafletMap(map) {
+    liveLeafletMaps.add(map);
+    return map;
+}
+
+function unregisterLeafletMap(map) {
+    liveLeafletMaps.delete(map);
+}
+
+window.addEventListener('boss:sidebar-toggled', () => {
+    liveLeafletMaps.forEach((map) => {
+        try {
+            // Skip (and drop) a map whose container was torn out of the DOM
+            // — e.g. a full page navigation that didn't reload this module.
+            if (map && map._container && map._container.isConnected) {
+                map.invalidateSize();
+            } else {
+                liveLeafletMaps.delete(map);
+            }
+        } catch (e) {
+            liveLeafletMaps.delete(map);
+        }
+    });
+});
+
 // v0.16.0 Langkah 5 — the location picker shared by FiberNodeForm (create
 // AND edit) and GpsPhotoCapture (edit, used by OdpEdit). Leaflet + free
 // OSM tiles, no API key. Two-way bound to the host component's own
@@ -46,9 +86,11 @@ window.fiberLocationMap = function ({ points }) {
             const lng = parse(this.$wire.longitude);
             const hasCoords = lat !== null && lng !== null;
 
-            this.map = L.map(this.$refs.map, { scrollWheelZoom: false }).setView(
-                hasCoords ? [lat, lng] : FALLBACK,
-                hasCoords ? 16 : 11,
+            this.map = registerLeafletMap(
+                L.map(this.$refs.map, { scrollWheelZoom: false }).setView(
+                    hasCoords ? [lat, lng] : FALLBACK,
+                    hasCoords ? 16 : 11,
+                ),
             );
 
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -81,6 +123,10 @@ window.fiberLocationMap = function ({ points }) {
             // Leaflet mis-measures its container when it initialises inside
             // a not-yet-fully-laid-out element (common under Livewire).
             setTimeout(() => this.map.invalidateSize(), 200);
+        },
+
+        destroy() {
+            unregisterLeafletMap(this.map);
         },
 
         writeFields(latlng) {
@@ -154,9 +200,11 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
 
         init() {
             const anchor = (markers || [])[0] || (customers || [])[0];
-            this.map = L.map(this.$refs.map, { scrollWheelZoom: true }).setView(
-                anchor ? [anchor.latitude, anchor.longitude] : [-6.9, 109.65],
-                anchor ? 13 : 10,
+            this.map = registerLeafletMap(
+                L.map(this.$refs.map, { scrollWheelZoom: true }).setView(
+                    anchor ? [anchor.latitude, anchor.longitude] : [-6.9, 109.65],
+                    anchor ? 13 : 10,
+                ),
             );
 
             const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -247,6 +295,10 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
             }
 
             setTimeout(() => this.map.invalidateSize(), 200);
+        },
+
+        destroy() {
+            unregisterLeafletMap(this.map);
         },
 
         esc(s) {
@@ -452,9 +504,11 @@ window.odpRouteMap = function ({ candidates, lat, lng }) {
             const startLng = parse(this.$wire.longitude) ?? parse(lng);
             const hasStart = startLat !== null && startLng !== null;
 
-            this.map = L.map(this.$refs.map, { scrollWheelZoom: true }).setView(
-                hasStart ? [startLat, startLng] : FALLBACK_CENTER,
-                hasStart ? 15 : 11,
+            this.map = registerLeafletMap(
+                L.map(this.$refs.map, { scrollWheelZoom: true }).setView(
+                    hasStart ? [startLat, startLng] : FALLBACK_CENTER,
+                    hasStart ? 15 : 11,
+                ),
             );
 
             const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -496,6 +550,10 @@ window.odpRouteMap = function ({ candidates, lat, lng }) {
             }
 
             setTimeout(() => this.map.invalidateSize(), 200);
+        },
+
+        destroy() {
+            unregisterLeafletMap(this.map);
         },
 
         esc(s) {

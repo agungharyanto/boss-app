@@ -245,8 +245,7 @@
 
     {{-- Modal: kelola manufacturer (addendum #3 — tambah + hapus dalam satu modal) --}}
     @if ($showManufacturerModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="$set('showManufacturerModal', false)">
-            <div class="bg-white rounded-md p-4 w-full max-w-sm space-y-3">
+        <x-modal wire:click.self="$set('showManufacturerModal', false)" max-width="max-w-sm" panel-class="rounded-md p-4 space-y-3">
                 <h3 class="font-medium text-sm">{{ __('Kelola Manufacturer') }}</h3>
 
                 @if ($manufacturerDeleteError)
@@ -277,14 +276,12 @@
                     <button wire:click="$set('showManufacturerModal', false)" class="px-3 py-1.5 text-sm border border-gray-300 rounded-md hover:bg-gray-50">{{ __('Tutup') }}</button>
                     <button wire:click="addManufacturer" class="px-3 py-1.5 text-sm bg-primary text-white rounded-md hover:opacity-90">{{ __('Tambah') }}</button>
                 </div>
-            </div>
-        </div>
+        </x-modal>
     @endif
 
     {{-- Modal: kelola model (addendum #3 — tambah + hapus dalam satu modal) --}}
     @if ($showModelModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="$set('showModelModal', false)">
-            <div class="bg-white rounded-md p-4 w-full max-w-sm space-y-3">
+        <x-modal wire:click.self="$set('showModelModal', false)" max-width="max-w-sm" panel-class="rounded-md p-4 space-y-3">
                 <h3 class="font-medium text-sm">{{ __('Kelola Model') }}</h3>
 
                 @if ($modelDeleteError)
@@ -322,8 +319,7 @@
                     <button wire:click="$set('showModelModal', false)" class="px-3 py-1.5 text-sm border border-gray-300 rounded-md hover:bg-gray-50">{{ __('Tutup') }}</button>
                     <button wire:click="addModel" class="px-3 py-1.5 text-sm bg-primary text-white rounded-md hover:opacity-90">{{ __('Tambah') }}</button>
                 </div>
-            </div>
-        </div>
+        </x-modal>
     @endif
 
     {{--

@@ -49,14 +49,13 @@
         <div class="bg-white border border-gray-200 rounded-md p-5 space-y-4" x-data="{ showReplaceModem: false }">
             <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">{{ __('Informasi Perangkat') }}</h2>
 
-            <dl class="grid grid-cols-2 gap-y-3 text-sm">
+            {{-- v0.17.0 Langkah 2 — grid-cols-1 di bawah sm: supaya label &
+                 nilai menumpuk (tidak berdesakan di 2 kolom sempit pada HP);
+                 sm: ke atas kembali ke layout label|nilai per baris seperti
+                 semula, tak berubah. --}}
+            <dl class="grid grid-cols-1 sm:grid-cols-2 gap-y-3 text-sm">
                 <dt class="text-gray-500">{{ __('Serial Number') }}</dt>
-                <dd class="font-mono text-gray-800">
-                    {{ $device->serial_number }}
-                    @if ($canManage)
-                        <button type="button" @click="showReplaceModem = !showReplaceModem" class="font-sans text-primary hover:underline text-xs ml-2" x-text="showReplaceModem ? '{{ __('Batal') }}' : '{{ __('Ganti Modem') }}'"></button>
-                    @endif
-                </dd>
+                <dd class="font-mono text-gray-800">{{ $device->serial_number }}</dd>
 
                 <dt class="text-gray-500">{{ __('Manufacturer / Model') }}</dt>
                 <dd class="text-gray-800">{{ $device->manufacturer ?? '—' }} {{ $device->model_name }}</dd>
@@ -99,6 +98,14 @@
             </dl>
 
             @if ($canManage)
+                {{-- v0.17.0 Langkah 2 — tombol "Ganti Modem" dipindah keluar
+                     dari <dd> Serial Number (dulu inline `ml-2`) jadi tombol
+                     tersendiri di bawah panel data, tidak lagi menempel pada
+                     baris data. --}}
+                <div>
+                    <button type="button" @click="showReplaceModem = !showReplaceModem" class="text-primary hover:underline text-xs" x-text="showReplaceModem ? '{{ __('Batal') }}' : '{{ __('Ganti Modem') }}'"></button>
+                </div>
+
                 <div x-show="showReplaceModem" x-cloak class="border-t border-gray-200 pt-4 space-y-3">
                     <h3 class="text-sm font-medium">{{ __('Ganti Modem') }}</h3>
                     <p class="text-xs text-gray-500">{{ __('Untuk pergantian perangkat fisik pelanggan ini. Binding lama dihapus (tanpa dicatat sebagai penolakan) dan device baru dicari di GenieACS berdasarkan serial number.') }}</p>
@@ -121,7 +128,7 @@
         <div class="bg-white border border-gray-200 rounded-md p-5 space-y-4">
             <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">{{ __('Status Jaringan') }}</h2>
 
-            <dl class="grid grid-cols-2 gap-y-3 text-sm">
+            <dl class="grid grid-cols-1 sm:grid-cols-2 gap-y-3 text-sm">
                 <dt class="text-gray-500">{{ __('RX Power') }}</dt>
                 <dd class="text-gray-800">{{ $summary['rx_power_dbm'] !== null ? number_format($summary['rx_power_dbm'], 2).' dBm' : '-' }}</dd>
 

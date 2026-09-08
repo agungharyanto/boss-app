@@ -1,5 +1,5 @@
 <div class="p-6 max-w-6xl mx-auto">
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-6">
         <h1 class="text-2xl font-semibold text-gray-800">{{ __('Daftar Perangkat Passive') }}</h1>
 
         @if ($canManage)

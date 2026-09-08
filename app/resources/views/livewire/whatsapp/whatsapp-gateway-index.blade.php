@@ -148,8 +148,7 @@
         </div>
 
         @if ($showTemplateForm)
-            <div class="fixed inset-0 bg-black/30 flex items-center justify-center z-50" wire:click.self="$set('showTemplateForm', false)">
-                <div class="bg-white rounded-md p-6 w-full max-w-lg space-y-4">
+            <x-modal wire:click.self="$set('showTemplateForm', false)" max-width="max-w-lg" panel-class="rounded-md p-6 space-y-4" backdrop="bg-black/30">
                     <h3 class="font-medium text-gray-800">Edit Template</h3>
                     <textarea wire:model="editingContent" rows="6" class="block w-full rounded-md border-gray-300 shadow-sm text-sm"></textarea>
                     @error('editingContent') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
@@ -164,8 +163,7 @@
                         <button wire:click="saveTemplate" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">Simpan</button>
                         <button wire:click="$set('showTemplateForm', false)" class="px-4 py-2 text-gray-500 text-sm">Batal</button>
                     </div>
-                </div>
-            </div>
+            </x-modal>
         @endif
     @endif
 

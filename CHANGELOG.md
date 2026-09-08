@@ -3,6 +3,45 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.17.0 — UI/UX Polish: Fondasi Responsif Mobile (merged `develop`→`main`, tagged `v0.17.0`)
+
+Scope dipersempit dari "profesionalisasi tampilan menyeluruh" jadi **responsivitas mobile bertahap**,
+prioritas halaman lapangan teknisi/sales. Semua diverifikasi manual Agung di HP asli sebelum merge.
+
+**Fondasi (Langkah 1):**
+- Hamburger + off-canvas drawer sidebar di bawah `md:` (768px) — `fixed` slide-in dengan backdrop,
+  `sidebarOpen` Alpine x-data di wrapper `@auth`. Di `md:` ke atas ditarik kembali jadi flex child inline
+  (`md:static md:z-auto md:translate-x-0 md:transition-none`) — desktop **byte-for-byte tak berubah**, nol
+  `!important`. Klik link sidebar menutup drawer.
+- Komponen `<x-modal>` baru — 2 fix mobile konsisten: `p-4` gutter di backdrop, `max-h-[90vh]
+  overflow-y-auto` di panel. **18 modal di 13 file dikonversi** (isi/handler/`@if` tak disentuh).
+
+**Per-halaman (Langkah 2):**
+- CPE Devices list: header `flex-wrap`; kolom "Detail" (kiri) `sticky left-0` + kolom Serial tabel "Belum
+  Ter-bind" idem; chrome DataTables stack di `<md`.
+- CPE Devices detail: `<dl grid-cols-2>` → `grid-cols-1 sm:grid-cols-2`; tombol "Ganti Modem" keluar dari
+  `<dd>`; Riwayat Dialup tanggal `d M Y` → `d/m/y`.
+- WorkOrderShow: header `flex-wrap`; kolom "Aksi" `sticky right-0`.
+- Topology Fiber (index/map/capacity): header & kontrol `flex-wrap`; kolom progress-bar `w-64` →
+  `w-32 sm:w-64`.
+
+**Bug fix (Langkah 2.1 & 2.2):**
+- Leaflet `invalidateSize()` on sidebar toggle — layout broadcast event `boss:sidebar-toggled` 260ms
+  setelah toggle; registry `liveLeafletMaps` + satu listener global nudge semua peta hidup (3 factory:
+  `fiberLocationMap`/`fiberTopologyMap`/`odpRouteMap`).
+- z-index stacking conflict drawer vs peta — Leaflet 1.9.4 menyuntik z-index sampai 1000
+  (`.leaflet-top`/`.leaflet-bottom`) di stacking context yang sama dengan `<aside>`; drawer `z-40` →
+  ke-render di belakang peta. Fix: backdrop `z-[1100]`, drawer `z-[1200]`, profile dropdown `z-[1250]`,
+  `<x-modal>` `z-[1300]`.
+
+**Verifikasi:** full regression **1680 passed** (5109 assertions) sebelum tiap merge, `npm run build`
+sukses, `FrontendBuildTest` hijau, HTTP check semua halaman disentuh 200. **Keterbatasan:** nol
+browser/screenshot tool — verifikasi otomatis struktural; hasil visual + 2 bug fix runtime diverifikasi
+Agung manual di HP asli.
+
+**Di luar scope (dicatat untuk sesi terpisah):** audit menu Subscriptions + "Registrasi Pelanggan" vs
+"+ Pelanggan Baru".
+
 ## v0.7.8 — GenieACS Resolver Multi-Vendor + Auto-WAN Configurable + Restrukturisasi Sidebar "Remote" (merged `develop`→`main`, tagged `v0.7.8`)
 
 **Status jujur: fitur BELUM sempurna tapi AMAN.** Di-merge dengan Auto-WAN **DISABLED by default**

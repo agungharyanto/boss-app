@@ -319,8 +319,7 @@
 
     {{-- ---------- Modal "Bayar Komisi Sekarang" (Titip — per baris ATAU per grup Referrer) ---------- --}}
     @if ($payingLedgerId !== null || $payingReferrerId !== null)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closePayModal">
-            <div class="bg-white rounded-md shadow-lg w-full max-w-md p-6">
+        <x-modal wire:click.self="closePayModal" max-width="max-w-md" panel-class="rounded-md shadow-lg p-6">
                 <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ __('Bayar Komisi Titip') }}</h2>
                 <p class="text-sm text-gray-500 mb-4">
                     {{ __('Unggah 1 foto bukti bayar (transfer/cash) sebelum menandai komisi ini sebagai dibayar. Aksi ini instan — hanya berlaku untuk komisi Titip yang statusnya "Layak Dibayar" dan setorannya sudah "Sudah Setor".') }}
@@ -349,14 +348,12 @@
                         </button>
                     @endif
                 </div>
-            </div>
-        </div>
+        </x-modal>
     @endif
 
     {{-- ---------- Modal Reject (komisi bulanan) ---------- --}}
     @if ($rejectingLedgerId !== null)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeRejectModal">
-            <div class="bg-white rounded-md shadow-lg w-full max-w-md p-6">
+        <x-modal wire:click.self="closeRejectModal" max-width="max-w-md" panel-class="rounded-md shadow-lg p-6">
                 <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ __('Tolak Komisi Bulanan') }}</h2>
                 <p class="text-sm text-gray-500 mb-4">
                     {{ __('Komisi yang ditolak TIDAK akan pernah masuk payout. Alasan disimpan sebagai jejak audit di catatan baris.') }}
@@ -373,14 +370,12 @@
                         {{ __('Tolak Komisi') }}
                     </button>
                 </div>
-            </div>
-        </div>
+        </x-modal>
     @endif
 
     {{-- ---------- Modal Clawback (semua skema) ---------- --}}
     @if ($clawbackLedgerId !== null)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeClawbackModal">
-            <div class="bg-white rounded-md shadow-lg w-full max-w-md p-6">
+        <x-modal wire:click.self="closeClawbackModal" max-width="max-w-md" panel-class="rounded-md shadow-lg p-6">
                 <h2 class="text-lg font-semibold text-gray-800 mb-2">{{ __('Batalkan Komisi (Clawback)') }}</h2>
                 <p class="text-sm text-gray-500 mb-4">
                     {{ __('Membuat baris pembatalan bernilai negatif yang me-reverse komisi ini — baris asli TETAP tersimpan sebagai jejak. Kalau komisi asli sudah dibayar, sistem TIDAK menarik uang otomatis; hanya dicatat sebagai utang yang perlu ditagih balik ke Referrer.') }}
@@ -397,7 +392,6 @@
                         {{ __('Batalkan Komisi') }}
                     </button>
                 </div>
-            </div>
-        </div>
+        </x-modal>
     @endif
 </div>

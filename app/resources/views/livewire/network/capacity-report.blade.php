@@ -32,7 +32,12 @@
                 <thead>
                     <tr>
                         <th class="px-4 py-2 text-left font-medium text-gray-500 text-xs">{{ __('Nama') }}</th>
-                        <th class="px-4 py-2 text-left font-medium text-gray-500 text-xs w-64">{{ __('Kapasitas') }}</th>
+                        {{-- v0.17.0 Langkah 2 — kolom progress bar menyempit di HP
+                             (w-32 = 128px, pas dengan min-width partial-nya:
+                             track min-w-[80px] + teks persen w-10 + gap) supaya
+                             tidak memaksa lebar tabel minimum terlalu besar; sm:
+                             ke atas kembali w-64 seperti semula. --}}
+                        <th class="px-4 py-2 text-left font-medium text-gray-500 text-xs w-32 sm:w-64">{{ __('Kapasitas') }}</th>
                         <th class="px-4 py-2 text-right font-medium text-gray-500 text-xs">{{ __('Terpakai / Total') }}</th>
                     </tr>
                 </thead>

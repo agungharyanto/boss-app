@@ -269,10 +269,41 @@
     ];
 @endphp
 
-<aside class="w-64 shrink-0 bg-gray-50 border-r border-gray-200 min-h-screen p-4" aria-label="{{ __('Navigasi utama') }}">
+{{-- v0.17.0 — BELOW md: this is an off-canvas drawer (fixed, slides in from
+     the left; `sidebarOpen` lives on the layout's @auth wrapper x-data). AT
+     md: and up the md:* overrides pull it back to exactly the old inline
+     `w-64 shrink-0` flex child — same position (static), z-index (auto), no
+     transform, no transition, no scroll container — so the desktop
+     experience is byte-for-byte unchanged. No `!important` needed: Tailwind
+     emits `md:` variants after the base utilities, so `md:translate-x-0` /
+     `md:static` / `md:z-auto` win the cascade at >=768px over the
+     unprefixed `-translate-x-full` / `fixed` / `z-[1200]`. `-translate-x-full`
+     is a STATIC class so there's no pre-Alpine flash of an open drawer on
+     mobile; Alpine's object :class removes it while the drawer is open.
+
+     v0.17.0 Langkah 2.2 — z-[1200] (was z-40) so the drawer stacks ABOVE a
+     Leaflet map on the same page: Leaflet (1.9.4) injects its own z-index up
+     to 1000 on `.leaflet-top`/`.leaflet-bottom` (zoom / layer controls) and
+     up to 700 on its tile/marker/popup panes, all in the SAME stacking
+     context as this <aside> (the map container makes no stacking context of
+     its own), so z-40 rendered the drawer BEHIND the map. Backdrop is
+     z-[1100], <x-modal> is z-[1300] — see layouts/app.blade.php. `md:z-auto`
+     still resets this to auto at >=md where the map isn't an issue. --}}
+<aside
+    class="w-64 shrink-0 bg-gray-50 border-r border-gray-200 min-h-screen p-4 overflow-y-auto
+           fixed inset-y-0 left-0 z-[1200] -translate-x-full transition-transform duration-200 ease-in-out
+           md:static md:z-auto md:translate-x-0 md:transition-none md:overflow-visible"
+    x-bind:class="{ '-translate-x-full': ! sidebarOpen }"
+    aria-label="{{ __('Navigasi utama') }}"
+>
     <nav class="space-y-2">
+        {{-- v0.17.0 — every navigating <a> in this sidebar closes the mobile
+             drawer on click (harmless no-op at md:+ where sidebarOpen is
+             never true). NOT the cluster/sub-group toggle <button>s — those
+             only expand/collapse. --}}
         <a
             href="{{ route('web.dashboard') }}"
+            x-on:click="sidebarOpen = false"
             class="block px-3 py-2 text-sm font-semibold rounded-md {{ request()->routeIs('web.dashboard') ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100' }}"
         >
             {{ __('Dashboard') }}
@@ -335,7 +366,7 @@
                                     </button>
                                 @else
                                     <div class="flex items-center rounded-md {{ request()->routeIs($link['route']) ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100' }}">
-                                        <a href="{{ route($link['route']) }}" class="flex-1 px-3 py-1.5 text-sm">
+                                        <a href="{{ route($link['route']) }}" x-on:click="sidebarOpen = false" class="flex-1 px-3 py-1.5 text-sm">
                                             {{ $link['label'] }}
                                         </a>
                                         <button
@@ -355,6 +386,7 @@
                                     @foreach ($link['children'] as $child)
                                         <a
                                             href="{{ route($child['route']) }}"
+                                            x-on:click="sidebarOpen = false"
                                             class="block px-3 py-1.5 text-sm rounded-md {{ request()->routeIs($child['route']) ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100' }}"
                                         >
                                             {{ $child['label'] }}
@@ -365,6 +397,7 @@
                         @else
                             <a
                                 href="{{ route($link['route']) }}"
+                                x-on:click="sidebarOpen = false"
                                 class="block px-3 py-1.5 text-sm rounded-md {{ request()->routeIs($link['route']) ? 'bg-primary text-white' : 'text-gray-600 hover:bg-gray-100' }}"
                             >
                                 {{ $link['label'] }}

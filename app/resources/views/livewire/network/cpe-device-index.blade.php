@@ -59,6 +59,32 @@
             vertical-align: bottom;
         }
 
+        /* v0.17.0 Langkah 2 — pin the "Detail" column (leftmost) while the
+           9-col table scrolls horizontally on a phone, so it never scrolls
+           out of reach. Left, not right, because that's where the column
+           already is — no reorder. bg on both th/td so neighbours don't
+           bleed through under it. Only engages once there's real overflow. */
+        #cpe-devices-table th:first-child,
+        #cpe-devices-table td:first-child {
+            position: sticky;
+            left: 0;
+            z-index: 2;
+        }
+        #cpe-devices-table td:first-child { background-color: #fff; }
+        #cpe-devices-table th:first-child { background-color: #f9fafb; }
+
+        /* Same treatment for the "Belum Ter-bind" table — pin the Serial
+           Number column (the row identifier) so you keep your place while
+           scrolling its 7 columns. */
+        #unbound-genieacs-table th:first-child,
+        #unbound-genieacs-table td:first-child {
+            position: sticky;
+            left: 0;
+            z-index: 2;
+        }
+        #unbound-genieacs-table td:first-child { background-color: #fff; }
+        #unbound-genieacs-table th:first-child { background-color: #f9fafb; }
+
         /* Single-line truncation for every column EXCEPT Pelanggan (column
            2), which stacks name + CID on two lines on purpose, and Status
            (column 3), whose badge must never get an ellipsis cut through
@@ -76,7 +102,7 @@
 @endpush
 
 <div class="p-6 w-full">
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
         <h1 class="text-2xl font-semibold text-gray-800">{{ __('Perangkat CPE') }}</h1>
 
         <div class="flex items-center gap-2 text-sm">

@@ -1,7 +1,6 @@
 <div>
     @if ($showModal)
-        <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" wire:click.self="closeModal">
-            <div class="bg-white rounded-md p-4 w-full max-w-sm space-y-3">
+        <x-modal wire:click.self="closeModal" max-width="max-w-sm" panel-class="rounded-md p-4 space-y-3">
                 <h3 class="font-medium text-sm">{{ __('Edit Device — :hostname', ['hostname' => $hostname]) }}</h3>
 
                 @if ($errorMessage)
@@ -51,7 +50,6 @@
                         <button wire:click="closeModal" class="px-3 py-1.5 text-sm border border-gray-300 rounded-md hover:bg-gray-50">{{ __('Tutup') }}</button>
                     </div>
                 @endif
-            </div>
-        </div>
+        </x-modal>
     @endif
 </div>

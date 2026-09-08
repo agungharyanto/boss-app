@@ -62,4 +62,16 @@ class FiberCore extends Model
     {
         return $this->hasMany(FiberCorePortLog::class);
     }
+
+    /** v0.16.1 — splice rows where this core is the `from` side. */
+    public function splicesAsFrom(): HasMany
+    {
+        return $this->hasMany(FiberCoreSplice::class, 'from_fiber_core_id');
+    }
+
+    /** v0.16.1 — splice rows where this core is the `to` side. */
+    public function splicesAsTo(): HasMany
+    {
+        return $this->hasMany(FiberCoreSplice::class, 'to_fiber_core_id');
+    }
 }

@@ -37,7 +37,7 @@ class OdpEditLivewireTest extends TestCase
         return $user;
     }
 
-    public function test_form_renders_with_odps_read_only_identity_and_editable_topology_fields(): void
+    public function test_form_renders_with_editable_code_name_and_topology_fields(): void
     {
         $tenant = Tenant::factory()->create();
         $odp = Odp::factory()->create(['tenant_id' => $tenant->id, 'code' => 'ODP-999', 'name' => 'ODP Test']);
@@ -45,8 +45,70 @@ class OdpEditLivewireTest extends TestCase
         Livewire::actingAs($this->admin($tenant))
             ->test(OdpEdit::class, ['odp' => $odp])
             ->assertOk()
-            ->assertSee('ODP-999')
-            ->assertSee('ODP Test');
+            ->assertSet('code', 'ODP-999')
+            ->assertSet('name', 'ODP Test')
+            ->assertSeeHtml('wire:model="code"')
+            ->assertSeeHtml('wire:model="name"');
+    }
+
+    public function test_revisi3_a_edit_code_and_name_persists(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $odp = Odp::factory()->create(['tenant_id' => $tenant->id, 'code' => 'ODP-OLD', 'name' => 'Nama Lama']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(OdpEdit::class, ['odp' => $odp])
+            ->set('code', 'ODP-BARU')
+            ->set('name', 'Depan Masjid Al-Falah')
+            ->set('lossInDb', '0.5')
+            ->set('lossOutDb', '0.5')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $odp->refresh();
+        $this->assertSame('ODP-BARU', $odp->code);
+        $this->assertSame('Depan Masjid Al-Falah', $odp->name);
+    }
+
+    public function test_revisi3_a_code_must_stay_unique_within_the_tenant_but_own_row_is_allowed(): void
+    {
+        $tenant = Tenant::factory()->create();
+        Odp::factory()->create(['tenant_id' => $tenant->id, 'code' => 'ODP-TAKEN']);
+        $odp = Odp::factory()->create(['tenant_id' => $tenant->id, 'code' => 'ODP-MINE']);
+
+        // collide with another row -> rejected
+        Livewire::actingAs($this->admin($tenant))
+            ->test(OdpEdit::class, ['odp' => $odp])
+            ->set('code', 'ODP-TAKEN')
+            ->set('lossInDb', '0.5')
+            ->set('lossOutDb', '0.5')
+            ->call('save')
+            ->assertHasErrors('code');
+
+        $this->assertSame('ODP-MINE', $odp->fresh()->code);
+
+        // re-saving with the SAME (own) code is fine
+        Livewire::actingAs($this->admin($tenant))
+            ->test(OdpEdit::class, ['odp' => $odp->fresh()])
+            ->set('lossInDb', '0.5')
+            ->set('lossOutDb', '0.5')
+            ->call('save')
+            ->assertHasNoErrors();
+    }
+
+    public function test_revisi3_a_code_and_name_are_required(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $odp = Odp::factory()->create(['tenant_id' => $tenant->id]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(OdpEdit::class, ['odp' => $odp])
+            ->set('code', '')
+            ->set('name', '')
+            ->set('lossInDb', '0.5')
+            ->set('lossOutDb', '0.5')
+            ->call('save')
+            ->assertHasErrors(['code', 'name']);
     }
 
     public function test_saving_without_loss_values_is_rejected_loss_is_always_required_for_odp(): void
@@ -103,7 +165,7 @@ class OdpEditLivewireTest extends TestCase
         ]);
     }
 
-    public function test_saving_never_touches_odps_own_core_registration_fields(): void
+    public function test_saving_leaves_total_ports_untouched(): void
     {
         $tenant = Tenant::factory()->create();
         $odp = Odp::factory()->create(['tenant_id' => $tenant->id, 'code' => 'ODP-KEEP', 'name' => 'Nama Asli', 'total_ports' => 8]);
@@ -115,6 +177,7 @@ class OdpEditLivewireTest extends TestCase
             ->call('save');
 
         $odp->refresh();
+        // code/name unchanged because the form was pre-filled with them
         $this->assertSame('ODP-KEEP', $odp->code);
         $this->assertSame('Nama Asli', $odp->name);
         $this->assertSame(8, $odp->total_ports);

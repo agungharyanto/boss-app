@@ -12,6 +12,7 @@ use App\Models\FiberCable;
 use App\Models\FiberCableWaypoint;
 use App\Models\FiberCore;
 use App\Models\FiberCorePortLog;
+use App\Models\FiberCoreSplice;
 use App\Models\FiberNode;
 use App\Models\FiberNodePhoto;
 use App\Models\Odp;
@@ -152,6 +153,87 @@ class FiberTopologyService
 
             return $node;
         });
+    }
+
+    /**
+     * v0.16.1 Poin D — create an Odp (tabel `odps`, v0.5.0) from
+     * FiberNodeForm's "Titik Baru" form when Tipe Titik = ODP. Bundles
+     * the row + Odp::provisionPorts() + photos + an optional splitter,
+     * all in ONE transaction. Deliberately does NOT go through
+     * StoreOdpRequest/OdpController (same posture as
+     * updateOdpTopologyFields() / the OdpEdit page).
+     *
+     * `latitude`/`longitude`/`total_ports`/`loss_in_db`/`loss_out_db` are
+     * all REQUIRED for an Odp (the caller validates them — isLossRequired()
+     * returns true for Odp, same as OdpEdit enforces). `code` uniqueness
+     * per tenant is guarded here (the same rule StoreOdpRequest carries).
+     *
+     * @param  array{tenant_id: int, code: string, name: string, latitude: float, longitude: float, total_ports: int, loss_in_db: float, loss_out_db: float, parent_type?: ?string, parent_id?: ?int, notes?: ?string}  $data
+     * @param  iterable<int, UploadedFile>  $photos
+     * @param  array{ratio?: ?string, model?: ?string}|null  $splitter
+     */
+    public function createOdpWithAttachments(array $data, iterable $photos = [], ?array $splitter = null): Odp
+    {
+        $tenantId = (int) ($data['tenant_id'] ?? Auth::user()?->tenant_id);
+        $code = trim((string) ($data['code'] ?? ''));
+        $name = trim((string) ($data['name'] ?? ''));
+
+        if ($code === '') {
+            throw new InvalidArgumentException('Kode ODP wajib diisi.');
+        }
+
+        if ($name === '') {
+            throw new InvalidArgumentException('Nama ODP wajib diisi.');
+        }
+
+        $this->assertOdpCodeAvailable($tenantId, $code);
+
+        return DB::transaction(function () use ($data, $photos, $splitter, $tenantId, $code, $name) {
+            $odp = Odp::create([
+                'tenant_id' => $tenantId,
+                'reseller_id' => null,
+                'code' => $code,
+                'name' => $name,
+                'latitude' => $data['latitude'],
+                'longitude' => $data['longitude'],
+                'total_ports' => (int) $data['total_ports'],
+                'loss_in_db' => $data['loss_in_db'],
+                'loss_out_db' => $data['loss_out_db'],
+                'parent_type' => $data['parent_type'] ?? null,
+                'parent_id' => $data['parent_id'] ?? null,
+                'notes' => $data['notes'] ?? null,
+            ]);
+
+            $odp->provisionPorts();
+
+            foreach ($photos as $photo) {
+                $this->addPhoto($odp, $photo);
+            }
+
+            $this->attachSplitter($odp, $splitter);
+
+            return $odp;
+        });
+    }
+
+    /**
+     * v0.16.1 Revisi 3 A — one place for "an ODP code must be unique
+     * within its tenant" (the same rule StoreOdpRequest carries), shared
+     * by createOdpWithAttachments() and the OdpEdit page's rename. Pass
+     * $ignoreOdpId when editing so a row doesn't collide with itself.
+     */
+    public function assertOdpCodeAvailable(int $tenantId, string $code, ?int $ignoreOdpId = null): void
+    {
+        $taken = Odp::query()
+            ->withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->where('code', $code)
+            ->when($ignoreOdpId !== null, fn ($q) => $q->whereKeyNot($ignoreOdpId))
+            ->exists();
+
+        if ($taken) {
+            throw new InvalidArgumentException("Kode ODP \"{$code}\" sudah dipakai.");
+        }
     }
 
     /**
@@ -373,18 +455,25 @@ class FiberTopologyService
     }
 
     /**
-     * v0.16.0 Langkah 8/9 — every cable touching $node (incoming AND
-     * outgoing), each with its full core list, for the FiberNodeDetail
-     * "Koneksi Core" table. The "Lihat di peta" link is per-CABLE (one
-     * physical route per cable), not per-core — `mappable` and
-     * `cable_id`/`from_label`/`to_label` live at the cable level here.
+     * v0.16.0 Langkah 8/9 / v0.16.1 Bagian C — every cable touching $node
+     * (incoming AND outgoing), each core grouped BY TUBE (one column per
+     * tube on the page), for the FiberNodeDetail "Koneksi Core" section.
+     * The "Lihat di peta" link is per-CABLE (one physical route), not
+     * per-core.
      *
-     * @return list<array{cable_id: int, description: string, from_label: string, to_label: string, total_cores: int, mappable: bool, cores: list<array{core_id: int, tube_number: int, core_number_in_tube: int, tube_color: ?string, core_color: ?string}>}>
+     * When $otb is given (the node IS an OTB), each core also carries its
+     * patched `port_number` + `destination` + OLT link. `spliced_to` is
+     * set for a core that's in a core-to-core splice AT $node.
+     *
+     * @return list<array<string, mixed>>
      */
-    public function cableCoreConnections(FiberNode|Odp $node): array
+    public function coreGridForNode(FiberNode|Odp $node, ?FiberNode $otb = null): array
     {
-        $cables = $node->cablesAsFrom()->with('cores')->get()
-            ->concat($node->cablesAsTo()->with('cores')->get());
+        $cables = $node->cablesAsFrom()->with('cores.oltDevice')->get()
+            ->concat($node->cablesAsTo()->with('cores.oltDevice')->get())
+            ->unique('id');
+
+        $spliceLabels = $this->splicePartnerLabels($node);
 
         $groups = [];
 
@@ -392,25 +481,81 @@ class FiberTopologyService
             $mappable = $this->morphCoords($cable->from_type, $cable->from_id) !== null
                 && $this->morphCoords($cable->to_type, $cable->to_id) !== null;
 
+            $tubes = [];
+            foreach ($cable->cores->sortBy(['tube_number', 'core_number_in_tube']) as $core) {
+                $t = (int) $core->tube_number;
+
+                if (! isset($tubes[$t])) {
+                    $tubes[$t] = [
+                        'tube_number' => $t,
+                        'tube_color' => $core->tube_color,
+                        'tube_hex' => $this->colorService->hexForName($core->tube_color),
+                        'cores' => [],
+                    ];
+                }
+
+                $card = $otb !== null ? $this->coreCardData($core, $otb) : [];
+
+                $tubes[$t]['cores'][] = [
+                    'core_id' => $core->id,
+                    'tube_number' => $t,
+                    'core_number_in_tube' => (int) $core->core_number_in_tube,
+                    'tube_color' => $core->tube_color,
+                    'core_color' => $core->core_color,
+                    'core_hex' => $this->colorService->hexForName($core->core_color),
+                    'port_number' => $otb !== null ? $core->port_number : null,
+                    'destination' => $card['destination'] ?? null,
+                    'connects_to_olt' => $card['connects_to_olt'] ?? false,
+                    'port_note' => $card['port_note'] ?? null,
+                    'spliced_to' => $spliceLabels[$core->id] ?? null,
+                ];
+            }
+
             $groups[] = [
                 'cable_id' => $cable->id,
                 'description' => $this->describeCable($cable),
-                'from_label' => $this->labelForMorph($cable->from_type, $cable->from_id),
-                'to_label' => $this->labelForMorph($cable->to_type, $cable->to_id),
-                'total_cores' => $cable->total_cores,
+                'from_label' => $this->labelForMorph($cable->from_type, (int) $cable->from_id),
+                'to_label' => $this->labelForMorph($cable->to_type, (int) $cable->to_id),
+                'total_cores' => (int) $cable->total_cores,
+                'tube_count' => (int) $cable->tube_count,
+                'cores_per_tube' => (int) $cable->cores_per_tube,
                 'mappable' => $mappable,
-                'cores' => $cable->cores->sortBy(['tube_number', 'core_number_in_tube'])
-                    ->map(fn (FiberCore $core) => [
-                        'core_id' => $core->id,
-                        'tube_number' => $core->tube_number,
-                        'core_number_in_tube' => $core->core_number_in_tube,
-                        'tube_color' => $core->tube_color,
-                        'core_color' => $core->core_color,
-                    ])->values()->all(),
+                'tubes' => array_values($tubes),
             ];
         }
 
         return $groups;
+    }
+
+    /**
+     * coreId => "Kabel … · T2/C3" for every core that is in a splice AT
+     * $node — the partner core's cable + tube/core position.
+     *
+     * @return array<int, string>
+     */
+    private function splicePartnerLabels(FiberNode|Odp $node): array
+    {
+        $rows = FiberCoreSplice::query()
+            ->where('splice_node_type', $node::class)
+            ->where('splice_node_id', $node->id)
+            ->with(['fromCore.fiberCable', 'toCore.fiberCable'])
+            ->get();
+
+        $out = [];
+
+        foreach ($rows as $row) {
+            foreach ([[$row->fromCore, $row->toCore], [$row->toCore, $row->fromCore]] as [$self, $partner]) {
+                if ($self === null || $partner === null) {
+                    continue;
+                }
+
+                $cable = $partner->fiberCable;
+                $desc = $cable !== null ? $this->describeCable($cable) : 'Kabel dihapus';
+                $out[$self->id] = $desc.' · T'.$partner->tube_number.'/C'.$partner->core_number_in_tube;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -613,6 +758,34 @@ class FiberTopologyService
      *
      * @param  list<array{lat: float|string, lng: float|string}>  $points
      */
+    /**
+     * v0.16.1 Revisi C / Revisi 2 A — delete a cable and its dependents.
+     * fiber_core_port_logs / fiber_accessories(fiber_cable_id) /
+     * fiber_cable_waypoints still cascade via their own ON DELETE CASCADE.
+     * BUT an active fiber_core_splices row that uses one of this cable's
+     * cores (as `from_` OR `to_`) now BLOCKS the delete (Revisi 2 —
+     * deliberate reversal of the earlier "cascade the splice too": a
+     * splice is manual field data an admin should remove explicitly, not
+     * lose silently when a cable is deleted).
+     */
+    public function deleteCable(FiberCable $cable): void
+    {
+        $coreIds = $cable->cores()->pluck('id');
+
+        $blockingSplices = FiberCoreSplice::query()
+            ->where(fn ($q) => $q->whereIn('from_fiber_core_id', $coreIds)
+                ->orWhereIn('to_fiber_core_id', $coreIds))
+            ->count();
+
+        if ($blockingSplices > 0) {
+            throw new InvalidArgumentException(
+                "Kabel ini masih punya {$blockingSplices} splice core-to-core aktif — hapus splice-nya dulu sebelum menghapus kabel."
+            );
+        }
+
+        $cable->delete();
+    }
+
     public function replaceCableWaypoints(FiberCable $cable, array $points): void
     {
         DB::transaction(function () use ($cable, $points) {
@@ -701,12 +874,13 @@ class FiberTopologyService
     }
 
     /**
-     * Odp's own v0.16.0-only fields (parent link + loss) — deliberately
-     * separate from StoreOdpRequest/UpdateOdpRequest (v0.5.0's own
-     * registration flow, which this Langkah does NOT touch at all). Used
-     * by the new App\Livewire\Installation\OdpEdit page.
+     * The Odp fields OdpEdit manages — parent link + loss (v0.16.0), plus
+     * code + name (v0.16.1 Revisi 3 A). Still deliberately separate from
+     * StoreOdpRequest/UpdateOdpRequest (v0.5.0's registration flow, not
+     * touched). Code-uniqueness is asserted by the caller via
+     * assertOdpCodeAvailable() before this runs.
      *
-     * @param  array{parent_type?: ?string, parent_id?: ?int, loss_in_db?: ?float, loss_out_db?: ?float}  $data
+     * @param  array{code?: string, name?: string, parent_type?: ?string, parent_id?: ?int, loss_in_db?: ?float, loss_out_db?: ?float}  $data
      */
     public function updateOdpTopologyFields(Odp $odp, array $data): Odp
     {
@@ -971,7 +1145,7 @@ class FiberTopologyService
             $core = $byPort->get($port);
             $rows[] = [
                 'port' => $port,
-                'core' => $core === null ? null : $this->coreCardData($core),
+                'core' => $core === null ? null : $this->coreCardData($core, $otb),
             ];
         }
 
@@ -979,17 +1153,21 @@ class FiberTopologyService
     }
 
     /**
-     * Every FiberCore belonging to a cable that ORIGINATES FROM $node —
-     * i.e. the cores a technician can patch onto $node's own OTB ports.
-     * Deliberately outgoing-only (unchanged from Langkah 6) — a Langkah 7
-     * OLT link is additive metadata on one of these same cores, not a new
-     * class of "portless uplink".
+     * Every FiberCore of any cable that TOUCHES $node — either end
+     * (`from` OR `to`). These are the cores a technician can patch onto
+     * $node's OTB ports: v0.16.1 widened this from outgoing-only (Langkah
+     * 6) because a FEEDER core arriving into the OTB is just as
+     * patch-worthy as one leaving it (a backbone-lintas core landing on a
+     * port, then patch-corded onward). A Langkah 7 OLT link is still
+     * additive metadata on one of these same cores.
      *
      * @return Collection<int, FiberCore>
      */
     public function coresFromNode(FiberNode|Odp $node): Collection
     {
-        $cableIds = $node->cablesAsFrom()->pluck('id');
+        $cableIds = $node->cablesAsFrom()->pluck('id')
+            ->concat($node->cablesAsTo()->pluck('id'))
+            ->unique();
 
         return FiberCore::query()
             ->whereIn('fiber_cable_id', $cableIds)
@@ -1001,25 +1179,40 @@ class FiberTopologyService
     }
 
     /**
-     * v0.16.0 Langkah 6 — every outgoing core of an OTB, shaped for the
-     * port-assignment table (colours + destination + current port + OLT).
+     * v0.16.0 Langkah 6 / v0.16.1 — every core of a cable touching an OTB
+     * (either end), shaped for the port-assignment table (colours +
+     * destination + current port + OLT). `destination` is resolved
+     * relative to the OTB, so a feeder core shows its far (upstream) end.
      *
      * @return list<array<string, mixed>>
      */
     public function assignableOtbCores(FiberNode $otb): array
     {
         return $this->coresFromNode($otb)
-            ->map(fn (FiberCore $core) => $this->coreCardData($core))
+            ->map(fn (FiberCore $core) => $this->coreCardData($core, $otb))
             ->all();
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function coreCardData(FiberCore $core): array
+    private function coreCardData(FiberCore $core, ?FiberNode $relativeTo = null): array
     {
         $cable = $core->fiberCable;
         $oltLabel = $this->oltLabelFor($core);
+
+        // Far end = the cable end that ISN'T $relativeTo (so a feeder core
+        // viewed from an OTB reports its upstream source, not the OTB
+        // itself). Falls back to the `to` end when no context is given.
+        $farType = $cable?->to_type;
+        $farId = $cable !== null ? (int) $cable->to_id : null;
+        if ($cable !== null && $relativeTo !== null
+            && $cable->to_type === FiberNode::class && (int) $cable->to_id === $relativeTo->id) {
+            $farType = $cable->from_type;
+            $farId = (int) $cable->from_id;
+        }
+
+        $ponNote = trim((string) $core->olt_pon_port_label);
 
         return [
             'core_id' => $core->id,
@@ -1033,8 +1226,11 @@ class FiberTopologyService
             'olt_device_id' => $core->olt_device_id,
             'olt_pon_port_label' => $core->olt_pon_port_label,
             'connects_to_olt' => $oltLabel !== null,
+            // v0.16.1 — free-text label kept even without an OLT (a
+            // non-OLT patch note, e.g. "Backbone Lintas A").
+            'port_note' => ($oltLabel === null && $ponNote !== '') ? $ponNote : null,
             'destination' => $oltLabel ?? ($cable !== null
-                ? $this->labelForMorph($cable->to_type, $cable->to_id)
+                ? $this->labelForMorph($farType, $farId)
                 : 'Tujuan tidak diketahui'),
         ];
     }
@@ -1067,6 +1263,24 @@ class FiberTopologyService
                 'id' => $olt->id,
                 'label' => $olt->name.($olt->oltModel !== null ? " ({$olt->oltModel->name})" : ''),
             ])
+            ->all();
+    }
+
+    /**
+     * v0.16.1 Revisi F — [olt_device_id => pon_port_count] for every OLT
+     * that has a manually-configured PON port count. The assign-port
+     * table uses this to switch olt_pon_port_label from a free-text field
+     * to a "PON 1".."PON N" dropdown for that device; a device absent
+     * from this map keeps the free-text input.
+     *
+     * @return array<int, int>
+     */
+    public function oltPonPortCounts(): array
+    {
+        return OltDevice::query()
+            ->whereNotNull('pon_port_count')
+            ->pluck('pon_port_count', 'id')
+            ->map(fn ($n) => (int) $n)
             ->all();
     }
 
@@ -1123,6 +1337,98 @@ class FiberTopologyService
     }
 
     /**
+     * v0.16.1 Revisi E / Revisi 2 C — swap the OTB port assignment of two
+     * cores in one atomic action (real-world case: a technician spliced
+     * two cores onto the wrong ports). The WHOLE assignment moves as a
+     * unit — port_number AND olt_device_id AND olt_pon_port_label — since
+     * the OLT/PON patch belongs to the OTB PORT, not the core. Safe
+     * without an intermediate "clear one first" step: fiber_cores.
+     * port_number has NO DB unique index (it's a cross-table "port
+     * belongs to an OTB" concept, app-enforced only). One transaction,
+     * audit-logged per core via applyCoreAssignment().
+     */
+    public function swapCorePorts(FiberNode $otb, int $coreIdA, int $coreIdB): void
+    {
+        if ($coreIdA === $coreIdB) {
+            throw new InvalidArgumentException('Pilih dua core yang berbeda.');
+        }
+
+        $cores = $this->coresFromNode($otb)->keyBy('id');
+        $a = $cores->get($coreIdA);
+        $b = $cores->get($coreIdB);
+
+        if ($a === null || $b === null) {
+            throw new InvalidArgumentException('Salah satu core bukan dari kabel yang terhubung ke OTB ini.');
+        }
+
+        $aVals = [$a->port_number, $a->olt_device_id, $a->olt_pon_port_label];
+
+        DB::transaction(function () use ($a, $b, $otb, $aVals) {
+            $this->applyCoreAssignment($a, $otb, $b->port_number, $b->olt_device_id, $b->olt_pon_port_label);
+            $this->applyCoreAssignment($b, $otb, $aVals[0], $aVals[1], $aVals[2]);
+        });
+    }
+
+    /**
+     * v0.16.1 Revisi 2 C — swap the port assignment of EVERY core in
+     * $sourceTube with the core at the SAME core_number_in_tube in
+     * $targetTube, within one cable (real-world: a whole tube was spliced
+     * onto the wrong block of ports). Like swapCorePorts() the whole
+     * assignment (port + OLT/PON) moves as a unit. Position pairing is by
+     * core_number_in_tube; a source core with no same-numbered partner in
+     * the target tube is skipped (leaves both untouched). Every value is
+     * captured BEFORE any write so the two-pass swap can't read a
+     * half-mutated row. One transaction.
+     */
+    public function swapCoreTubes(FiberNode $otb, int $cableId, int $sourceTube, int $targetTube): void
+    {
+        if ($sourceTube === $targetTube) {
+            throw new InvalidArgumentException('Tube sumber dan tube tujuan harus berbeda.');
+        }
+
+        $cable = FiberCable::with('cores')->find($cableId);
+
+        if ($cable === null) {
+            throw new InvalidArgumentException('Kabel tidak ditemukan.');
+        }
+
+        if ($cable->cores->isEmpty()) {
+            throw new InvalidArgumentException('Kabel ini tidak punya core.');
+        }
+
+        $this->assertCoreBelongsToOtb($cable->cores->first(), $otb);
+
+        $source = $cable->cores->where('tube_number', $sourceTube)->values();
+        $target = $cable->cores->where('tube_number', $targetTube)->keyBy('core_number_in_tube');
+
+        if ($source->isEmpty() || $target->isEmpty()) {
+            throw new InvalidArgumentException('Tube sumber atau tube tujuan tidak ditemukan di kabel ini.');
+        }
+
+        $pairs = [];
+        foreach ($source as $sc) {
+            $tc = $target->get($sc->core_number_in_tube);
+
+            if ($tc === null) {
+                continue;
+            }
+
+            $pairs[] = [
+                $sc, $tc,
+                [$sc->port_number, $sc->olt_device_id, $sc->olt_pon_port_label],
+                [$tc->port_number, $tc->olt_device_id, $tc->olt_pon_port_label],
+            ];
+        }
+
+        DB::transaction(function () use ($pairs, $otb) {
+            foreach ($pairs as [$sc, $tc, $scVals, $tcVals]) {
+                $this->applyCoreAssignment($sc, $otb, $tcVals[0], $tcVals[1], $tcVals[2]);
+                $this->applyCoreAssignment($tc, $otb, $scVals[0], $scVals[1], $scVals[2]);
+            }
+        });
+    }
+
+    /**
      * v0.16.0 Langkah 7 — bulk save every port input on the OTB detail
      * page at once, ALL-OR-NOTHING. The whole submitted set is validated
      * before any write; if a row is invalid nothing is saved. Uniqueness
@@ -1172,7 +1478,7 @@ class FiberTopologyService
                 continue;
             }
 
-            $parsed[$coreId] = ['port' => $port, 'olt_device_id' => $oltId, 'olt_pon_port_label' => $port === null ? null : $ponLabel, 'reset_olt' => $oltId === null];
+            $parsed[$coreId] = ['port' => $port, 'olt_device_id' => $port === null ? null : $oltId, 'olt_pon_port_label' => $port === null ? null : $ponLabel];
 
             if ($port !== null) {
                 $portToCores[$port][] = $coreId;
@@ -1197,8 +1503,8 @@ class FiberTopologyService
                     $cores->get($coreId),
                     $otb,
                     $data['port'],
-                    $data['reset_olt'] ? null : $data['olt_device_id'],
-                    $data['reset_olt'] ? null : $data['olt_pon_port_label'],
+                    $data['olt_device_id'],
+                    $data['olt_pon_port_label'],
                 );
             }
         });
@@ -1210,8 +1516,17 @@ class FiberTopologyService
     {
         $cable = $core->fiberCable;
 
-        if ($cable === null || $cable->from_type !== FiberNode::class || (int) $cable->from_id !== $otb->id) {
-            throw new InvalidArgumentException('Core ini bukan berasal dari OTB tersebut.');
+        if ($cable === null) {
+            throw new InvalidArgumentException('Core ini tidak punya kabel.');
+        }
+
+        // v0.16.1 — either end: a feeder core arriving into the OTB is
+        // patchable too, not just an outgoing one.
+        $touchesFrom = $cable->from_type === FiberNode::class && (int) $cable->from_id === $otb->id;
+        $touchesTo = $cable->to_type === FiberNode::class && (int) $cable->to_id === $otb->id;
+
+        if (! $touchesFrom && ! $touchesTo) {
+            throw new InvalidArgumentException('Core ini bukan dari kabel yang terhubung ke OTB tersebut.');
         }
     }
 
@@ -1252,7 +1567,11 @@ class FiberTopologyService
         $core->update([
             'port_number' => $portNumber,
             'olt_device_id' => $portNumber === null ? null : $oltDeviceId,
-            'olt_pon_port_label' => ($portNumber === null || $oltDeviceId === null) ? null : $oltPonPortLabel,
+            // v0.16.1 — the label persists for ANY patched port, whether
+            // or not an OLT is linked (it doubles as a free-text patch
+            // note like "Backbone Lintas A"). Only a portless core (no
+            // patch at all) clears it.
+            'olt_pon_port_label' => $portNumber === null ? null : ($oltPonPortLabel ?: null),
         ]);
         $core->refresh();
 
@@ -1407,6 +1726,94 @@ class FiberTopologyService
             $percent >= 60 => ['key' => 'hampir-penuh', 'label' => 'hampir penuh', 'color' => '#F59E0B'],
             default => ['key' => 'longgar', 'label' => 'longgar', 'color' => '#22C55E'],
         };
+    }
+
+    /**
+     * v0.16.1 Bagian F — the compact info panel shown when a topology
+     * marker (OTB / Closure / ODC / ODP) is tapped on "Peta Topologi".
+     * Deliberately NOT the full "Koneksi Core" table (that stays on
+     * FiberNodeDetail, linked to via `detail_url`): one main photo, a
+     * used/spare core count, and the same traffic-light capacity badge
+     * the Capacity Report uses (`capacityZone()`).
+     *
+     * $kind is the marker's `type` field: 'fiber_node' or 'odp'.
+     *
+     * @return array{
+     *   kind: string, id: int, title: string, subtitle: string,
+     *   photo_url: ?string, photo_caption: ?string,
+     *   cores: array{incoming: array{used: int, spare: int, total: int}, outgoing: array{used: int, spare: int, total: int}},
+     *   capacity_incoming: array{percent: ?int, label: string, color: string},
+     *   capacity_outgoing: array{percent: ?int, label: string, color: string},
+     *   port_capacity: null|array{percent: ?int, label: string, color: string, used: int, total: int},
+     *   detail_url: string
+     * }|null
+     */
+    public function markerInfoPanel(string $kind, int $id): ?array
+    {
+        $node = match ($kind) {
+            'fiber_node' => FiberNode::find($id),
+            'odp' => Odp::find($id),
+            default => null,
+        };
+
+        if ($node === null) {
+            return null;
+        }
+
+        // v0.16.1 Revisi 3 E / Revisi 4 B — core counts are kept STRICTLY
+        // separate by cable direction: no masuk+keluar sum anywhere (the
+        // combined "72 core" figure only ever confused). A Closure
+        // legitimately has an incoming feeder AND outgoing distribution
+        // cables; each gets its own 3 boxes + its own traffic-light badge.
+        $sumCores = function ($ids): array {
+            $statuses = FiberCore::query()->whereIn('fiber_cable_id', $ids)->pluck('status');
+            $used = $statuses->filter(fn ($s) => $s === FiberCoreStatus::Used)->count();
+            $total = $statuses->count();
+
+            return ['used' => $used, 'spare' => $total - $used, 'total' => $total];
+        };
+
+        $in = $sumCores($node->cablesAsTo()->pluck('id'));
+        $out = $sumCores($node->cablesAsFrom()->pluck('id'));
+
+        $zoneFor = function (array $side): array {
+            $percent = $side['total'] > 0 ? (int) round($side['used'] / $side['total'] * 100) : null;
+            $zone = $this->capacityZone($percent);
+
+            return ['percent' => $percent, 'label' => $zone['label'], 'color' => $zone['color']];
+        };
+
+        $portCapacity = null;
+        if ($kind === 'odp') {
+            $cap = $this->odpCapacities()->get($id);
+            $portCapacity = $cap === null
+                ? ['percent' => null, 'label' => $this->capacityZone(null)['label'], 'color' => $this->capacityZone(null)['color'], 'used' => 0, 'total' => 0]
+                : ['percent' => $cap['percent'], 'label' => $cap['zone_label'], 'color' => $cap['zone_color'], 'used' => $cap['used'], 'total' => $cap['total']];
+
+            $title = "{$node->code} - {$node->name}";
+            $subtitle = 'ODP';
+            $detailUrl = route('web.odps.detail', $node->id);
+        } else {
+            $title = $node->local_label ?? $node->node_type->label();
+            $subtitle = $node->node_type->label();
+            $detailUrl = route('web.fiber-nodes.detail', $node->id);
+        }
+
+        $photo = $node->photos()->latest('id')->first();
+
+        return [
+            'kind' => $kind,
+            'id' => $id,
+            'title' => $title,
+            'subtitle' => $subtitle,
+            'photo_url' => $photo === null ? null : route('web.fiber-node-photos.show', $photo->id),
+            'photo_caption' => $photo?->caption,
+            'cores' => ['incoming' => $in, 'outgoing' => $out],
+            'capacity_incoming' => $zoneFor($in),
+            'capacity_outgoing' => $zoneFor($out),
+            'port_capacity' => $portCapacity,
+            'detail_url' => $detailUrl,
+        ];
     }
 
     public function capacityReport(?string $search = null): array

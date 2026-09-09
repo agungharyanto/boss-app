@@ -44,6 +44,18 @@ class FiberTopologyMap extends Component
     public bool $showExportPanel = false;
 
     /**
+     * v0.16.1 Bagian F — the compact info panel for the last-tapped
+     * topology marker (OTB / Closure / ODC / ODP). Null = closed. Its
+     * shape is FiberTopologyService::markerInfoPanel()'s return. Rendered
+     * OUTSIDE the Leaflet wire:ignore subtree as a bottom sheet (mobile) /
+     * side panel (desktop), reusing v0.17.0's fixed+backdrop+z-index
+     * convention — NOT the sidebar drawer component.
+     *
+     * @var array<string, mixed>|null
+     */
+    public ?array $markerPanel = null;
+
+    /**
      * Categories included in the next KMZ export — the checklist shown
      * before "Download KMZ". Defaults to every category (an explicit
      * export usually wants everything; user unchecks what they don't).
@@ -102,6 +114,23 @@ class FiberTopologyMap extends Component
         ));
 
         $this->pushLines($service);
+    }
+
+    /**
+     * v0.16.1 Bagian F — a topology marker was tapped on the map (the
+     * Leaflet marker's own click handler calls this via $wire). Loads the
+     * compact summary; the map itself (inside wire:ignore) is untouched.
+     */
+    public function openMarkerPanel(string $kind, int $id, FiberTopologyService $service): void
+    {
+        abort_unless($this->canView(), 403);
+
+        $this->markerPanel = $service->markerInfoPanel($kind, $id);
+    }
+
+    public function closeMarkerPanel(): void
+    {
+        $this->markerPanel = null;
     }
 
     /**

@@ -34,6 +34,7 @@ class OltDevice extends Model
         'snmp_port',
         'snmp_ro_community',
         'snmp_rw_community',
+        'pon_port_count',
         'last_connection_test_at',
         'last_connection_test_result',
         'last_connection_test_message',

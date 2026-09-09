@@ -7,6 +7,7 @@ use App\Models\Odp;
 use App\Models\Splitter;
 use App\Services\Network\FiberTopologyService;
 use App\Services\Network\SplitterLossReferenceService;
+use InvalidArgumentException;
 use Livewire\Component;
 
 /**
@@ -14,11 +15,15 @@ use Livewire\Component;
  * NEW page — confirmed by grep before building that no Odp web edit page
  * existed anywhere in this codebase (Odp has only ever been API-only,
  * v0.5.0's OdpController). This page does NOT touch StoreOdpRequest/
- * UpdateOdpRequest/OdpController at all — Odp's own core fields
- * (code/name/total_ports, the v0.5.0 registration flow) are shown
- * read-only here; only the NEW v0.16.0 fields (parent link, loss, GPS,
- * photos) are editable, via FiberTopologyService::updateOdpTopologyFields()
- * and the same reusable GpsPhotoCapture widget FiberNodeForm uses.
+ * UpdateOdpRequest/OdpController at all — it edits the v0.16.0 topology
+ * fields (parent link, loss, GPS, photos) via
+ * FiberTopologyService::updateOdpTopologyFields() + the reusable
+ * GpsPhotoCapture widget.
+ *
+ * v0.16.1 Revisi 3 A — `code` + `name` are now editable here too (were
+ * read-only). Code uniqueness-per-tenant reuses
+ * FiberTopologyService::assertOdpCodeAvailable() — the same rule
+ * createOdpWithAttachments() enforces, not a duplicate.
  */
 class OdpEdit extends Component
 {
@@ -65,6 +70,8 @@ class OdpEdit extends Component
     protected function rules(): array
     {
         return [
+            'code' => ['required', 'string', 'max:50'],
+            'name' => ['required', 'string', 'max:255'],
             'parentId' => ['nullable', 'integer'],
             'lossInDb' => ['required', 'numeric'],
             'lossOutDb' => ['required', 'numeric'],
@@ -76,6 +83,8 @@ class OdpEdit extends Component
     protected function validationAttributes(): array
     {
         return [
+            'code' => 'Kode ODP',
+            'name' => 'Nama ODP',
             'lossInDb' => 'Redaman Masuk',
             'lossOutDb' => 'Redaman Keluar',
             'splitterRatio' => 'Rasio Splitter',
@@ -102,7 +111,21 @@ class OdpEdit extends Component
 
         $this->validate();
 
-        $odp = $service->updateOdpTopologyFields(Odp::findOrFail($this->odpId), [
+        $odp = Odp::findOrFail($this->odpId);
+        $code = trim($this->code);
+        $name = trim($this->name);
+
+        try {
+            $service->assertOdpCodeAvailable($odp->tenant_id, $code, $odp->id);
+        } catch (InvalidArgumentException $e) {
+            $this->addError('code', $e->getMessage());
+
+            return;
+        }
+
+        $odp = $service->updateOdpTopologyFields($odp, [
+            'code' => $code,
+            'name' => $name,
             'parent_type' => $this->parentId !== '' ? FiberNode::class : null,
             'parent_id' => $this->parentId !== '' ? (int) $this->parentId : null,
             'loss_in_db' => (float) $this->lossInDb,

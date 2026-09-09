@@ -197,6 +197,7 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
         editWaypoints: [],
         editServerWaypoints: [],
         editEndpoints: [],
+        tapAddMode: false, // v0.16.1 Bagian E
 
         init() {
             const anchor = (markers || [])[0] || (customers || [])[0];
@@ -256,12 +257,15 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
                     .addTo(group)
                     .bindTooltip(m.label, { direction: 'top' });
 
-                // v0.16.0 Langkah 11 Bagian E — ODP marker popup shows the
-                // same "X/Y port terpakai" + traffic-light badge as the
-                // Capacity Report (data comes straight from
-                // FiberTopologyService::odpCapacities()).
-                if (m.node_type === 'odp') {
-                    marker.bindPopup(this.odpPopupHtml(m));
+                // v0.16.1 Bagian F — tapping any node/ODP marker opens the
+                // compact info panel (bottom sheet / side panel), rendered
+                // by Livewire OUTSIDE this wire:ignore subtree. Replaces
+                // the old Leaflet ODP popup (the panel is a superset — it
+                // also carries a photo, core summary and a detail link).
+                if (this.$wire) {
+                    marker.on('click', () => {
+                        this.$wire.call('openMarkerPanel', m.type, m.id);
+                    });
                 }
             });
 
@@ -286,6 +290,11 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
 
             this.renderLines(lines || []);
 
+            // v0.16.1 Bagian E — tap-to-add waypoint (mobile-friendly
+            // alternative to dragging handles). Only acts while a cable is
+            // being edited AND "Mode Edit Rute" is on.
+            this.map.on('click', (e) => this.onMapTapForEdit(e.latlng));
+
             if (this.$wire) {
                 this.$wire.on('topology-lines-updated', (payload) => {
                     const next = Array.isArray(payload) ? payload[0]?.lines : payload?.lines;
@@ -305,18 +314,6 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
             return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
                 '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
             })[c]);
-        },
-
-        odpPopupHtml(m) {
-            let html = '<strong>' + this.esc(m.label) + '</strong>';
-            const cap = m.capacity;
-            if (!cap) {
-                return html + '<br><span style="color:#9ca3af">Kapasitas port belum diatur</span>';
-            }
-            const badge = '<span style="display:inline-block;padding:1px 6px;border-radius:9999px;font-size:11px;color:#fff;background:' +
-                cap.zone_color + '">' + this.esc(cap.zone_label) +
-                (cap.percent === null ? '' : ' · ' + cap.percent + '%') + '</span>';
-            return html + '<br>' + cap.used + '/' + cap.total + ' port terpakai ' + badge;
         },
 
         fullPoints(line) {
@@ -363,6 +360,7 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
             this.editServerWaypoints = line.waypoints.map((p) => [p[0], p[1]]);
             this.editWaypoints = this.editServerWaypoints.map((p) => [p[0], p[1]]);
             this.editEndpoints = [line.endpoints[0], line.endpoints[1]];
+            this.tapAddMode = false;
             this.redrawEdit();
         },
 
@@ -371,6 +369,7 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
             this.editLabel = '';
             this.editWaypoints = [];
             this.editServerWaypoints = [];
+            this.tapAddMode = false;
             if (this.editLayer) {
                 this.editLayer.clearLayers();
             }
@@ -379,6 +378,52 @@ window.fiberTopologyMap = function ({ markers, customers, lines, canManage, defa
         resetRoute() {
             this.editWaypoints = this.editServerWaypoints.map((p) => [p[0], p[1]]);
             this.redrawEdit();
+        },
+
+        /* v0.16.1 Bagian E — mobile waypoint editing without drag precision. */
+        toggleTapAdd() {
+            this.tapAddMode = !this.tapAddMode;
+        },
+
+        onMapTapForEdit(latlng) {
+            if (this.editCableId === null || !this.tapAddMode) {
+                return;
+            }
+            // append at the END of the route — the list below lets the user
+            // reorder afterwards, so no need to guess an insertion segment.
+            this.editWaypoints.push([latlng.lat, latlng.lng]);
+            this.redrawEdit();
+        },
+
+        moveWaypoint(idx, dir) {
+            const j = idx + dir;
+            if (j < 0 || j >= this.editWaypoints.length) {
+                return;
+            }
+            const tmp = this.editWaypoints[idx];
+            this.editWaypoints[idx] = this.editWaypoints[j];
+            this.editWaypoints[j] = tmp;
+            this.redrawEdit();
+        },
+
+        removeWaypointAt(idx) {
+            this.editWaypoints.splice(idx, 1);
+            this.redrawEdit();
+        },
+
+        /* v0.16.1 Revisi A — one-click undo of the most recently added
+           waypoint (tap-add or drag-inserted), clickable repeatedly to
+           peel back several. Still client-side until "Simpan Rute". */
+        undoLastWaypoint() {
+            if (this.editWaypoints.length === 0) {
+                return;
+            }
+            this.editWaypoints.pop();
+            this.redrawEdit();
+        },
+
+        fmtLatLng(p) {
+            return Number(p[0]).toFixed(6) + ', ' + Number(p[1]).toFixed(6);
         },
 
         editFullPoints() {

@@ -80,6 +80,13 @@ class OltDeviceIndex extends Component
 
     public string $snmpRwCommunity = '';
 
+    /**
+     * v0.16.1 Revisi F — jumlah PON port fisik, diisi manual, opsional.
+     * Kalau terisi, form assign-port core memakai dropdown "PON 1..N"
+     * alih-alih teks bebas untuk device ini.
+     */
+    public ?int $ponPortCount = null;
+
     public string $notes = '';
 
     public ?int $resellerId = null;
@@ -231,6 +238,7 @@ class OltDeviceIndex extends Component
         $this->snmpPort = $oltDevice->snmp_port ?? 2161;
         $this->snmpRoCommunity = '';
         $this->snmpRwCommunity = '';
+        $this->ponPortCount = $oltDevice->pon_port_count;
         $this->notes = (string) $oltDevice->notes;
         $this->resellerId = $oltDevice->reseller_id;
 
@@ -423,6 +431,7 @@ class OltDeviceIndex extends Component
             'snmpPort' => ['required', 'integer', 'min:1', 'max:65535'],
             'snmpRoCommunity' => [$this->editingOltDeviceId === null ? 'required' : 'nullable', 'string', 'max:255'],
             'snmpRwCommunity' => ['nullable', 'string', 'max:255'],
+            'ponPortCount' => ['nullable', 'integer', 'min:1', 'max:1024'],
             'notes' => ['nullable', 'string'],
         ];
 
@@ -493,6 +502,7 @@ class OltDeviceIndex extends Component
         // masked-secret convention as telnet/ssh passwords above.
         $data['snmp_version'] = $this->snmpVersion;
         $data['snmp_port'] = $this->snmpPort;
+        $data['pon_port_count'] = $this->ponPortCount ?: null;
         if ($this->snmpRoCommunity !== '') {
             $data['snmp_ro_community'] = $this->snmpRoCommunity;
         }
@@ -564,6 +574,7 @@ class OltDeviceIndex extends Component
         $this->snmpPort = 2161;
         $this->snmpRoCommunity = '';
         $this->snmpRwCommunity = '';
+        $this->ponPortCount = null;
         $this->notes = '';
         $this->resellerId = null;
         $this->testConnectionResult = null;

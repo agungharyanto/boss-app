@@ -35,3 +35,6 @@ backups/exports/
 # Uploaded working files (per-sprint, not committed)
 exportgenieacsanten.xlsx
 virtualParameters-*.csv
+
+# Claude Code local config (per-machine, not project code)
+.claude/

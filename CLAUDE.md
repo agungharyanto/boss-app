@@ -8685,6 +8685,117 @@ re-run this investigation** — the answer is: coordinates are entered going for
 `App\Livewire\Customers\CustomerCoordinateFill` (`/customers/lengkapi-koordinat`, a manual per-customer
 pin-drop that writes ONLY `latitude`/`longitude`, deliberately no ODP link) or the registration form.
 
+## v0.16.1 Topology Refinements — SELESAI, MERGED + TAGGED (branch `v0.16.1-topology-refinements`, dipertahankan)
+
+**Status: MERGED `--no-ff` ke `develop` lalu `develop`→`main` (pola v0.16.0/v0.17.0), tag annotated
+`v0.16.1` di commit merge `develop`→`main`, pushed.** Full regression suite hijau sebelum tiap merge
+(branch: 1743 · develop pasca-merge · main pasca-merge). Verifikasi manual browser oleh Agung sepanjang
+sesi (4 putaran review+fix). Branch TIDAK dihapus (kebiasaan proyek). Semua migration DB dev sudah setara
+`main` sekarang (`fiber_core_splices`, `olt_devices.pon_port_count`).
+
+**Isi (Bagian A-H + Revisi 1-4):** fix bug OTB assign-port (`olt_pon_port_label` independen dari OLT) +
+feeder core assignable; `fiber_core_splices` polimorfik (Closure/ODC/ODP) dengan guard arah masuk↔keluar +
+multi-hop through-splice (`coreAlreadySplicedAtNode`); reorganisasi "Koneksi Core" per-tube; "Simulasi
+Port" digabung ke OTB; ODP sebagai Tipe Titik di form "Titik Baru" (create-only,
+`createOdpWithAttachments()`); edit Kode/Nama ODP di `OdpEdit`; unifikasi "Label"→"Nama Titik"; mode edit
+rute mobile (tap peta + daftar waypoint + undo); panel info marker peta (6 kotak kapasitas per arah);
+"Tukar Port" modal (Antar Core / Antar Tube); blokir hapus kabel dgn splice aktif; `olt_devices.pon_port_count`
+→ dropdown PON; **fix bug laten sejak v0.16.0: `FiberNodePhotoController` return type salah → foto passive/ODP
+tidak pernah tampil di UI mana pun**. Detail per-revisi di bawah + `CHANGELOG.md`.
+
+- **A** `FiberTopologyService` — `olt_pon_port_label` didecouple dari `olt_device_id` (bebas diisi utk
+  catatan non-OLT, cuma di-null saat port di-clear); feeder core (`cablesAsTo` ke OTB) ikut assignable;
+  `coreCardData($core, ?$relativeTo)` direction-aware.
+- **B** migration `2026_09_08_100000_create_fiber_core_splices_table` (**SUDAH `migrate` di DB dev — DB dev
+  lebih maju dari `main`**). Polimorfik `splice_node_type`/`splice_node_id` (jalan di ODP, yang di tabel
+  `odps`). `App\Models\FiberCoreSplice` + `App\Services\Network\FiberCoreSpliceService` (5 guard).
+- **C+D** `FiberNodeDetail` blade rewrite — "Koneksi Core" kolom per-tube dinamis (`tube_count`),
+  "Simulasi Port" digabung (OTB). Non-OTB: "Assign Core-to-Core" dropdown 2-tahap (Kabel→Tube+Core, guard
+  beda kabel). `coreGridForNode(FiberNode|Odp, ?FiberNode $otb)` satu sumber data.
+- **E** `fiberTopologyMap` factory (`app.js`) + blade — mode edit rute mobile (tap peta tambah waypoint di
+  ujung + daftar waypoint reorder/hapus). Drag-pin desktop tetap.
+- **F** `FiberTopologyService::markerInfoPanel(kind, id)` + `FiberTopologyMap::openMarkerPanel()`/
+  `closeMarkerPanel()` + panel blade (bottom sheet/side panel, z-[1100]/z-[1200] konvensi v0.17.0 L2.2,
+  BUKAN drawer). Popup Leaflet ODP lama (`odpPopupHtml`) DIHAPUS — panel supersetnya.
+- **b (PON dropdown)** — awalnya tidak dikerjakan; **revisi F** kemudian menambahkan `olt_devices.pon_port_count`
+  (diisi manual admin, TANPA monitoring live) → di form assign-port jadi dropdown "PON 1".."PON N" kalau
+  device-nya dikonfigurasi, fallback teks bebas kalau null.
+
+**Revisi 1 (review Agung, commit `cfdda38`)**: A undo waypoint di Mode Edit Rute; B label
+"Tube N (Warna) / Core M (Warna)" di dropdown splice; C guard arah splice (`FiberCoreSpliceService`:
+kabel MASUK `to_*==node` ↔ kabel KELUAR `from_*==node`, tolak masuk+masuk/keluar+keluar, tanpa batasan
+jumlah) + `FiberTopologyService::deleteCable()` + tombol "Hapus" per kartu kabel di Diagram Splice;
+E `FiberTopologyService::swapCorePorts()` + field cari di "Assign Port ke Core"; F
+`olt_devices.pon_port_count` (**migration `2026_09_08_120000` sudah di-`migrate` di DB dev**).
+
+**Revisi 2 (review Agung terhadap hasil revisi 1, commit `830c798`)**:
+- **A — BALIK keputusan hapus-kabel** (sengaja, demi keamanan data): `deleteCable()` sekarang **memblokir**
+  kalau kabel masih punya >= 1 `fiber_core_splices` aktif (core jadi `from_` ATAU `to_`) →
+  `InvalidArgumentException` + jumlah splice; `FiberNodeDetail::deleteCable()` flash `cable-error`. Cascade
+  lain (`fiber_core_port_logs`/`fiber_accessories`/`fiber_cable_waypoints`) tetap. Hapus splice dulu baru
+  kabel bisa dihapus. **JANGAN kembalikan ke cascade — ini keputusan final.**
+- **B — filter dropdown splice per arah**: `spliceIncomingCableOptions` (`to_*==node`) /
+  `spliceOutgoingCableOptions` (`from_*==node`); label "Kabel Masuk"/"Kabel Keluar". Guard service tetap
+  lapis 2. Gate `$canSplice` = min 1 masuk + 1 keluar.
+- **C — "Tukar Port" jadi modal 2-tingkat**: mode "Antar Tube" (`swapCoreTubes()` — semua core posisi-sama
+  T-x/C-n ⇄ T-y/C-n dalam 1 transaction) / "Antar Core" (`swapCorePorts()`). Kolom checkbox "Tukar" dihapus
+  dari tabel. `swapCorePorts()` sekarang menukar SELURUH assignment (port + `olt_device_id` +
+  `olt_pon_port_label`) sebagai satu unit — patch OLT/PON milik PORT bukan core.
+
+**Revisi 3 (review Agung, commit `897e6c6` = Bagian 2; Bagian 1 = investigasi/STOP)**:
+- **Bagian 2 A** — Kode/Nama ODP editable di `OdpEdit` (dulu read-only). `FiberTopologyService::
+  assertOdpCodeAvailable($tenantId, $code, ?$ignoreOdpId)` shared antara `createOdpWithAttachments()` dan
+  `OdpEdit::save()`.
+- **Bagian 2 B/C** — form "Titik Baru": field "Label" disembunyikan saat Tipe=ODP (redundan dengan "Nama
+  ODP", yang dapat placeholder "Patokan Lokasi"); "Label" → **"Nama Titik"** untuk OTB/Closure/ODC (istilah
+  tampilan saja, kolom `local_label` tidak berubah).
+- **Bagian 2 D — BUG LATEN sejak v0.16.0, foto passive/ODP TIDAK PERNAH tampil di UI mana pun.**
+  `FiberNodePhotoController::show()` return type `Illuminate\Http\Response` tapi
+  `Storage::disk('local')->response()` mengembalikan `StreamedResponse` (di server ini DAN
+  `Storage::fake`) → `TypeError` → 500 → broken `<img>` di GpsPhotoCapture / OdpEdit / panel marker Peta
+  Topologi. Fix: return type → `Symfony\Component\HttpFoundation\Response` (persis `CommissionPaymentProofController`
+  yang docblock-nya sudah lama mencatat kontras ini). **`FiberNodePhotoControllerTest` baru — sebelumnya
+  nol HTTP test untuk endpoint ini.** `CommissionPaymentProofController` docblock premisnya ("real local
+  disk mengembalikan `Illuminate\Http\Response`") ternyata KELIRU untuk versi Flysystem/Laravel ini —
+  `StreamedResponse` di kedua kasus.
+- **Bagian 2 E** — `markerInfoPanel()['cores']` shape berubah: `incoming_used`/`incoming_total`/
+  `outgoing_used`/`outgoing_total`/`unused`/`total` (dipecah per arah kabel `cablesAsTo`/`cablesAsFrom`)
+  — ganti gabungan `used`/`spare`/`total` yang lama (yang bikin "72 Core" tampak aneh).
+- **Bagian 1 (override destinasi per-core: `fiber_cores.override_to_type`/`override_to_id`) — BELUM
+  dikerjakan, STOP & lapor.** Investigasi titik sentuh `fiber_cable.to_type`/`to_id` selesai (lihat
+  laporan). Menunggu konfirmasi Agung untuk desain final sebelum eksekusi.
+
+**Revisi 4 (review Agung terhadap Revisi 3, commit `cb5d223`)**:
+- **A — bug filter core splice "sudah dipakai".** `FiberCoreSpliceService::coreAlreadySpliced()` (cek core
+  di splice mana pun, kolom mana pun) diganti **`coreAlreadySplicedAtNode($coreId, $node)`** (cek `where
+  splice_node_* = node` + either column). Dipakai `assertValid()` DAN
+  `FiberNodeDetail::spliceCoreOptions()`. **Alasan**: sebuah core boleh di-through-splice di KEDUA ujung
+  kabelnya (multi-hop path: cableA -(node X)- cableB -(node Y)- cableC). DB sudah membatasi ke sekali-per-
+  kolom via `unique(from_fiber_core_id)`/`unique(to_fiber_core_id)` terpisah — filter lama lebih ketat
+  dari yang diperlukan & menyembunyikan semua core yang sudah di-splice di ujung lain. Dropdown "Tube /
+  Core sisi masuk/keluar" dapat label "(N core tersedia)" + pesan amber kalau 0. `test_rejects_a_core_that_is_already_spliced_on_either_side`
+  tetap hijau (core yang spliced sebagai `to_` di node X tetap ditolak untuk splice lagi DI node X).
+- **B — popup kapasitas peta 6 kotak.** `markerInfoPanel()['cores']` **shape berubah lagi**:
+  `{incoming: {used, spare, total}, outgoing: {used, spare, total}}` — TANPA `unused`/`total` gabungan
+  (Revisi 3 E punya `incoming_used`/`unused`/dll flat + `capacity` gabungan; Revisi 4 hapus semua angka
+  gabungan). + `capacity_incoming` / `capacity_outgoing` (badge per arah) + `port_capacity` (khusus ODP,
+  nullable).
+
+**Revisi poin D (ODP di form `FiberNodeForm` "Titik Baru") — SELESAI (commit terpisah, 10 keputusan
+dikonfirmasi Agung).** "ODP" jadi opsi Tipe Titik **hanya saat create** (`@if ($fiberNodeId === null)`;
+`nodeType` rule `Rule::in` tolak 'odp' saat edit + guard `save()`). Field kondisional Tipe=ODP: `odpCode`
+(wajib, unik `(tenant_id,code)` — guard di service), `odpName` (wajib), lat/long WAJIB (kolom `odps` NOT
+NULL, `rules()` conditional), "Jumlah Port ODP" pakai prop `portCount` yang sama tapi ditulis ke
+`odps.total_ports` (field `port_count` OTB disembunyikan saat non-OTB), loss in/out **WAJIB** (konsisten
+`OdpEdit` + `isLossRequired()` — `save()` addError kalau kosong, sama pola ODC), splitter form muncul
+(`$isSplittingPoint = in_array($nodeType, ['odc','odp'])`). **`FiberTopologyService::createOdpWithAttachments($data,
+$photos, $splitter)`** baru: guard code kosong/duplikat → `InvalidArgumentException`, lalu `Odp::create()`
++ `provisionPorts()` + `addPhoto()` + `attachSplitter()` dalam 1 `DB::transaction`, `reseller_id = null`.
+TIDAK menyentuh `StoreOdpRequest`/`OdpController` (pola `OdpEdit`/`updateOdpTopologyFields`). Gate tetap
+`network_infrastructure.manage` (dikonfirmasi lolos tier-admin sama seperti `OdpPolicy::create`).
+
+**Closure selesai** — merged `develop`→`main`, tag `v0.16.1` di merge commit `develop`→`main`, semua di-push.
+
 ## Migrasi whatsmeow — Baileys Resmi Pensiun (branch `migrasi-whatsmeow`, selesai 2026-09-05)
 
 **Gateway WhatsApp pindah total dari Node.js/Baileys ke Go/whatsmeow.** `whatsapp-gateway/` sekarang

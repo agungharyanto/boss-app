@@ -200,6 +200,26 @@ class GenieAcsPresetServiceTest extends TestCase
         // WAN2 guard v2 — cek isi (bridge di posisi mana pun) + SN allowlist in-script.
         $this->assertStringContainsString('bridgeWithTargetVlanExists', $script);
         $this->assertStringContainsString('wan2Allowlist', $script);
+
+        // Fix bug instance-number CT-COM (2026-09-09): nomor instance
+        // WANPPPConnection di-RE-READ dari device, tidak di-hardcode `.1`.
+        $this->assertStringContainsString('function ctcNewInstance', $script);
+        // Cabang CT-COM WAN1 & WAN2 membangun basePath dari nomor instance
+        // hasil re-read (`${wan1PppPath}.${w1Inst}` / `${wan2PppPath}.${w2Inst}`),
+        // BUKAN hardcoded `.1` (branch H/C/Z tetap `.1` — vendor itu andal).
+        $this->assertStringContainsString('`${wan1PppPath}.${w1Inst}`', $script);
+        $this->assertStringContainsString('`${wan2PppPath}.${w2Inst}`', $script);
+        $this->assertStringContainsString('const w1Inst = ctcNewInstance(', $script);
+        $this->assertStringContainsString('const w2Inst = ctcNewInstance(', $script);
+        // ctcFreeWcd() scan wildcard (SEMUA instance, beberapa leaf), bukan cuma `.1`.
+        $this->assertStringContainsString('${conn}.*.${leaf}', $script);
+        $this->assertStringContainsString('X_CT-COM_ServiceList', $script);
+        // WAN1 idempotent guard juga wildcard.
+        $this->assertStringContainsString('WANPPPConnection.*.Username', $script);
+        // Penanda inline "⚠️ VERIFIED BROKEN" di cabang provisioning sudah
+        // hilang; diganti blok "HISTORI BUG" (jejak tetap ada).
+        $this->assertStringNotContainsString('⚠️ VERIFIED BROKEN', $script);
+        $this->assertStringContainsString('HISTORI BUG', $script);
     }
 
     public function test_serial_list_is_normalized_into_the_args_csv(): void

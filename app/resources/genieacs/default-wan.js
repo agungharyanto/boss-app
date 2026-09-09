@@ -44,10 +44,11 @@
 //     template CMDCA21C01E7 (di-konfig manual: WAN1 PPPoE VID 111 +
 //     WAN2 bridge VID 172 + multi-SSID). GUARD idempoten CT-COM SUDAH
 //     dites ke device asli (skip semua). PROVISIONING WAN BARU CT-COM ke
-//     device FRESH = **KNOWN BUG** (instance number hardcoded `.1`,
-//     device bikin di `.2` → `preset_loop`). VERIFIED BROKEN pada
-//     CMDCA473F158 2026-09-08 — lihat blok "KNOWN BUG" tepat sebelum
-//     definisi ctcFreeWcd(). Fitur DISABLED by default, AMAN untuk fleet.
+//     device FRESH: instance number WANPPPConnection di-RE-READ dari device
+//     setelah create (tidak diasumsikan `.1`) + ctcFreeWcd() memindai
+//     SEMUA instance per WCD. Bug hardcoded-`.1` ditemukan pada CMDCA473F158
+//     2026-09-08 (`preset_loop`), diperbaiki 2026-09-09 — lihat blok
+//     "HISTORI BUG" tepat sebelum definisi ctcFreeWcd().
 //
 // IDEMPOTEN — cek BERDASARKAN ISI, bukan posisi:
 //   WAN1: skip kalau SUDAH ada WANPPPConnection.*.1.Username terisi di
@@ -100,62 +101,92 @@ if (enabled) {
   const wanDevicePath = "InternetGatewayDevice.WANDevice.1";
 
   // ══════════════════════════════════════════════════════════════════════
-  // KNOWN BUG — cabang isCTCom PROVISIONING (WAN1 + WAN2): instance number
-  // WANPPPConnection di-HARDCODE `.1` (lihat `const basePath = ...".1"`).
-  // Device CT-COM nyata bisa membuat instance di nomor MANA PUN (mis. `.2`)
-  // setelah `declare("${path}.*", null, { path: 1 })` — nomor instance
-  // TR-069 di objek dinamis TIDAK stabil/berurutan (persis gotcha yang
-  // sudah dicatat CLAUDE.md untuk Hosts.Host.{n}, v0.7.6).
+  // HISTORI BUG — instance number CT-COM (ditemukan 2026-09-08, fix 2026-09-09)
   //
-  // Akibatnya:
-  //  - Username / X_CT-COM_ServiceList / X_CT-COM_LanInterface ditulis ke
-  //    `.1` yang tidak ada → tidak pernah ter-set.
-  //  - `ctcFreeWcd()` di bawah cuma memindai instance `.1` → WCD yang sudah
-  //    kepakai (di instance `.2`) tetap terlihat "kosong" → cabang WAN1 &
-  //    WAN2 sama-sama merebut WCD yang sama, VLANIDMark ke-timpa
-  //    (wan1Vlan → wan2Vlan).
-  //  - Script re-run tiap Inform, tidak pernah konvergen → GenieACS raise
-  //    fault `preset_loop`.
+  // Versi lama cabang isCTCom PROVISIONING (WAN1 + WAN2) meng-HARDCODE
+  // instance `.1` (`const basePath = ...".1"`). Device CT-COM nyata
+  // (CMDC H3-2S) membuat instance di nomor MANA PUN (teramati `.2`) setelah
+  // `declare("${path}.*", null, { path: 1 })` — nomor instance TR-069 di
+  // objek dinamis TIDAK stabil/berurutan (gotcha yang sama dengan
+  // Hosts.Host.{n}, CLAUDE.md v0.7.6). Akibat: writes ke `.1` yang tak ada
+  // → tak pernah ter-set; `ctcFreeWcd()` (yang cuma cek `.1`) melihat WCD
+  // kepakai sebagai "kosong" → WAN1 & WAN2 rebut WCD sama, VLANIDMark
+  // ke-timpa → script re-run tiap Inform → fault `preset_loop`.
+  // VERIFIED BROKEN CMDCA473F158 (fw V1.1.20P1T4) 2026-09-08.
   //
-  // VERIFIED BROKEN pada CMDCA473F158 (CMDC H3-2S XPON, fw V1.1.20P1T4),
-  // 2026-09-08 — device fresh, provisioning menghasilkan 1 WANPPPConnection
-  // setengah jadi di WCD.1 instance 2 (Enable=false, Username kosong,
-  // VLANIDMark=172) + 2 fault `preset_loop` (boss-auto-wan + default).
+  // FIX (2026-09-09):
+  //  1. `ctcNewInstance(pppPath)` — setelah `declare({path:1})` + `commit()`,
+  //     enumerasi instance yang GENUINELY ada di device (`declare("${path}.*
+  //     .ConnectionType")` lalu iterasi hasilnya) dan ambil nomor terkecil.
+  //     Return 0 kalau belum ter-refresh → branch skip Inform ini,
+  //     konvergen berikutnya (JANGAN tulis ke `.1` buta).
+  //  2. `ctcFreeWcd()` memindai SEMUA instance per WCD (wildcard
+  //     `WANIPConnection.*` / `WANPPPConnection.*`, beberapa leaf:
+  //     ConnectionType/Name/Enable/X_CT-COM_ServiceList), bukan cuma `.1`.
+  //     Slot dianggap "kepakai" bahkan kalau instance-nya un-configured
+  //     atau cuma expose ServiceList (bias ke aman — jangan pernah stomp
+  //     instance existing).
+  //  3. WAN1 idempotent guard diperlebar (scan instance via wildcard, bukan
+  //     hardcoded 1-2) supaya device yang bikin di `.2`/`.3` tetap ke-skip.
   //
-  // FIX yang diperlukan (belum dikerjakan):
-  //  1. Setelah `declare("${path}.*", null, { path: 1 })` + `commit()`,
-  //     RE-READ nomor instance sebenarnya (`declare("${path}.*", { value: 1 })`
-  //     lalu ambil key numerik pertama) — jangan asumsikan `.1`.
-  //  2. `ctcFreeWcd()` harus memindai SEMUA instance per WCD (pakai
-  //     `WANPPPConnectionNumberOfEntries` / `WANIPConnectionNumberOfEntries`
-  //     + loop instance), bukan cuma `.1`.
-  //  3. Retest ke device CT-COM yang sudah di-factory-reset.
-  //
-  // MITIGASI SEKARANG: fitur ini DISABLED by default
-  // (RemoteWanConfig.enabled = false → preset `boss-auto-wan` tidak dibuat,
-  // NOL device fleet kena). SN allowlist in-script (args[7]) = jaring
-  // pengaman tambahan selama fase testing. AMAN untuk fleet apa adanya.
+  // Fitur tetap DISABLED by default (RemoteWanConfig.enabled = false →
+  // preset boss-auto-wan tidak dibuat). SN allowlist in-script (args[7])
+  // = jaring pengaman tambahan fase testing.
   // ══════════════════════════════════════════════════════════════════════
+
+  // Setelah `declare("${pppPath}.*", null, { path: 1 })` + `commit()` pada
+  // sebuah WCD yang tadinya kosong (dipilih ctcFreeWcd), cari tahu nomor
+  // instance yang DEVICE benar-benar buat — jangan asumsikan `.1`.
+  // Return 0 kalau tidak ada instance ter-refresh (write belum propagasi
+  // dalam eksekusi yang sama) → pemanggil skip Inform ini, konvergen di
+  // Inform berikutnya (pola guard idempoten yang sama di seluruh script).
+  function ctcNewInstance(pppPath) {
+    let inst = 0;
+    for (const leaf of ["ConnectionType", "Enable", "Name"]) {
+      const decl = declare(`${pppPath}.*.${leaf}`, { value: Date.now() });
+      for (const it of decl) {
+        const parts = String(it.path).split(".");
+        const n = parseInt(parts[parts.length - 2], 10);
+        if (!isNaN(n) && (inst === 0 || n < inst)) inst = n;
+      }
+      if (inst > 0) return inst;
+    }
+    return 0;
+  }
 
   // CT-COM: VLAN tiap WAN ada di X_CT-COM_WANGponLinkConfig LEVEL-WCD
   // (`WANConnectionDevice.{N}.X_CT-COM_WANGponLinkConfig.VLANIDMark`),
   // BUKAN di connection. Helper cari slot WCD kosong pertama (1..8) untuk
   // provisioning WAN baru — model CT-COM menaruh tiap WAN di WCD terpisah
-  // (device auto-assign slot, tidak konsisten: H3-2S pakai WCD.1 spare +
-  // WCD.2 TR069; F663NV3a pakai WCD.1 TR069 tanpa spare). "Kosong" =
-  // tidak ada ConnectionType di WANIPConnection.1 MAUPUN WANPPPConnection.1.
-  // FUNGSI (bukan nilai) — dipanggil ulang di blok WAN1 & WAN2 supaya WAN2
-  // dapat slot BERIKUTNYA setelah WAN1 tercatat; kalau read belum
-  // ter-refresh dalam eksekusi yang sama, WAN2 skip Inform ini & konvergen
-  // di Inform berikutnya (sama pola guard idempoten lain).
+  // (device auto-assign slot, tidak konsisten). "Kosong" = tidak ada SATU
+  // PUN instance WANIPConnection ATAU WANPPPConnection di WCD itu (scan
+  // wildcard, bukan cuma `.1` — device bisa taruh koneksi di instance
+  // mana pun). FUNGSI (bukan nilai) — dipanggil ulang di blok WAN1 & WAN2
+  // supaya WAN2 dapat slot BERIKUTNYA setelah WAN1 tercatat.
   function ctcFreeWcd() {
     if (!isCTCom) return 0;
     for (let wcd = 1; wcd <= 8; wcd++) {
-      const ip = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.WANIPConnection.1.ConnectionType`, { value: Date.now() });
-      const ppp = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.WANPPPConnection.1.ConnectionType`, { value: Date.now() });
-      const ipSet = ip.size && ip.value && ip.value[0];
-      const pppSet = ppp.size && ppp.value && ppp.value[0];
-      if (!ipSet && !pppSet) return wcd;
+      let occupied = false;
+      for (const conn of ["WANIPConnection", "WANPPPConnection"]) {
+        // Cek BEBERAPA leaf, bukan cuma ConnectionType — device nyata
+        // (CMDCA473F158, 2026-09-09) punya WCD dengan WANIPConnection.1 yang
+        // HANYA meng-expose X_CT-COM_ServiceList (sisa refresh parsial /
+        // artefak TR069), ConnectionType-nya tidak ada. Kalau cuma cek
+        // ConnectionType, slot itu keliru dianggap kosong → WAN baru
+        // di-stomp ke instance existing.
+        for (const leaf of ["ConnectionType", "Name", "Enable", "X_CT-COM_ServiceList"]) {
+          const decl = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.${conn}.*.${leaf}`, { value: Date.now() });
+          for (const it of decl) {
+            // Instance apa pun (configured ATAU un-configured) = slot kepakai.
+            void it;
+            occupied = true;
+            break;
+          }
+          if (occupied) break;
+        }
+        if (occupied) break;
+      }
+      if (!occupied) return wcd;
     }
     return 0;
   }
@@ -165,16 +196,19 @@ if (enabled) {
   // WANPPPConnection dengan Username terisi di POSISI MANA PUN. Script
   // referensi cuma cek WANConnectionDevice 1-5 instance .1 — tapi CLAUDE.md
   // sendiri mencatat koneksi INTERNET pelanggan nyata pernah ada di
-  // WANConnectionDevice.6 (dan instance .2 untuk sebagian). Diperlebar ke
-  // WCD 1-8 x WANPPPConnection 1-3 supaya pelanggan existing TIDAK PERNAH
-  // ter-provision ulang tak sengaja.
+  // WANConnectionDevice.6 (dan instance .2/.3 untuk sebagian, terutama
+  // CT-COM). Scan wildcard `WANPPPConnection.*.Username` per WCD (1-8) —
+  // menjaring instance nomor BERAPA PUN supaya pelanggan existing (dan WAN1
+  // yang baru kita buat di instance non-`.1`) TIDAK PERNAH ter-provision
+  // ulang tak sengaja.
   if (wan1Enabled && !isNaN(wan1Vlan)) {
     let wan1AlreadyConfigured = false;
     for (let wcd = 1; wcd <= 8 && !wan1AlreadyConfigured; wcd++) {
-      for (let inst = 1; inst <= 2 && !wan1AlreadyConfigured; inst++) {
-        const pppCheck = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.WANPPPConnection.${inst}.Username`, { value: Date.now() });
-        if (pppCheck.size && pppCheck.value && pppCheck.value[0]) {
+      const usernames = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.WANPPPConnection.*.Username`, { value: Date.now() });
+      for (const u of usernames) {
+        if (u.value && u.value[0]) {
           wan1AlreadyConfigured = true;
+          break;
         }
       }
     }
@@ -256,7 +290,10 @@ if (enabled) {
       } else if (isCTCom && ctcFreeWcd() > 0) {
         // CT-COM WAN1 = routed PPPoE. Diverifikasi dari template
         // CMDCA21C01E7 (`2_INTERNET_R_VID_111`):
-        //  - WANPPPConnection.1 di WCD kosong (bukan instance .2 di WCD.1)
+        //  - WANPPPConnection di WCD kosong TERPISAH (bukan instance .2 di
+        //    WCD.1). Nomor instance di-RE-READ dari device (ctcNewInstance)
+        //    — device CT-COM bisa bikin di `.2`/`.3`, JANGAN asumsi `.1`
+        //    (bug 2026-09-08, lihat blok HISTORI BUG di atas).
         //  - Username/Password = field STANDAR (bukan X_CT-COM_IPoE*)
         //  - ConnectionType = "IP_Routed" (BUKAN "PPPoE_Routed" — device
         //    tetap routed-PPPoE selama Username terisi)
@@ -264,38 +301,38 @@ if (enabled) {
         //  - X_CT-COM_ServiceList = "INTERNET"
         //  - X_CT-COM_LanInterface = CSV path SSID (default SSID1+SSID5 =
         //    wifi rumah), X_CT-COM_LanInterface-DHCPEnable = true (LAN mode)
-        // ⚠️ VERIFIED BROKEN ke device CT-COM fresh (CMDCA473F158,
-        // 2026-09-08): `${wan1PppPath}.1` di bawah = instance hardcoded,
-        // device bikin di `.2` → writes ke `.1` hilang → `preset_loop`.
-        // Lihat blok "KNOWN BUG" sebelum ctcFreeWcd(). Guard idempoten
-        // (skip device yang sudah dikonfig) sudah OK.
         const w1Wcd = ctcFreeWcd();
         const wcdPath = `${wanDevicePath}.WANConnectionDevice.${w1Wcd}`;
         const wan1PppPath = `${wcdPath}.WANPPPConnection`;
         declare(`${wan1PppPath}.*`, null, { path: 1 });
         commit();
-        const basePath = `${wan1PppPath}.1`;
-        declare(`${basePath}.Username`, null, { value: wan1Username });
-        declare(`${basePath}.Password`, null, { value: wan1Password });
-        commit();
-        declare(`${basePath}.Enable`, null, { value: true });
-        declare(`${basePath}.ConnectionType`, null, { value: "IP_Routed" });
-        declare(`${basePath}.X_CT-COM_ServiceList`, null, { value: "INTERNET" });
-        commit();
-        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Enable`, null, { value: true });
-        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Mode`, null, { value: 2 });
-        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, null, { value: wan1Vlan });
-        commit();
-        const nat = declare(`${basePath}.NATEnabled`, { value: Date.now() });
-        if (!nat.size || nat.value[0] != true) {
-          declare(`${basePath}.NATEnabled`, null, { value: true });
+        const w1Inst = ctcNewInstance(wan1PppPath);
+        if (w1Inst > 0) {
+          const basePath = `${wan1PppPath}.${w1Inst}`;
+          declare(`${basePath}.Username`, null, { value: wan1Username });
+          declare(`${basePath}.Password`, null, { value: wan1Password });
+          commit();
+          declare(`${basePath}.Enable`, null, { value: true });
+          declare(`${basePath}.ConnectionType`, null, { value: "IP_Routed" });
+          declare(`${basePath}.X_CT-COM_ServiceList`, null, { value: "INTERNET" });
+          commit();
+          declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Enable`, null, { value: true });
+          declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Mode`, null, { value: 2 });
+          declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, null, { value: wan1Vlan });
+          commit();
+          const nat = declare(`${basePath}.NATEnabled`, { value: Date.now() });
+          if (!nat.size || nat.value[0] != true) {
+            declare(`${basePath}.NATEnabled`, null, { value: true });
+            commit();
+          }
+          declare(`${basePath}.X_CT-COM_LanInterface`, null, {
+            value: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1,InternetGatewayDevice.LANDevice.1.WLANConfiguration.5",
+          });
+          declare(`${basePath}.X_CT-COM_LanInterface-DHCPEnable`, null, { value: true });
           commit();
         }
-        declare(`${basePath}.X_CT-COM_LanInterface`, null, {
-          value: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1,InternetGatewayDevice.LANDevice.1.WLANConfiguration.5",
-        });
-        declare(`${basePath}.X_CT-COM_LanInterface-DHCPEnable`, null, { value: true });
-        commit();
+        // w1Inst === 0 → instance belum ter-refresh dalam eksekusi ini;
+        // skip, konvergen di Inform berikutnya.
       }
     }
   }
@@ -431,46 +468,48 @@ if (enabled) {
     } else if (shouldProvisionWan2 && isCTCom && ctcFreeWcd() > 0) {
       // CT-COM WAN2 = bridge. Diverifikasi dari template CMDCA21C01E7
       // (`3_INTERNET_B_VID_172`):
-      //  - WANPPPConnection.1 di WCD kosong TERPISAH (ctcFreeWcd sudah
-      //    memperhitungkan WAN1 yang mungkin baru dibuat di atas — helper
-      //    memindai ulang tiap eksekusi, jadi WAN2 dapat slot berikutnya
-      //    pada Inform setelah WAN1 tercatat)
+      //  - WANPPPConnection di WCD kosong TERPISAH (ctcFreeWcd — yang kini
+      //    memindai SEMUA instance per WCD — sudah memperhitungkan WAN1 yang
+      //    mungkin baru dibuat di atas; kalau read WAN1 belum ter-refresh
+      //    dalam eksekusi ini, WAN2 dapat WCD sama & di-guard oleh
+      //    bridgeWithTargetVlanExists / ctcNewInstance return 0 → skip,
+      //    konvergen Inform berikutnya)
+      //  - Nomor instance di-RE-READ (ctcNewInstance), JANGAN asumsi `.1`
+      //    (bug 2026-09-08, lihat blok HISTORI BUG di atas)
       //  - ConnectionType = "PPPoE_Bridged", Username kosong, NAT OFF
       //  - VLAN di X_CT-COM_WANGponLinkConfig.VLANIDMark LEVEL-WCD + Mode=2
       //  - X_CT-COM_ServiceList = "INTERNET"
       //  - X_CT-COM_LanInterface = SSID4+SSID8 (default "TOKEN WIFI" /
       //    hotspot bridged), X_CT-COM_LanInterface-DHCPEnable = false (WAN mode)
-      // ⚠️ VERIFIED BROKEN ke device CT-COM fresh (CMDCA473F158,
-      // 2026-09-08): sama akar bugnya dengan WAN1 — `ctcFreeWcd()` cuma
-      // scan instance `.1`, jadi WCD yang WAN1 sudah pakai (di `.2`) masih
-      // terlihat kosong → WAN2 rebut WCD yang sama, VLANIDMark ke-timpa
-      // (wan1Vlan → wan2Vlan). Lihat blok "KNOWN BUG" sebelum ctcFreeWcd().
       const w2Wcd = ctcFreeWcd();
       const wcdPath = `${wanDevicePath}.WANConnectionDevice.${w2Wcd}`;
       const wan2PppPath = `${wcdPath}.WANPPPConnection`;
-      const wan2Check = declare(`${wan2PppPath}.1.ConnectionType`, { value: Date.now() });
-      if (!(wan2Check.size && wan2Check.value[0])) {
-        declare(`${wan2PppPath}.*`, null, { path: 1 });
-        commit();
-        const base2Path = `${wan2PppPath}.1`;
-        declare(`${base2Path}.Enable`, null, { value: true });
-        declare(`${base2Path}.ConnectionType`, null, { value: "PPPoE_Bridged" });
-        declare(`${base2Path}.X_CT-COM_ServiceList`, null, { value: "INTERNET" });
-        commit();
-        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Enable`, null, { value: true });
-        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Mode`, null, { value: 2 });
-        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, null, { value: wan2Vlan });
-        commit();
-        const nat2 = declare(`${base2Path}.NATEnabled`, { value: Date.now() });
-        if (!nat2.size || nat2.value[0] != false) {
-          declare(`${base2Path}.NATEnabled`, null, { value: false });
+      declare(`${wan2PppPath}.*`, null, { path: 1 });
+      commit();
+      const w2Inst = ctcNewInstance(wan2PppPath);
+      if (w2Inst > 0) {
+        const base2Path = `${wan2PppPath}.${w2Inst}`;
+        const wan2Check = declare(`${base2Path}.ConnectionType`, { value: Date.now() });
+        if (!(wan2Check.size && wan2Check.value[0])) {
+          declare(`${base2Path}.Enable`, null, { value: true });
+          declare(`${base2Path}.ConnectionType`, null, { value: "PPPoE_Bridged" });
+          declare(`${base2Path}.X_CT-COM_ServiceList`, null, { value: "INTERNET" });
+          commit();
+          declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Enable`, null, { value: true });
+          declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Mode`, null, { value: 2 });
+          declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, null, { value: wan2Vlan });
+          commit();
+          const nat2 = declare(`${base2Path}.NATEnabled`, { value: Date.now() });
+          if (!nat2.size || nat2.value[0] != false) {
+            declare(`${base2Path}.NATEnabled`, null, { value: false });
+            commit();
+          }
+          declare(`${base2Path}.X_CT-COM_LanInterface`, null, {
+            value: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.4,InternetGatewayDevice.LANDevice.1.WLANConfiguration.8",
+          });
+          declare(`${base2Path}.X_CT-COM_LanInterface-DHCPEnable`, null, { value: false });
           commit();
         }
-        declare(`${base2Path}.X_CT-COM_LanInterface`, null, {
-          value: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.4,InternetGatewayDevice.LANDevice.1.WLANConfiguration.8",
-        });
-        declare(`${base2Path}.X_CT-COM_LanInterface-DHCPEnable`, null, { value: false });
-        commit();
       }
     }
   }

@@ -2294,7 +2294,29 @@ provisioning ditandai eksplisit "BELUM DIVERIFIKASI" di komentar script. Setelah
 di-revert `enabled=false` (preset dihapus, `wan2_serial_allowlist=CMDCA21C01E7` dipertahankan untuk
 re-enable cepat). `default-wan` provision tetap di GenieACS (harmless, tak direferensikan).
 
-### KNOWN BUG — provisioning CT-COM fresh (`preset_loop`), VERIFIED BROKEN `CMDCA473F158` 2026-09-08
+### KNOWN BUG — provisioning CT-COM fresh (`preset_loop`) — FIX DIIMPLEMENTASIKAN 2026-09-09, RETEST HARDWARE BERJALAN
+
+**FIX 2026-09-09 (retest hardware `CMDCA473F158` sedang berjalan — Opsi 5b: test AS-IS, device masih ada
+sampah `WANPPPConnection.2` un-configured di WCD.1 dari insiden 2026-09-08, sengaja diperlakukan sebagai
+skenario "device berantakan" yang harus ditangani fix, bukan reset ulang):**
+`app/resources/genieacs/default-wan.js` cabang `isCTCom` tidak lagi hardcode instance `.1`:
+- `ctcNewInstance(pppPath)` — setelah `declare("${path}.*", null, {path:1})` + `commit()`,
+  meng-enumerasi instance yang GENUINELY dibuat device (iterasi `declare("${path}.*.ConnectionType")`)
+  dan mengambil nomor terkecil. Return `0` kalau belum ter-refresh → branch skip Inform ini,
+  konvergen berikutnya (JANGAN tulis ke `.1` buta).
+- `ctcFreeWcd()` memindai SEMUA instance per WCD (wildcard `WAN{IP,PPP}Connection.*` × beberapa leaf:
+  ConnectionType/Name/Enable/X_CT-COM_ServiceList), bukan cuma `.1`. Slot dianggap kepakai bahkan kalau
+  instance-nya un-configured atau cuma expose ServiceList (kasus nyata `CMDCA473F158` WCD.3).
+- WAN1 idempotent guard: scan wildcard `WANPPPConnection.*.Username` per WCD (bukan hardcoded inst 1-2).
+Diverifikasi di sim Node (device CT-COM yang bikin instance `.2`): WAN1 → WCD kosong pertama, WAN2 →
+WCD berikutnya, `VLANIDMark` ditulis di DUA WCD berbeda (tidak saling timpa = akar `preset_loop` hilang).
+Test scoped `GenieAcsPresetServiceTest` hijau (19). **BELUM diverifikasi ke device asli** — perlu Agung
+factory-reset `CMDCA473F158` dulu (masih ada sampah `WANPPPConnection.2` setengah jadi di WCD.1 dari
+insiden 2026-09-08). Penanda `⚠️ VERIFIED BROKEN` inline di script diganti blok `HISTORI BUG`.
+
+---
+
+**Catatan insiden asli (2026-09-08) — biarkan sebagai jejak:**
 
 **Test provisioning WAN BARU ke device CT-COM FRESH pertama kali — GAGAL.** Modem test `CMDCA473F158`
 (CMDC `H3-2S XPON`, fw `V1.1.20P1T4`, di ro-hotspot VLAN9) bootstrap ke GenieACS 2026-09-07 23:52 WIB

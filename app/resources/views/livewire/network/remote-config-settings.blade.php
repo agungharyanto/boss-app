@@ -6,7 +6,7 @@
 <div class="p-6 max-w-3xl mx-auto" @if ($hasPendingSync) wire:poll.5s="$refresh" @endif>
     <h1 class="text-2xl font-semibold mb-2" style="color: var(--color-text)">{{ __('Konfig Remote') }}</h1>
     <p class="text-sm text-gray-500 mb-6">
-        {{ __('Auto-WAN provisioning GenieACS — VLAN + kredensial default PPPoE yang dulu HARDCODED di script provision, sekarang diatur dari sini. Berlaku fleet-wide (semua ONT yang dikelola GenieACS). Deteksi vendor (Huawei / CMCC / ZTE generic) dan guard idempoten dipertahankan dari script referensi.') }}
+        {{ __('Auto-WAN provisioning GenieACS — VLAN + kredensial default PPPoE yang dulu HARDCODED di script provision, sekarang diatur dari sini. Preset boss-auto-wan SELALU di-scope ke SN di allowlist (WAN1 + WAN2) — allowlist kosong = preset tidak dibuat, TIDAK PERNAH fleet-wide. Deteksi vendor (Huawei / CMCC / ZTE generic / CT-COM) dan guard idempoten dipertahankan dari script referensi.') }}
     </p>
 
     @if ($flash)
@@ -92,7 +92,7 @@
             <div class="pl-7">
                 <label class="block text-xs font-medium text-gray-600 mb-1">{{ __('SN Allowlist WAN1 (scope preset)') }}</label>
                 <textarea wire:model="wan1_serial_allowlist" rows="4" @disabled(!$canManage)
-                    placeholder="Satu Serial Number per baris.&#10;Kosong = FLEET-WIDE (precondition &quot;true&quot;, semua device)."
+                    placeholder="Satu Serial Number per baris.&#10;Kosong = preset boss-auto-wan TIDAK dibuat (tidak ada device yang di-provision). TIDAK PERNAH fleet-wide."
                     class="block w-full rounded-md border-gray-300 shadow-sm text-sm font-mono"></textarea>
                 <p class="text-xs text-gray-400 mt-1">{{ __('SN di sini + SN di allowlist WAN2 digabung jadi precondition preset boss-auto-wan (DeviceID.SerialNumber = "..." OR ...). Selama fase testing, isi dengan SN modem test saja — supaya ~414 device fleet TIDAK terkena beban provision ini (sudah ada masalah too_many_commits kronis).') }}</p>
                 @error('wan1_serial_allowlist') <span class="text-xs text-red-600">{{ $message }}</span> @enderror

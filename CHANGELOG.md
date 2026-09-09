@@ -3,6 +3,80 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.7.8.1 — Auto-WAN CT-COM: fix instance-number + WAN2 dynamic WCD-creation + remediasi buildPrecondition (merged `develop`→`main`, tagged `v0.7.8.1`)
+
+**Patch ke slot v0.7.8 (pola `v0.14.5.1`-`.4`) — menutup KNOWN BUG yang di-ship v0.7.8 (`preset_loop`
+CT-COM fresh) + insiden 2026-09-07..09.** Setelah patch ini: **Auto-WAN CT-COM (WAN1 + WAN2 + LAN binding
+SSID + WCD-creation) TERVERIFIKASI PENUH ke device asli `CMDCA473F158`** (CMDC H3-2S XPON, fw
+V1.1.20P1T4). Fitur tetap **DISABLED by default** (`RemoteWanConfig.enabled=false` → preset
+`boss-auto-wan` tidak dibuat → NOL device fleet kena). Branch: commit langsung ke `develop` (4 commit),
+`develop`→`main` `--no-ff`, tag `v0.7.8.1`.
+
+### 1. Root cause `preset_loop` — insiden 2026-09-07 (4 ONT pelanggan) + remediasi
+
+Investigasi menemukan insiden Auto-WAN 2026-09-07 menyentuh **4 device** (ZTEGCB399CEB/Sartimin,
+ZTEGCD1C7546/Narti, ZTEGCE21E630/Suswanto, CMDCA453D0FE/Misiono) — bukan menambah bridge parasit (bridge
+`2_*_B_VID_172` = template ISP standar, dikonfirmasi via 26 F663NV9 + 12 CT-COM kontrol), tapi **MENGHAPUS
+WAN internet asli + menimpa username jadi "default"**. Narti = outage nyata (`1_INTERNET_R_VID_10`
+terhapus, di radcheck). Sartimin = username→"default" corruption. Suswanto & Misiono = nol dampak.
+**Nol write ke device dilakukan** — dilaporkan ke Agung untuk keputusan (Narti diurus terpisah).
+
+**Akar teknis:** `App\Services\Network\GenieAcsPresetService::buildPrecondition([])` LAMA mengembalikan
+`'true'` → preset `boss-auto-wan` fleet-wide → semua ~414 device kena `default-wan` provisioning.
+
+### 2. Fix permanen `buildPrecondition` (commit `d02ba74`)
+
+- `syncAutoWanConfig()`: `enabled=true` + allowlist KOSONG (union wan1+wan2) → **preset DIHAPUS / TIDAK
+  DIBUAT**, TIDAK PERNAH fleet-wide. Safe default = "provision NOBODY".
+- `buildPrecondition([])` sekarang **`throw RuntimeException`** (defense-in-depth) alih-alih fallback
+  `'true'`.
+- Docblock kelas + `RemoteConfigSettings` + blade "Konfig Remote": "Kosong = FLEET-WIDE" → "Kosong =
+  preset TIDAK dibuat, TIDAK PERNAH fleet-wide" (3 tempat).
+- Test: `test_enabled_with_empty_allowlists_deletes_the_preset_and_is_never_fleet_wide` (rename +
+  `Http::assertNotSent` precondition `'true'`), `test_build_precondition_throws_on_empty_allowlist...`
+  (baru, via ReflectionMethod).
+
+### 3. Fix instance-number CT-COM (commit `2894e15`) — `preset_loop` VERIFIED HILANG
+
+Cabang `isCTCom` `default-wan.js` tidak lagi hardcode instance `WANPPPConnection` `.1`:
+- **`ctcNewInstance(pppPath)`** — setelah `declare("${path}.*", null, {path:1})` + `commit()`, RE-READ
+  nomor instance yang GENUINELY dibuat device (iterasi `declare("${path}.*.ConnectionType")` dll), ambil
+  terkecil. Return `0` = belum ter-refresh → skip Inform ini, konvergen berikutnya (jangan tulis ke `.1`
+  buta). Device H3-2S bikin instance di `.2` (gotcha instance-number TR-069, sama `Hosts.Host.{n}`
+  CLAUDE.md v0.7.6).
+- **`ctcFreeWcd()`** memindai instance via wildcard (bukan cuma `.1`).
+- **WAN1 idempotent guard** diperlebar (scan wildcard `WANPPPConnection.*.Username` per WCD).
+- Retest hardware `CMDCA473F158` (Opsi 5b — device AS-IS dgn sampah WCD.1 dari insiden 08-09): **WAN1
+  VLAN 10 provision penuh** (`WANPPPConnection.2`, `IP_Routed`, `X_CT-COM_LanInterface` = SSID1/5,
+  DHCPEnable=true), konvergen 1 sesi, 8+ Inform berikutnya nol tulis, **0 fault**. WCD.3 TR-069 (VLAN 9,
+  Connected) tak tersentuh.
+
+### 4. WAN2 dynamic WCD-creation (commit `58373f6`) — WAN2 VERIFIED
+
+- **`ctcWcdInstances()`** — SET nomor WCD yang genuinely ada. **`ctcFreeWcd()`** iterasi SET itu ("kosong"
+  = `VLANIDMark` default ≤1 + tak ada koneksi berarti). **`ctcResolveWcd()`** — kalau tak ada WCD kosong,
+  `declare("WANConnectionDevice.*", null, {path: count+1})` + commit → AddObject → kembalikan nomor WCD
+  BARU. Cap `≥5` WCD. Return 0 = belum propagasi / ditolak firmware. Simetris WAN1 & WAN2.
+- **Jawaban firmware:** H3-2S **MENERIMA** AddObject + DeleteObject ke `WANConnectionDevice` (bukan slot
+  fixed). Retest #1 sempat loop (device auto-isi `WANPPPConnection.1` default di WCD baru → `ctcFreeWcd()`
+  awal lihat "terpakai" → bikin terus → `too_many_commits`/`preset_loop`, 4 WCD junk) — di-revert +
+  dibersihkan deleteObject; fix: freeness berbasis VLAN default + cap 5.
+- **Retest #2 (post-fix, device bersih):** **WAN2 VLAN 172 SUKSES di `WCD.4` yang BARU DIBUAT** —
+  `PPPoE_Bridged`, `X_CT-COM_LanInterface` = **SSID4/8**, `X_CT-COM_LanInterface-DHCPEnable=false` (WAN
+  mode), NAT=false. Konvergen 1 sesi (2 AddObject + 3 SetParameterValues), 3+ Inform berikutnya = GPN/GPV
+  saja NOL tulis, **0 fault**. WAN1 (WCD.1) + TR-069 (WCD.3) tak tersentuh.
+- Simulasi Node (`tmp/sim-ctcom-wcd.js`, model re-run multi-pass GenieACS) — 4 skenario hijau:
+  bersih / device-junk / firmware-reject / cap-5.
+- Guard inner `wan2Check` ("ConnectionType terisi → skip") DIHAPUS di cabang WAN2 CT-COM (WCD sudah
+  dipastikan kosong; `WANPPPConnection.1` default device memang harus ditimpa jadi bridge).
+
+### 5. Verifikasi
+
+Test scoped `GenieAcsPresetServiceTest` (10). Full regression suite dijalankan sebagai gerbang akhir
+sebelum merge ke `main` (hasil di commit merge). Pint clean di file yang disentuh. `default-wan.js` blok
+`⚠️ VERIFIED BROKEN` → blok `HISTORI BUG` (jejak dipertahankan). CLAUDE.md/ROADMAP.md: status Auto-WAN
+CT-COM + insiden 2026-09-07..09 = **CLOSED/RESOLVED**.
+
 ## v0.16.1 — Topology Refinements (merged `develop`→`main`, tagged `v0.16.1`)
 
 Patch dari v0.16.0 (pola `v0.14.5.1`). Item 1-8 Agung → Bagian A-H. Branch dari `develop` di atas v0.17.0

@@ -31,34 +31,50 @@ class GenieAcsPresetServiceTest extends TestCase
         ]);
     }
 
-    public function test_enabled_with_empty_allowlists_puts_a_fleet_wide_preset(): void
+    public function test_enabled_with_empty_allowlists_deletes_the_preset_and_is_never_fleet_wide(): void
     {
-        $this->fakeOk();
+        // Regression: `buildPrecondition([])` LAMA mengembalikan `"true"`
+        // (fleet-wide) → insiden 2026-09-07 (4 ONT pelanggan kena WAN rogue).
+        // Sekarang: allowlist kosong + enabled = preset TIDAK dibuat.
+        Http::fake([
+            'genieacs-nbi:7557/provisions/*' => Http::response([['_id' => 'default-wan']], 200),
+            'genieacs-nbi:7557/presets/boss-auto-wan' => Http::response('', 200),
+        ]);
 
         $config = RemoteWanConfig::current();
         $config->update(['enabled' => true, 'wan1_vlan' => 10, 'wan1_pppoe_username' => 'boss']);
 
         $this->service()->syncAutoWanConfig($config->fresh());
 
-        // Script provision di-PUT.
+        // Script provision TETAP di-PUT (harmless kalau tak direferensikan preset).
         Http::assertSent(fn ($r) => $r->method() === 'PUT'
             && str_contains($r->url(), '/provisions/default-wan')
             && str_contains((string) $r->body(), 'Auto-WAN provisioning'));
 
-        // Preset boss-auto-wan di-PUT, precondition "true" (fleet-wide).
-        Http::assertSent(function ($request) {
-            if ($request->method() !== 'PUT' || ! str_contains($request->url(), '/presets/boss-auto-wan')) {
+        // Preset di-DELETE, TIDAK di-PUT.
+        Http::assertSent(fn ($r) => $r->method() === 'DELETE' && str_contains($r->url(), '/presets/boss-auto-wan'));
+        Http::assertNotSent(fn ($r) => $r->method() === 'PUT' && str_contains($r->url(), '/presets/boss-auto-wan'));
+
+        // Tidak ada satu pun request yang membawa precondition "true".
+        Http::assertNotSent(function ($request) {
+            if ($request->method() !== 'PUT' || ! str_contains($request->url(), '/presets/')) {
                 return false;
             }
             $body = json_decode((string) $request->body(), true);
-            $this->assertSame('true', $body['precondition']);
-            $this->assertSame('boss-auto-wan', $body['channel']);
-            $wan = $body['configurations'][0];
-            $this->assertSame('default-wan', $wan['name']);
-            $this->assertSame([true, true, 10, 'boss', 'default', false, 1200, ''], $wan['args']);
 
-            return true;
+            return ($body['precondition'] ?? null) === 'true';
         });
+    }
+
+    public function test_build_precondition_throws_on_empty_allowlist_instead_of_falling_back_to_true(): void
+    {
+        $method = new \ReflectionMethod(GenieAcsPresetService::class, 'buildPrecondition');
+        $method->setAccessible(true);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('allowlist kosong');
+
+        $method->invoke($this->service(), []);
     }
 
     public function test_enabled_with_a_serial_allowlist_scopes_the_precondition(): void
@@ -128,7 +144,7 @@ class GenieAcsPresetServiceTest extends TestCase
         ]);
 
         $config = RemoteWanConfig::current();
-        $config->update(['enabled' => true]);
+        $config->update(['enabled' => true, 'wan1_serial_allowlist' => 'ZTEGC1234567']);
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('menolak update preset');
@@ -184,6 +200,44 @@ class GenieAcsPresetServiceTest extends TestCase
         // WAN2 guard v2 — cek isi (bridge di posisi mana pun) + SN allowlist in-script.
         $this->assertStringContainsString('bridgeWithTargetVlanExists', $script);
         $this->assertStringContainsString('wan2Allowlist', $script);
+
+        // Fix bug instance-number CT-COM (2026-09-09): nomor instance
+        // WANPPPConnection di-RE-READ dari device, tidak di-hardcode `.1`.
+        $this->assertStringContainsString('function ctcNewInstance', $script);
+        // Cabang CT-COM WAN1 & WAN2 membangun basePath dari nomor instance
+        // hasil re-read (`${wan1PppPath}.${w1Inst}` / `${wan2PppPath}.${w2Inst}`),
+        // BUKAN hardcoded `.1` (branch H/C/Z tetap `.1` — vendor itu andal).
+        $this->assertStringContainsString('`${wan1PppPath}.${w1Inst}`', $script);
+        $this->assertStringContainsString('`${wan2PppPath}.${w2Inst}`', $script);
+        $this->assertStringContainsString('const w1Inst = ctcNewInstance(', $script);
+        $this->assertStringContainsString('const w2Inst = ctcNewInstance(', $script);
+        // ctcFreeWcd() scan wildcard (SEMUA instance, beberapa leaf), bukan cuma `.1`.
+        $this->assertStringContainsString('${conn}.*.${leaf}', $script);
+        $this->assertStringContainsString('X_CT-COM_ServiceList', $script);
+        // WAN1 idempotent guard juga wildcard.
+        $this->assertStringContainsString('WANPPPConnection.*.Username', $script);
+        // Penanda inline "⚠️ VERIFIED BROKEN" di cabang provisioning sudah
+        // hilang; diganti blok "HISTORI BUG" (jejak tetap ada).
+        $this->assertStringNotContainsString('⚠️ VERIFIED BROKEN', $script);
+        $this->assertStringContainsString('HISTORI BUG', $script);
+
+        // WCD-creation CT-COM (2026-09-09): `ctcResolveWcd()` dipakai IDENTIK
+        // oleh WAN1 & WAN2 — cari slot WCD existing kosong, kalau tak ada
+        // bikin instance WANConnectionDevice baru. `ctcFreeWcd()` cuma iterasi
+        // WCD yang genuinely ada (`ctcWcdInstances`), bukan indeks 1..8 buta.
+        $this->assertStringContainsString('function ctcResolveWcd', $script);
+        $this->assertStringContainsString('function ctcWcdInstances', $script);
+        $this->assertStringContainsString('const w1Wcd = ctcResolveWcd()', $script);
+        $this->assertStringContainsString('const w2Wcd = ctcResolveWcd()', $script);
+        $this->assertStringContainsString('{ path: before.length + 1 }', $script);
+        $this->assertStringContainsString('for (const wcd of ctcWcdInstances())', $script);
+        // Anti-loop: WCD fresh dikenali "kosong" via VLANIDMark default (<=1),
+        // BUKAN "ada connection instance" (device auto-isi PPPConn.1 default).
+        $this->assertStringContainsString('v > 1) continue', $script);
+        $this->assertStringContainsString('before.length >= 5', $script);
+        // Cabang CT-COM tidak lagi digate `ctcFreeWcd() > 0` di kondisi
+        // `else if` (create-slot dipindah ke dalam branch).
+        $this->assertStringNotContainsString('isCTCom && ctcFreeWcd() > 0', $script);
     }
 
     public function test_serial_list_is_normalized_into_the_args_csv(): void

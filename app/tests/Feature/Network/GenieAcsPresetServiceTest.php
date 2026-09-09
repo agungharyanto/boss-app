@@ -220,6 +220,24 @@ class GenieAcsPresetServiceTest extends TestCase
         // hilang; diganti blok "HISTORI BUG" (jejak tetap ada).
         $this->assertStringNotContainsString('⚠️ VERIFIED BROKEN', $script);
         $this->assertStringContainsString('HISTORI BUG', $script);
+
+        // WCD-creation CT-COM (2026-09-09): `ctcResolveWcd()` dipakai IDENTIK
+        // oleh WAN1 & WAN2 — cari slot WCD existing kosong, kalau tak ada
+        // bikin instance WANConnectionDevice baru. `ctcFreeWcd()` cuma iterasi
+        // WCD yang genuinely ada (`ctcWcdInstances`), bukan indeks 1..8 buta.
+        $this->assertStringContainsString('function ctcResolveWcd', $script);
+        $this->assertStringContainsString('function ctcWcdInstances', $script);
+        $this->assertStringContainsString('const w1Wcd = ctcResolveWcd()', $script);
+        $this->assertStringContainsString('const w2Wcd = ctcResolveWcd()', $script);
+        $this->assertStringContainsString('{ path: before.length + 1 }', $script);
+        $this->assertStringContainsString('for (const wcd of ctcWcdInstances())', $script);
+        // Anti-loop: WCD fresh dikenali "kosong" via VLANIDMark default (<=1),
+        // BUKAN "ada connection instance" (device auto-isi PPPConn.1 default).
+        $this->assertStringContainsString('v > 1) continue', $script);
+        $this->assertStringContainsString('before.length >= 5', $script);
+        // Cabang CT-COM tidak lagi digate `ctcFreeWcd() > 0` di kondisi
+        // `else if` (create-slot dipindah ke dalam branch).
+        $this->assertStringNotContainsString('isCTCom && ctcFreeWcd() > 0', $script);
     }
 
     public function test_serial_list_is_normalized_into_the_args_csv(): void

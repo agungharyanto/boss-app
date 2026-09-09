@@ -2294,6 +2294,31 @@ provisioning ditandai eksplisit "BELUM DIVERIFIKASI" di komentar script. Setelah
 di-revert `enabled=false` (preset dihapus, `wan2_serial_allowlist=CMDCA21C01E7` dipertahankan untuk
 re-enable cepat). `default-wan` provision tetap di GenieACS (harmless, tak direferensikan).
 
+### CT-COM provisioning fresh — WAN1 + WAN2 (bikin slot WCD) VERIFIED HARDWARE 2026-09-09 (`CMDCA473F158`)
+
+**`preset_loop` root bug (instance-number) + WCD-creation SEMUA TERVERIFIKASI ke hardware.** Cabang
+`isCTCom` `default-wan.js` kini: (1) re-read nomor instance WANPPPConnection (tidak hardcode `.1`), (2)
+bisa MEMBUAT slot `WANConnectionDevice` baru kalau device kehabisan slot (H3-2S `CMDCA473F158` — firmware
+V1.1.20P1T4 — TERBUKTI menerima AddObject DAN DeleteObject ke `WANConnectionDevice`). Fitur tetap DISABLED
+by default (`RemoteWanConfig.enabled=false`). Detail investigasi + jebakan di sub-bagian di bawah.
+
+**RETEST #2 (2026-09-09, target VLAN 10 / 172, device dibersihkan dulu dari 4 WCD junk sisa loop #1):**
+- **WAN1 (VLAN 10, WCD.1) — TIDAK TERSENTUH** (sudah ada dari retest sebelumnya, guard `wan1AlreadyConfigured`
+  skip). `WCD.3` TR-069 (VLAN 9, `Connected`) — TIDAK TERSENTUH.
+- **WAN2 (VLAN 172) — SUKSES PENUH di `WCD.4` yang BARU DIBUAT via AddObject.** `X_CT-COM_WANGponLinkConfig.VLANIDMark=172`
+  Mode=2 Enable=true; `WANPPPConnection.1` → `ConnectionType=PPPoE_Bridged`, `Enable=true`, `Username=""`
+  (bridge), `X_CT-COM_ServiceList=INTERNET`, `NATEnabled=false`. **LAN BINDING:**
+  `X_CT-COM_LanInterface = ...WLANConfiguration.4,...WLANConfiguration.8` + `X_CT-COM_LanInterface-DHCPEnable=false`
+  (WAN mode). `ConnectionStatus=Unconfigured` (bridge — normal, tak butuh auth).
+- **Konvergen 1 sesi tulis** (13:25:15Z: **2 AddObject** [1× WANConnectionDevice, 1× WANPPPConnection] +
+  3 SetParameterValues), lalu **3+ Inform berturut = 21 GetParameterNames + 17 GetParameterValues, NOL
+  SetParameterValues/AddObject, NOL fault** — idempoten (guard CT-COM memang GPN/GPV tiap Inform, sama
+  pola CMDCA21C01E7). **0 fault `preset_loop` sepanjang test.**
+- Revert `enabled=false` (preset dihapus, provision tetap, wan1_vlan=10/wan2_vlan=172/allowlist
+  dipertahankan). Device menyisakan `WCD.4` VLAN 172 bridge (harmless — factory-reset kalau mau bersih).
+
+---
+
 ### KNOWN BUG — provisioning CT-COM fresh (`preset_loop`) — FIX INSTANCE-NUMBER VERIFIED 2026-09-09 (WAN1 OK, WAN2 butuh slot WCD)
 
 **FIX 2026-09-09 — instance-number `preset_loop` VERIFIED HILANG di hardware `CMDCA473F158`
@@ -2327,9 +2352,39 @@ WCD.1 dari insiden 2026-09-08 — sengaja diperlakukan sebagai skenario "device 
   mengasumsikan slot WCD kosong SUDAH ADA — TIDAK membuat instance `WANConnectionDevice` baru. Di template
   CMDCA21C01E7 (verifikasi 2026-09-07) ada 4 WCD karena Agung konfig manual; di sini tidak. WAN2 branch
   no-op bersih (0 fault, 0 loop) — bukan regresi, keterbatasan desain yang baru muncul.
-  **FOLLOW-UP (butuh keputusan Agung):** tambah `declare(\`${wanDevicePath}.WANConnectionDevice.*\`, null,
-  { path: N })` untuk membuat slot WCD saat `ctcFreeWcd()` tidak menemukan yang kosong — enhancement
-  terpisah, perlu siklus test sendiri.
+
+**LANJUTAN 2026-09-09 — WCD-creation (`ctcResolveWcd()`):**
+Cabang `isCTCom` sekarang bisa MEMBUAT slot `WANConnectionDevice` baru kalau semua yang ada terpakai —
+simetris untuk WAN1 & WAN2 (keduanya "cari existing kosong dulu, bikin baru kalau perlu", bukan asumsi
+WAN1 selalu dapat slot lama).
+- `ctcWcdInstances()` — SET nomor WCD yang GENUINELY ada (scan wildcard `WANConnectionDevice.*.<leaf>`).
+  `ctcFreeWcd()` kini cuma iterasi SET ini, bukan indeks 1..8 buta (dulu `ctcFreeWcd()` mengembalikan
+  indeks WCD yang tidak ada → `declare` ke child-nya no-op diam → WAN2 tak pernah terbentuk).
+- `ctcResolveWcd()` — cari `ctcFreeWcd()`; kalau 0, `declare("WANConnectionDevice.*", null,
+  {path: before.length+1})` + `commit()` → AddObject → kembalikan nomor WCD BARU (diff before/after,
+  jangan re-scan). Return 0 = AddObject belum propagasi / ditolak firmware / device sudah >=5 WCD.
+- Kondisi `else if` cabang CT-COM tidak lagi digate `ctcFreeWcd() > 0`; guard `if (wXWcd > 0)` di dalam.
+
+**RETEST HARDWARE #1 (`CMDCA473F158`) — LOOP, diperbaiki.** Firmware **MENERIMA** AddObject ke
+`WANConnectionDevice` (jawaban penting: device H3-2S BISA bikin WCD baru, bukan fixed). TAPI versi pertama
+`ctcResolveWcd()` **loop**: `too_many_commits` (8 AddObject dalam 1 sesi) → `preset_loop`, device dapat 4
+WCD junk (WCD.4-7, VLAN=1). Akar: (a) device **OTOMATIS mengisi `WANPPPConnection.1` default** di tiap WCD
+baru → `ctcFreeWcd()` lama ("ada connection instance = terpakai") melihat WCD fresh sebagai terpakai →
+`ctcResolveWcd()` bikin lagi tiap script re-run (GenieACS re-run provision sampai konvergen). (b)
+`{path: N}` dengan gap instance (1,3) + re-run terus menaikkan N.
+**Fix (RETEST #2 hardware SUKSES — lihat ringkasan di header bagian ini):**
+- `ctcFreeWcd()` "kosong" = `X_CT-COM_WANGponLinkConfig.VLANIDMark` default (<=1) DAN tak ada koneksi
+  dengan config berarti (Username / ServiceList terisi / ConnectionType "bridg"/"pppoe"). WCD fresh
+  (VLAN=1 + PPPConn.1 default `IP_Routed` tanpa Username) → KOSONG. Begitu satu WCD fresh muncul,
+  script re-run dapat dari `ctcFreeWcd()` → TIDAK create lagi.
+- Cap: `before.length >= 5` → tidak create (WAN1+WAN2+TR069 = 3; >=5 kemungkinan loop / device aneh).
+- Guard inner `wan2Check` ("ConnectionType sudah terisi → skip") DIHAPUS di cabang WAN2 CT-COM — WCD
+  sudah dipastikan kosong, PPPConn.1 default memang harus ditimpa jadi bridge.
+- Simulasi Node (`tmp/sim-ctcom-wcd.js`, 4 skenario, SEMUA lolos + cek konvergensi multi-pass GenieACS):
+  (A) device bersih → 1 AddObject, WAN2 VLAN 172 + LanInterface SSID4/8 + DHCP=false di WCD baru,
+  WAN1/TR-069 tak tersentuh, idempoten; (A2) device dgn 4 WCD junk (state nyata pasca-loop) → 0
+  AddObject (reuse junk), WAN2 tetap terbentuk; (B) AddObject ditolak → script fault, 0 stomp; (C) 5 WCD
+  semua VLAN nyata → cap, skip bersih, 0 fault. Test scoped `GenieAcsPresetServiceTest` hijau (10).
 
 Penanda `⚠️ VERIFIED BROKEN` inline di script diganti blok `HISTORI BUG`.
 

@@ -2294,11 +2294,11 @@ provisioning ditandai eksplisit "BELUM DIVERIFIKASI" di komentar script. Setelah
 di-revert `enabled=false` (preset dihapus, `wan2_serial_allowlist=CMDCA21C01E7` dipertahankan untuk
 re-enable cepat). `default-wan` provision tetap di GenieACS (harmless, tak direferensikan).
 
-### KNOWN BUG — provisioning CT-COM fresh (`preset_loop`) — FIX DIIMPLEMENTASIKAN 2026-09-09, RETEST HARDWARE BERJALAN
+### KNOWN BUG — provisioning CT-COM fresh (`preset_loop`) — FIX INSTANCE-NUMBER VERIFIED 2026-09-09 (WAN1 OK, WAN2 butuh slot WCD)
 
-**FIX 2026-09-09 (retest hardware `CMDCA473F158` sedang berjalan — Opsi 5b: test AS-IS, device masih ada
-sampah `WANPPPConnection.2` un-configured di WCD.1 dari insiden 2026-09-08, sengaja diperlakukan sebagai
-skenario "device berantakan" yang harus ditangani fix, bukan reset ulang):**
+**FIX 2026-09-09 — instance-number `preset_loop` VERIFIED HILANG di hardware `CMDCA473F158`
+(commit `2894e15`, retest Opsi 5b: device AS-IS, masih ada sampah `WANPPPConnection.2` un-configured di
+WCD.1 dari insiden 2026-09-08 — sengaja diperlakukan sebagai skenario "device berantakan"):**
 `app/resources/genieacs/default-wan.js` cabang `isCTCom` tidak lagi hardcode instance `.1`:
 - `ctcNewInstance(pppPath)` — setelah `declare("${path}.*", null, {path:1})` + `commit()`,
   meng-enumerasi instance yang GENUINELY dibuat device (iterasi `declare("${path}.*.ConnectionType")`)
@@ -2308,11 +2308,30 @@ skenario "device berantakan" yang harus ditangani fix, bukan reset ulang):**
   ConnectionType/Name/Enable/X_CT-COM_ServiceList), bukan cuma `.1`. Slot dianggap kepakai bahkan kalau
   instance-nya un-configured atau cuma expose ServiceList (kasus nyata `CMDCA473F158` WCD.3).
 - WAN1 idempotent guard: scan wildcard `WANPPPConnection.*.Username` per WCD (bukan hardcoded inst 1-2).
-Diverifikasi di sim Node (device CT-COM yang bikin instance `.2`): WAN1 → WCD kosong pertama, WAN2 →
-WCD berikutnya, `VLANIDMark` ditulis di DUA WCD berbeda (tidak saling timpa = akar `preset_loop` hilang).
-Test scoped `GenieAcsPresetServiceTest` hijau (19). **BELUM diverifikasi ke device asli** — perlu Agung
-factory-reset `CMDCA473F158` dulu (masih ada sampah `WANPPPConnection.2` setengah jadi di WCD.1 dari
-insiden 2026-09-08). Penanda `⚠️ VERIFIED BROKEN` inline di script diganti blok `HISTORI BUG`.
+
+**HASIL RETEST HARDWARE 2026-09-09 (`CMDCA473F158`, target VLAN 10 / 172, Opsi 5b AS-IS):**
+- **WAN1 (VLAN 10, PPPoE) — SUKSES PENUH.** Provision ke `WCD.1.WANPPPConnection.2` (reuse slot sampah
+  insiden 2026-09-08 — fix membersihkannya, tidak meninggalkannya): `X_CT-COM_WANGponLinkConfig.VLANIDMark`
+  di WCD.1 = **10** (Mode=2), `WANPPPConnection.2` → `Username=test`, `ConnectionType=IP_Routed`,
+  `Enable=true`, `X_CT-COM_ServiceList=INTERNET`, `NATEnabled=true`. **LAN BINDING ter-set:**
+  `X_CT-COM_LanInterface = ...WLANConfiguration.1,...WLANConfiguration.5` + `X_CT-COM_LanInterface-DHCPEnable=true`.
+  `ConnectionStatus=Unconfigured` (username `test` sengaja tak authenticate — verifikasi STRUKTUR, bukan
+  konektivitas nyata).
+- **Konvergen 1 sesi tulis** (12:34:15Z: 1 AddObject + 4 SetParameterValues), lalu **8+ Inform berturut
+  (60s/tick) NOL SetParameterValues/AddObject/fault** — idempoten. Forced connection-request re-eval →
+  tetap NOL tulis. **0 fault `preset_loop` sepanjang test** (akar bug — VLAN stomp antar-WAN yang rebut
+  WCD sama — HILANG).
+- **WCD.3 (TR-069 manajemen, VLAN 9, `Connected`) TIDAK TERSENTUH** sepanjang test.
+- **WAN2 (VLAN 172 bridge) — TIDAK terbentuk.** Device H3-2S ini cuma expose 2 slot `WANConnectionDevice`
+  (WCD.1 spare + WCD.3 TR-069); WAN1 mengambil satu-satunya spare. Cabang CT-COM `ctcFreeWcd()`
+  mengasumsikan slot WCD kosong SUDAH ADA — TIDAK membuat instance `WANConnectionDevice` baru. Di template
+  CMDCA21C01E7 (verifikasi 2026-09-07) ada 4 WCD karena Agung konfig manual; di sini tidak. WAN2 branch
+  no-op bersih (0 fault, 0 loop) — bukan regresi, keterbatasan desain yang baru muncul.
+  **FOLLOW-UP (butuh keputusan Agung):** tambah `declare(\`${wanDevicePath}.WANConnectionDevice.*\`, null,
+  { path: N })` untuk membuat slot WCD saat `ctcFreeWcd()` tidak menemukan yang kosong — enhancement
+  terpisah, perlu siklus test sendiri.
+
+Penanda `⚠️ VERIFIED BROKEN` inline di script diganti blok `HISTORI BUG`.
 
 ---
 

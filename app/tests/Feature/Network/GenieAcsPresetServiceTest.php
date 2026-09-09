@@ -31,34 +31,50 @@ class GenieAcsPresetServiceTest extends TestCase
         ]);
     }
 
-    public function test_enabled_with_empty_allowlists_puts_a_fleet_wide_preset(): void
+    public function test_enabled_with_empty_allowlists_deletes_the_preset_and_is_never_fleet_wide(): void
     {
-        $this->fakeOk();
+        // Regression: `buildPrecondition([])` LAMA mengembalikan `"true"`
+        // (fleet-wide) → insiden 2026-09-07 (4 ONT pelanggan kena WAN rogue).
+        // Sekarang: allowlist kosong + enabled = preset TIDAK dibuat.
+        Http::fake([
+            'genieacs-nbi:7557/provisions/*' => Http::response([['_id' => 'default-wan']], 200),
+            'genieacs-nbi:7557/presets/boss-auto-wan' => Http::response('', 200),
+        ]);
 
         $config = RemoteWanConfig::current();
         $config->update(['enabled' => true, 'wan1_vlan' => 10, 'wan1_pppoe_username' => 'boss']);
 
         $this->service()->syncAutoWanConfig($config->fresh());
 
-        // Script provision di-PUT.
+        // Script provision TETAP di-PUT (harmless kalau tak direferensikan preset).
         Http::assertSent(fn ($r) => $r->method() === 'PUT'
             && str_contains($r->url(), '/provisions/default-wan')
             && str_contains((string) $r->body(), 'Auto-WAN provisioning'));
 
-        // Preset boss-auto-wan di-PUT, precondition "true" (fleet-wide).
-        Http::assertSent(function ($request) {
-            if ($request->method() !== 'PUT' || ! str_contains($request->url(), '/presets/boss-auto-wan')) {
+        // Preset di-DELETE, TIDAK di-PUT.
+        Http::assertSent(fn ($r) => $r->method() === 'DELETE' && str_contains($r->url(), '/presets/boss-auto-wan'));
+        Http::assertNotSent(fn ($r) => $r->method() === 'PUT' && str_contains($r->url(), '/presets/boss-auto-wan'));
+
+        // Tidak ada satu pun request yang membawa precondition "true".
+        Http::assertNotSent(function ($request) {
+            if ($request->method() !== 'PUT' || ! str_contains($request->url(), '/presets/')) {
                 return false;
             }
             $body = json_decode((string) $request->body(), true);
-            $this->assertSame('true', $body['precondition']);
-            $this->assertSame('boss-auto-wan', $body['channel']);
-            $wan = $body['configurations'][0];
-            $this->assertSame('default-wan', $wan['name']);
-            $this->assertSame([true, true, 10, 'boss', 'default', false, 1200, ''], $wan['args']);
 
-            return true;
+            return ($body['precondition'] ?? null) === 'true';
         });
+    }
+
+    public function test_build_precondition_throws_on_empty_allowlist_instead_of_falling_back_to_true(): void
+    {
+        $method = new \ReflectionMethod(GenieAcsPresetService::class, 'buildPrecondition');
+        $method->setAccessible(true);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('allowlist kosong');
+
+        $method->invoke($this->service(), []);
     }
 
     public function test_enabled_with_a_serial_allowlist_scopes_the_precondition(): void
@@ -128,7 +144,7 @@ class GenieAcsPresetServiceTest extends TestCase
         ]);
 
         $config = RemoteWanConfig::current();
-        $config->update(['enabled' => true]);
+        $config->update(['enabled' => true, 'wan1_serial_allowlist' => 'ZTEGC1234567']);
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('menolak update preset');

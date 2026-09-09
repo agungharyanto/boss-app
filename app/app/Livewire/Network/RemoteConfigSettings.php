@@ -41,7 +41,7 @@ class RemoteConfigSettings extends Component
     #[Validate('required|string|min:1|max:64')]
     public string $wan1_pppoe_password = 'default';
 
-    /** SN allowlist WAN1, satu per baris. Kosong = fleet-wide (precondition "true"). */
+    /** SN allowlist WAN1, satu per baris. Kosong = preset boss-auto-wan TIDAK dibuat (tidak ada device di-provision). */
     #[Validate('nullable|string|max:20000')]
     public string $wan1_serial_allowlist = '';
 

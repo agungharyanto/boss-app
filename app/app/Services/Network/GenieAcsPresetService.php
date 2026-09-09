@@ -17,14 +17,16 @@ use RuntimeException;
  * preset `default` berlaku fleet-wide (~414 device) dan sudah punya masalah
  * kronis `too_many_commits`/`too_many_rpcs` di ~68 device pohon-besar —
  * menambah provision ke situ berisiko memperburuk. Preset `boss-auto-wan`
- * di-SCOPE lewat `precondition`:
+ * SELALU di-SCOPE lewat `precondition` ke SN eksplisit:
  *   - `enabled = false` → preset DIHAPUS total (GenieACS tidak menjalankan
  *     `default-wan` sama sekali);
- *   - `enabled = true` + ada SN di allowlist (union wan1+wan2) →
- *     `precondition` = `DeviceID.SerialNumber = "SN1" OR ...` (HANYA SN itu);
- *   - `enabled = true` + kedua allowlist KOSONG → `precondition = "true"`
- *     (fleet-wide — state akhir "dilonggarkan", disengaja setelah guard
- *     content-based terbukti reliable).
+ *   - `enabled = true` + allowlist KOSONG (union wan1+wan2) → preset TIDAK
+ *     DIBUAT / DIHAPUS. Safe default = "provision NOBODY" — TIDAK PERNAH
+ *     fleet-wide. Precondition `"true"` fleet-wide pernah menyebabkan
+ *     insiden nyata (2026-09-07: 4 ONT pelanggan kena WAN rogue karena
+ *     `buildPrecondition([])` lama mengembalikan `"true"`).
+ *   - `enabled = true` + ada SN di allowlist →
+ *     `precondition` = `DeviceID.SerialNumber = "SN1" OR ...` (HANYA SN itu).
  *
  * Provision `default-wan` dibaca dari `app/resources/genieacs/default-wan.js`.
  * Kontrak args posisional — lihat `RemoteWanConfig::toProvisionArgs()`.
@@ -53,7 +55,12 @@ class GenieAcsPresetService
     {
         $this->putProvisionScript(self::PROVISION_NAME, $this->autoWanScript());
 
-        if (! $config->enabled) {
+        $serials = $config->allSerialAllowlist();
+
+        // enabled=false ATAU allowlist kosong → preset dihapus/tak dibuat.
+        // Allowlist kosong TIDAK PERNAH berarti fleet-wide — safe default
+        // adalah "provision nobody" (lihat docblock kelas + insiden 2026-09-07).
+        if (! $config->enabled || $serials === []) {
             $this->deletePreset(self::PRESET_NAME);
 
             return;
@@ -61,7 +68,7 @@ class GenieAcsPresetService
 
         $this->putPreset(self::PRESET_NAME, [
             'weight' => 0,
-            'precondition' => $this->buildPrecondition($config->allSerialAllowlist()),
+            'precondition' => $this->buildPrecondition($serials),
             'channel' => self::PRESET_NAME,
             'configurations' => [[
                 'type' => 'provision',
@@ -72,12 +79,20 @@ class GenieAcsPresetService
     }
 
     /**
+     * Precondition SELALU scoped ke SN eksplisit. Allowlist kosong tidak
+     * boleh sampai ke sini — `syncAutoWanConfig()` sudah menghapus preset
+     * lebih dulu. Guard di sini defense-in-depth: gagal keras, JANGAN
+     * pernah jatuh ke `"true"` fleet-wide.
+     *
      * @param  list<string>  $serials
      */
     private function buildPrecondition(array $serials): string
     {
         if ($serials === []) {
-            return 'true';
+            throw new RuntimeException(
+                'buildPrecondition() dipanggil dengan allowlist kosong — ini bug: '
+                .'preset boss-auto-wan tidak boleh dibuat tanpa SN allowlist eksplisit.'
+            );
         }
 
         return collect($serials)

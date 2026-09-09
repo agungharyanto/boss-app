@@ -57,7 +57,8 @@ class ReferrerForgotPasswordTest extends TestCase
 
     private function otpCode(int $referrerId, string $scope): string
     {
-        return Cache::get("referrer-otp:{$referrerId}:{$scope}")['code'];
+        // v0.12.1: cache key pindah ke format generic ActionOtpService.
+        return Cache::get("otp:referrer:{$referrerId}:{$scope}")['code'];
     }
 
     public function test_valid_phone_gets_a_code_and_can_reset_then_login(): void

@@ -2122,12 +2122,23 @@ also no "look up WorkOrder by device serial number" endpoint —
 `index()` only filters by `status`. Both are real gaps to close as part of
 `v0.12.0`, not something to design/build yet.
 
-## GenieACS Auto-WAN Configurable + Sidebar "Remote" (v0.7.8 — merged/tagged 2026-09-08)
+## GenieACS Auto-WAN Configurable + Sidebar "Remote" (v0.7.8 — merged/tagged 2026-09-08; **patch v0.7.8.1 2026-09-09 → CT-COM VERIFIED PENUH, CLOSED**)
 
-**Di-merge dengan fitur Auto-WAN BELUM sempurna tapi AMAN** — `RemoteWanConfig.enabled = false` by
-default → preset `boss-auto-wan` TIDAK dibuat di GenieACS → NOL device fleet kena provisioning apa pun.
-Provisioning WAN baru ke device **CT-COM fresh = KNOWN BUG** (`preset_loop`, lihat bagian
-"KNOWN BUG — provisioning CT-COM fresh" di bawah). Tag `v0.7.8` = slot ROADMAP (bukan kronologis).
+**STATUS FINAL (v0.7.8.1, 2026-09-09):** Auto-WAN CT-COM — WAN1 (PPPoE routed) + WAN2 (bridge) + LAN
+binding SSID + **dynamic WCD-creation** — **TERVERIFIKASI PENUH ke device asli `CMDCA473F158`** (CMDC
+H3-2S XPON, fw V1.1.20P1T4). KNOWN BUG `preset_loop` (instance-number CT-COM) + insiden fleet-wide
+2026-09-07 (4 ONT pelanggan) = **RESOLVED**. Fitur tetap **DISABLED by default**
+(`RemoteWanConfig.enabled = false` → preset `boss-auto-wan` TIDAK dibuat → NOL device fleet kena). Detail
+lengkap: bagian **"CT-COM provisioning fresh — WAN1 + WAN2 ... VERIFIED HARDWARE 2026-09-09"** di bawah +
+CHANGELOG `v0.7.8.1`. Tag `v0.7.8`/`v0.7.8.1` = slot ROADMAP (bukan kronologis).
+
+**Remediasi insiden 2026-09-07 (`buildPrecondition([])` fleet-wide):** `GenieAcsPresetService::
+syncAutoWanConfig()` — `enabled=true` + allowlist KOSONG (union wan1+wan2) sekarang **MENGHAPUS preset**
+(tidak fleet-wide); `buildPrecondition([])` **throw `RuntimeException`** (defense-in-depth), tidak pernah
+fallback `'true'`. 4 device kena insiden (Sartimin/Narti/Suswanto/Misiono) — investigasi read-only, nol
+write ke device, dilaporkan ke Agung (Narti = outage nyata `1_INTERNET_R_VID_10` terhapus, diurus
+terpisah). Bridge `2_*_B_VID_172` = template ISP standar (bukan parasit — dikonfirmasi 26 F663NV9 + 12
+CT-COM kontrol).
 
 **Folding `fix-genieacs-pppoe-provision` (Opsi A, keputusan Agung 2026-09-07)** — branch itu selesai +
 tested + DITERAPKAN LIVE ke GenieACS sejak 2026-09-02 (provision `default-pppoe` + `default-optical`
@@ -2319,7 +2330,7 @@ by default (`RemoteWanConfig.enabled=false`). Detail investigasi + jebakan di su
 
 ---
 
-### KNOWN BUG — provisioning CT-COM fresh (`preset_loop`) — FIX INSTANCE-NUMBER VERIFIED 2026-09-09 (WAN1 OK, WAN2 butuh slot WCD)
+### ~~KNOWN BUG~~ RESOLVED (v0.7.8.1) — provisioning CT-COM fresh (`preset_loop`) — kronologi + fix (dipertahankan sebagai jejak)
 
 **FIX 2026-09-09 — instance-number `preset_loop` VERIFIED HILANG di hardware `CMDCA473F158`
 (commit `2894e15`, retest Opsi 5b: device AS-IS, masih ada sampah `WANPPPConnection.2` un-configured di

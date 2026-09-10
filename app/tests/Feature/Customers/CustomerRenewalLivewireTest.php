@@ -113,7 +113,8 @@ class CustomerRenewalLivewireTest extends TestCase
 
     private function otpCodeFor(Referrer $referrer, Customer $customer): string
     {
-        return Cache::get("referrer-otp:{$referrer->id}:renewal:{$customer->id}")['code'];
+        // v0.12.1: cache key pindah ke format generic ActionOtpService.
+        return Cache::get("otp:referrer:{$referrer->id}:renewal:{$customer->id}")['code'];
     }
 
     public function test_renew_by_a_sales_referrer_creates_an_eligible_titip_commission(): void
@@ -457,7 +458,7 @@ class CustomerRenewalLivewireTest extends TestCase
             ->set('renewMonths', 3)
             ->set('renewStartPeriod', now()->startOfMonth()->format('Y-m'))
             ->call('sendRenewOtp')
-            ->set('renewOtp', Cache::get("referrer-otp:{$referrer->id}:{$scope}")['code'])
+            ->set('renewOtp', Cache::get("otp:referrer:{$referrer->id}:{$scope}")['code'])
             ->call('verifyRenewOtp')
             ->call('submitRenew')
             ->assertSet('renewFlash', fn ($m) => str_contains($m, 'komisi Titip Rp 9.000')); // 3000 x 3

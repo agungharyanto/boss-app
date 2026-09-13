@@ -47,7 +47,18 @@ class RenewalInvoiceService
      * itu sudah ada (dari jalur mana pun) TIDAK membuat yang kedua — kalau
      * belum Paid, dilunaskan; kalau sudah Paid, dibiarkan.
      *
-     * @return array{invoice: Invoice, created: bool, newly_paid: bool}
+     * v0.12.2 Track A — kalau `PppPackage::hasZeroSellPrice()` (satu sumber
+     * kebenaran, dipakai identik di sini, `PppoeVlan10MigrationService`, dan
+     * `GenerateDueInvoices`) bilang paket pelanggan gratis SECARA
+     * STRUKTURAL, TIDAK ADA invoice yang dibuat sama sekali — bukan invoice
+     * Rp0 berstatus "paid". `invoice` di hasil jadi `null`,
+     * `skipped_zero_price` jadi `true` — dicek SEBELUM
+     * `renewalSubscriptionFor()` dipanggil, jadi subscription
+     * "Perpanjangan Manual" tersembunyi juga TIDAK dibuat untuk periode
+     * yang di-skip (tidak ada gunanya baris subscription kosong tanpa
+     * satu pun invoice di baliknya).
+     *
+     * @return array{invoice: ?Invoice, created: bool, newly_paid: bool, skipped_zero_price: bool}
      */
     public function issuePaidForPeriod(Customer $customer, CarbonInterface $period): array
     {
@@ -55,11 +66,15 @@ class RenewalInvoiceService
         $periodEnd = $periodStart->copy()->endOfMonth();
         $dueDate = $periodStart->copy();
 
-        $subscription = $this->renewalSubscriptionFor($customer);
-
         $package = $customer->ppp_package_id !== null
             ? PppPackage::withoutGlobalScopes()->find($customer->ppp_package_id)
             : null;
+
+        if (PppPackage::hasZeroSellPrice($package)) {
+            return ['invoice' => null, 'created' => false, 'newly_paid' => false, 'skipped_zero_price' => true];
+        }
+
+        $subscription = $this->renewalSubscriptionFor($customer);
 
         $amount = $package !== null ? (float) $package->sell_price : 0.0;
         $description = $package !== null
@@ -79,7 +94,7 @@ class RenewalInvoiceService
         $created = $invoice->wasRecentlyCreated;
 
         if ($invoice->status === InvoiceStatus::Paid) {
-            return ['invoice' => $invoice, 'created' => $created, 'newly_paid' => false];
+            return ['invoice' => $invoice, 'created' => $created, 'newly_paid' => false, 'skipped_zero_price' => false];
         }
 
         // Draft -> Pending -> Paid. markPaid() memicu maturity Komisi
@@ -92,7 +107,7 @@ class RenewalInvoiceService
         // invoice; Perpanjang multi-bulan akan mengirim N pesan terpisah.
         $invoice = $this->invoiceService->markPaid($invoice, notifyCustomer: false);
 
-        return ['invoice' => $invoice, 'created' => $created, 'newly_paid' => true];
+        return ['invoice' => $invoice, 'created' => $created, 'newly_paid' => true, 'skipped_zero_price' => false];
     }
 
     /**

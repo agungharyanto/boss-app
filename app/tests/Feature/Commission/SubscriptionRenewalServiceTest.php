@@ -504,4 +504,72 @@ class SubscriptionRenewalServiceTest extends TestCase
         $this->assertSame('11000.00', $invoice->tax_total);       // PPN 11% on top
         $this->assertSame('111000.00', $invoice->grand_total);
     }
+
+    // ── v0.12.2 Track A amendment — sell_price=0 struktural skip invoice ──
+
+    public function test_renew_for_a_package_with_zero_sell_price_creates_no_invoice(): void
+    {
+        $user = $this->actingUser();
+        $freePackage = $this->package(3000, 'PPPoE-Remote', 0);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'reseller_id' => null,
+            'ppp_package_id' => $freePackage->id,
+        ]);
+
+        $result = $this->service->renew($user, $customer, null);
+
+        $this->assertSame(0, Invoice::withoutGlobalScopes()->where('customer_id', $customer->id)->count());
+        $this->assertSame(0, $result['invoices_created']);
+        $this->assertSame(0, $result['invoices_paid']);
+        $this->assertSame(1, $result['invoices_skipped_zero_price']);
+        $this->assertSame([], $result['invoice_numbers']);
+        $this->assertSame(0.0, $result['invoice_grand_total']);
+
+        // Subscription "Perpanjangan Manual" tersembunyi TIDAK dibuat sama
+        // sekali untuk periode yang di-skip — tidak ada gunanya baris
+        // subscription kosong tanpa satu pun invoice di baliknya.
+        $this->assertSame(
+            0,
+            Subscription::withoutGlobalScopes()
+                ->where('customer_id', $customer->id)
+                ->where('name', RenewalInvoiceService::RENEWAL_SUBSCRIPTION_NAME)
+                ->count(),
+        );
+    }
+
+    public function test_renewal_invoice_service_skips_invoice_for_zero_price_package_directly(): void
+    {
+        $this->actingUser();
+        $freePackage = $this->package(null, 'PPPoE-Remote', 0);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'reseller_id' => null,
+            'ppp_package_id' => $freePackage->id,
+        ]);
+
+        $result = app(RenewalInvoiceService::class)->issuePaidForPeriod($customer, now());
+
+        $this->assertNull($result['invoice']);
+        $this->assertFalse($result['created']);
+        $this->assertFalse($result['newly_paid']);
+        $this->assertTrue($result['skipped_zero_price']);
+    }
+
+    public function test_renewal_invoice_service_does_not_skip_a_promo_price_of_zero_on_a_paid_package(): void
+    {
+        $this->actingUser();
+        // promo_price=0 di atas paket BERBAYAR (sell_price>0) BUKAN sinyal
+        // "gratis struktural" — guard hanya memeriksa sell_price, bukan
+        // promo_price.
+        $package = $this->package(null, 'Paket Promo', 50000);
+        $package->update(['promo_price' => 0]);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $this->tenant->id, 'reseller_id' => null,
+            'ppp_package_id' => $package->id,
+        ]);
+
+        $result = app(RenewalInvoiceService::class)->issuePaidForPeriod($customer, now());
+
+        $this->assertNotNull($result['invoice']);
+        $this->assertFalse($result['skipped_zero_price']);
+    }
 }

@@ -182,12 +182,20 @@ class WorkOrderService
         return $workOrder->fresh();
     }
 
-    public function addDevice(WorkOrder $workOrder, WorkOrderDeviceType $deviceType, string $macAddress, string $serialNumber): WorkOrderDevice
+    /**
+     * v0.12.7 — $modemTypeId opsional (teknisi mungkin tidak selalu tahu/
+     * isi ini saat scan) — disimpan ke work_order_devices.modem_type_id
+     * (kolom sudah ada sejak v0.12.4). Belum menyentuh cpe_devices sama
+     * sekali di sini — itu tugas CpeBindingService::bindFromWorkOrder()
+     * saat WO di-complete (lihat method itu sendiri).
+     */
+    public function addDevice(WorkOrder $workOrder, WorkOrderDeviceType $deviceType, string $macAddress, string $serialNumber, ?int $modemTypeId = null): WorkOrderDevice
     {
         return $workOrder->devices()->create([
             'device_type' => $deviceType,
             'mac_address' => $macAddress,
             'serial_number' => $serialNumber,
+            'modem_type_id' => $modemTypeId,
             'scanned_at' => now(),
         ]);
     }

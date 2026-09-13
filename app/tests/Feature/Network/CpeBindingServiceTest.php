@@ -3,12 +3,14 @@
 namespace Tests\Feature\Network;
 
 use App\Enums\CpeDeviceStatus;
+use App\Enums\ModemTypeAssignmentSource;
 use App\Enums\Tr069Root;
 use App\Enums\WorkOrderDeviceType;
 use App\Enums\WorkOrderPhotoType;
 use App\Enums\WorkOrderStatus;
 use App\Models\CpeActionLog;
 use App\Models\CpeDevice;
+use App\Models\ModemType;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
 use App\Models\WorkOrderPhoto;
@@ -305,6 +307,77 @@ class CpeBindingServiceTest extends TestCase
             'cpe_device_id' => $cpeDevice->id,
             'status' => 'failed',
         ]);
+    }
+
+    // ── v0.12.7 Langkah 2 — copy modem_type_id saat binding ──
+
+    public function test_binding_copies_modem_type_id_from_work_order_device_with_manual_source(): void
+    {
+        Http::fake([
+            '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNMODEM001', 'AABBCC-ONT-SNMODEM001')], 200),
+        ]);
+
+        $workOrder = WorkOrder::factory()->inProgress()->create();
+        foreach (WorkOrderPhotoType::cases() as $type) {
+            WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType($type)->create();
+        }
+        $modemType = ModemType::factory()->create(['tenant_id' => $workOrder->tenant_id]);
+        WorkOrderDevice::factory()->forWorkOrder($workOrder)->create([
+            'device_type' => WorkOrderDeviceType::Ont,
+            'serial_number' => 'SNMODEM001',
+            'modem_type_id' => $modemType->id,
+        ]);
+
+        app(WorkOrderService::class)->complete($workOrder->fresh());
+
+        $cpeDevice = CpeDevice::where('serial_number', 'SNMODEM001')->firstOrFail();
+        $this->assertSame($modemType->id, $cpeDevice->modem_type_id);
+        $this->assertSame(ModemTypeAssignmentSource::Manual, $cpeDevice->modem_type_source);
+    }
+
+    /**
+     * Teknisi tidak selalu mengisi Tipe Modem saat scan (opsional). Kalau
+     * device SUDAH punya modem_type_id (mis. hasil auto-suggest OUI
+     * matching sebelumnya, v0.12.5), binding TIDAK BOLEH menimpanya
+     * dengan NULL hanya karena work_order_devices.modem_type_id kosong —
+     * lihat CpeBindingService::bindFromWorkOrder()'s own comment.
+     * Disimulasikan lewat panggilan bindFromWorkOrder() DUA KALI: yang
+     * pertama membangun kondisi "sudah auto-assigned", yang kedua
+     * (dengan work_order_devices.modem_type_id TETAP null) tidak boleh
+     * menghapusnya.
+     */
+    public function test_binding_does_not_override_an_existing_modem_type_id_when_work_order_device_has_none(): void
+    {
+        Http::fake([
+            '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNMODEM002', 'AABBCC-ONT-SNMODEM002')], 200),
+        ]);
+
+        $workOrder = WorkOrder::factory()->inProgress()->create();
+        $workOrderDevice = WorkOrderDevice::factory()->forWorkOrder($workOrder)->create([
+            'device_type' => WorkOrderDeviceType::Ont,
+            'serial_number' => 'SNMODEM002',
+            'modem_type_id' => null,
+        ]);
+
+        $cpeDevice = app(CpeBindingService::class)->bindFromWorkOrder($workOrder->fresh());
+
+        // Simulasikan auto-suggest OUI (v0.12.5) sudah mengisi ini di
+        // antara panggilan pertama dan kedua — independen dari alur WO.
+        $autoModemType = ModemType::factory()->create(['tenant_id' => $workOrder->tenant_id]);
+        $cpeDevice->update([
+            'modem_type_id' => $autoModemType->id,
+            'modem_type_source' => ModemTypeAssignmentSource::Auto,
+        ]);
+
+        // work_order_devices.modem_type_id TETAP null di sini -- binding
+        // ulang (skenario nyata: reconcile / re-complete) tidak boleh
+        // menimpanya.
+        $this->assertNull($workOrderDevice->fresh()->modem_type_id);
+        app(CpeBindingService::class)->bindFromWorkOrder($workOrder->fresh());
+
+        $cpeDevice->refresh();
+        $this->assertSame($autoModemType->id, $cpeDevice->modem_type_id);
+        $this->assertSame(ModemTypeAssignmentSource::Auto, $cpeDevice->modem_type_source);
     }
 
     public function test_get_standard_identity_falls_back_from_tr098_to_tr181_root(): void

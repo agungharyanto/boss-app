@@ -134,20 +134,21 @@ class WorkOrderController extends Controller
             $work_order,
             WorkOrderDeviceType::from($request->validated('device_type')),
             $request->validated('mac_address'),
-            $request->validated('serial_number')
+            $request->validated('serial_number'),
+            $request->validated('modem_type_id')
         );
 
         return $this->success($device, 'Perangkat berhasil dicatat', [], 201);
     }
 
     /**
-     * v0.7.5 bridge endpoint — see ProvisionWorkOrderDeviceRequest's own
-     * docblock for why this is CS/admin manual input, not a technician
-     * self-service form. genieacs_device_id/wifi_provisioned_at aren't
-     * touched here at all — this only records the credential; the actual
-     * push happens later, from CpeBindingService, once the device is known
-     * to GenieACS (may already have happened by binding time, or may still
-     * be pending — this endpoint doesn't need to know which).
+     * v0.7.5 bridge endpoint, sekarang JUGA technician self-service sejak
+     * v0.12.3 (lihat ProvisionWorkOrderDeviceRequest's own docblock).
+     * genieacs_device_id/wifi_provisioned_at aren't touched here at all —
+     * this only records the credential; the actual push happens later,
+     * from CpeBindingService, once the device is known to GenieACS (may
+     * already have happened by binding time, or may still be pending —
+     * this endpoint doesn't need to know which).
      */
     public function provisionDevice(ProvisionWorkOrderDeviceRequest $request, WorkOrder $work_order, WorkOrderDevice $device, WorkOrderService $service): JsonResponse
     {

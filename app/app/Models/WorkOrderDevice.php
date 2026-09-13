@@ -17,6 +17,7 @@ class WorkOrderDevice extends Model
     protected $fillable = [
         'work_order_id',
         'device_type',
+        'modem_type_id',
         'mac_address',
         'serial_number',
         'scanned_at',
@@ -54,5 +55,16 @@ class WorkOrderDevice extends Model
     public function cpeDevice(): HasOne
     {
         return $this->hasOne(CpeDevice::class);
+    }
+
+    /**
+     * v0.12.4 — Tipe Modem yang diisi manual teknisi saat scan device.
+     * Nullable: sengaja belum wajib (device lama tidak pernah punya ini,
+     * wiring form penuh baru v0.12.7) — lihat modem_types migration untuk
+     * kenapa field ini manual, bukan deteksi TR-069.
+     */
+    public function modemType(): BelongsTo
+    {
+        return $this->belongsTo(ModemType::class);
     }
 }

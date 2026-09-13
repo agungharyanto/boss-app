@@ -10,6 +10,7 @@ use Database\Factories\PppPackageFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
@@ -92,6 +93,17 @@ class PppPackage extends Model
     public function commissionRate(): HasOne
     {
         return $this->hasOne(CommissionRate::class);
+    }
+
+    /**
+     * v0.12.4 — baris matrix Template Konfig CPE (WanConfigTemplate) untuk
+     * paket ini, satu per Tipe Modem (plus paling banyak satu baris
+     * `modem_type_id` NULL = default/fallback paket ini). Lihat
+     * `wan_config_templates` migration untuk constraint uniqueness-nya.
+     */
+    public function wanConfigTemplates(): HasMany
+    {
+        return $this->hasMany(WanConfigTemplate::class);
     }
 
     /**

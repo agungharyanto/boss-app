@@ -9,6 +9,7 @@ use Database\Factories\WorkOrderFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class WorkOrder extends Model
@@ -79,5 +80,18 @@ class WorkOrder extends Model
     public function photos(): HasMany
     {
         return $this->hasMany(WorkOrderPhoto::class);
+    }
+
+    /**
+     * v0.12.3 — Technician yang PERNAH klaim WO ini lewat API
+     * (`work_order_technicians`). GENUINELY terpisah dari `technician()`
+     * (assignment resmi admin via `technician_id`) — lihat migration's own
+     * docblock.
+     */
+    public function claimedByTechnicians(): BelongsToMany
+    {
+        return $this->belongsToMany(Technician::class, 'work_order_technicians')
+            ->withPivot('claimed_at')
+            ->withTimestamps();
     }
 }

@@ -17,6 +17,7 @@ use App\Models\Subscription;
 use App\Models\Technician;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
+use App\Policies\WorkOrderPolicy;
 use App\Services\Installation\WorkOrderPhotoService;
 use App\Services\Installation\WorkOrderService;
 use Illuminate\Http\JsonResponse;
@@ -31,14 +32,21 @@ class WorkOrderController extends Controller
     /**
      * BelongsToResellerScope narrows this to the reseller's own work
      * orders; an ISP admin (no context) sees every work order.
+     *
+     * v0.12.3 — kalau acting user MURNI teknisi (WorkOrderPolicy::
+     * isTechnicianOnly(), bukan admin/.manage-wide/reseller membership),
+     * query di-scope ke WorkOrderPolicy::scopeForTechnician() — definisi
+     * visibility YANG SAMA persis dengan authorize('view', ...) per-objek,
+     * bukan dua definisi terpisah yang bisa drift.
      */
-    public function index(Request $request): JsonResponse
+    public function index(Request $request, WorkOrderPolicy $policy): JsonResponse
     {
         $this->authorize('viewAny', WorkOrder::class);
 
         $workOrders = WorkOrder::query()
             ->with(self::WITH)
             ->when($request->filled('status'), fn ($q) => $q->where('status', $request->string('status')))
+            ->when($policy->isTechnicianOnly($request->user()), fn ($q) => $policy->scopeForTechnician($request->user(), $q))
             ->latest()
             ->paginate($request->integer('per_page', 15));
 
@@ -164,5 +172,58 @@ class WorkOrderController extends Controller
         $workOrder = $service->cancel($work_order);
 
         return $this->success(new WorkOrderResource($workOrder->load(self::WITH)), 'Work order dibatalkan');
+    }
+
+    /**
+     * v0.12.3 — klaim mandiri (self-service). `view` (bukan `manage`) —
+     * kalau WO belum kelihatan sama sekali (sudah di-assign/diklaim
+     * teknisi LAIN), authorize() ini sudah menolak sebelum sampai ke
+     * WorkOrderService::claim() — teknisi lain tidak pernah bisa "merebut"
+     * klaim yang sudah ada.
+     */
+    public function claim(WorkOrder $work_order, WorkOrderService $service): JsonResponse
+    {
+        $this->authorize('view', $work_order);
+
+        $technician = Technician::query()->where('user_id', request()->user()->id)->first();
+
+        if ($technician === null) {
+            abort(403, 'Akun ini tidak tertaut ke Technician — tidak bisa mengklaim work order.');
+        }
+
+        $claim = $service->claim($work_order, $technician);
+
+        return $this->success(['claimed_at' => $claim->claimed_at->toIso8601String()], 'Work order berhasil diklaim');
+    }
+
+    /**
+     * v0.12.3 — lookup WorkOrder lewat serial number perangkat yang sudah
+     * di-scan (`work_order_devices.serial_number`). Query lewat relasi
+     * WorkOrder (bukan `WorkOrderDevice::where(...)` langsung) SENGAJA —
+     * WorkOrderDevice sendiri tidak tenant-scoped, WorkOrder::query() sudah
+     * (BelongsToTenant), jadi ini menghindari kebocoran lintas-tenant kalau
+     * kebetulan ada serial yang sama persis di tenant lain.
+     */
+    public function lookupBySerial(Request $request): JsonResponse
+    {
+        $this->authorize('viewAny', WorkOrder::class);
+
+        $serial = $request->string('serial')->trim()->toString();
+
+        if ($serial === '') {
+            abort(422, 'Parameter serial wajib diisi.');
+        }
+
+        $workOrder = WorkOrder::query()
+            ->whereHas('devices', fn ($q) => $q->where('serial_number', $serial))
+            ->first();
+
+        if ($workOrder === null) {
+            abort(404, 'Tidak ada work order dengan serial number tersebut.');
+        }
+
+        $this->authorize('view', $workOrder);
+
+        return $this->success(new WorkOrderResource($workOrder->load(self::WITH)));
     }
 }

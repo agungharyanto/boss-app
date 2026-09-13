@@ -122,10 +122,15 @@ Route::prefix('v1')->group(function () {
 
             Route::get('work-orders', [WorkOrderController::class, 'index']);
             Route::post('work-orders', [WorkOrderController::class, 'store']);
+            // v0.12.3 — HARUS di atas 'work-orders/{work_order}' di bawah,
+            // supaya literal path ini tidak tertangkap sebagai parameter
+            // {work_order} (urutan definisi route menentukan prioritas match).
+            Route::get('work-orders/lookup-by-serial', [WorkOrderController::class, 'lookupBySerial']);
             Route::get('work-orders/{work_order}', [WorkOrderController::class, 'show']);
             Route::post('subscriptions/{subscription}/work-order', [WorkOrderController::class, 'storeFromSubscription']);
             Route::post('work-orders/{work_order}/verify', [WorkOrderController::class, 'verify']);
             Route::post('work-orders/{work_order}/assign', [WorkOrderController::class, 'assign']);
+            Route::post('work-orders/{work_order}/claim', [WorkOrderController::class, 'claim']);
             Route::post('work-orders/{work_order}/start', [WorkOrderController::class, 'start']);
             Route::post('work-orders/{work_order}/photos', [WorkOrderController::class, 'storePhoto']);
             Route::post('work-orders/{work_order}/devices', [WorkOrderController::class, 'storeDevice']);
@@ -146,6 +151,9 @@ Route::prefix('v1')->group(function () {
             Route::get('technicians', [TechnicianController::class, 'index']);
             Route::post('technicians', [TechnicianController::class, 'store']);
             Route::get('technicians/{technician}', [TechnicianController::class, 'show']);
+            // v0.12.3 — terbitkan token Sanctum Technician-scoped API baru
+            // (revoke token lama). Lihat TechnicianTokenService.
+            Route::post('technicians/{technician}/token', [TechnicianController::class, 'generateToken']);
 
             Route::get('nas', [NasController::class, 'index']);
             Route::post('nas', [NasController::class, 'store']);

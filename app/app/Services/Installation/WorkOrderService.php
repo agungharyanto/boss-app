@@ -8,11 +8,13 @@ use App\Enums\WorkOrderPhotoType;
 use App\Enums\WorkOrderStatus;
 use App\Exceptions\IncompleteWorkOrderException;
 use App\Exceptions\InvalidWorkOrderStatusTransitionException;
+use App\Exceptions\WorkOrderClaimException;
 use App\Models\OdpPort;
 use App\Models\Subscription;
 use App\Models\Technician;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
+use App\Models\WorkOrderTechnician;
 use App\Services\Network\CpeBindingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -90,6 +92,31 @@ class WorkOrderService
         $workOrder->update(['technician_id' => $technician->id]);
 
         return $workOrder->fresh();
+    }
+
+    /**
+     * v0.12.3 — klaim mandiri (self-service) lewat API, GENUINELY terpisah
+     * dari assignTechnician() di atas: TIDAK mengubah status WO, TIDAK
+     * menyentuh `technician_id` sama sekali — lihat WorkOrderTechnician's
+     * own docblock untuk kenapa dua mekanisme ini sengaja tidak disinkronkan.
+     * Idempoten: klaim ulang oleh teknisi yang sama TIDAK membuat baris
+     * kedua (unique(work_order_id, technician_id) di DB adalah jaring
+     * pengaman terakhir, firstOrCreate() di sini adalah jalur normalnya).
+     *
+     * @throws WorkOrderClaimException kalau WO sudah completed/cancelled.
+     */
+    public function claim(WorkOrder $workOrder, Technician $technician): WorkOrderTechnician
+    {
+        if (in_array($workOrder->status, [WorkOrderStatus::Completed, WorkOrderStatus::Cancelled], true)) {
+            throw new WorkOrderClaimException(
+                "Work order ini sudah {$workOrder->status->label()} — tidak bisa diklaim lagi."
+            );
+        }
+
+        return WorkOrderTechnician::query()->firstOrCreate(
+            ['work_order_id' => $workOrder->id, 'technician_id' => $technician->id],
+            ['claimed_at' => now()],
+        );
     }
 
     public function start(WorkOrder $workOrder): WorkOrder

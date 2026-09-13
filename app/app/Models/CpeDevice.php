@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\CpeDeviceStatus;
 use App\Enums\Tr069Root;
+use App\Enums\WanConfigTemplateSource;
 use App\Models\Concerns\BelongsToResellerScope;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CpeDeviceFactory;
@@ -33,6 +34,10 @@ class CpeDevice extends Model
         'last_inform_at',
         'bound_at',
         'wifi_provisioned_at',
+        // v0.12.5 — hasil auto-suggest (WanConfigTemplateSuggestionService)
+        // atau override manual admin, lihat WanConfigTemplateSource.
+        'wan_config_template_id',
+        'wan_config_template_source',
     ];
 
     protected function casts(): array
@@ -44,6 +49,7 @@ class CpeDevice extends Model
             'last_inform_at' => 'datetime',
             'bound_at' => 'datetime',
             'wifi_provisioned_at' => 'datetime',
+            'wan_config_template_source' => WanConfigTemplateSource::class,
         ];
     }
 
@@ -60,6 +66,15 @@ class CpeDevice extends Model
     public function workOrderDevice(): BelongsTo
     {
         return $this->belongsTo(WorkOrderDevice::class);
+    }
+
+    /**
+     * v0.12.5 — Template Konfig CPE ter-assign (auto-suggest atau
+     * override manual, lihat wan_config_template_source).
+     */
+    public function wanConfigTemplate(): BelongsTo
+    {
+        return $this->belongsTo(WanConfigTemplate::class);
     }
 
     /**

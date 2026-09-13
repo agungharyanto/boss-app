@@ -204,6 +204,62 @@
         @livewire('network.cpe-dialup-history', ['cpeDeviceId' => $device->id], key('cpe-dialup-history-'.$device->id))
     </div>
 
+    {{-- v0.12.5 — Template Konfig CPE ter-assign (auto-suggest atau
+         override manual, lihat CpeWanConfigAssignmentService). Badge
+         "Auto-terdeteksi"/"Manual" biar jelas asalnya dari mana — auto
+         bisa berubah lagi lain waktu (self-healing tiap halaman dibuka,
+         cuma kalau device BELUM PERNAH ter-assign), manual TIDAK PERNAH
+         ditimpa otomatis. --}}
+    <div class="bg-white border border-gray-200 rounded-md p-5 mt-6" x-data="{ editingWanTemplate: false }">
+        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">{{ __('Template Konfig CPE') }}</h2>
+
+        <dl class="grid grid-cols-1 sm:grid-cols-2 gap-y-3 text-sm">
+            <dt class="text-gray-500">{{ __('Template Ter-assign') }}</dt>
+            <dd class="text-gray-800">
+                @if ($device->wanConfigTemplate)
+                    {{ $device->wanConfigTemplate->name }}
+                    <span class="ml-1 px-2 py-0.5 rounded-full text-xs {{ $device->wan_config_template_source->badgeClasses() }}">
+                        {{ $device->wan_config_template_source->label() }}
+                    </span>
+                @else
+                    <span class="text-gray-400">{{ __('Belum ada Template ter-assign.') }}</span>
+                @endif
+            </dd>
+
+            @if ($device->wanConfigTemplate)
+                <dt class="text-gray-500">{{ __('Tipe Modem') }}</dt>
+                <dd class="text-gray-800">{{ $device->wanConfigTemplate->modemType->name ?? __('Generic (Tanpa Tipe Modem)') }}</dd>
+
+                <dt class="text-gray-500">{{ __('Status Template') }}</dt>
+                <dd class="text-gray-800">
+                    <span class="px-2 py-0.5 rounded-full text-xs {{ $device->wanConfigTemplate->enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500' }}">
+                        {{ $device->wanConfigTemplate->enabled ? __('Aktif') : __('Nonaktif') }}
+                    </span>
+                </dd>
+            @endif
+        </dl>
+
+        @if ($canManage)
+            <div class="mt-3">
+                <button type="button" @click="editingWanTemplate = !editingWanTemplate" class="text-primary hover:underline text-xs" x-text="editingWanTemplate ? '{{ __('Batal') }}' : '{{ __('Ubah Template') }}'"></button>
+            </div>
+
+            <div x-show="editingWanTemplate" x-cloak class="border-t border-gray-200 pt-4 mt-3 space-y-3">
+                <label class="block text-sm font-medium mb-1">{{ __('Pilih Template (Manual)') }}</label>
+                <select id="cpe-wan-template-select-{{ $device->id }}" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                    <option value="">{{ __('-- Tidak ada / Hapus assignment --') }}</option>
+                    @foreach ($wanConfigTemplates as $template)
+                        <option value="{{ $template->id }}" @selected($device->wan_config_template_id === $template->id)>
+                            {{ $template->name }} ({{ $template->modemType->name ?? __('Generic') }})
+                        </option>
+                    @endforeach
+                </select>
+                <div class="text-xs text-red-600" id="cpe-wan-template-error-{{ $device->id }}"></div>
+                <button type="button" onclick="cpeAssignWanConfigTemplate({{ $device->id }})" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">{{ __('Terapkan') }}</button>
+            </div>
+        @endif
+    </div>
+
     {{-- WiFi/SSID — semua SSID yang ditemukan discovery, bukan cuma SSID1.
          "Ganti WiFi" (2026-08-17) is now per-row here instead of one
          standalone form below — a single flat form could only ever target
@@ -409,6 +465,27 @@
                     body: JSON.stringify({ ssid_index: ssidIndex, enabled: !currentlyEnabled }),
                 }).then(({ ok, body }) => {
                     cpeFlash(body.message, !ok);
+                });
+            };
+
+            // v0.12.5 — reload halaman setelah sukses (bukan cuma flash
+            // message) karena section Template Konfig CPE menampilkan
+            // badge/nilai yang harus fresh setelah assignment berubah,
+            // beda dari reboot/wifi yang cukup flash message saja.
+            window.cpeAssignWanConfigTemplate = function (id) {
+                const select = document.getElementById(`cpe-wan-template-select-${id}`);
+                const errorEl = document.getElementById(`cpe-wan-template-error-${id}`);
+                errorEl.textContent = '';
+                cpeFetch(`/api/internal/cpe-devices/${id}/wan-config-template`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ template_id: select.value || null }),
+                }).then(({ ok, body }) => {
+                    if (!ok) {
+                        errorEl.textContent = body.message || 'Gagal menyimpan.';
+                        return;
+                    }
+                    window.location.reload();
                 });
             };
 

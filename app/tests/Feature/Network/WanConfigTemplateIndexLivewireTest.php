@@ -4,7 +4,6 @@ namespace Tests\Feature\Network;
 
 use App\Livewire\Network\WanConfigTemplateIndex;
 use App\Models\ModemType;
-use App\Models\PppPackage;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Models\WanConfigTemplate;
@@ -14,10 +13,12 @@ use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
- * v0.12.5 — "Template Konfig CPE" (matrix Paket x Tipe Modem). Langkah 4:
- * validasi uniqueness (termasuk skenario soft-delete PppPackage/ModemType,
- * pelajaran langsung dari insiden verifikasi v0.12.4), validasi
- * mutually-exclusive kombinasi Paket x Tipe Modem, dan CRUD ModemType.
+ * v0.12.5 (revisi arsitektur) — "Template Konfig CPE" TIDAK terikat Paket
+ * sama sekali, dibedakan HANYA oleh Tipe Modem. TIDAK ADA lagi validasi
+ * collision (Paket, Modem) — beberapa Template boleh punya Tipe Modem yang
+ * sama, dibedakan lewat `name` bebas. Satu-satunya validasi yang tersisa:
+ * referential integrity Tipe Modem (assertReferencesAlive), sama pola
+ * dengan sebelumnya.
  */
 class WanConfigTemplateIndexLivewireTest extends TestCase
 {
@@ -50,191 +51,134 @@ class WanConfigTemplateIndexLivewireTest extends TestCase
         Livewire::test(WanConfigTemplateIndex::class)->assertForbidden();
     }
 
-    // ================= Create — matrix dasar =================
+    // ================= Create =================
 
-    public function test_creating_a_default_template_for_a_package(): void
+    public function test_creating_a_generic_template(): void
     {
         $tenant = Tenant::factory()->create();
         $admin = $this->admin($tenant);
-        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
 
         $this->actingAs($admin);
 
         Livewire::test(WanConfigTemplateIndex::class)
-            ->call('openCreateForTemplate', $package->id)
-            ->set('modemTypeSelection', 'default')
+            ->call('openCreateForModemType')
+            ->set('name', 'Template Generic Default')
+            ->set('modemTypeSelection', 'generic')
             ->set('wan1Vlan', '10')
             ->call('saveTemplate')
             ->assertHasNoErrors();
 
         $this->assertDatabaseHas('wan_config_templates', [
-            'ppp_package_id' => $package->id,
+            'tenant_id' => $tenant->id,
+            'name' => 'Template Generic Default',
             'modem_type_id' => null,
             'wan1_vlan' => 10,
         ]);
     }
 
-    public function test_creating_a_modem_specific_template_for_a_package(): void
+    public function test_creating_a_modem_specific_template(): void
     {
         $tenant = Tenant::factory()->create();
         $admin = $this->admin($tenant);
-        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
         $modemType = ModemType::factory()->create(['tenant_id' => $tenant->id]);
 
         $this->actingAs($admin);
 
         Livewire::test(WanConfigTemplateIndex::class)
-            ->call('openCreateForTemplate', $package->id)
-            ->set('modemTypeSelection', (string) $modemType->id)
+            ->call('openCreateForModemType', $modemType->id)
+            ->set('name', 'Template ZTE Standar')
             ->call('saveTemplate')
             ->assertHasNoErrors();
 
         $this->assertDatabaseHas('wan_config_templates', [
-            'ppp_package_id' => $package->id,
+            'name' => 'Template ZTE Standar',
             'modem_type_id' => $modemType->id,
         ]);
     }
 
-    // ================= Validasi mutually-exclusive (Paket x Tipe Modem) =================
-
-    public function test_two_templates_with_the_same_package_and_modem_type_is_rejected(): void
+    /**
+     * TIDAK LAGI ditolak (kebalikan dari desain v0.12.4 lama) — beberapa
+     * Template boleh punya Tipe Modem yang SAMA, dibedakan lewat nama.
+     */
+    public function test_two_templates_for_the_same_modem_type_are_both_allowed(): void
     {
         $tenant = Tenant::factory()->create();
         $admin = $this->admin($tenant);
-        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
         $modemType = ModemType::factory()->create(['tenant_id' => $tenant->id]);
-        WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'ppp_package_id' => $package->id, 'modem_type_id' => $modemType->id]);
+        WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'modem_type_id' => $modemType->id, 'name' => 'Template A']);
 
         $this->actingAs($admin);
 
         Livewire::test(WanConfigTemplateIndex::class)
-            ->call('openCreateForTemplate', $package->id)
-            ->set('modemTypeSelection', (string) $modemType->id)
-            ->call('saveTemplate')
-            ->assertHasErrors('modemTypeSelection');
-
-        $this->assertSame(1, WanConfigTemplate::where('ppp_package_id', $package->id)->where('modem_type_id', $modemType->id)->count());
-    }
-
-    /**
-     * Kasus NULL — partial unique index harus mencegah DUA baris "default"
-     * (modem_type_id NULL) untuk paket yang sama, persis diverifikasi live
-     * saat skema v0.12.4 dibangun. Diuji di sini lewat jalur UI penuh, bukan
-     * cuma query DB langsung.
-     */
-    public function test_two_default_templates_for_the_same_package_is_rejected(): void
-    {
-        $tenant = Tenant::factory()->create();
-        $admin = $this->admin($tenant);
-        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
-        WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'ppp_package_id' => $package->id, 'modem_type_id' => null]);
-
-        $this->actingAs($admin);
-
-        Livewire::test(WanConfigTemplateIndex::class)
-            ->call('openCreateForTemplate', $package->id)
-            ->set('modemTypeSelection', 'default')
-            ->call('saveTemplate')
-            ->assertHasErrors('modemTypeSelection');
-
-        $this->assertSame(1, WanConfigTemplate::where('ppp_package_id', $package->id)->whereNull('modem_type_id')->count());
-    }
-
-    /**
-     * Kombinasi paket SAMA + modem BEDA harus tetap diizinkan — memastikan
-     * validasi di atas benar-benar per-kombinasi, bukan per-paket saja.
-     */
-    public function test_same_package_with_a_different_modem_type_is_allowed(): void
-    {
-        $tenant = Tenant::factory()->create();
-        $admin = $this->admin($tenant);
-        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
-        $modemA = ModemType::factory()->create(['tenant_id' => $tenant->id]);
-        $modemB = ModemType::factory()->create(['tenant_id' => $tenant->id]);
-        WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'ppp_package_id' => $package->id, 'modem_type_id' => $modemA->id]);
-
-        $this->actingAs($admin);
-
-        Livewire::test(WanConfigTemplateIndex::class)
-            ->call('openCreateForTemplate', $package->id)
-            ->set('modemTypeSelection', (string) $modemB->id)
+            ->call('openCreateForModemType', $modemType->id)
+            ->set('name', 'Template B')
             ->call('saveTemplate')
             ->assertHasNoErrors();
 
-        $this->assertSame(2, WanConfigTemplate::where('ppp_package_id', $package->id)->count());
+        $this->assertSame(2, WanConfigTemplate::where('modem_type_id', $modemType->id)->count());
     }
 
     /**
-     * Mengedit template yang sudah ada (mengubah field lain, bukan
-     * kombinasi paket/modem-nya) tidak boleh dianggap bentrok dengan
-     * dirinya sendiri.
+     * Sama halnya untuk beberapa Template generic sekaligus — tidak ada
+     * lagi batasan "1 default per paket" (paket sudah tidak ada).
      */
-    public function test_editing_a_template_does_not_flag_a_collision_with_its_own_unchanged_combination(): void
+    public function test_two_generic_templates_are_both_allowed(): void
     {
         $tenant = Tenant::factory()->create();
         $admin = $this->admin($tenant);
-        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
-        $modemType = ModemType::factory()->create(['tenant_id' => $tenant->id]);
-        $template = WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'ppp_package_id' => $package->id, 'modem_type_id' => $modemType->id]);
+        WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'modem_type_id' => null, 'name' => 'Generic A']);
+
+        $this->actingAs($admin);
+
+        Livewire::test(WanConfigTemplateIndex::class)
+            ->call('openCreateForModemType')
+            ->set('name', 'Generic B')
+            ->set('modemTypeSelection', 'generic')
+            ->call('saveTemplate')
+            ->assertHasNoErrors();
+
+        $this->assertSame(2, WanConfigTemplate::whereNull('modem_type_id')->count());
+    }
+
+    public function test_editing_a_template(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $template = WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Nama Lama']);
 
         $this->actingAs($admin);
 
         Livewire::test(WanConfigTemplateIndex::class)
             ->call('editTemplate', $template->id)
+            ->set('name', 'Nama Baru')
             ->set('wan1Vlan', '999')
             ->call('saveTemplate')
             ->assertHasNoErrors();
 
+        $this->assertSame('Nama Baru', $template->fresh()->name);
         $this->assertSame(999, $template->fresh()->wan1_vlan);
     }
 
-    // ================= Validasi soft-delete (pelajaran insiden v0.12.4) =================
-
-    /**
-     * PppPackage yang soft-deleted TIDAK boleh bisa dipilih untuk membuat
-     * template baru — persis kelas bug yang menyebabkan PppPackage #17
-     * "PPPoE-Remote" produksi ter-soft-delete tak sengaja saat verifikasi
-     * restrictOnDelete() kemarin. Dropdown (query PppPackage biasa) sudah
-     * otomatis exclude via SoftDeletingScope; ini menguji SISI SERVER
-     * (submit dengan id paket yang sudah soft-deleted, seolah dikirim
-     * manual/stale) benar-benar ditolak juga, bukan cuma disembunyikan di
-     * dropdown.
-     */
-    public function test_a_soft_deleted_package_is_rejected_when_creating_a_template(): void
-    {
-        $tenant = Tenant::factory()->create();
-        $admin = $this->admin($tenant);
-        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
-        $package->delete();
-
-        $this->actingAs($admin);
-
-        Livewire::test(WanConfigTemplateIndex::class)
-            ->set('pppPackageId', (string) $package->id)
-            ->set('modemTypeSelection', 'default')
-            ->call('saveTemplate')
-            ->assertHasErrors('pppPackageId');
-
-        $this->assertDatabaseCount('wan_config_templates', 0);
-    }
+    // ================= Validasi soft-delete Tipe Modem (assertReferencesAlive) =================
 
     /**
      * ModemType yang soft-deleted TIDAK boleh bisa dipilih untuk membuat
-     * template baru — sisi lain dari case di atas.
+     * template baru — sama pola dengan sebelumnya, masih relevan (satu-
+     * satunya validasi referential integrity yang tersisa di arsitektur
+     * baru).
      */
     public function test_a_soft_deleted_modem_type_is_rejected_when_creating_a_template(): void
     {
         $tenant = Tenant::factory()->create();
         $admin = $this->admin($tenant);
-        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
         $modemType = ModemType::factory()->create(['tenant_id' => $tenant->id]);
         $modemType->delete();
 
         $this->actingAs($admin);
 
         Livewire::test(WanConfigTemplateIndex::class)
-            ->call('openCreateForTemplate', $package->id)
-            ->set('modemTypeSelection', (string) $modemType->id)
+            ->call('openCreateForModemType', $modemType->id)
+            ->set('name', 'Template Ilegal')
             ->call('saveTemplate')
             ->assertHasErrors('modemTypeSelection');
 
@@ -242,32 +186,23 @@ class WanConfigTemplateIndexLivewireTest extends TestCase
     }
 
     /**
-     * Kebalikannya — sebuah kombinasi (paket, modem) yang sudah PERNAH
-     * dipakai template tapi paket/modem-nya KEMUDIAN soft-deleted (bukan
-     * request baru, tapi record lama) TIDAK boleh membuat kombinasi itu
-     * "terkunci selamanya" untuk paket/modem lain yang masih hidup — sudah
-     * tercakup test_same_package_with_a_different_modem_type_is_allowed di
-     * atas untuk arah "kombinasi beda tetap boleh"; test ini menegaskan
-     * arah sebaliknya: begitu paket A di-soft-delete, PppPackage #A tidak
-     * lagi bisa dipilih SAMA SEKALI (baik untuk kombinasi baru maupun
-     * "menghidupkan lagi" kombinasi lama) — dicek lewat assertDatabaseHas
-     * bahwa baris LAMA (dibuat sebelum soft-delete) tetap utuh, hanya
-     * PEMBUATAN BARU yang diblokir.
+     * Kebalikannya — Template yang SUDAH ada tetap utuh begitu Tipe
+     * Modem-nya kemudian soft-deleted (bukan request baru, record lama).
      */
-    public function test_a_pre_existing_template_survives_its_packages_later_soft_delete(): void
+    public function test_a_pre_existing_template_survives_its_modem_types_later_soft_delete(): void
     {
         $tenant = Tenant::factory()->create();
-        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
-        $template = WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'ppp_package_id' => $package->id]);
+        $modemType = ModemType::factory()->create(['tenant_id' => $tenant->id]);
+        $template = WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'modem_type_id' => $modemType->id]);
 
-        $package->delete();
+        $modemType->delete();
 
-        $this->assertDatabaseHas('wan_config_templates', ['id' => $template->id, 'ppp_package_id' => $package->id]);
+        $this->assertDatabaseHas('wan_config_templates', ['id' => $template->id, 'modem_type_id' => $modemType->id]);
     }
 
     // ================= CRUD Tipe Modem =================
 
-    public function test_creating_a_modem_type(): void
+    public function test_creating_a_modem_type_with_match_patterns(): void
     {
         $tenant = Tenant::factory()->create();
         $admin = $this->admin($tenant);
@@ -276,10 +211,16 @@ class WanConfigTemplateIndexLivewireTest extends TestCase
 
         Livewire::test(WanConfigTemplateIndex::class)
             ->set('modemTypeName', 'ZTE F609 Dual-Band')
+            ->set('manufacturerMatchPatterns', 'ZICG, CIOT')
             ->call('saveModemType')
             ->assertHasNoErrors();
 
-        $this->assertDatabaseHas('modem_types', ['tenant_id' => $tenant->id, 'name' => 'ZTE F609 Dual-Band', 'is_active' => true]);
+        $this->assertDatabaseHas('modem_types', [
+            'tenant_id' => $tenant->id,
+            'name' => 'ZTE F609 Dual-Band',
+            'manufacturer_match_patterns' => 'ZICG, CIOT',
+            'is_active' => true,
+        ]);
     }
 
     public function test_creating_a_modem_type_with_a_duplicate_name_is_rejected(): void
@@ -298,11 +239,6 @@ class WanConfigTemplateIndexLivewireTest extends TestCase
         $this->assertSame(1, ModemType::where('name', 'ZTE F609 Dual-Band')->count());
     }
 
-    /**
-     * Nama yang sama dengan ModemType yang SUDAH soft-deleted boleh dipakai
-     * ulang — sama pola bandwidth_profiles/ppp_packages (partial unique
-     * index WHERE deleted_at IS NULL).
-     */
     public function test_a_modem_type_name_can_be_reused_after_the_original_is_soft_deleted(): void
     {
         $tenant = Tenant::factory()->create();
@@ -331,11 +267,17 @@ class WanConfigTemplateIndexLivewireTest extends TestCase
         Livewire::test(WanConfigTemplateIndex::class)
             ->call('editModemType', $modemType->id)
             ->set('modemTypeName', 'Nama Baru')
+            ->set('manufacturerMatchPatterns', 'HWTC')
             ->set('modemTypeIsActive', false)
             ->call('saveModemType')
             ->assertHasNoErrors();
 
-        $this->assertDatabaseHas('modem_types', ['id' => $modemType->id, 'name' => 'Nama Baru', 'is_active' => false]);
+        $this->assertDatabaseHas('modem_types', [
+            'id' => $modemType->id,
+            'name' => 'Nama Baru',
+            'manufacturer_match_patterns' => 'HWTC',
+            'is_active' => false,
+        ]);
     }
 
     public function test_deleting_an_unused_modem_type(): void
@@ -353,12 +295,6 @@ class WanConfigTemplateIndexLivewireTest extends TestCase
         $this->assertSoftDeleted('modem_types', ['id' => $modemType->id]);
     }
 
-    /**
-     * ModemType yang masih dipakai WanConfigTemplate AKTIF tidak boleh
-     * dihapus — cek referential integrity EKSPLISIT di ModemTypeService,
-     * bukan mengandalkan restrictOnDelete() FK saja (yang terbukti tidak
-     * memblokir soft-delete, lihat insiden verifikasi v0.12.4).
-     */
     public function test_deleting_a_modem_type_still_used_by_a_template_is_rejected(): void
     {
         $tenant = Tenant::factory()->create();

@@ -195,6 +195,8 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
             Route::post('/{cpe_device}/ssid-enabled', [CpeDeviceActionController::class, 'ssidEnabled'])->name('ssid-enabled');
             Route::post('/{cpe_device}/sync-now', [CpeDeviceActionController::class, 'syncNow'])->name('sync-now');
             Route::post('/{cpe_device}/replace-modem', [CpeDeviceActionController::class, 'replaceModem'])->name('replace-modem');
+            // v0.12.5 — override manual Template Konfig CPE.
+            Route::post('/{cpe_device}/wan-config-template', [CpeDeviceActionController::class, 'assignWanConfigTemplate'])->name('wan-config-template');
             Route::delete('/{cpe_device}', [CpeDeviceActionController::class, 'destroy'])->name('destroy');
         });
         Route::get('/work-orders/{work_order}', WorkOrderShow::class)->name('work-orders.show');

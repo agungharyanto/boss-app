@@ -3,7 +3,6 @@
 namespace App\Livewire\Network;
 
 use App\Models\ModemType;
-use App\Models\PppPackage;
 use App\Models\WanConfigTemplate;
 use App\Services\Network\ModemTypeService;
 use App\Services\Network\WanConfigTemplateService;
@@ -14,19 +13,16 @@ use Livewire\Attributes\Validate;
 use Livewire\Component;
 
 /**
- * v0.12.5 — "Template Konfig CPE" (matrix Paket x Tipe Modem), menggantikan
- * "Konfig Remote" (RemoteWanConfig singleton, TIDAK dihapus, dibangun
- * paralel — lihat WanConfigTemplate's own docblock). Tampilan
- * dikelompokkan per Paket: satu baris "Default (Semua Tipe Modem)"
- * (modem_type_id NULL) + satu baris per Tipe Modem spesifik yang sudah
- * punya template.
+ * v0.12.5 (revisi arsitektur) — "Template Konfig CPE" TIDAK terikat Paket
+ * sama sekali, dibedakan HANYA oleh Tipe Modem. Tampilan dikelompokkan
+ * per Tipe Modem (+ grup "Generic/Tanpa Tipe Modem" untuk
+ * `modem_type_id` NULL). Assignment ke device terjadi di Detail
+ * Perangkat CPE (auto-suggest atau manual), bukan di halaman ini —
+ * halaman ini murni katalog Template + katalog Tipe Modem.
  *
  * BELUM ada sync ke GenieACS di sini — WanConfigTemplateService tidak
- * dispatch job apa pun (GenieAcsPresetService per-template belum
- * dibangun, menyusul sub-versi terpisah setelah UI ini direview).
- *
- * "Tipe Modem" (ModemType) di-CRUD inline lewat modal di halaman yang
- * sama (bukan halaman terpisah) — sesuai instruksi sprint.
+ * dispatch job apa pun (GenieAcsPresetService per-template adalah bagian
+ * TERPISAH, v0.12.6).
  */
 class WanConfigTemplateIndex extends Component
 {
@@ -37,10 +33,10 @@ class WanConfigTemplateIndex extends Component
 
     public ?int $editingTemplateId = null;
 
-    #[Validate('required|integer')]
-    public string $pppPackageId = '';
+    #[Validate('required|string|max:255')]
+    public string $name = '';
 
-    /** '' = belum dipilih (invalid). 'default' = modem_type_id NULL. Selain itu = id ModemType. */
+    /** '' = belum dipilih (invalid). 'generic' = modem_type_id NULL. Selain itu = id ModemType. */
     #[Validate('required|string')]
     public string $modemTypeSelection = '';
 
@@ -70,6 +66,9 @@ class WanConfigTemplateIndex extends Component
     #[Validate('required|string|max:255')]
     public string $modemTypeName = '';
 
+    /** Comma-separated kode OUI, mis. "ZICG,CIOT" — dasar auto-suggest. */
+    public string $manufacturerMatchPatterns = '';
+
     public bool $modemTypeIsActive = true;
 
     public function mount(): void
@@ -79,12 +78,12 @@ class WanConfigTemplateIndex extends Component
 
     // ================= Template Konfig CPE =================
 
-    public function openCreateForTemplate(?int $pppPackageId = null): void
+    public function openCreateForModemType(?int $modemTypeId = null): void
     {
         $this->authorize('manage', WanConfigTemplate::class);
 
         $this->resetTemplateForm();
-        $this->pppPackageId = $pppPackageId !== null ? (string) $pppPackageId : '';
+        $this->modemTypeSelection = $modemTypeId !== null ? (string) $modemTypeId : '';
         $this->showTemplateForm = true;
     }
 
@@ -94,8 +93,8 @@ class WanConfigTemplateIndex extends Component
         $this->authorize('manage', WanConfigTemplate::class);
 
         $this->editingTemplateId = $template->id;
-        $this->pppPackageId = (string) $template->ppp_package_id;
-        $this->modemTypeSelection = $template->modem_type_id === null ? 'default' : (string) $template->modem_type_id;
+        $this->name = $template->name;
+        $this->modemTypeSelection = $template->modem_type_id === null ? 'generic' : (string) $template->modem_type_id;
         $this->enabled = $template->enabled;
         $this->wan1Enabled = $template->wan1_enabled;
         $this->wan1Vlan = (string) $template->wan1_vlan;
@@ -115,7 +114,7 @@ class WanConfigTemplateIndex extends Component
     private function resetTemplateForm(): void
     {
         $this->reset([
-            'editingTemplateId', 'pppPackageId', 'modemTypeSelection', 'enabled',
+            'editingTemplateId', 'name', 'modemTypeSelection', 'enabled',
             'wan1Enabled', 'wan1Vlan', 'wan1PppoeUsername', 'wan1PppoePassword',
             'wan2Enabled', 'wan2Vlan',
         ]);
@@ -131,11 +130,10 @@ class WanConfigTemplateIndex extends Component
     {
         $this->authorize('manage', WanConfigTemplate::class);
 
+        $this->name = trim($this->name);
+
         $validated = $this->validate([
-            'pppPackageId' => [
-                'required', 'integer',
-                Rule::exists(PppPackage::class, 'id')->whereNull('deleted_at'),
-            ],
+            'name' => ['required', 'string', 'max:255'],
             'modemTypeSelection' => ['required', 'string'],
             'wan1Vlan' => ['required', 'integer', 'min:1', 'max:4094'],
             'wan1PppoeUsername' => ['required', 'string', 'min:1', 'max:64'],
@@ -143,7 +141,7 @@ class WanConfigTemplateIndex extends Component
             'wan2Vlan' => ['required', 'integer', 'min:1', 'max:4094'],
         ]);
 
-        if ($this->modemTypeSelection !== 'default') {
+        if ($this->modemTypeSelection !== 'generic') {
             $this->validate([
                 'modemTypeSelection' => [
                     Rule::exists(ModemType::class, 'id')->whereNull('deleted_at'),
@@ -151,10 +149,10 @@ class WanConfigTemplateIndex extends Component
             ]);
         }
 
-        $modemTypeId = $this->modemTypeSelection === 'default' ? null : (int) $this->modemTypeSelection;
+        $modemTypeId = $this->modemTypeSelection === 'generic' ? null : (int) $this->modemTypeSelection;
 
         $data = [
-            'ppp_package_id' => (int) $validated['pppPackageId'],
+            'name' => $validated['name'],
             'modem_type_id' => $modemTypeId,
             'enabled' => $this->enabled,
             'wan1_enabled' => $this->wan1Enabled,
@@ -204,7 +202,7 @@ class WanConfigTemplateIndex extends Component
 
     private function resetModemTypeForm(): void
     {
-        $this->reset(['editingModemTypeId', 'modemTypeName']);
+        $this->reset(['editingModemTypeId', 'modemTypeName', 'manufacturerMatchPatterns']);
         $this->modemTypeIsActive = true;
         $this->resetErrorBag();
     }
@@ -216,6 +214,7 @@ class WanConfigTemplateIndex extends Component
 
         $this->editingModemTypeId = $modemType->id;
         $this->modemTypeName = $modemType->name;
+        $this->manufacturerMatchPatterns = (string) $modemType->manufacturer_match_patterns;
         $this->modemTypeIsActive = $modemType->is_active;
     }
 
@@ -239,7 +238,11 @@ class WanConfigTemplateIndex extends Component
             ],
         ]);
 
-        $data = ['name' => $validated['modemTypeName'], 'is_active' => $this->modemTypeIsActive];
+        $data = [
+            'name' => $validated['modemTypeName'],
+            'manufacturer_match_patterns' => $this->manufacturerMatchPatterns !== '' ? $this->manufacturerMatchPatterns : null,
+            'is_active' => $this->modemTypeIsActive,
+        ];
 
         if ($this->editingModemTypeId !== null) {
             $service->update(ModemType::findOrFail($this->editingModemTypeId), $data);
@@ -263,14 +266,17 @@ class WanConfigTemplateIndex extends Component
 
     public function render()
     {
-        $packages = PppPackage::query()
-            ->with(['wanConfigTemplates' => fn ($query) => $query->with('modemType')->orderBy('modem_type_id')])
-            ->orderBy('name')
-            ->get();
+        $modemTypes = ModemType::query()->orderBy('name')->get();
+        $genericTemplates = WanConfigTemplate::query()->whereNull('modem_type_id')->orderBy('name')->get();
 
         return view('livewire.network.wan-config-template-index', [
-            'packages' => $packages,
-            'modemTypes' => ModemType::query()->orderBy('name')->get(),
+            'modemTypes' => $modemTypes,
+            'genericTemplates' => $genericTemplates,
+            'templatesByModemType' => WanConfigTemplate::query()
+                ->whereNotNull('modem_type_id')
+                ->orderBy('name')
+                ->get()
+                ->groupBy('modem_type_id'),
             'canManage' => auth()->user()->can('manage', WanConfigTemplate::class),
         ])->layout('layouts.app');
     }

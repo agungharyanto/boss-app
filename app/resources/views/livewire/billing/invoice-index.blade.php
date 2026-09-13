@@ -7,13 +7,49 @@
         </div>
     @endif
 
-    <div class="mb-4">
-        <select wire:model.live="statusFilter" class="rounded-md border-gray-300 shadow-sm">
-            <option value="">{{ __('Semua Status') }}</option>
-            @foreach (\App\Enums\InvoiceStatus::cases() as $status)
-                <option value="{{ $status->value }}">{{ $status->label() }}</option>
-            @endforeach
-        </select>
+    {{-- v0.12.2 — 4 card ringkasan, independen dari filter tabel di bawah --}}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div class="rounded-md border border-red-200 bg-red-50 p-4">
+            <div class="text-xs font-medium text-red-700 uppercase">{{ __('Overdue Bulan Ini') }}</div>
+            <div class="mt-1 text-2xl font-semibold text-red-800">{{ $summary['overdue_this_month'] }}</div>
+        </div>
+        <div class="rounded-md border border-red-200 bg-red-50 p-4">
+            <div class="text-xs font-medium text-red-700 uppercase">{{ __('Overdue Semua') }}</div>
+            <div class="mt-1 text-2xl font-semibold text-red-800">{{ $summary['overdue_all'] }}</div>
+        </div>
+        <div class="rounded-md border border-gray-200 bg-gray-50 p-4">
+            <div class="text-xs font-medium text-gray-600 uppercase">{{ __('Total Invoice Bulan Ini') }}</div>
+            <div class="mt-1 text-2xl font-semibold text-gray-800">{{ $summary['total_this_month'] }}</div>
+        </div>
+        <div class="rounded-md border border-green-200 bg-green-50 p-4">
+            <div class="text-xs font-medium text-green-700 uppercase">{{ __('Terbayar Bulan Ini') }}</div>
+            <div class="mt-1 text-2xl font-semibold text-green-800">{{ $summary['paid_this_month'] }}</div>
+        </div>
+    </div>
+
+    <div class="mb-4 flex flex-wrap items-end gap-3">
+        <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">{{ __('Status') }}</label>
+            <select wire:model.live="statusFilter" class="rounded-md border-gray-300 shadow-sm">
+                <option value="">{{ __('Semua Status') }}</option>
+                @foreach (\App\Enums\InvoiceStatus::cases() as $status)
+                    <option value="{{ $status->value }}">{{ $status->label() }}</option>
+                @endforeach
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">{{ __('Jatuh Tempo Dari') }}</label>
+            <input type="date" wire:model.live="dateFrom" class="rounded-md border-gray-300 shadow-sm text-sm">
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">{{ __('Sampai') }}</label>
+            <input type="date" wire:model.live="dateTo" class="rounded-md border-gray-300 shadow-sm text-sm">
+        </div>
+        @if ($dateFrom !== '' || $dateTo !== '')
+            <button type="button" wire:click="resetDateFilter" class="text-sm text-gray-500 hover:underline pb-2">
+                {{ __('Reset tanggal') }}
+            </button>
+        @endif
     </div>
 
     <div class="overflow-x-auto border border-gray-200 rounded-md">

@@ -46,6 +46,7 @@ use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\PppPackageIndex;
 use App\Livewire\Network\RemoteConfigSettings;
 use App\Livewire\Network\VpnScriptGenerator;
+use App\Livewire\Network\WanConfigTemplateIndex;
 use App\Livewire\Referrers\ReferrerIndex;
 use App\Livewire\Resellers\PackagePricingIndex;
 use App\Livewire\Resellers\ResellerIndex;
@@ -194,6 +195,8 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
             Route::post('/{cpe_device}/ssid-enabled', [CpeDeviceActionController::class, 'ssidEnabled'])->name('ssid-enabled');
             Route::post('/{cpe_device}/sync-now', [CpeDeviceActionController::class, 'syncNow'])->name('sync-now');
             Route::post('/{cpe_device}/replace-modem', [CpeDeviceActionController::class, 'replaceModem'])->name('replace-modem');
+            // v0.12.5 — override manual Tipe Modem.
+            Route::post('/{cpe_device}/modem-type', [CpeDeviceActionController::class, 'assignModemType'])->name('modem-type');
             Route::delete('/{cpe_device}', [CpeDeviceActionController::class, 'destroy'])->name('destroy');
         });
         Route::get('/work-orders/{work_order}', WorkOrderShow::class)->name('work-orders.show');
@@ -249,6 +252,12 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // v0.14.5 — same cluster "Profil Paket", same posture as
     // /hotspot-packages above.
     Route::get('/ppp-packages', PppPackageIndex::class)->name('ppp-packages.index');
+
+    // v0.12.5 — "Template Konfig CPE" (matrix Paket x Tipe Modem), grup
+    // sidebar "Remote CPE" (bukan cluster "Profil Paket" secara sidebar,
+    // tapi posisi route sama — tenant-level, tanpa reseller.context, sama
+    // posture /ppp-packages di atas karena bergantung pada PppPackage).
+    Route::get('/wan-config-templates', WanConfigTemplateIndex::class)->name('wan-config-templates.index');
 
     // v0.16.0 Core Network Infrastructure Management, Langkah 3 —
     // FiberNodeForm is a genuinely separate Livewire component from

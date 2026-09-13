@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\CpeActionLog;
 use App\Models\CpeConnectedHost;
 use App\Models\CpeDevice;
+use App\Models\ModemType;
+use App\Services\Network\CpeModemTypeAssignmentService;
 use App\Services\Network\CpeParameterResolverService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
@@ -28,11 +30,11 @@ use Illuminate\Support\Collection;
  */
 class CpeDeviceDetailController extends Controller
 {
-    public function show(CpeDevice $cpeDevice, CpeParameterResolverService $resolver): View
+    public function show(CpeDevice $cpeDevice, CpeParameterResolverService $resolver, CpeModemTypeAssignmentService $assignment): View
     {
         $this->authorize('view', $cpeDevice);
 
-        return view('cpe-devices.detail-row', $this->loadDetailData($cpeDevice, $resolver));
+        return view('cpe-devices.detail-row', $this->loadDetailData($cpeDevice, $resolver, $assignment));
     }
 
     /**
@@ -44,7 +46,7 @@ class CpeDeviceDetailController extends Controller
      * the page never receives it even server-side until explicitly
      * requested by a reveal click.
      */
-    public function page(CpeDevice $cpeDevice, CpeParameterResolverService $resolver): View
+    public function page(CpeDevice $cpeDevice, CpeParameterResolverService $resolver, CpeModemTypeAssignmentService $assignment): View
     {
         $this->authorize('view', $cpeDevice);
 
@@ -52,7 +54,7 @@ class CpeDeviceDetailController extends Controller
         $pppoe = $resolver->resolvePppoeConnection($genieAcsId);
 
         $pageData = array_merge(
-            $this->loadDetailData($cpeDevice, $resolver),
+            $this->loadDetailData($cpeDevice, $resolver, $assignment),
             [
                 'wanConnections' => $resolver->resolveWanConnectionsSummary($genieAcsId),
                 'pppoeName' => $pppoe['name'] ?? null,
@@ -103,11 +105,18 @@ class CpeDeviceDetailController extends Controller
     }
 
     /**
-     * @return array{device: CpeDevice, summary: array, historyLogs: Collection, connectedHosts: Collection, canManage: bool}
+     * @return array{device: CpeDevice, summary: array, historyLogs: Collection, connectedHosts: Collection, canManage: bool, modemTypes: Collection}
      */
-    private function loadDetailData(CpeDevice $cpeDevice, CpeParameterResolverService $resolver): array
+    private function loadDetailData(CpeDevice $cpeDevice, CpeParameterResolverService $resolver, CpeModemTypeAssignmentService $assignment): array
     {
-        $cpeDevice->load(['customer', 'reseller']);
+        // v0.12.5 — self-healing auto-suggest: kalau device belum pernah
+        // punya assignment Tipe Modem sama sekali, coba resolve otomatis
+        // SEKARANG (best-effort, bisa tetap null). Tidak pernah menimpa
+        // assignment yang sudah ada (auto maupun manual) — lihat
+        // CpeModemTypeAssignmentService's own docblock.
+        $assignment->autoAssignIfUnset($cpeDevice);
+
+        $cpeDevice->load(['customer', 'reseller', 'modemType']);
 
         $summary = $resolver->resolveDeviceSummary($cpeDevice->genieacs_device_id);
 
@@ -124,12 +133,21 @@ class CpeDeviceDetailController extends Controller
             ->limit(50)
             ->get();
 
+        // v0.12.5 — daftar untuk dropdown override manual. Scoped
+        // eksplisit ke tenant device ini (bukan cuma andalkan TenantScope
+        // dari Auth user) — sama disiplin ModemTypeSuggestionService.
+        $modemTypes = ModemType::withoutGlobalScopes()
+            ->where('tenant_id', $cpeDevice->tenant_id)
+            ->orderBy('name')
+            ->get();
+
         return [
             'device' => $cpeDevice,
             'summary' => $summary,
             'historyLogs' => $historyLogs,
             'connectedHosts' => $connectedHosts,
             'canManage' => auth()->user()->can('manage', $cpeDevice),
+            'modemTypes' => $modemTypes,
         ];
     }
 }

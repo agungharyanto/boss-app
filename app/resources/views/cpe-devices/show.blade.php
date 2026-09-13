@@ -204,6 +204,61 @@
         @livewire('network.cpe-dialup-history', ['cpeDeviceId' => $device->id], key('cpe-dialup-history-'.$device->id))
     </div>
 
+    {{-- v0.12.5 — Tipe Modem ter-assign (auto-suggest OUI matching atau
+         override manual, lihat CpeModemTypeAssignmentService). Badge
+         "Auto-terdeteksi"/"Manual" biar jelas asalnya dari mana — auto
+         bisa berubah lagi lain waktu (self-healing tiap halaman dibuka,
+         cuma kalau device BELUM PERNAH ter-assign), manual TIDAK PERNAH
+         ditimpa otomatis. Template Konfig CPE TIDAK ditampilkan di sini
+         lagi — di-resolve on-demand (v0.12.6, saat push), bukan disimpan
+         permanen di device (lihat WanConfigTemplateResolverService). --}}
+    <div class="bg-white border border-gray-200 rounded-md p-5 mt-6" x-data="{ editingModemType: false }">
+        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">{{ __('Tipe Modem') }}</h2>
+
+        <dl class="grid grid-cols-1 sm:grid-cols-2 gap-y-3 text-sm">
+            <dt class="text-gray-500">{{ __('Tipe Modem Ter-assign') }}</dt>
+            <dd class="text-gray-800">
+                @if ($device->modemType)
+                    {{ $device->modemType->name }}
+                    <span class="ml-1 px-2 py-0.5 rounded-full text-xs {{ $device->modem_type_source->badgeClasses() }}">
+                        {{ $device->modem_type_source->label() }}
+                    </span>
+                @else
+                    <span class="text-gray-400">{{ __('Belum ada Tipe Modem ter-assign.') }}</span>
+                @endif
+            </dd>
+
+            @if ($device->modemType)
+                <dt class="text-gray-500">{{ __('WiFi Band') }}</dt>
+                <dd class="text-gray-800">
+                    <span class="px-2 py-0.5 rounded-full text-xs {{ $device->modemType->is_dual_band ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600' }}">
+                        {{ $device->modemType->is_dual_band ? __('Dual-Band') : __('2.4GHz saja') }}
+                    </span>
+                </dd>
+            @endif
+        </dl>
+
+        @if ($canManage)
+            <div class="mt-3">
+                <button type="button" @click="editingModemType = !editingModemType" class="text-primary hover:underline text-xs" x-text="editingModemType ? '{{ __('Batal') }}' : '{{ __('Ubah Tipe Modem') }}'"></button>
+            </div>
+
+            <div x-show="editingModemType" x-cloak class="border-t border-gray-200 pt-4 mt-3 space-y-3">
+                <label class="block text-sm font-medium mb-1">{{ __('Pilih Tipe Modem (Manual)') }}</label>
+                <select id="cpe-modem-type-select-{{ $device->id }}" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                    <option value="">{{ __('-- Tidak ada / Hapus assignment --') }}</option>
+                    @foreach ($modemTypes as $modemType)
+                        <option value="{{ $modemType->id }}" @selected($device->modem_type_id === $modemType->id)>
+                            {{ $modemType->name }}{{ $modemType->is_active ? '' : ' ('.__('Nonaktif').')' }}
+                        </option>
+                    @endforeach
+                </select>
+                <div class="text-xs text-red-600" id="cpe-modem-type-error-{{ $device->id }}"></div>
+                <button type="button" onclick="cpeAssignModemType({{ $device->id }})" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">{{ __('Terapkan') }}</button>
+            </div>
+        @endif
+    </div>
+
     {{-- WiFi/SSID — semua SSID yang ditemukan discovery, bukan cuma SSID1.
          "Ganti WiFi" (2026-08-17) is now per-row here instead of one
          standalone form below — a single flat form could only ever target
@@ -409,6 +464,27 @@
                     body: JSON.stringify({ ssid_index: ssidIndex, enabled: !currentlyEnabled }),
                 }).then(({ ok, body }) => {
                     cpeFlash(body.message, !ok);
+                });
+            };
+
+            // v0.12.5 — reload halaman setelah sukses (bukan cuma flash
+            // message) karena section Tipe Modem menampilkan badge/nilai
+            // yang harus fresh setelah assignment berubah, beda dari
+            // reboot/wifi yang cukup flash message saja.
+            window.cpeAssignModemType = function (id) {
+                const select = document.getElementById(`cpe-modem-type-select-${id}`);
+                const errorEl = document.getElementById(`cpe-modem-type-error-${id}`);
+                errorEl.textContent = '';
+                cpeFetch(`/api/internal/cpe-devices/${id}/modem-type`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ modem_type_id: select.value || null }),
+                }).then(({ ok, body }) => {
+                    if (!ok) {
+                        errorEl.textContent = body.message || 'Gagal menyimpan.';
+                        return;
+                    }
+                    window.location.reload();
                 });
             };
 

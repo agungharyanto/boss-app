@@ -96,7 +96,7 @@ class PppPackage extends Model
     }
 
     /**
-     * v0.12.4 — baris matrix Template Konfig CPE (WanConfigTemplate) untuk
+     * v0.12.5 — baris matrix Template Konfig CPE (WanConfigTemplate) untuk
      * paket ini, satu per Tipe Modem (plus paling banyak satu baris
      * `modem_type_id` NULL = default/fallback paket ini). Lihat
      * `wan_config_templates` migration untuk constraint uniqueness-nya.

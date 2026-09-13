@@ -4,35 +4,50 @@ namespace App\Models;
 
 use App\Enums\MikrotikSyncStatus;
 use App\Models\Concerns\BelongsToTenant;
+use Database\Factories\WanConfigTemplateFactory;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * v0.12.4 — satu baris = satu kombinasi `ppp_package_id` × `modem_type_id`
- * (matrix Template Konfig CPE). `modem_type_id` NULL = template
- * default/fallback untuk paket itu, berlaku apa pun modemnya — lihat
- * migration `create_wan_config_templates_table` untuk constraint
- * uniqueness-nya (dua lapis, termasuk kasus NULL).
+ * v0.12.5 (koreksi arsitektur, kembali ke matrix — dikonfirmasi Agung dari
+ * klarifikasi chat planning) — satu baris = satu kombinasi
+ * `ppp_package_id` x `modem_type_id`. `modem_type_id` NULL = template
+ * default/fallback untuk paket itu, berlaku apa pun modemnya. Paket harus
+ * sudah ada di Profil PPP dulu (FK `restrictOnDelete()`) sebelum
+ * Template-nya bisa dibuat.
+ *
+ * `name` — bebas, TIDAK unique (dua template berbeda modem_type_id untuk
+ * paket yang sama boleh punya nama mirip, tidak dibatasi).
+ *
+ * TIDAK PERNAH disimpan permanen di device (`cpe_devices` TIDAK punya
+ * kolom FK ke tabel ini sama sekali, sejak revisi v0.12.5 terakhir) —
+ * device hanya menyimpan `modem_type_id`-nya sendiri (lihat
+ * `CpeDevice::modemType()`); Template yang berlaku di-resolve ON-DEMAND
+ * dari kombinasi `customer.ppp_package_id` + `cpe_devices.modem_type_id`
+ * lewat App\Services\Network\WanConfigTemplateResolverService, dipanggil
+ * nanti saat push (v0.12.6) — bukan ditampilkan di Detail Perangkat CPE.
+ * Keputusan ini sengaja: Template yang berubah/dihapus tidak perlu
+ * migrasi/update manual ke device manapun.
  *
  * Menggantikan `RemoteWanConfig` (singleton fleet-wide) — DIBANGUN
  * PARALEL, bukan pengganti langsung. `RemoteWanConfig` belum
- * dihapus/dimatikan.
+ * dihapus/dimatikan, `/remote-config` tidak disentuh sama sekali.
  *
- * TIDAK ADA kolom serial-allowlist di sini (beda dari `RemoteWanConfig`)
- * — SN yang di-scope preset GenieACS per-template dihitung DINAMIS saat
- * sync, cross-reference `customers.ppp_package_id` +
- * `work_order_devices.modem_type_id`. Query cross-reference-nya sendiri:
- * v0.12.5 (GenieAcsPresetService baru per-template), belum ada di sini.
+ * TIDAK ADA kolom serial-allowlist di sini — push ke GenieACS (v0.12.6)
+ * akan cross-reference hasil resolve di atas langsung.
  *
  * `markSynced()`/`markSyncFailed()`/`markSyncPending()` — pola identik
- * `RemoteWanConfig`, dipakai job sync (v0.12.5) nanti.
+ * `RemoteWanConfig`, dipakai job sync (v0.12.6) nanti.
  */
 class WanConfigTemplate extends Model
 {
-    use BelongsToTenant;
+    /** @use HasFactory<WanConfigTemplateFactory> */
+    use BelongsToTenant, HasFactory;
 
     protected $fillable = [
         'tenant_id',
+        'name',
         'ppp_package_id',
         'modem_type_id',
         'enabled',

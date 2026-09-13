@@ -165,7 +165,7 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.remote-config.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.remote-config.*') || request()->routeIs('web.wan-config-templates.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*'),
             // v0.8.1 — nested one level deeper than a plain link: an item
             // with a 'children' key renders as its own expand/collapse
             // sub-group (own localStorage key, same pattern as the
@@ -196,17 +196,20 @@
                 auth()->user()->can('monitoring.view')
                     ? ['route' => 'web.monitoring.index', 'label' => __('Monitoring')]
                     : null,
-                // "Remote" — grup collapsible TOGGLE-MURNI (tanpa key
-                // 'route'): klik header HANYA expand/collapse. Pola persis
-                // "Profil Paket"/"Komisi". Isi: Perangkat CPE (+ Cek Status
-                // Device), Konfig Remote (GenieACS Auto-WAN). Grup tampil
-                // kalau user bisa lihat SALAH SATU child — tiap child tetap
-                // punya check sendiri (defense in depth).
+                // "Remote CPE" (dulu "Remote") — grup collapsible
+                // TOGGLE-MURNI (tanpa key 'route'): klik header HANYA
+                // expand/collapse. Pola persis "Profil Paket"/"Komisi". Isi:
+                // Perangkat CPE (+ Cek Status Device), Konfig Remote
+                // (GenieACS Auto-WAN singleton lama, TIDAK dihapus), Template
+                // Konfig CPE (v0.12.5, matrix Paket x Tipe Modem — dibangun
+                // paralel, bukan pengganti langsung). Grup tampil kalau user
+                // bisa lihat SALAH SATU child — tiap child tetap punya check
+                // sendiri (defense in depth).
                 (auth()->user()->can('viewAny', \App\Models\CpeDevice::class) || auth()->user()->can('remote_config.view'))
                     ? [
                         'id' => 'remote',
                         'toggle_only' => true,
-                        'label' => __('Remote'),
+                        'label' => __('Remote CPE'),
                         'children' => array_filter([
                             auth()->user()->can('viewAny', \App\Models\CpeDevice::class)
                                 ? ['route' => 'web.cpe-devices.index', 'label' => __('Perangkat CPE')]
@@ -219,6 +222,12 @@
                                 : null,
                             auth()->user()->can('remote_config.view')
                                 ? ['route' => 'web.remote-config.index', 'label' => __('Konfig Remote')]
+                                : null,
+                            // v0.12.5 — reuse remote_config.view (sama
+                            // permission dengan Konfig Remote, lihat
+                            // WanConfigTemplatePolicy).
+                            auth()->user()->can('remote_config.view')
+                                ? ['route' => 'web.wan-config-templates.index', 'label' => __('Template Konfig CPE')]
                                 : null,
                         ]),
                     ]

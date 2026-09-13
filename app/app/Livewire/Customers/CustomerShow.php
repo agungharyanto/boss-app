@@ -17,6 +17,7 @@ use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Services\CommissionAttributionService;
 use App\Services\Network\CpeBindingService;
+use App\Services\Network\RadiusCredentialService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -421,7 +422,7 @@ class CustomerShow extends Component
         $this->customer->refresh();
     }
 
-    public function render()
+    public function render(RadiusCredentialService $radiusCredential)
     {
         $this->customer->refresh();
 
@@ -456,6 +457,8 @@ class CustomerShow extends Component
             'commissionSchemeOptions' => $schemeState['options'],
             'showCommissionSchemeField' => $schemeState['show'],
             'referrerLocked' => $this->referrerLocked(),
+            // v0.12.2 — section "Kredensial PPPoE".
+            'radiusCredential' => $radiusCredential->lookupForCustomer($this->customer),
         ]);
     }
 }

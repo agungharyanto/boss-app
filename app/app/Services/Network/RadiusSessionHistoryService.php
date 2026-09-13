@@ -3,6 +3,7 @@
 namespace App\Services\Network;
 
 use App\Models\Customer;
+use App\Support\RadiusUsernameResolver;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -58,7 +59,7 @@ class RadiusSessionHistoryService
      */
     public function getHistoryForCustomer(Customer $customer, int $limit = 50): array
     {
-        $usernames = $this->candidateUsernames($customer);
+        $usernames = RadiusUsernameResolver::candidatesFor($customer);
 
         if ($usernames === []) {
             return [];
@@ -92,17 +93,6 @@ class RadiusSessionHistoryService
                 'terminate_cause' => $row->acctterminatecause,
             ];
         })->all();
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    private function candidateUsernames(Customer $customer): array
-    {
-        return array_values(array_unique(array_filter([
-            $customer->phone_number,
-            $customer->legacy_username,
-        ])));
     }
 
     private function sessionSeconds(object $row, ?Carbon $startedAt, ?Carbon $stoppedAt): int

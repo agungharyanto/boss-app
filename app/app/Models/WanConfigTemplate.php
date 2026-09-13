@@ -20,17 +20,22 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * `name` — bebas, TIDAK unique (dua template berbeda modem_type_id untuk
  * paket yang sama boleh punya nama mirip, tidak dibatasi).
  *
- * Assignment ke device (`cpe_devices.wan_config_template_id`) terjadi
- * lewat auto-suggest (App\Services\Network\WanConfigTemplateSuggestionService
- * — resolve dari customer.ppp_package_id + cpe_devices.manufacturer) atau
- * override manual admin di Detail Perangkat CPE.
+ * TIDAK PERNAH disimpan permanen di device (`cpe_devices` TIDAK punya
+ * kolom FK ke tabel ini sama sekali, sejak revisi v0.12.5 terakhir) —
+ * device hanya menyimpan `modem_type_id`-nya sendiri (lihat
+ * `CpeDevice::modemType()`); Template yang berlaku di-resolve ON-DEMAND
+ * dari kombinasi `customer.ppp_package_id` + `cpe_devices.modem_type_id`
+ * lewat App\Services\Network\WanConfigTemplateResolverService, dipanggil
+ * nanti saat push (v0.12.6) — bukan ditampilkan di Detail Perangkat CPE.
+ * Keputusan ini sengaja: Template yang berubah/dihapus tidak perlu
+ * migrasi/update manual ke device manapun.
  *
  * Menggantikan `RemoteWanConfig` (singleton fleet-wide) — DIBANGUN
  * PARALEL, bukan pengganti langsung. `RemoteWanConfig` belum
  * dihapus/dimatikan, `/remote-config` tidak disentuh sama sekali.
  *
  * TIDAK ADA kolom serial-allowlist di sini — push ke GenieACS (v0.12.6)
- * akan cross-reference `cpe_devices.wan_config_template_id` langsung.
+ * akan cross-reference hasil resolve di atas langsung.
  *
  * `markSynced()`/`markSyncFailed()`/`markSyncPending()` — pola identik
  * `RemoteWanConfig`, dipakai job sync (v0.12.6) nanti.

@@ -218,7 +218,10 @@
                         <input type="text" wire:model="manufacturerMatchPatterns" placeholder="{{ __('Kode OUI (pisah koma), mis. ZICG,CIOT — dasar auto-suggest') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                         <p class="text-xs text-gray-400 mt-0.5">{{ __('Dicocokkan ke cpe_devices.manufacturer. Kosong = tidak pernah auto-suggest untuk Tipe Modem ini.') }}</p>
                     </div>
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-3">
+                        <label class="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap">
+                            <input type="checkbox" wire:model="modemTypeIsDualBand"> {{ __('Dual-Band (2.4GHz + 5GHz)') }}
+                        </label>
                         <label class="flex items-center gap-1 text-xs text-gray-600 whitespace-nowrap">
                             <input type="checkbox" wire:model="modemTypeIsActive"> {{ __('Aktif') }}
                         </label>
@@ -238,6 +241,9 @@
                         <div wire:key="modem-type-{{ $modemType->id }}" class="px-3 py-2 flex items-center justify-between text-sm">
                             <span class="text-gray-800">
                                 {{ $modemType->name }}
+                                @if ($modemType->is_dual_band)
+                                    <span class="text-xs text-blue-600">({{ __('Dual-Band') }})</span>
+                                @endif
                                 @if ($modemType->manufacturer_match_patterns)
                                     <span class="text-xs text-gray-400 font-mono">({{ $modemType->manufacturer_match_patterns }})</span>
                                 @endif

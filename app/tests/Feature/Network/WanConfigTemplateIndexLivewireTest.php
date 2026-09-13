@@ -313,6 +313,49 @@ class WanConfigTemplateIndexLivewireTest extends TestCase
         ]);
     }
 
+    /**
+     * v0.12.5 — is_dual_band, informasional saja (belum di-wire ke fitur
+     * SSID PSB apa pun sesi ini). Default false kalau tidak dicentang.
+     */
+    public function test_creating_a_modem_type_with_dual_band_checked(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+
+        $this->actingAs($admin);
+
+        Livewire::test(WanConfigTemplateIndex::class)
+            ->set('modemTypeName', 'ZTE F609 Dual-Band')
+            ->set('modemTypeIsDualBand', true)
+            ->call('saveModemType')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('modem_types', [
+            'tenant_id' => $tenant->id,
+            'name' => 'ZTE F609 Dual-Band',
+            'is_dual_band' => true,
+        ]);
+    }
+
+    public function test_creating_a_modem_type_without_dual_band_defaults_to_false(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+
+        $this->actingAs($admin);
+
+        Livewire::test(WanConfigTemplateIndex::class)
+            ->set('modemTypeName', 'CT-COM Single-Band Generic')
+            ->call('saveModemType')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('modem_types', [
+            'tenant_id' => $tenant->id,
+            'name' => 'CT-COM Single-Band Generic',
+            'is_dual_band' => false,
+        ]);
+    }
+
     public function test_creating_a_modem_type_with_a_duplicate_name_is_rejected(): void
     {
         $tenant = Tenant::factory()->create();
@@ -358,6 +401,7 @@ class WanConfigTemplateIndexLivewireTest extends TestCase
             ->call('editModemType', $modemType->id)
             ->set('modemTypeName', 'Nama Baru')
             ->set('manufacturerMatchPatterns', 'HWTC')
+            ->set('modemTypeIsDualBand', true)
             ->set('modemTypeIsActive', false)
             ->call('saveModemType')
             ->assertHasNoErrors();
@@ -366,6 +410,7 @@ class WanConfigTemplateIndexLivewireTest extends TestCase
             'id' => $modemType->id,
             'name' => 'Nama Baru',
             'manufacturer_match_patterns' => 'HWTC',
+            'is_dual_band' => true,
             'is_active' => false,
         ]);
     }

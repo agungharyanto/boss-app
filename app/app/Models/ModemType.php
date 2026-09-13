@@ -12,15 +12,20 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 /**
  * Tipe Modem — dikelola admin, diisi manual oleh teknisi saat instalasi
  * (`WorkOrderDevice::modem_type_id`), dipakai sebagai satu sumbu matrix
- * `WanConfigTemplate`. Lihat migration `create_modem_types_table` untuk
- * kenapa ini BUKAN hasil deteksi otomatis dari `cpe_devices.manufacturer`/
- * `model_name`.
+ * `WanConfigTemplate` dan assignment langsung ke `cpe_devices.modem_type_id`
+ * (Detail Perangkat CPE). Lihat migration `create_modem_types_table`
+ * untuk kenapa ini BUKAN hasil deteksi otomatis dari
+ * `cpe_devices.manufacturer`/`model_name`.
  *
  * `manufacturer_match_patterns` (v0.12.5) — dasar auto-suggest
- * (App\Services\Network\WanConfigTemplateSuggestionService): comma-
- * separated kode OUI GenieACS (mis. "ZICG,CIOT"), diisi MANUAL admin
- * kapan pun tahu kode OUI suatu Tipe Modem — bukan hasil deteksi
- * otomatis juga, sama filosofi dengan Tipe Modem itu sendiri.
+ * (App\Services\Network\ModemTypeSuggestionService): comma-separated
+ * kode OUI GenieACS (mis. "ZICG,CIOT"), diisi MANUAL admin kapan pun
+ * tahu kode OUI suatu Tipe Modem — bukan hasil deteksi otomatis juga,
+ * sama filosofi dengan Tipe Modem itu sendiri.
+ *
+ * `is_dual_band` (v0.12.5) — kapabilitas WiFi band, diisi manual admin.
+ * BELUM di-wire ke fitur SSID PSB apa pun sesi ini — dipakai v0.12.7
+ * Bagian C.
  */
 class ModemType extends Model
 {
@@ -31,12 +36,14 @@ class ModemType extends Model
         'tenant_id',
         'name',
         'manufacturer_match_patterns',
+        'is_dual_band',
         'is_active',
     ];
 
     protected function casts(): array
     {
         return [
+            'is_dual_band' => 'boolean',
             'is_active' => 'boolean',
         ];
     }
@@ -50,7 +57,7 @@ class ModemType extends Model
      * @return list<string> pattern ter-normalisasi (uppercase, trim) —
      *                      siap dibandingkan langsung terhadap `cpe_devices.manufacturer`
      *                      yang juga dinormalisasi sama (lihat
-     *                      WanConfigTemplateSuggestionService::normalizeManufacturer()).
+     *                      ModemTypeSuggestionService::normalizeManufacturer()).
      */
     public function matchPatterns(): array
     {

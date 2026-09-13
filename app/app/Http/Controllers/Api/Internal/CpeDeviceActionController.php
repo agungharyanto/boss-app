@@ -13,7 +13,7 @@ use App\Http\Resources\CpeActionLogResource;
 use App\Models\CpeDevice;
 use App\Services\Network\CpeActionService;
 use App\Services\Network\CpeBindingService;
-use App\Services\Network\CpeWanConfigAssignmentService;
+use App\Services\Network\CpeModemTypeAssignmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
@@ -142,26 +142,26 @@ class CpeDeviceActionController extends Controller
     }
 
     /**
-     * v0.12.5 — override manual Template Konfig CPE di Detail Perangkat
-     * CPE (dropdown + submit). `template_id` null = hapus assignment.
+     * v0.12.5 — override manual Tipe Modem di Detail Perangkat CPE
+     * (dropdown + submit). `modem_type_id` null = hapus assignment.
      * SELALU menang atas apa pun yang ada sebelumnya (auto-suggest atau
-     * manual lain) — lihat CpeWanConfigAssignmentService::assignManually()'s
+     * manual lain) — lihat CpeModemTypeAssignmentService::assignManually()'s
      * own docblock.
      */
-    public function assignWanConfigTemplate(Request $request, CpeDevice $cpeDevice, CpeWanConfigAssignmentService $service): JsonResponse
+    public function assignModemType(Request $request, CpeDevice $cpeDevice, CpeModemTypeAssignmentService $service): JsonResponse
     {
         $this->authorize('manage', $cpeDevice);
 
         $validated = $request->validate([
-            'template_id' => ['nullable', 'integer'],
+            'modem_type_id' => ['nullable', 'integer'],
         ]);
 
         try {
-            $service->assignManually($cpeDevice, $validated['template_id'] ?? null);
+            $service->assignManually($cpeDevice, $validated['modem_type_id'] ?? null);
         } catch (InvalidArgumentException $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage(), 'data' => null, 'meta' => []], 422);
         }
 
-        return $this->success(null, 'Template Konfig CPE berhasil diperbarui.');
+        return $this->success(null, 'Tipe Modem berhasil diperbarui.');
     }
 }

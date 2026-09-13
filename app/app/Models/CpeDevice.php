@@ -3,8 +3,8 @@
 namespace App\Models;
 
 use App\Enums\CpeDeviceStatus;
+use App\Enums\ModemTypeAssignmentSource;
 use App\Enums\Tr069Root;
-use App\Enums\WanConfigTemplateSource;
 use App\Models\Concerns\BelongsToResellerScope;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\CpeDeviceFactory;
@@ -34,10 +34,13 @@ class CpeDevice extends Model
         'last_inform_at',
         'bound_at',
         'wifi_provisioned_at',
-        // v0.12.5 — hasil auto-suggest (WanConfigTemplateSuggestionService)
-        // atau override manual admin, lihat WanConfigTemplateSource.
-        'wan_config_template_id',
-        'wan_config_template_source',
+        // v0.12.5 — hasil auto-suggest (ModemTypeSuggestionService) atau
+        // override manual admin, lihat ModemTypeAssignmentSource. Template
+        // Konfig CPE TIDAK disimpan di sini — di-resolve on-demand dari
+        // kombinasi customer.ppp_package_id + modem_type_id (lihat
+        // App\Services\Network\WanConfigTemplateResolverService).
+        'modem_type_id',
+        'modem_type_source',
     ];
 
     protected function casts(): array
@@ -49,7 +52,7 @@ class CpeDevice extends Model
             'last_inform_at' => 'datetime',
             'bound_at' => 'datetime',
             'wifi_provisioned_at' => 'datetime',
-            'wan_config_template_source' => WanConfigTemplateSource::class,
+            'modem_type_source' => ModemTypeAssignmentSource::class,
         ];
     }
 
@@ -69,12 +72,12 @@ class CpeDevice extends Model
     }
 
     /**
-     * v0.12.5 — Template Konfig CPE ter-assign (auto-suggest atau
-     * override manual, lihat wan_config_template_source).
+     * v0.12.5 — Tipe Modem ter-assign ke device ini (auto-suggest OUI
+     * matching atau override manual, lihat modem_type_source).
      */
-    public function wanConfigTemplate(): BelongsTo
+    public function modemType(): BelongsTo
     {
-        return $this->belongsTo(WanConfigTemplate::class);
+        return $this->belongsTo(ModemType::class);
     }
 
     /**

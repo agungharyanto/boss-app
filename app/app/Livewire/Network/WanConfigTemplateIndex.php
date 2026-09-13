@@ -74,6 +74,9 @@ class WanConfigTemplateIndex extends Component
     /** Comma-separated kode OUI, mis. "ZICG,CIOT" — dasar auto-suggest. */
     public string $manufacturerMatchPatterns = '';
 
+    /** v0.12.5 — kapabilitas WiFi band, informasional, belum di-wire ke fitur apa pun. */
+    public bool $modemTypeIsDualBand = false;
+
     public bool $modemTypeIsActive = true;
 
     public function mount(): void
@@ -213,7 +216,7 @@ class WanConfigTemplateIndex extends Component
 
     private function resetModemTypeForm(): void
     {
-        $this->reset(['editingModemTypeId', 'modemTypeName', 'manufacturerMatchPatterns']);
+        $this->reset(['editingModemTypeId', 'modemTypeName', 'manufacturerMatchPatterns', 'modemTypeIsDualBand']);
         $this->modemTypeIsActive = true;
         $this->resetErrorBag();
     }
@@ -226,6 +229,7 @@ class WanConfigTemplateIndex extends Component
         $this->editingModemTypeId = $modemType->id;
         $this->modemTypeName = $modemType->name;
         $this->manufacturerMatchPatterns = (string) $modemType->manufacturer_match_patterns;
+        $this->modemTypeIsDualBand = $modemType->is_dual_band;
         $this->modemTypeIsActive = $modemType->is_active;
     }
 
@@ -252,6 +256,7 @@ class WanConfigTemplateIndex extends Component
         $data = [
             'name' => $validated['modemTypeName'],
             'manufacturer_match_patterns' => $this->manufacturerMatchPatterns !== '' ? $this->manufacturerMatchPatterns : null,
+            'is_dual_band' => $this->modemTypeIsDualBand,
             'is_active' => $this->modemTypeIsActive,
         ];
 

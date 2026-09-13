@@ -2670,3 +2670,26 @@ container `osrm` verified; draft offline diverifikasi masih jalan). Langkah 0-4 
 `v0.16.0-core-network-infrastructure`). Merged `--no-ff` ke `develop` (merge commit `f10c2f9`), tag
 `v0.16.0` di merge commit itu. Full regression suite 1332 hijau di branch sprint DAN di `develop`
 pasca-merge. Belum di-merge ke `main` (belum diminta).
+
+## Backlog — QR Code Modem & ODP (komplain + lookup lapangan) — belum ada nomor versi
+
+**Status: Backlog.** Dicatat dari chat planning cluster v0.12.x, 2026-09-13 — **bukan scope kerja
+v0.12.x manapun**, murni pencatatan supaya idenya tidak hilang. Belum ada decision-gate, jangan mulai
+implementasi sampai ada instruksi eksplisit terpisah.
+
+Dua fitur QR yang genuinely terpisah dari alur PSB (Pasang Baru), beda tujuan dan beda audiens:
+
+1. **QR di modem** — ditempel fisik saat instalasi. Pelanggan scan saat komplain → otomatis membuka
+   WhatsApp dengan pesan template yang sudah menyertakan CID pelanggan (supaya CS langsung tahu siapa
+   yang komplain tanpa tanya-tanya). Endpoint **publik, tanpa auth** (pelanggan yang scan, bukan staf
+   yang login).
+2. **QR di ODP** — ditempel fisik di titik ODP. Teknisi scan di lokasi → tampilkan data pelanggan yang
+   terhubung dari ODP itu (buat lookup cepat di lapangan, mis. saat troubleshooting gangguan massal per
+   ODP). Endpoint **protected, khusus teknisi** — kemungkinan besar terhubung ke data fiber topology
+   v0.16.x (rantai OTB → Closure → ODC → ODP yang sudah ada).
+
+**Perlu didesain sebelum eksekusi** (belum diputuskan, dicatat sebagai pertanyaan terbuka):
+- Print-layout QR (ukuran, bahan, cara nempel di modem/ODP).
+- Format payload QR itu sendiri (URL langsung? Token? ID terenkripsi?).
+- Detail endpoint publik (fitur 1) vs protected (fitur 2) — termasuk apakah fitur 2 perlu terhubung ke
+  mekanisme token teknisi yang sedang dibangun di v0.12.3 (Technician-scoped API).

@@ -197,6 +197,8 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
             Route::post('/{cpe_device}/replace-modem', [CpeDeviceActionController::class, 'replaceModem'])->name('replace-modem');
             // v0.12.5 — override manual Tipe Modem.
             Route::post('/{cpe_device}/modem-type', [CpeDeviceActionController::class, 'assignModemType'])->name('modem-type');
+            // v0.12.6 — "Push Konfig Sekarang", tombol manual.
+            Route::post('/{cpe_device}/push-wan-config', [CpeDeviceActionController::class, 'pushWanConfig'])->name('push-wan-config');
             Route::delete('/{cpe_device}', [CpeDeviceActionController::class, 'destroy'])->name('destroy');
         });
         Route::get('/work-orders/{work_order}', WorkOrderShow::class)->name('work-orders.show');

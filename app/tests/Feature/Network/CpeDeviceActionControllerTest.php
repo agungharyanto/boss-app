@@ -343,4 +343,44 @@ class CpeDeviceActionControllerTest extends TestCase
             ->postJson("/api/internal/cpe-devices/{$device->id}/replace-modem", ['serial_number' => 'SNSHOULDNOTWORK'])
             ->assertForbidden();
     }
+
+    /**
+     * v0.12.6 Bagian 1 — tombol manual "Push Konfig Sekarang" ini
+     * memanggil App\Services\Network\WanConfigPushService::push() yang
+     * SAMA persis dengan yang dipanggil otomatis dari
+     * SubscriptionRenewalService::renew() (lihat
+     * Tests\Feature\Commission\WanConfigPushServiceHookTest) — sengaja
+     * skenario skip (tidak ada Template Konfig CPE cocok), bukan
+     * delivered, supaya bukti "service yang sama" tidak bergantung pada
+     * fixture GenieACS lengkap (delivered/failed sudah dicakup penuh
+     * WanConfigPushServiceTest sendiri).
+     */
+    public function test_push_wan_config_returns_a_skipped_response_when_no_template_matches(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->actingAs($this->admin($tenant))
+            ->postJson("/api/internal/cpe-devices/{$device->id}/push-wan-config")
+            ->assertOk();
+
+        $this->assertStringContainsString('dilewati', $response->json('message'));
+        $this->assertDatabaseHas('cpe_action_logs', [
+            'cpe_device_id' => $device->id,
+            'action_type' => 'push_wan_config',
+            'status' => 'skipped',
+        ]);
+    }
+
+    public function test_view_only_user_cannot_push_wan_config(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+        $viewer = User::factory()->create(['tenant_id' => $tenant->id]);
+        $viewer->givePermissionTo(Permission::firstOrCreate(['name' => 'cpe_devices.view', 'guard_name' => 'web']));
+
+        $this->actingAs($viewer)
+            ->postJson("/api/internal/cpe-devices/{$device->id}/push-wan-config")
+            ->assertForbidden();
+    }
 }

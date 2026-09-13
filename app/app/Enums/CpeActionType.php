@@ -9,6 +9,8 @@ enum CpeActionType: string
     case SetPassword = 'set_password';
     case SetSsidEnabled = 'set_ssid_enabled';
     case SyncNow = 'sync_now';
+    /** v0.12.6 — lihat App\Services\Network\WanConfigPushService. */
+    case PushWanConfig = 'push_wan_config';
 
     public function label(): string
     {
@@ -18,6 +20,7 @@ enum CpeActionType: string
             self::SetPassword => 'Ganti Password WiFi',
             self::SetSsidEnabled => 'Ubah Status SSID',
             self::SyncNow => 'Sync Sekarang',
+            self::PushWanConfig => 'Push Konfig WAN',
         };
     }
 }

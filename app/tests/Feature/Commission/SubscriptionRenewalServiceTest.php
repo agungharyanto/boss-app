@@ -28,6 +28,7 @@ use App\Models\User;
 use App\Services\Billing\RenewalInvoiceService;
 use App\Services\Commission\SubscriptionRenewalService;
 use App\Services\InvoiceService;
+use App\Services\Network\WanConfigPushService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Spatie\Permission\Models\Permission;
@@ -380,13 +381,30 @@ class SubscriptionRenewalServiceTest extends TestCase
         $this->service->renew($user, $customer, null);
     }
 
-    public function test_the_service_has_no_network_gateway_dependency(): void
+    /**
+     * v0.12.6 — PENGECUALIAN DISENGAJA (lihat docblock kelas
+     * SubscriptionRenewalService sendiri): satu-satunya dependency
+     * App\Services\Network yang diizinkan sekarang adalah
+     * WanConfigPushService (dipanggil best-effort setelah paket berganti,
+     * lihat WanConfigPushServiceHookTest) — bukan pelanggaran batasan
+     * "tidak ada panggilan NAS/RouterOS/FreeRADIUS/MixRadius", karena
+     * WanConfigPushService sendiri cuma menyentuh GenieACS (TR-069/CWMP),
+     * bukan RouterOS/NAS/FreeRADIUS/MixRadius. Guard terhadap RouterOs*
+     * (akses RouterOS API LANGSUNG dari service komisi ini) TETAP berlaku
+     * tanpa pengecualian.
+     */
+    public function test_the_service_has_no_network_gateway_dependency_except_the_deliberate_wan_config_push_exception(): void
     {
         $ctor = (new \ReflectionClass(SubscriptionRenewalService::class))->getConstructor();
 
         foreach ($ctor->getParameters() as $param) {
             $type = $param->getType();
             $name = $type instanceof \ReflectionNamedType ? $type->getName() : '';
+
+            if ($name === WanConfigPushService::class) {
+                continue;
+            }
+
             $this->assertStringNotContainsString('App\\Services\\Network', $name);
             $this->assertStringNotContainsString('RouterOs', $name);
         }

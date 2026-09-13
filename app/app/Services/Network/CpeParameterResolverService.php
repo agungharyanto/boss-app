@@ -526,6 +526,45 @@ class CpeParameterResolverService
      */
     public function resolvePppoeConnection(?string $genieAcsDeviceId): ?array
     {
+        $match = $this->findActivePppConnection($genieAcsDeviceId);
+
+        if ($match === null) {
+            return null;
+        }
+
+        return [
+            'name' => $match['conn']['Name']['_value'] ?? null,
+            'username' => $match['conn']['Username']['_value'],
+            'password' => $match['conn']['Password']['_value'] ?? null,
+        ];
+    }
+
+    /**
+     * v0.12.6 — path TR-069 LENGKAP (bukan cuma nilai) ke instance
+     * WANPPPConnection yang genuinely aktif sebagai WAN1 internet device
+     * ini SEKARANG (Username-nya terisi, bukan bridged). Dipakai
+     * App\Services\Network\WanConfigPushService untuk push
+     * setParameterValues ke instance yang BENAR — instance number
+     * (WANDevice/WANConnectionDevice/WANPPPConnection) TIDAK selalu 1.1.1,
+     * berbeda-beda per device (dikonfirmasi CT-COM fleet, lihat CLAUDE.md)
+     * — hardcode index di sini SALAH TARGET secara nyata, bisa menimpa
+     * instance lain (misal WAN TR-069 management) alih-alih WAN1.
+     *
+     * Null kalau device tidak ditemukan ATAU tidak ada satu pun
+     * WANPPPConnection non-bridged dengan Username terisi — sama kondisi
+     * null yang sudah resolvePppoeConnection() punya, jadi "tidak ada
+     * target aman untuk push" sama-sama diketahui dari method yang sama.
+     */
+    public function resolveActivePppConnectionPath(?string $genieAcsDeviceId): ?string
+    {
+        return $this->findActivePppConnection($genieAcsDeviceId)['path'] ?? null;
+    }
+
+    /**
+     * @return ?array{path: string, conn: array}
+     */
+    private function findActivePppConnection(?string $genieAcsDeviceId): ?array
+    {
         $device = $this->safeFindDevice($genieAcsDeviceId);
 
         if ($device === null) {
@@ -551,9 +590,8 @@ class CpeParameterResolverService
 
                     if (is_string($username) && $username !== '') {
                         return [
-                            'name' => $conn['Name']['_value'] ?? null,
-                            'username' => $username,
-                            'password' => $conn['Password']['_value'] ?? null,
+                            'path' => "InternetGatewayDevice.WANDevice.{$wanKey}.WANConnectionDevice.{$cdKey}.WANPPPConnection.{$pppKey}",
+                            'conn' => $conn,
                         ];
                     }
                 }

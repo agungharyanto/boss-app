@@ -46,6 +46,7 @@ use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\PppPackageIndex;
 use App\Livewire\Network\RemoteConfigSettings;
 use App\Livewire\Network\VpnScriptGenerator;
+use App\Livewire\Network\WanConfigTemplateIndex;
 use App\Livewire\Referrers\ReferrerIndex;
 use App\Livewire\Resellers\PackagePricingIndex;
 use App\Livewire\Resellers\ResellerIndex;
@@ -249,6 +250,12 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
     // v0.14.5 — same cluster "Profil Paket", same posture as
     // /hotspot-packages above.
     Route::get('/ppp-packages', PppPackageIndex::class)->name('ppp-packages.index');
+
+    // v0.12.5 — "Template Konfig CPE" (matrix Paket x Tipe Modem), grup
+    // sidebar "Remote CPE" (bukan cluster "Profil Paket" secara sidebar,
+    // tapi posisi route sama — tenant-level, tanpa reseller.context, sama
+    // posture /ppp-packages di atas karena bergantung pada PppPackage).
+    Route::get('/wan-config-templates', WanConfigTemplateIndex::class)->name('wan-config-templates.index');
 
     // v0.16.0 Core Network Infrastructure Management, Langkah 3 —
     // FiberNodeForm is a genuinely separate Livewire component from

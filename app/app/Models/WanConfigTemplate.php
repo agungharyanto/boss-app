@@ -4,6 +4,8 @@ namespace App\Models;
 
 use App\Enums\MikrotikSyncStatus;
 use App\Models\Concerns\BelongsToTenant;
+use Database\Factories\WanConfigTemplateFactory;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -29,7 +31,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class WanConfigTemplate extends Model
 {
-    use BelongsToTenant;
+    /** @use HasFactory<WanConfigTemplateFactory> */
+    use BelongsToTenant, HasFactory;
 
     protected $fillable = [
         'tenant_id',

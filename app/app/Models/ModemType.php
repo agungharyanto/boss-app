@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use App\Models\Concerns\BelongsToTenant;
+use Database\Factories\ModemTypeFactory;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -16,7 +18,8 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  */
 class ModemType extends Model
 {
-    use BelongsToTenant, SoftDeletes;
+    /** @use HasFactory<ModemTypeFactory> */
+    use BelongsToTenant, HasFactory, SoftDeletes;
 
     protected $fillable = [
         'tenant_id',

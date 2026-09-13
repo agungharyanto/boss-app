@@ -7,42 +7,75 @@ use App\Models\ModemType;
 use App\Models\WanConfigTemplate;
 
 /**
- * v0.12.5 — auto-suggest Template Konfig CPE untuk sebuah device,
- * BEST-EFFORT, TIDAK PERNAH garansi match. Dipanggil ON-DEMAND dari
- * Detail Perangkat CPE (bukan dari alur binding v0.7.5/CpeBindingService)
- * — lihat docblock ini sendiri untuk alasan keputusan arsitektur.
+ * v0.12.5 (koreksi arsitektur, kembali ke matrix — dikonfirmasi Agung dari
+ * klarifikasi chat planning) — auto-suggest Template Konfig CPE untuk
+ * sebuah device, BEST-EFFORT, TIDAK PERNAH garansi match. Dipanggil
+ * ON-DEMAND dari Detail Perangkat CPE (bukan dari alur binding v0.7.5/
+ * CpeBindingService) — sama keputusan arsitektur seperti sebelumnya
+ * (freshness terhadap katalog + menghindari regresi pada
+ * CpeBindingService yang sudah lama stabil).
  *
- * KEPUTUSAN: on-demand di Detail Perangkat CPE, BUKAN dihook ke
- * CpeBindingService. Dua alasan:
- * 1. Freshness — katalog ModemType/Template bisa berubah kapan pun
- *    setelah device pertama kali di-bind; hook di binding-time akan
- *    "membekukan" hasil suggestion pada state katalog saat itu, tidak
- *    pernah ter-refresh otomatis kalau admin menambah/mengubah Tipe Modem
- *    belakangan. On-demand (dipanggil ulang tiap halaman dibuka) selalu
- *    mencerminkan katalog TERKINI.
- * 2. Risiko regresi — CpeBindingService (v0.7.1) adalah kode stabil lama
- *    yang dipanggil dari reconcile loop background TANPA konteks Auth
- *    (tenant harus di-pass manual, sama kelas masalah yang sudah
- *    ditangani WhatsappTemplateService::resolve()). Menyentuhnya untuk
- *    fitur baru ini menambah permukaan regresi pada alur binding yang
- *    sudah lama establish, di luar scope sub-versi ini.
+ * DUA SUMBER resolusi, KEDUANYA wajib ter-resolve:
+ * 1. `customers.ppp_package_id` — paket pelanggan SEKARANG (lewat
+ *    `cpe_devices.customer`). Null kalau customer tidak ada atau belum
+ *    punya paket -> gagal total.
+ * 2. `cpe_devices.manufacturer` -> `modem_types.manufacturer_match_patterns`
+ *    — logic TIDAK BERUBAH dari versi sebelumnya (null kalau tidak match
+ *    sama sekali ATAU match ke LEBIH DARI SATU Tipe Modem/ambigu) -> gagal
+ *    total kalau null.
  *
- * Query di sini SENGAJA `withoutGlobalScopes()` + `tenant_id` manual
- * (bukan bergantung pada TenantScope's Auth-based filter) — supaya tetap
- * benar regardless of caller context, sama disiplin
- * WhatsappTemplateService::resolve().
+ * Begitu kedua sumber ter-resolve, template dicari dengan urutan:
+ * exact match (ppp_package_id, modem_type_id) dulu, lalu fallback ke
+ * template Default paket itu (modem_type_id NULL) kalau exact match tidak
+ * ada. Null kalau TIDAK ADA satu pun dari keduanya (customer perlu
+ * assignment manual).
+ *
+ * Constraint unique `(ppp_package_id, modem_type_id)` di DB menjamin
+ * paling banyak SATU baris untuk tiap kombinasi — beda dari desain
+ * modem-only kemarin (yang butuh cek "template AKTIF > 1 = ambigu"),
+ * sekarang cukup `first()`, tidak ada ambiguitas struktural di level
+ * Template lagi.
  */
 class WanConfigTemplateSuggestionService
 {
-    /**
-     * Null kalau: manufacturer device kosong, manufacturer tidak match
-     * satu pun Tipe Modem, manufacturer match LEBIH DARI SATU Tipe Modem
-     * (ambigu di level Tipe Modem), Tipe Modem yang match tidak punya
-     * template aktif sama sekali, atau punya LEBIH DARI SATU template
-     * aktif (ambigu di level Template — tidak ada "yang benar" otomatis,
-     * serahkan ke manual, JANGAN asal pilih salah satu).
-     */
     public function suggestFor(CpeDevice $device): ?WanConfigTemplate
+    {
+        $modemTypeId = $this->resolveModemTypeId($device);
+
+        if ($modemTypeId === null) {
+            return null;
+        }
+
+        $pppPackageId = $device->loadMissing('customer')->customer?->ppp_package_id;
+
+        if ($pppPackageId === null) {
+            return null;
+        }
+
+        $exact = WanConfigTemplate::withoutGlobalScopes()
+            ->where('tenant_id', $device->tenant_id)
+            ->where('ppp_package_id', $pppPackageId)
+            ->where('modem_type_id', $modemTypeId)
+            ->first();
+
+        if ($exact !== null) {
+            return $exact;
+        }
+
+        return WanConfigTemplate::withoutGlobalScopes()
+            ->where('tenant_id', $device->tenant_id)
+            ->where('ppp_package_id', $pppPackageId)
+            ->whereNull('modem_type_id')
+            ->first();
+    }
+
+    /**
+     * Null kalau manufacturer device kosong, tidak match Tipe Modem mana
+     * pun, atau match LEBIH DARI SATU Tipe Modem sekaligus (ambigu, tidak
+     * ada "yang benar" otomatis) — logic sama persis sebelumnya, tidak
+     * diubah oleh revisi ini.
+     */
+    private function resolveModemTypeId(CpeDevice $device): ?int
     {
         $manufacturer = self::normalizeManufacturer($device->manufacturer);
 
@@ -60,26 +93,12 @@ class WanConfigTemplateSuggestionService
             return null;
         }
 
-        $modemType = $matchingModemTypes->first();
-
-        $candidateTemplates = WanConfigTemplate::withoutGlobalScopes()
-            ->where('tenant_id', $device->tenant_id)
-            ->where('modem_type_id', $modemType->id)
-            ->where('enabled', true)
-            ->get();
-
-        if ($candidateTemplates->count() !== 1) {
-            return null;
-        }
-
-        return $candidateTemplates->first();
+        return $matchingModemTypes->first()->id;
     }
 
     /**
      * Normalisasi kode OUI GenieACS (`cpe_devices.manufacturer`) supaya
-     * perbandingan tidak sensitif kapital/spasi — OUI yang sama bisa
-     * tersimpan dengan variasi kapitalisasi tergantung device/waktu
-     * import (lihat investigasi v0.12.4). Sama normalisasi dengan
+     * perbandingan tidak sensitif kapital/spasi. Sama normalisasi dengan
      * ModemType::matchPatterns().
      */
     public static function normalizeManufacturer(?string $manufacturer): ?string

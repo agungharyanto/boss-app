@@ -4,7 +4,9 @@ namespace Tests\Feature\Network;
 
 use App\Enums\WanConfigTemplateSource;
 use App\Models\CpeDevice;
+use App\Models\Customer;
 use App\Models\ModemType;
+use App\Models\PppPackage;
 use App\Models\Tenant;
 use App\Models\WanConfigTemplate;
 use App\Services\Network\CpeWanConfigAssignmentService;
@@ -13,9 +15,13 @@ use InvalidArgumentException;
 use Tests\TestCase;
 
 /**
- * v0.12.5 — CpeWanConfigAssignmentService: autoAssignIfUnset() (self-
- * healing, tidak pernah menimpa assignment yang sudah ada) dan
- * assignManually() (override eksplisit, selalu menang).
+ * v0.12.5 (koreksi arsitektur, kembali ke matrix) — CpeWanConfigAssignmentService:
+ * autoAssignIfUnset() (self-healing, tidak pernah menimpa assignment yang
+ * sudah ada) dan assignManually() (override eksplisit, selalu menang).
+ * Fixture untuk skenario auto-assign yang BERHASIL match sekarang perlu
+ * customer dengan ppp_package_id juga (WanConfigTemplateSuggestionService
+ * butuh dua sumber sejak koreksi arsitektur ini) — skenario assignManually()
+ * tidak terpengaruh sama sekali (tidak pernah memanggil suggestion service).
  */
 class CpeWanConfigAssignmentServiceTest extends TestCase
 {
@@ -26,12 +32,24 @@ class CpeWanConfigAssignmentServiceTest extends TestCase
         return app(CpeWanConfigAssignmentService::class);
     }
 
+    private function deviceForPackage(Tenant $tenant, PppPackage $package, string $manufacturer): CpeDevice
+    {
+        $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'ppp_package_id' => $package->id]);
+
+        return CpeDevice::factory()->create([
+            'tenant_id' => $tenant->id,
+            'customer_id' => $customer->id,
+            'manufacturer' => $manufacturer,
+        ]);
+    }
+
     public function test_auto_assign_if_unset_persists_a_match_as_auto_source(): void
     {
         $tenant = Tenant::factory()->create();
         $modemType = ModemType::factory()->create(['tenant_id' => $tenant->id, 'manufacturer_match_patterns' => 'ZICG']);
-        $template = WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'modem_type_id' => $modemType->id, 'enabled' => true]);
-        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id, 'manufacturer' => 'ZICG']);
+        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
+        $template = WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'ppp_package_id' => $package->id, 'modem_type_id' => $modemType->id]);
+        $device = $this->deviceForPackage($tenant, $package, 'ZICG');
 
         $result = $this->service()->autoAssignIfUnset($device);
 
@@ -43,16 +61,13 @@ class CpeWanConfigAssignmentServiceTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $modemType = ModemType::factory()->create(['tenant_id' => $tenant->id, 'manufacturer_match_patterns' => 'ZICG']);
-        WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'modem_type_id' => $modemType->id, 'enabled' => true]);
+        $package = PppPackage::factory()->create(['tenant_id' => $tenant->id]);
+        WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id, 'ppp_package_id' => $package->id, 'modem_type_id' => $modemType->id]);
         $manualTemplate = WanConfigTemplate::factory()->create(['tenant_id' => $tenant->id]);
-        $device = CpeDevice::factory()->create([
-            'tenant_id' => $tenant->id,
-            'manufacturer' => 'ZICG',
-            'wan_config_template_id' => $manualTemplate->id,
-            'wan_config_template_source' => WanConfigTemplateSource::Manual,
-        ]);
+        $device = $this->deviceForPackage($tenant, $package, 'ZICG');
+        $device->update(['wan_config_template_id' => $manualTemplate->id, 'wan_config_template_source' => WanConfigTemplateSource::Manual]);
 
-        $result = $this->service()->autoAssignIfUnset($device);
+        $result = $this->service()->autoAssignIfUnset($device->fresh());
 
         $this->assertSame($manualTemplate->id, $result->wan_config_template_id);
         $this->assertSame(WanConfigTemplateSource::Manual, $result->wan_config_template_source);

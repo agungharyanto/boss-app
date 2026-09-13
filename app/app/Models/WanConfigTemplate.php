@@ -10,26 +10,27 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * v0.12.5 (revisi arsitektur, dikonfirmasi Agung) — Template Konfig CPE
- * TIDAK terikat Paket sama sekali, dibedakan HANYA oleh Tipe Modem.
- * `modem_type_id` NULL = template generic/fallback (tanpa Tipe Modem
- * spesifik). TIDAK ADA unique constraint pada `modem_type_id` — beberapa
- * Template boleh punya Tipe Modem yang sama, dibedakan lewat `name`
- * (bebas, tanpa constraint ketat).
+ * v0.12.5 (koreksi arsitektur, kembali ke matrix — dikonfirmasi Agung dari
+ * klarifikasi chat planning) — satu baris = satu kombinasi
+ * `ppp_package_id` x `modem_type_id`. `modem_type_id` NULL = template
+ * default/fallback untuk paket itu, berlaku apa pun modemnya. Paket harus
+ * sudah ada di Profil PPP dulu (FK `restrictOnDelete()`) sebelum
+ * Template-nya bisa dibuat.
+ *
+ * `name` — bebas, TIDAK unique (dua template berbeda modem_type_id untuk
+ * paket yang sama boleh punya nama mirip, tidak dibatasi).
  *
  * Assignment ke device (`cpe_devices.wan_config_template_id`) terjadi
- * lewat auto-suggest (best-effort, lihat
- * App\Services\Network\WanConfigTemplateSuggestionService) atau override
- * manual admin di Detail Perangkat CPE — BUKAN lewat kombinasi
- * Paket+Modem seperti desain v0.12.4 asli (sudah di-rework total).
+ * lewat auto-suggest (App\Services\Network\WanConfigTemplateSuggestionService
+ * — resolve dari customer.ppp_package_id + cpe_devices.manufacturer) atau
+ * override manual admin di Detail Perangkat CPE.
  *
  * Menggantikan `RemoteWanConfig` (singleton fleet-wide) — DIBANGUN
  * PARALEL, bukan pengganti langsung. `RemoteWanConfig` belum
  * dihapus/dimatikan, `/remote-config` tidak disentuh sama sekali.
  *
- * TIDAK ADA kolom serial-allowlist di sini — sama seperti desain asli,
- * push ke GenieACS (v0.12.6) akan cross-reference `cpe_devices.
- * wan_config_template_id` langsung, bukan allowlist manual.
+ * TIDAK ADA kolom serial-allowlist di sini — push ke GenieACS (v0.12.6)
+ * akan cross-reference `cpe_devices.wan_config_template_id` langsung.
  *
  * `markSynced()`/`markSyncFailed()`/`markSyncPending()` — pola identik
  * `RemoteWanConfig`, dipakai job sync (v0.12.6) nanti.
@@ -42,6 +43,7 @@ class WanConfigTemplate extends Model
     protected $fillable = [
         'tenant_id',
         'name',
+        'ppp_package_id',
         'modem_type_id',
         'enabled',
         'wan1_enabled',
@@ -68,17 +70,21 @@ class WanConfigTemplate extends Model
         ];
     }
 
+    public function pppPackage(): BelongsTo
+    {
+        return $this->belongsTo(PppPackage::class);
+    }
+
     public function modemType(): BelongsTo
     {
         return $this->belongsTo(ModemType::class);
     }
 
     /**
-     * True kalau baris ini template generic/fallback (tanpa Tipe Modem
-     * spesifik) — bukan template ber-Tipe-Modem spesifik. Dulu bernama
-     * isDefaultForPackage() (v0.12.4, sebelum Paket dihapus dari skema).
+     * True kalau baris ini template default/fallback paket-nya (berlaku
+     * apa pun modemnya) — bukan template ber-Tipe-Modem spesifik.
      */
-    public function isGeneric(): bool
+    public function isDefaultForPackage(): bool
     {
         return $this->modem_type_id === null;
     }

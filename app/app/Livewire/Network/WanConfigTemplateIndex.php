@@ -3,6 +3,7 @@
 namespace App\Livewire\Network;
 
 use App\Models\ModemType;
+use App\Models\PppPackage;
 use App\Models\WanConfigTemplate;
 use App\Services\Network\ModemTypeService;
 use App\Services\Network\WanConfigTemplateService;
@@ -13,12 +14,13 @@ use Livewire\Attributes\Validate;
 use Livewire\Component;
 
 /**
- * v0.12.5 (revisi arsitektur) — "Template Konfig CPE" TIDAK terikat Paket
- * sama sekali, dibedakan HANYA oleh Tipe Modem. Tampilan dikelompokkan
- * per Tipe Modem (+ grup "Generic/Tanpa Tipe Modem" untuk
- * `modem_type_id` NULL). Assignment ke device terjadi di Detail
- * Perangkat CPE (auto-suggest atau manual), bukan di halaman ini —
- * halaman ini murni katalog Template + katalog Tipe Modem.
+ * v0.12.5 (koreksi arsitektur, kembali ke matrix — dikonfirmasi Agung)
+ * — "Template Konfig CPE" adalah matrix Paket x Tipe Modem. Tampilan
+ * dikelompokkan per Paket: satu baris "Default (Semua Tipe Modem)"
+ * (modem_type_id NULL) + satu baris per Tipe Modem spesifik yang sudah
+ * punya template. Dropdown Paket cuma menampilkan Profil PPP yang
+ * genuinely ada (paket harus dibuat dulu di /ppp-packages sebelum
+ * Template-nya bisa dibuat).
  *
  * BELUM ada sync ke GenieACS di sini — WanConfigTemplateService tidak
  * dispatch job apa pun (GenieAcsPresetService per-template adalah bagian
@@ -36,7 +38,10 @@ class WanConfigTemplateIndex extends Component
     #[Validate('required|string|max:255')]
     public string $name = '';
 
-    /** '' = belum dipilih (invalid). 'generic' = modem_type_id NULL. Selain itu = id ModemType. */
+    #[Validate('required|integer')]
+    public string $pppPackageId = '';
+
+    /** '' = belum dipilih (invalid). 'default' = modem_type_id NULL. Selain itu = id ModemType. */
     #[Validate('required|string')]
     public string $modemTypeSelection = '';
 
@@ -78,12 +83,12 @@ class WanConfigTemplateIndex extends Component
 
     // ================= Template Konfig CPE =================
 
-    public function openCreateForModemType(?int $modemTypeId = null): void
+    public function openCreateForTemplate(?int $pppPackageId = null): void
     {
         $this->authorize('manage', WanConfigTemplate::class);
 
         $this->resetTemplateForm();
-        $this->modemTypeSelection = $modemTypeId !== null ? (string) $modemTypeId : '';
+        $this->pppPackageId = $pppPackageId !== null ? (string) $pppPackageId : '';
         $this->showTemplateForm = true;
     }
 
@@ -94,7 +99,8 @@ class WanConfigTemplateIndex extends Component
 
         $this->editingTemplateId = $template->id;
         $this->name = $template->name;
-        $this->modemTypeSelection = $template->modem_type_id === null ? 'generic' : (string) $template->modem_type_id;
+        $this->pppPackageId = (string) $template->ppp_package_id;
+        $this->modemTypeSelection = $template->modem_type_id === null ? 'default' : (string) $template->modem_type_id;
         $this->enabled = $template->enabled;
         $this->wan1Enabled = $template->wan1_enabled;
         $this->wan1Vlan = (string) $template->wan1_vlan;
@@ -114,7 +120,7 @@ class WanConfigTemplateIndex extends Component
     private function resetTemplateForm(): void
     {
         $this->reset([
-            'editingTemplateId', 'name', 'modemTypeSelection', 'enabled',
+            'editingTemplateId', 'name', 'pppPackageId', 'modemTypeSelection', 'enabled',
             'wan1Enabled', 'wan1Vlan', 'wan1PppoeUsername', 'wan1PppoePassword',
             'wan2Enabled', 'wan2Vlan',
         ]);
@@ -134,6 +140,10 @@ class WanConfigTemplateIndex extends Component
 
         $validated = $this->validate([
             'name' => ['required', 'string', 'max:255'],
+            'pppPackageId' => [
+                'required', 'integer',
+                Rule::exists(PppPackage::class, 'id')->whereNull('deleted_at'),
+            ],
             'modemTypeSelection' => ['required', 'string'],
             'wan1Vlan' => ['required', 'integer', 'min:1', 'max:4094'],
             'wan1PppoeUsername' => ['required', 'string', 'min:1', 'max:64'],
@@ -141,7 +151,7 @@ class WanConfigTemplateIndex extends Component
             'wan2Vlan' => ['required', 'integer', 'min:1', 'max:4094'],
         ]);
 
-        if ($this->modemTypeSelection !== 'generic') {
+        if ($this->modemTypeSelection !== 'default') {
             $this->validate([
                 'modemTypeSelection' => [
                     Rule::exists(ModemType::class, 'id')->whereNull('deleted_at'),
@@ -149,10 +159,11 @@ class WanConfigTemplateIndex extends Component
             ]);
         }
 
-        $modemTypeId = $this->modemTypeSelection === 'generic' ? null : (int) $this->modemTypeSelection;
+        $modemTypeId = $this->modemTypeSelection === 'default' ? null : (int) $this->modemTypeSelection;
 
         $data = [
             'name' => $validated['name'],
+            'ppp_package_id' => (int) $validated['pppPackageId'],
             'modem_type_id' => $modemTypeId,
             'enabled' => $this->enabled,
             'wan1_enabled' => $this->wan1Enabled,
@@ -266,17 +277,14 @@ class WanConfigTemplateIndex extends Component
 
     public function render()
     {
-        $modemTypes = ModemType::query()->orderBy('name')->get();
-        $genericTemplates = WanConfigTemplate::query()->whereNull('modem_type_id')->orderBy('name')->get();
+        $packages = PppPackage::query()
+            ->with(['wanConfigTemplates' => fn ($query) => $query->with('modemType')->orderBy('modem_type_id')])
+            ->orderBy('name')
+            ->get();
 
         return view('livewire.network.wan-config-template-index', [
-            'modemTypes' => $modemTypes,
-            'genericTemplates' => $genericTemplates,
-            'templatesByModemType' => WanConfigTemplate::query()
-                ->whereNotNull('modem_type_id')
-                ->orderBy('name')
-                ->get()
-                ->groupBy('modem_type_id'),
+            'packages' => $packages,
+            'modemTypes' => ModemType::query()->orderBy('name')->get(),
             'canManage' => auth()->user()->can('manage', WanConfigTemplate::class),
         ])->layout('layouts.app');
     }

@@ -47,11 +47,11 @@ class RenewalInvoiceService
      * itu sudah ada (dari jalur mana pun) TIDAK membuat yang kedua — kalau
      * belum Paid, dilunaskan; kalau sudah Paid, dibiarkan.
      *
-     * v0.12.2 Track A — kalau paket pelanggan `sell_price = 0` SECARA
-     * STRUKTURAL (mis. `PPPoE-Remote` #17, paket fallback tanpa harga jual
-     * sama sekali — BUKAN `promo_price = 0` di atas paket berbayar, yang
-     * TIDAK diperiksa di sini), TIDAK ADA invoice yang dibuat sama sekali —
-     * bukan invoice Rp0 berstatus "paid". `invoice` di hasil jadi `null`,
+     * v0.12.2 Track A — kalau `PppPackage::hasZeroSellPrice()` (satu sumber
+     * kebenaran, dipakai identik di sini, `PppoeVlan10MigrationService`, dan
+     * `GenerateDueInvoices`) bilang paket pelanggan gratis SECARA
+     * STRUKTURAL, TIDAK ADA invoice yang dibuat sama sekali — bukan invoice
+     * Rp0 berstatus "paid". `invoice` di hasil jadi `null`,
      * `skipped_zero_price` jadi `true` — dicek SEBELUM
      * `renewalSubscriptionFor()` dipanggil, jadi subscription
      * "Perpanjangan Manual" tersembunyi juga TIDAK dibuat untuk periode
@@ -70,7 +70,7 @@ class RenewalInvoiceService
             ? PppPackage::withoutGlobalScopes()->find($customer->ppp_package_id)
             : null;
 
-        if ($package !== null && (float) $package->sell_price === 0.0) {
+        if (PppPackage::hasZeroSellPrice($package)) {
             return ['invoice' => null, 'created' => false, 'newly_paid' => false, 'skipped_zero_price' => true];
         }
 

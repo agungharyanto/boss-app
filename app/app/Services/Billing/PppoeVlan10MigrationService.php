@@ -39,15 +39,12 @@ use Illuminate\Support\Carbon;
  * jadi spam yang salah konteks. Sama alasan v0.9.12 Bagian A untuk
  * `RenewalInvoiceService`.
  *
- * v0.12.2 amendment — paket dengan `sell_price = 0` SECARA STRUKTURAL
- * (mis. `PPPoE-Remote` #17, paket fallback tanpa harga jual sama sekali —
- * BUKAN `promo_price = 0` di atas paket berbayar, yang tidak diperiksa di
- * sini) TIDAK PERNAH menghasilkan invoice — bukan invoice Rp0 berstatus
- * "paid". Subscription + `customers.ppp_package_id` tetap dibuat/
- * di-update seperti biasa; hanya langkah penerbitan invoice-nya yang
- * dilewati. Sama pola guard yang dipakai
- * `RenewalInvoiceService::issuePaidForPeriod()` (lihat docblock method
- * itu).
+ * v0.12.2 amendment — `PppPackage::hasZeroSellPrice()` (satu sumber
+ * kebenaran, dipakai identik di `RenewalInvoiceService` dan
+ * `GenerateDueInvoices`) TIDAK PERNAH menghasilkan invoice untuk paket
+ * gratis struktural — bukan invoice Rp0 berstatus "paid". Subscription +
+ * `customers.ppp_package_id` tetap dibuat/di-update seperti biasa; hanya
+ * langkah penerbitan invoice-nya yang dilewati.
  */
 class PppoeVlan10MigrationService
 {
@@ -101,7 +98,7 @@ class PppoeVlan10MigrationService
         ])->save();
 
         $package = $pppPackageId !== null ? PppPackage::withoutGlobalScopes()->find($pppPackageId) : null;
-        if ($package !== null && (float) $package->sell_price === 0.0) {
+        if (PppPackage::hasZeroSellPrice($package)) {
             return [
                 'subscription_id' => $subscription->id,
                 'invoice_id' => null,

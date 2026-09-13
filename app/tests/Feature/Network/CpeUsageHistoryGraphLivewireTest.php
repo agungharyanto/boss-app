@@ -152,6 +152,31 @@ class CpeUsageHistoryGraphLivewireTest extends TestCase
             ->assertForbidden();
     }
 
+    // ── v0.12.6 (revisi) — Bagian 3: catatan Download ──
+
+    public function test_download_caution_note_is_shown_regardless_of_state(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $customer = Customer::factory()->create(['tenant_id' => $tenant->id]);
+        $deviceOk = CpeDevice::factory()->create(['tenant_id' => $tenant->id, 'customer_id' => $customer->id]);
+
+        $this->app->instance(CpeUsageHistoryService::class, $this->fakeService(true, [
+            ['date' => '2026-09-01', 'upload_mb' => 1.0, 'download_mb' => 2.0],
+        ]));
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CpeUsageHistoryGraph::class, ['cpeDeviceId' => $deviceOk->id])
+            ->assertSee(__('Grafik Download saat ini kurang mencerminkan pemakaian sebenarnya — keterbatasan sisi RouterOS/RADIUS, sedang diinvestigasi lebih lanjut.'));
+
+        $customerNoData = Customer::factory()->create(['tenant_id' => $tenant->id]);
+        $deviceNoData = CpeDevice::factory()->create(['tenant_id' => $tenant->id, 'customer_id' => $customerNoData->id]);
+        $this->app->instance(CpeUsageHistoryService::class, $this->fakeService(false));
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(CpeUsageHistoryGraph::class, ['cpeDeviceId' => $deviceNoData->id])
+            ->assertSee(__('Grafik Download saat ini kurang mencerminkan pemakaian sebenarnya — keterbatasan sisi RouterOS/RADIUS, sedang diinvestigasi lebih lanjut.'));
+    }
+
     // ── v0.12.6 (revisi) — Bagian 2: modal "Riwayat" ──
 
     public function test_history_button_is_visible_only_when_state_is_ok(): void

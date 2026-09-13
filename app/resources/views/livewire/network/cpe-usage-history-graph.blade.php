@@ -1,5 +1,5 @@
 <div>
-    <div class="flex items-center justify-between mb-3">
+    <div class="flex items-center justify-between mb-1">
         <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">{{ __('Grafik Pemakaian') }}</h2>
         {{-- v0.12.6 (revisi) — tombol "Riwayat" HANYA saat state === 'ok',
              beda dari RX Power yang tombolnya selalu ada — lihat komponen
@@ -10,6 +10,11 @@
             </button>
         @endif
     </div>
+    {{-- v0.12.6 (revisi) — catatan temuan investigasi radacct, sama
+         persis teks CpeDialupHistory (sumber data yang sama) — sengaja
+         SEKALI saja di sini, tidak diulang di dalam modal Riwayat
+         (section utama tetap ada di render terlepas modal dibuka). --}}
+    <p class="text-xs text-amber-600 mb-3">{{ __('Grafik Download saat ini kurang mencerminkan pemakaian sebenarnya — keterbatasan sisi RouterOS/RADIUS, sedang diinvestigasi lebih lanjut.') }}</p>
 
     @if ($state === 'no_data')
         <p class="text-sm text-gray-500">{{ __('Belum ada data pemakaian — akun ini belum aktif tercatat lewat FreeRADIUS boss-app.') }}</p>

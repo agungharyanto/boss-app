@@ -141,4 +141,10 @@
         <p>{{ __('Cache preset GenieACS di-refresh tiap ~5,5 menit — perubahan VLAN berlaku otomatis dalam rentang itu tanpa restart.') }}</p>
         <p>{{ __('Provision default-wan yang BENAR-BENAR baru (deploy pertama) mungkin butuh `docker compose restart genieacs-cwmp` sekali.') }}</p>
     </div>
+
+    {{-- v0.12.6 (revisi) — section "Push Konfig" (WanConfigPushService,
+         v0.12.6 Bagian 1), TERPISAH dari form Auto-WAN di atas — component
+         Livewire sendiri, tidak berbagi state apa pun dengan
+         RemoteConfigSettings. --}}
+    @livewire('network.wan-config-push-lookup')
 </div>

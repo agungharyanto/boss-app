@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreTechnicianRequest;
 use App\Http\Resources\TechnicianResource;
 use App\Models\Technician;
+use App\Services\Installation\TechnicianTokenService;
 use App\Support\ResellerContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -60,5 +61,31 @@ class TechnicianController extends Controller
         $this->authorize('view', $technician);
 
         return $this->success(new TechnicianResource($technician->load('reseller')));
+    }
+
+    /**
+     * v0.12.3 — terbitkan token Sanctum baru untuk Technician-scoped API
+     * (revoke SEMUA token lama miliknya). `manage` (bukan `view`) —
+     * penerbitan token adalah aksi administratif, sama tingkat otorisasi
+     * dengan edit/kelola data teknisi itu sendiri.
+     *
+     * Token plaintext HANYA muncul di response INI, sekali — Sanctum
+     * sendiri cuma menyimpan hash-nya di `personal_access_tokens`, tidak
+     * ada cara melihatnya lagi setelah response ini hilang. Simpan sekarang.
+     */
+    public function generateToken(Technician $technician, TechnicianTokenService $service): JsonResponse
+    {
+        $this->authorize('manage', $technician);
+
+        // TechnicianTokenException (technician nonaktif / user tidak ada)
+        // di-render otomatis jadi 422 oleh exception handler-nya sendiri —
+        // tidak perlu try/catch manual di sini, sama pola
+        // InvalidInvoiceStatusTransitionException.
+        $token = $service->generate($technician);
+
+        return $this->success(
+            ['token' => $token],
+            'Token diterbitkan — plaintext ini TIDAK akan ditampilkan lagi, simpan sekarang.',
+        );
     }
 }

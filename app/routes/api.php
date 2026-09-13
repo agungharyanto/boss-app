@@ -146,6 +146,9 @@ Route::prefix('v1')->group(function () {
             Route::get('technicians', [TechnicianController::class, 'index']);
             Route::post('technicians', [TechnicianController::class, 'store']);
             Route::get('technicians/{technician}', [TechnicianController::class, 'show']);
+            // v0.12.3 — terbitkan token Sanctum Technician-scoped API baru
+            // (revoke token lama). Lihat TechnicianTokenService.
+            Route::post('technicians/{technician}/token', [TechnicianController::class, 'generateToken']);
 
             Route::get('nas', [NasController::class, 'index']);
             Route::post('nas', [NasController::class, 'store']);

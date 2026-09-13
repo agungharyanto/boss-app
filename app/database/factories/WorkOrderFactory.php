@@ -69,4 +69,15 @@ class WorkOrderFactory extends Factory
     {
         return $this->state(fn () => ['status' => WorkOrderStatus::InProgress, 'equipment_ready' => true]);
     }
+
+    /**
+     * v0.12.7 Langkah 3 — teknisi sudah konfirmasi via OTP WhatsApp
+     * (App\Services\Installation\TechnicianActionOtpService), gerbang
+     * terakhir sebelum WorkOrderService::complete() mengizinkan transisi
+     * ke Completed.
+     */
+    public function technicianConfirmed(): static
+    {
+        return $this->state(fn () => ['technician_confirmed_at' => now()]);
+    }
 }

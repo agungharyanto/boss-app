@@ -7,6 +7,7 @@ use App\Enums\WorkOrderPhotoType;
 use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\AssignWorkOrderRequest;
+use App\Http\Requests\ConfirmWorkOrderRequest;
 use App\Http\Requests\ProvisionWorkOrderDeviceRequest;
 use App\Http\Requests\StoreWorkOrderDeviceRequest;
 use App\Http\Requests\StoreWorkOrderPhotoRequest;
@@ -18,6 +19,7 @@ use App\Models\Technician;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
 use App\Policies\WorkOrderPolicy;
+use App\Services\Installation\TechnicianOtpException;
 use App\Services\Installation\WorkOrderPhotoService;
 use App\Services\Installation\WorkOrderService;
 use Illuminate\Http\JsonResponse;
@@ -195,6 +197,57 @@ class WorkOrderController extends Controller
         $claim = $service->claim($work_order, $technician);
 
         return $this->success(['claimed_at' => $claim->claimed_at->toIso8601String()], 'Work order berhasil diklaim');
+    }
+
+    /**
+     * v0.12.7 Langkah 3.1 — mengirim OTP WhatsApp ke nomor teknisi sendiri
+     * (`technicians.phone`, BUKAN pelanggan) untuk mengonfirmasi instalasi
+     * yang baru selesai dia kerjakan. `manage` (bukan `view` seperti
+     * claim() di atas) — endpoint ini bagian dari alur SETELAH teknisi
+     * sudah mengerjakan WO (assigned/claimed), bukan "melihat sebelum
+     * mengklaim".
+     */
+    public function requestConfirmation(WorkOrder $work_order, WorkOrderService $service): JsonResponse
+    {
+        $this->authorize('manage', $work_order);
+
+        $technician = Technician::query()->where('user_id', request()->user()->id)->first();
+
+        if ($technician === null) {
+            abort(403, 'Akun ini tidak tertaut ke Technician — tidak bisa meminta konfirmasi work order.');
+        }
+
+        try {
+            $service->requestConfirmation($work_order, $technician);
+        } catch (TechnicianOtpException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage(), 'data' => null, 'meta' => []], 422);
+        }
+
+        return $this->success(null, 'Kode konfirmasi dikirim ke WhatsApp Anda.');
+    }
+
+    /**
+     * v0.12.7 Langkah 3.2 — verifikasi kode OTP dari
+     * requestConfirmation() di atas. Sukses -> work_orders.
+     * technician_confirmed_at terisi, gerbang terakhir sebelum
+     * WorkOrderService::complete() (lihat guard di method itu sendiri —
+     * Langkah 3.3).
+     */
+    public function confirm(ConfirmWorkOrderRequest $request, WorkOrder $work_order, WorkOrderService $service): JsonResponse
+    {
+        $technician = Technician::query()->where('user_id', request()->user()->id)->first();
+
+        if ($technician === null) {
+            abort(403, 'Akun ini tidak tertaut ke Technician — tidak bisa mengonfirmasi work order.');
+        }
+
+        try {
+            $workOrder = $service->confirmByTechnician($work_order, $technician, $request->validated('code'));
+        } catch (TechnicianOtpException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage(), 'data' => null, 'meta' => []], 422);
+        }
+
+        return $this->success(['technician_confirmed_at' => $workOrder->technician_confirmed_at->toIso8601String()], 'Instalasi berhasil dikonfirmasi.');
     }
 
     /**

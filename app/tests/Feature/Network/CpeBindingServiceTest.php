@@ -27,7 +27,7 @@ class CpeBindingServiceTest extends TestCase
 
     private function readyWorkOrder(string $serialNumber): WorkOrder
     {
-        $workOrder = WorkOrder::factory()->inProgress()->create();
+        $workOrder = WorkOrder::factory()->inProgress()->technicianConfirmed()->create();
 
         foreach (WorkOrderPhotoType::cases() as $type) {
             WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType($type)->create();
@@ -148,7 +148,7 @@ class CpeBindingServiceTest extends TestCase
             '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNWIFI001', 'AABBCC-ONT-SNWIFI001')], 200),
         ]);
 
-        $workOrder = WorkOrder::factory()->inProgress()->create();
+        $workOrder = WorkOrder::factory()->inProgress()->technicianConfirmed()->create();
         foreach (WorkOrderPhotoType::cases() as $type) {
             WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType($type)->create();
         }
@@ -212,7 +212,7 @@ class CpeBindingServiceTest extends TestCase
                 ->push([$foundDevice], 200),
         ]);
 
-        $workOrder = WorkOrder::factory()->inProgress()->create();
+        $workOrder = WorkOrder::factory()->inProgress()->technicianConfirmed()->create();
         foreach (WorkOrderPhotoType::cases() as $type) {
             WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType($type)->create();
         }
@@ -226,14 +226,20 @@ class CpeBindingServiceTest extends TestCase
         $cpeDevice = CpeDevice::where('serial_number', 'SNWIFISLOW')->firstOrFail();
         $this->assertSame(CpeDeviceStatus::PendingFirstConnect, $cpeDevice->status);
         $this->assertNull($cpeDevice->wifi_provisioned_at);
-        // Nothing attempted yet — no cpe_action_logs row at all.
-        $this->assertDatabaseCount('cpe_action_logs', 0);
+        // WiFi provisioning belum dicoba sama sekali (bukan lagi "nol row
+        // apa pun" sejak v0.12.7 Langkah 4 — complete() sekarang JUGA
+        // mencoba Push Konfig best-effort, yang menulis baris
+        // push_wan_config skipped-nya sendiri terlepas dari WiFi).
+        $this->assertDatabaseMissing('cpe_action_logs', ['action_type' => 'set_ssid']);
 
         app(CpeBindingService::class)->reconcilePending();
 
         $cpeDevice->refresh();
         $this->assertNotNull($cpeDevice->wifi_provisioned_at);
-        $log = CpeActionLog::where('cpe_device_id', $cpeDevice->id)->firstOrFail();
+        // action_type di-filter eksplisit -- sekarang ada 2 baris untuk
+        // device ini (push_wan_config skipped dari complete() pertama +
+        // set_ssid dari reconcile ini), bukan cuma satu lagi.
+        $log = CpeActionLog::where('cpe_device_id', $cpeDevice->id)->where('action_type', 'set_ssid')->firstOrFail();
         $this->assertSame('auto_provisioning_reconciliation', $log->parameters['triggered_by']);
     }
 
@@ -249,7 +255,10 @@ class CpeBindingServiceTest extends TestCase
 
         $cpeDevice = CpeDevice::where('serial_number', 'SNNOCRED001')->firstOrFail();
         $this->assertNull($cpeDevice->wifi_provisioned_at);
-        $this->assertDatabaseCount('cpe_action_logs', 0);
+        // Sama seperti di atas — WiFi provisioning spesifik, bukan total
+        // baris (Push Konfig, v0.12.7 Langkah 4, juga menulis barisnya
+        // sendiri).
+        $this->assertDatabaseMissing('cpe_action_logs', ['action_type' => 'set_ssid']);
     }
 
     public function test_binding_does_not_reprovision_a_device_that_was_already_provisioned(): void
@@ -287,7 +296,7 @@ class CpeBindingServiceTest extends TestCase
             '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNPUSHFAIL', 'AABBCC-ONT-SNPUSHFAIL')], 200),
         ]);
 
-        $workOrder = WorkOrder::factory()->inProgress()->create();
+        $workOrder = WorkOrder::factory()->inProgress()->technicianConfirmed()->create();
         foreach (WorkOrderPhotoType::cases() as $type) {
             WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType($type)->create();
         }
@@ -317,7 +326,7 @@ class CpeBindingServiceTest extends TestCase
             '*genieacs-nbi*' => Http::response([$this->fakeGenieAcsDevice('SNMODEM001', 'AABBCC-ONT-SNMODEM001')], 200),
         ]);
 
-        $workOrder = WorkOrder::factory()->inProgress()->create();
+        $workOrder = WorkOrder::factory()->inProgress()->technicianConfirmed()->create();
         foreach (WorkOrderPhotoType::cases() as $type) {
             WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType($type)->create();
         }

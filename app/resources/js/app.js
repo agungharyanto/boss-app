@@ -1103,3 +1103,77 @@ window.commissionPaidChart = function (initialSeries) {
         },
     };
 };
+
+// v0.12.6 — "Grafik Pemakaian" (CPE detail page), sama posture
+// signalHistoryChart di atas (Chart.js dalam wire:ignore, update via
+// dispatched event) tapi dua dataset (Upload/Download, MB per hari,
+// bukan satu nilai per poll) — data cumulative harian, bukan bit-rate,
+// jadi sumbu Y "MB" tetap (bukan unit dinamis seperti pickBpsUnit di
+// atas, yang untuk RATE bit/detik pada grafik traffic real-time).
+window.usageHistoryChart = function (initialSeries) {
+    return {
+        chart: null,
+        init() {
+            this.chart = this.build(initialSeries || []);
+        },
+        update(detail) {
+            const series = (detail && detail.series) || [];
+
+            if (this.chart) {
+                this.chart.destroy();
+            }
+
+            this.chart = this.build(series);
+        },
+        build(series) {
+            const labels = series.map((p) => new Date(p.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }));
+            const uploadData = series.map((p) => p.upload_mb);
+            const downloadData = series.map((p) => p.download_mb);
+
+            const rootStyle = getComputedStyle(document.documentElement);
+            const textColor = rootStyle.getPropertyValue('--color-text').trim() || '#1f2937';
+
+            return new Chart(this.$refs.canvas, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [
+                        { label: 'Upload', data: uploadData, borderColor: '#f59e0b', backgroundColor: '#f59e0b', tension: 0.3, pointRadius: 2 },
+                        { label: 'Download', data: downloadData, borderColor: '#3b82f6', backgroundColor: '#3b82f6', tension: 0.3, pointRadius: 2 },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    animation: false,
+                    scales: {
+                        y: {
+                            title: { display: true, text: 'MB' },
+                            beginAtZero: true,
+                        },
+                    },
+                    plugins: {
+                        legend: { display: true, labels: { color: textColor } },
+                        tooltip: {
+                            backgroundColor: '#ffffff',
+                            titleColor: textColor,
+                            bodyColor: textColor,
+                            borderColor: '#e5e7eb',
+                            borderWidth: 1,
+                            padding: 10,
+                            callbacks: {
+                                title(items) {
+                                    return new Date(series[items[0].dataIndex].date).toLocaleDateString('id-ID', {
+                                        day: 'numeric',
+                                        month: 'short',
+                                        year: 'numeric',
+                                    });
+                                },
+                                label: (item) => `${item.dataset.label}: ${item.raw.toFixed(2)} MB`,
+                            },
+                        },
+                    },
+                },
+            });
+        },
+    };
+};

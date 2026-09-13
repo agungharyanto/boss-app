@@ -65,5 +65,14 @@
         </div>
     </div>
 
-    @include('cpe-devices._actions-and-history', ['device' => $device, 'canManage' => $canManage, 'historyLogs' => $historyLogs, 'connectedHosts' => $connectedHosts])
+    @include('cpe-devices._actions-and-history', ['device' => $device, 'canManage' => $canManage, 'historyLogs' => $historyLogs])
+
+    {{-- v0.12.6 Bagian 3 — Client Terhubung diekstrak ke partial sendiri
+         (lihat _connected-hosts.blade.php's own docblock); fragment ini
+         (deprecated UI-wise) tetap menampilkan semuanya, cuma urutannya
+         geser sedikit (dulu: Riwayat Aksi, Client Terhubung, tombol Aksi —
+         sekarang: Riwayat Aksi + tombol Aksi, baru Client Terhubung) —
+         tidak masalah untuk fragment ini, tidak ada test yang menguji
+         urutan persis di sini. --}}
+    @include('cpe-devices._connected-hosts', ['device' => $device, 'connectedHosts' => $connectedHosts])
 </div>

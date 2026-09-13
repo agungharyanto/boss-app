@@ -11,9 +11,12 @@ use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Models\User;
 use App\Services\Billing\RenewalInvoiceService;
+use App\Services\Network\WanConfigPushService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 /**
  * Sprint "perpanjang-daftar-pelanggan" — aksi "Perpanjang" di Daftar
@@ -32,6 +35,12 @@ use Illuminate\Support\Facades\DB;
  *  - HANYA data BOSS App. TIDAK ADA satu pun panggilan ke NAS / RouterOS /
  *    FreeRADIUS / MixRadius. Perpanjangan layanan yang sebenarnya tetap
  *    proses manual admin di luar BOSS App.
+ *  - PENGECUALIAN DISENGAJA (v0.12.6): Push Konfig ke GenieACS (BUKAN
+ *    NAS/RouterOS/FreeRADIUS/MixRadius — CPE pelanggan lewat TR-069)
+ *    dipanggil di sini, TEPAT SETELAH `ppp_package_id` diubah, lihat
+ *    App\Services\Network\WanConfigPushService. Best-effort (try/catch,
+ *    log warning saja) — kegagalan push tidak pernah membatalkan
+ *    transaksi Ganti Paket/Perpanjang itu sendiri.
  *  - `GenerateDueInvoices` (job recurring otomatis) TETAP OFF —
  *    `SubscriptionService` tidak dipakai. Invoice yang dibuat di sini
  *    ON-DEMAND, dipicu manual. Subscription "asli" tetap tidak diaktifkan;
@@ -60,6 +69,7 @@ class SubscriptionRenewalService
     public function __construct(
         private readonly ReferrerTitipService $titip,
         private readonly RenewalInvoiceService $renewalInvoice,
+        private readonly WanConfigPushService $wanConfigPush,
     ) {}
 
     /**
@@ -82,6 +92,7 @@ class SubscriptionRenewalService
      *     invoice_numbers: list<string>,
      *     invoice_grand_total: float,
      *     sales_commission_matured: int,
+     *     wan_config_push_results: list<array{cpe_device_id: int, status: string}>,
      * }
      *
      * @throws \RuntimeException kalau: paket baru tidak valid; multi-bulan
@@ -172,6 +183,7 @@ class SubscriptionRenewalService
             'invoice_numbers' => [],
             'invoice_grand_total' => 0.0,
             'sales_commission_matured' => 0,
+            'wan_config_push_results' => [],
         ];
 
         DB::transaction(function () use (&$result, $actor, $customer, $newPackage, $originalPackageId, $fromName, $referrer, $periods, $months): void {
@@ -182,6 +194,26 @@ class SubscriptionRenewalService
 
                 $result['package_changed'] = true;
                 $result['package_to'] = $newPackage->name;
+
+                // v0.12.6 — Push Konfig, HANYA di titik ini (bukan via
+                // Observer/model event) supaya tidak ikut ter-trigger oleh
+                // jalur lain yang mengubah ppp_package_id (migrasi batch,
+                // seed, tinker) — lihat WanConfigPushService's own docblock.
+                // Best-effort: kegagalan push (device offline, tidak ada
+                // Template cocok, dll) TIDAK BOLEH membatalkan transaksi
+                // Ganti Paket/Perpanjang itu sendiri — sama posture
+                // WorkOrderService::complete()'s CPE binding hook.
+                foreach ($customer->cpeDevices as $device) {
+                    try {
+                        $log = $this->wanConfigPush->push($device, $actor);
+                        $result['wan_config_push_results'][] = [
+                            'cpe_device_id' => $device->id,
+                            'status' => $log->status->value,
+                        ];
+                    } catch (Throwable $e) {
+                        Log::warning("SubscriptionRenewalService: Push Konfig gagal untuk CpeDevice #{$device->id} — {$e->getMessage()}");
+                    }
+                }
             }
 
             $eligibleType = $referrer !== null

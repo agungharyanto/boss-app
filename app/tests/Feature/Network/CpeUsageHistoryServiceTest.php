@@ -126,4 +126,60 @@ class CpeUsageHistoryServiceTest extends TestCase
 
         $this->assertSame(1.0, $series[29]['upload_mb']);
     }
+
+    // ── v0.12.6 (revisi) — Bagian 2: customDailyUsageForCustomer() (modal "Riwayat", tab Custom) ──
+
+    public function test_custom_daily_usage_covers_exactly_the_requested_date_range_inclusive(): void
+    {
+        $this->insertRow(['acctstoptime' => '2026-06-01 10:00:00']);
+        $this->insertRow(['acctstoptime' => '2026-06-10 10:00:00']);
+        $customer = Customer::factory()->create(['phone_number' => '081229565701', 'legacy_username' => null]);
+
+        $series = app(CpeUsageHistoryService::class)->customDailyUsageForCustomer(
+            $customer,
+            Carbon::parse('2026-06-01'),
+            Carbon::parse('2026-06-10'),
+        );
+
+        $this->assertCount(10, $series);
+        $this->assertSame('2026-06-01', $series[0]['date']);
+        $this->assertSame('2026-06-10', $series[9]['date']);
+        $this->assertSame(1.0, $series[0]['upload_mb']);
+        $this->assertSame(1.0, $series[9]['upload_mb']);
+        // Hari di antara (tanpa sesi selesai) tetap 0, bukan dilewati.
+        $this->assertSame(0.0, $series[4]['upload_mb']);
+    }
+
+    public function test_custom_daily_usage_excludes_a_session_outside_the_requested_range(): void
+    {
+        $this->insertRow(['acctstoptime' => '2026-05-15 10:00:00']); // di luar rentang
+        $customer = Customer::factory()->create(['phone_number' => '081229565701', 'legacy_username' => null]);
+
+        $series = app(CpeUsageHistoryService::class)->customDailyUsageForCustomer(
+            $customer,
+            Carbon::parse('2026-06-01'),
+            Carbon::parse('2026-06-05'),
+        );
+
+        foreach ($series as $row) {
+            $this->assertSame(0.0, $row['upload_mb']);
+            $this->assertSame(0.0, $row['download_mb']);
+        }
+    }
+
+    public function test_custom_daily_usage_for_a_single_day_range_returns_exactly_one_row(): void
+    {
+        $this->insertRow(['acctstoptime' => '2026-06-05 10:00:00']);
+        $customer = Customer::factory()->create(['phone_number' => '081229565701', 'legacy_username' => null]);
+
+        $series = app(CpeUsageHistoryService::class)->customDailyUsageForCustomer(
+            $customer,
+            Carbon::parse('2026-06-05'),
+            Carbon::parse('2026-06-05'),
+        );
+
+        $this->assertCount(1, $series);
+        $this->assertSame('2026-06-05', $series[0]['date']);
+        $this->assertSame(1.0, $series[0]['upload_mb']);
+    }
 }

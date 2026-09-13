@@ -57,9 +57,35 @@ class CpeUsageHistoryService
      */
     public function dailyUsageForCustomer(Customer $customer, int $days = 30): array
     {
-        $usernames = RadiusUsernameResolver::candidatesFor($customer);
         $end = Carbon::today();
         $start = $end->copy()->subDays($days - 1);
+
+        return $this->buildDailySeries($customer, $start, $end);
+    }
+
+    /**
+     * v0.12.6 (revisi) — varian rentang bebas ("Dari"/"Sampai" manual) untuk
+     * modal "Riwayat" pada Grafik Pemakaian, dipakai
+     * App\Livewire\Concerns\ValidatesCustomHistoryRange's "Custom" tab —
+     * sama persis CpeSignalHistoryQueryService::customSeriesFor()'s own
+     * role untuk RX Power. Granularitas TETAP per hari (lihat
+     * App\Enums\CpeUsageHistoryRange's own docblock untuk alasan tidak
+     * ada agregasi mingguan/bulanan di sini) — beda dari RX Power yang
+     * grain-nya berubah tergantung panjang rentang.
+     *
+     * @return array<int, array{date: string, upload_mb: float, download_mb: float}>
+     */
+    public function customDailyUsageForCustomer(Customer $customer, Carbon $from, Carbon $to): array
+    {
+        return $this->buildDailySeries($customer, $from->copy()->startOfDay(), $to->copy()->startOfDay());
+    }
+
+    /**
+     * @return array<int, array{date: string, upload_mb: float, download_mb: float}>
+     */
+    private function buildDailySeries(Customer $customer, Carbon $start, Carbon $end): array
+    {
+        $usernames = RadiusUsernameResolver::candidatesFor($customer);
 
         $byDate = [];
 

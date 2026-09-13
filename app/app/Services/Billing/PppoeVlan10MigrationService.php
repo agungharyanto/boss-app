@@ -5,6 +5,7 @@ namespace App\Services\Billing;
 use App\Enums\InvoiceStatus;
 use App\Enums\SubscriptionStatus;
 use App\Models\Customer;
+use App\Models\PppPackage;
 use App\Models\Subscription;
 use App\Services\InvoiceService;
 use Carbon\CarbonInterface;
@@ -37,6 +38,16 @@ use Illuminate\Support\Carbon;
  * mengirim WA "pembayaran diterima" ke ratusan pelanggan sekaligus akan
  * jadi spam yang salah konteks. Sama alasan v0.9.12 Bagian A untuk
  * `RenewalInvoiceService`.
+ *
+ * v0.12.2 amendment — paket dengan `sell_price = 0` SECARA STRUKTURAL
+ * (mis. `PPPoE-Remote` #17, paket fallback tanpa harga jual sama sekali —
+ * BUKAN `promo_price = 0` di atas paket berbayar, yang tidak diperiksa di
+ * sini) TIDAK PERNAH menghasilkan invoice — bukan invoice Rp0 berstatus
+ * "paid". Subscription + `customers.ppp_package_id` tetap dibuat/
+ * di-update seperti biasa; hanya langkah penerbitan invoice-nya yang
+ * dilewati. Sama pola guard yang dipakai
+ * `RenewalInvoiceService::issuePaidForPeriod()` (lihat docblock method
+ * itu).
  */
 class PppoeVlan10MigrationService
 {
@@ -45,12 +56,11 @@ class PppoeVlan10MigrationService
     public function __construct(private readonly InvoiceService $invoiceService) {}
 
     /**
-     * @return array{subscription_id: int, invoice_id: int, invoice_number: string, invoice_status: string, invoice_created: bool}
+     * @return array{subscription_id: int, invoice_id: ?int, invoice_number: ?string, invoice_status: ?string, invoice_created: bool, invoice_skipped_zero_price: bool}
      */
     public function migrateOne(
         Customer $customer,
         ?int $pppPackageId,
-        ?string $subscriptionName,
         float $amount,
         string $lineDescription,
         ?CarbonInterface $startedAt,
@@ -62,6 +72,18 @@ class PppoeVlan10MigrationService
             $customer->update(['ppp_package_id' => $pppPackageId]);
         }
 
+        // BUG NYATA ditemukan+diperbaiki (v0.12.2, sesi verifikasi ulang):
+        // versi awal `name` di fill() di bawah dibuat BERVARIASI per paket
+        // (mis. "HomeFixed-30Mbps") padahal firstOrNew() di atas mencari
+        // berdasarkan `name = self::SUBSCRIPTION_NAME` yang KONSTAN — begitu
+        // baris tersimpan dgn nama yang sudah berubah, run KEDUA tidak
+        // pernah menemukannya lagi (match query masih cari nama konstan)
+        // dan membuat baris DUPLIKAT (527 subscription + 233 invoice
+        // duplikat nyata terjadi di produksi, ditemukan+dihapus manual).
+        // `name` di sini SEKARANG SELALU `self::SUBSCRIPTION_NAME` — jangan
+        // pernah dibuat bervariasi lagi. Nama paket tetap tersimpan penuh
+        // di `invoice_line_items.description` (lihat $lineDescription) dan
+        // `customers.ppp_package_id` — tidak ada informasi yang hilang.
         $subscription = Subscription::withoutGlobalScopes()->firstOrNew([
             'customer_id' => $customer->id,
             'name' => self::SUBSCRIPTION_NAME,
@@ -70,13 +92,25 @@ class PppoeVlan10MigrationService
         $subscription->fill([
             'tenant_id' => $customer->tenant_id,
             'reseller_id' => $customer->reseller_id,
-            'name' => $subscriptionName ?? self::SUBSCRIPTION_NAME,
+            'name' => self::SUBSCRIPTION_NAME,
             'monthly_amount' => $amount,
             'status' => SubscriptionStatus::Active->value,
             'billing_cycle_day' => $billingCycleDay,
             'started_at' => ($startedAt ?? Carbon::now())->toDateString(),
             'expires_at' => $expiresAt?->toDateString(),
         ])->save();
+
+        $package = $pppPackageId !== null ? PppPackage::withoutGlobalScopes()->find($pppPackageId) : null;
+        if ($package !== null && (float) $package->sell_price === 0.0) {
+            return [
+                'subscription_id' => $subscription->id,
+                'invoice_id' => null,
+                'invoice_number' => null,
+                'invoice_status' => null,
+                'invoice_created' => false,
+                'invoice_skipped_zero_price' => true,
+            ];
+        }
 
         $periodEnd = ($expiresAt ?? Carbon::now())->copy()->startOfDay();
         $periodStart = $periodEnd->copy()->subMonthNoOverflow()->addDay();
@@ -112,6 +146,7 @@ class PppoeVlan10MigrationService
             'invoice_number' => $invoice->invoice_number,
             'invoice_status' => $invoice->status->value,
             'invoice_created' => $created,
+            'invoice_skipped_zero_price' => false,
         ];
     }
 }

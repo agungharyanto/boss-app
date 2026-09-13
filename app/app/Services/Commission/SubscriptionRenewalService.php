@@ -168,6 +168,7 @@ class SubscriptionRenewalService
             'commission_skipped_reason' => null,
             'invoices_created' => 0,
             'invoices_paid' => 0,
+            'invoices_skipped_zero_price' => 0,
             'invoice_numbers' => [],
             'invoice_grand_total' => 0.0,
             'sales_commission_matured' => 0,
@@ -224,7 +225,19 @@ class SubscriptionRenewalService
                 // Invoice ASLI per periode + langsung LUNAS lewat
                 // InvoiceService::markPaid() — yang men-trigger pematangan
                 // Komisi Penjualan v0.9.5 tanpa logic komisi baru.
+                //
+                // v0.12.2 Track A — paket sell_price=0 struktural (mis.
+                // PPPoE-Remote #17) tidak pernah menghasilkan invoice sama
+                // sekali (lihat RenewalInvoiceService::issuePaidForPeriod()'s
+                // own docblock) — 'invoice' null di sini berarti periode ini
+                // di-skip total dari invoice_numbers/invoice_grand_total,
+                // bukan dicatat sebagai invoice Rp0.
                 $issued = $this->renewalInvoice->issuePaidForPeriod($customer, $period);
+                if ($issued['invoice'] === null) {
+                    $result['invoices_skipped_zero_price']++;
+
+                    continue;
+                }
                 $invoiceIds[] = $issued['invoice']->id;
                 $result['invoice_numbers'][] = $issued['invoice']->invoice_number;
                 $result['invoice_grand_total'] += (float) $issued['invoice']->grand_total;

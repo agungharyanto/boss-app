@@ -160,14 +160,11 @@ class MigratePppoeVlan10TrackA extends Command
                 ? "Paket {$package->name} — migrasi PPPoE VLAN10 test-x86"
                 : "Paket {$plan} (CSV mixradius) — migrasi PPPoE VLAN10 test-x86";
 
-            $subscriptionName = $package !== null ? $package->name : "Migrasi PPPoE VLAN10 (Track A) — {$plan}";
-
             if ($commit) {
                 try {
                     $result = $migration->migrateOne(
                         $customer,
                         $package?->id,
-                        $subscriptionName,
                         $amount,
                         $lineDescription,
                         $startedAt,
@@ -194,7 +191,8 @@ class MigratePppoeVlan10TrackA extends Command
                     'cust_id' => $customer->id, 'name' => $customer->name, 'login' => $login,
                     'plan' => $plan, 'pkg' => $package?->name ?? '(NULL)', 'ppp_package_id' => $package?->id ?? 'NULL',
                     'expires_at' => $expiresAt?->toDateString() ?? 'NULL', 'auth' => $auth ? 'y' : 'n',
-                    'invoice_status' => $result['invoice_status'], 'invoice_number' => $result['invoice_number'],
+                    'invoice_status' => $result['invoice_status'] ?? 'skip(sell_price=0)',
+                    'invoice_number' => $result['invoice_number'] ?? '-',
                 ];
             }
         }

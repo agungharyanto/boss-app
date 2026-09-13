@@ -27,6 +27,10 @@ class Subscription extends Model
         'billing_cycle_day',
         'started_at',
         'cancelled_at',
+        // v0.12.2 Track A — tanggal jatuh tempo/expired periode berjalan
+        // (dari `Expired` mixradius). Lihat migration
+        // 2026_09_13_120000_add_expires_at_to_subscriptions_table.
+        'expires_at',
     ];
 
     protected function casts(): array
@@ -37,6 +41,7 @@ class Subscription extends Model
             'billing_cycle_day' => 'integer',
             'started_at' => 'date',
             'cancelled_at' => 'date',
+            'expires_at' => 'date',
         ];
     }
 

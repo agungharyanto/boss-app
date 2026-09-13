@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Technician extends Model
@@ -51,5 +52,16 @@ class Technician extends Model
     public function workOrders(): HasMany
     {
         return $this->hasMany(WorkOrder::class);
+    }
+
+    /**
+     * v0.12.3 — WorkOrder yang PERNAH di-klaim teknisi ini lewat API.
+     * Lihat `WorkOrderTechnician`'s own docblock.
+     */
+    public function claimedWorkOrders(): BelongsToMany
+    {
+        return $this->belongsToMany(WorkOrder::class, 'work_order_technicians')
+            ->withPivot('claimed_at')
+            ->withTimestamps();
     }
 }

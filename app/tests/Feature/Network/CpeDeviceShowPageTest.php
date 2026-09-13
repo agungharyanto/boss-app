@@ -336,4 +336,67 @@ class CpeDeviceShowPageTest extends TestCase
             ->getJson("/api/internal/cpe-devices/{$device->id}/pppoe-password")
             ->assertForbidden();
     }
+
+    /**
+     * v0.12.6 Bagian 3 — smoke test reshuffle layout: halaman render 200
+     * tanpa error dengan section "Grafik Pemakaian" (baru) dan "Tipe
+     * Modem" digabung ke Status Jaringan (bukan section terpisah lagi).
+     * Tidak menguji visual detail — cukup memastikan render tidak meledak
+     * dan setiap section yang direshuffle genuinely ada.
+     */
+    public function test_page_renders_without_error_with_all_reshuffled_v0_12_6_sections_present(): void
+    {
+        Http::fake(['*genieacs-nbi*' => Http::response([], 200)]);
+
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->actingAs($this->admin($tenant))
+            ->get("/cpe-devices/{$device->id}")
+            ->assertOk()
+            ->assertSee(__('Informasi Perangkat'))
+            ->assertSee(__('Status Jaringan'))
+            ->assertSee(__('Tipe Modem'))
+            ->assertSee(__('Grafik Pemakaian'))
+            ->assertSee(__('WiFi / SSID'))
+            ->assertSee(__('Client Terhubung'))
+            ->assertSee(__('Riwayat Aksi'));
+    }
+
+    /**
+     * Bukti STRUKTURAL urutan reshuffle (bukan cuma "section ada"): RX
+     * Power < Grafik Pemakaian < WiFi/SSID < Client Terhubung < Riwayat
+     * Aksi. "Tipe Modem" sekarang muncul PALING AWAL (digabung ke dalam
+     * panel Status Jaringan di baris grid pertama), bukan lagi section
+     * terpisah di tengah halaman seperti sebelum v0.12.6.
+     */
+    public function test_reshuffled_sections_render_in_the_expected_order(): void
+    {
+        Http::fake(['*genieacs-nbi*' => Http::response([], 200)]);
+
+        $tenant = Tenant::factory()->create();
+        $device = CpeDevice::factory()->create(['tenant_id' => $tenant->id]);
+
+        $content = $this->actingAs($this->admin($tenant))
+            ->get("/cpe-devices/{$device->id}")
+            ->assertOk()
+            ->getContent();
+
+        $statusJaringanPos = strpos($content, '>'.__('Status Jaringan').'<');
+        $rxPowerHeadingPos = strpos($content, __('Attached VLANs')); // penanda akhir panel Status Jaringan
+        $wifiSsidPos = strpos($content, '>'.__('WiFi / SSID').'<');
+        $clientTerhubungPos = strpos($content, 'Client Terhubung');
+        $riwayatAksiPos = strpos($content, 'Riwayat Aksi');
+
+        $this->assertNotFalse($statusJaringanPos);
+        $this->assertNotFalse($rxPowerHeadingPos);
+        $this->assertNotFalse($wifiSsidPos);
+        $this->assertNotFalse($clientTerhubungPos);
+        $this->assertNotFalse($riwayatAksiPos);
+
+        $this->assertGreaterThan($statusJaringanPos, $rxPowerHeadingPos);
+        $this->assertGreaterThan($rxPowerHeadingPos, $wifiSsidPos);
+        $this->assertGreaterThan($wifiSsidPos, $clientTerhubungPos);
+        $this->assertGreaterThan($clientTerhubungPos, $riwayatAksiPos);
+    }
 }

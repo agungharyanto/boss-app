@@ -12,15 +12,25 @@ use Livewire\Component;
 
 /**
  * v0.8.4 — "Riwayat Dialup" section on the CPE detail page (Acct ID,
- * Uptime, Waktu Mulai/Berakhir, NAS, Upload, Download, Terminate By —
- * matching the MixRadius reference layout), backed by
- * RadiusSessionHistoryService (radacct via the separate `radius`
- * connection — see that service's own docblock for the full username-
- * mapping/empty-state reasoning). Self-authorizes independently
- * (`CpeDevice::findOrFail()` — tenant-scoped, so a cross-tenant id 404s
- * before the policy check even runs — then `$this->authorize('view',
- * $device)`), same defense-in-depth posture as every other Livewire
- * component on this page (CpeSignalHistoryGraph).
+ * Uptime, Waktu Mulai/Berakhir, Upload, Download, Terminate By —
+ * matching the MixRadius reference layout, minus the NAS column removed
+ * in the v0.12.6 revision below), backed by RadiusSessionHistoryService
+ * (radacct via the separate `radius` connection — see that service's own
+ * docblock for the full username-mapping/empty-state reasoning).
+ * Self-authorizes independently (`CpeDevice::findOrFail()` — tenant-
+ * scoped, so a cross-tenant id 404s before the policy check even runs —
+ * then `$this->authorize('view', $device)`), same defense-in-depth
+ * posture as every other Livewire component on this page
+ * (CpeSignalHistoryGraph).
+ *
+ * v0.12.6 (revisi) — dibatasi 10 baris terakhir (bukan service's own
+ * default 50) dan kolom NAS dihapus dari tabel — section ini cuma
+ * konteks cepat di Detail Perangkat CPE (satu device sudah tersirat dari
+ * halamannya sendiri), bukan tempat untuk audit riwayat penuh lintas
+ * NAS. Juga: catatan singkat ditambahkan di header tabel soal kolom
+ * Download yang saat ini kurang representatif (temuan investigasi
+ * radacct — lihat CLAUDE.md/laporan sesi terkait; Upload TIDAK
+ * bermasalah, tidak diberi catatan).
  *
  * Only one empty state, not two: `cpe_devices.customer_id` is NOT NULL
  * (every CPE device is required to have a customer, confirmed directly
@@ -58,7 +68,10 @@ class CpeDialupHistory extends Component
         $customer = Customer::withoutGlobalScopes()->findOrFail($device->customer_id);
 
         $service ??= app(RadiusSessionHistoryService::class);
-        $this->rows = $service->getHistoryForCustomer($customer);
+        // v0.12.6 (revisi) — dibatasi 10 baris terakhir (bukan default 50
+        // milik service ini) — cukup untuk konteks langsung di Detail
+        // Perangkat CPE, riwayat penuh bukan tujuan section ini.
+        $this->rows = $service->getHistoryForCustomer($customer, limit: 10);
     }
 
     public function formatBytes(int $bytes): string

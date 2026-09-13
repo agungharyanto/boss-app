@@ -293,15 +293,19 @@ class SidebarNavigationTest extends TestCase
 
         $html = $this->actingAs($user)->get('/invoices')->getContent();
 
-        // Parent "Remote" is a <button> toggle (no href), same pola as Profil Paket / Komisi.
+        // Parent "Remote CPE" (dulu "Remote", v0.12.5) is a <button> toggle
+        // (no href), same pola as Profil Paket / Komisi.
         $this->assertMatchesRegularExpression(
-            '/<button[^>]*aria-controls="sidebar-subgroup-remote"[^>]*>\s*<span>Remote<\/span>/s',
+            '/<button[^>]*aria-controls="sidebar-subgroup-remote"[^>]*>\s*<span>Remote CPE<\/span>/s',
             $html
         );
         $this->assertStringContainsString(route('web.cpe-devices.index'), $html);
         $this->assertStringContainsString(route('web.cpe-devices.status-check'), $html);
         $this->assertStringContainsString(route('web.remote-config.index'), $html);
         $this->assertStringContainsString('Konfig Remote', $html);
+        // v0.12.5 — "Template Konfig CPE", child baru grup yang sama.
+        $this->assertStringContainsString(route('web.wan-config-templates.index'), $html);
+        $this->assertStringContainsString('Template Konfig CPE', $html);
     }
 
     public function test_noc_sees_konfig_remote_but_not_cpe_status_check(): void
@@ -313,6 +317,9 @@ class SidebarNavigationTest extends TestCase
 
         $this->assertStringContainsString(route('web.remote-config.index'), $html);
         $this->assertStringContainsString('Konfig Remote', $html);
+        // v0.12.5 — reuse remote_config.view, jadi noc juga melihat ini.
+        $this->assertStringContainsString(route('web.wan-config-templates.index'), $html);
+        $this->assertStringContainsString('Template Konfig CPE', $html);
     }
 
     public function test_non_admin_non_noc_user_does_not_see_the_remote_menu(): void
@@ -323,5 +330,6 @@ class SidebarNavigationTest extends TestCase
 
         $this->assertStringNotContainsString('sidebar-subgroup-remote', $html);
         $this->assertStringNotContainsString('Konfig Remote', $html);
+        $this->assertStringNotContainsString('Template Konfig CPE', $html);
     }
 }

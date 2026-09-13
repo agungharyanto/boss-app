@@ -132,6 +132,42 @@
         @endif
     </div>
 
+    {{-- Kredensial PPPoE (v0.12.2) — baca radcheck/radreply lewat
+         App\Services\Network\RadiusCredentialService, sumber sama
+         (RadiusUsernameResolver) yang dipakai kolom "Jatuh Tempo" di
+         Daftar Pelanggan. --}}
+    <div class="p-4 border border-gray-200 rounded-md">
+        <h2 class="text-sm font-semibold text-gray-700 mb-3">Kredensial PPPoE</h2>
+
+        @if ($radiusCredential === null)
+            <span class="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-500">Belum di FreeRADIUS</span>
+        @else
+            <dl class="grid grid-cols-2 gap-2 text-sm items-center">
+                <dt class="text-gray-500">Username</dt>
+                <dd class="text-gray-800 font-mono">{{ $radiusCredential['username'] }}</dd>
+
+                <dt class="text-gray-500">Password</dt>
+                <dd x-data="{ showPw: false }">
+                    <span class="font-mono text-gray-800" x-show="showPw">{{ $radiusCredential['password'] }}</span>
+                    <span class="font-mono text-gray-800" x-show="!showPw" x-cloak>&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span>
+                    <button type="button" @click="showPw = !showPw" class="ml-2 text-xs text-primary hover:underline" x-text="showPw ? 'Sembunyikan' : 'Lihat'"></button>
+                </dd>
+
+                <dt class="text-gray-500">Status</dt>
+                <dd>
+                    <span class="px-2 py-1 text-xs rounded-full {{ $radiusCredential['enabled'] ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500' }}">
+                        {{ $radiusCredential['enabled'] ? 'Aktif' : 'Nonaktif' }}
+                    </span>
+                </dd>
+
+                @if ($radiusCredential['framed_pool'])
+                    <dt class="text-gray-500">Framed-Pool</dt>
+                    <dd class="text-gray-800 font-mono">{{ $radiusCredential['framed_pool'] }}</dd>
+                @endif
+            </dl>
+        @endif
+    </div>
+
     {{-- Invoice khusus pelanggan ini (v0.9.12) --}}
     <div class="p-4 border border-gray-200 rounded-md">
         <h2 class="text-sm font-semibold text-gray-700 mb-3">Invoice</h2>

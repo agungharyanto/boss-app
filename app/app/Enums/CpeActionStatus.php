@@ -18,6 +18,14 @@ enum CpeActionStatus: string
     case Queued = 'queued';
     case Delivered = 'delivered';
     case Failed = 'failed';
+    /**
+     * v0.12.6 — bukan "gagal", tapi "genuinely tidak ada yang perlu
+     * dikirim" (mis. WanConfigPushService::push() tidak menemukan
+     * Template yang cocok). Dibedakan dari Failed supaya UI/laporan tidak
+     * menyiratkan ada error saat sebenarnya ini kondisi valid yang
+     * diketahui.
+     */
+    case Skipped = 'skipped';
 
     public function label(): string
     {
@@ -25,6 +33,7 @@ enum CpeActionStatus: string
             self::Queued => 'Diantre',
             self::Delivered => 'Terkirim ke GenieACS',
             self::Failed => 'Gagal',
+            self::Skipped => 'Dilewati',
         };
     }
 }

@@ -7,6 +7,7 @@ use App\Enums\CommissionScheme;
 use App\Http\Middleware\EnsureAdminPanelAccess;
 use App\Models\CommissionLedger;
 use App\Models\Customer;
+use App\Models\Invoice;
 use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Services\Commission\ReferrerActionOtpService;
@@ -413,8 +414,20 @@ class CustomerIndex extends Component
             ? Customer::query()->with('pppPackage:id,name')->find($this->renewCustomerId)
             : null;
 
+        // v0.12.2 — badge status (overdue/paid) di sebelah Jatuh Tempo:
+        // invoice TERBARU (by due_date) tiap pelanggan di halaman ini saja
+        // (bukan N+1 per baris) — Invoice::query() sudah tenant-scoped
+        // sama seperti tabel utama di atas.
+        $latestInvoiceByCustomer = Invoice::query()
+            ->whereIn('customer_id', $customers->pluck('id'))
+            ->orderByDesc('due_date')
+            ->get(['id', 'customer_id', 'due_date', 'status'])
+            ->groupBy('customer_id')
+            ->map(fn ($group) => $group->first());
+
         return view('livewire.customers.customer-index', [
             'customers' => $customers,
+            'latestInvoiceByCustomer' => $latestInvoiceByCustomer,
             'referrerView' => $referrerView,
             'canCreate' => ! $referrerView && auth()->user()->can('create', Customer::class),
             'canRegister' => ! $referrerView && auth()->user()->can('register-customer'),

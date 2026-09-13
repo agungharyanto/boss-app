@@ -1,5 +1,10 @@
 <div>
-    <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">{{ __('Riwayat Dialup') }}</h2>
+    <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-1">{{ __('Riwayat Dialup') }}</h2>
+    {{-- v0.12.6 (revisi) — catatan temuan investigasi radacct: kolom
+         Download saat ini sering menampilkan byte kecil konstan
+         (overhead negosiasi PPP, bukan traffic nyata) bahkan untuk sesi
+         berjam-jam — Upload TIDAK bermasalah, tidak diberi catatan. --}}
+    <p class="text-xs text-amber-600 mb-3">{{ __('Kolom Download saat ini kurang mencerminkan pemakaian sebenarnya — keterbatasan sisi RouterOS/RADIUS, sedang diinvestigasi lebih lanjut.') }}</p>
 
     @if (empty($rows))
         <p class="text-sm text-gray-500 italic">
@@ -14,7 +19,6 @@
                         <th class="px-3 py-1.5 text-left">{{ __('Uptime') }}</th>
                         <th class="px-3 py-1.5 text-left">{{ __('Waktu Mulai') }}</th>
                         <th class="px-3 py-1.5 text-left">{{ __('Waktu Berakhir') }}</th>
-                        <th class="px-3 py-1.5 text-left">{{ __('NAS') }}</th>
                         <th class="px-3 py-1.5 text-left">{{ __('Upload') }}</th>
                         <th class="px-3 py-1.5 text-left">{{ __('Download') }}</th>
                         <th class="px-3 py-1.5 text-left">{{ __('Terminate By') }}</th>
@@ -38,7 +42,6 @@
                                  penghilang scroll. --}}
                             <td class="px-3 py-1.5 whitespace-nowrap text-gray-500">{{ $row['started_at']?->format('d/m/y H:i:s') ?? '-' }}</td>
                             <td class="px-3 py-1.5 whitespace-nowrap text-gray-500">{{ $row['stopped_at']?->format('d/m/y H:i:s') ?? '-' }}</td>
-                            <td class="px-3 py-1.5 font-mono text-xs text-gray-500">{{ $row['nas_ip'] ?? '-' }}</td>
                             <td class="px-3 py-1.5 text-gray-700">{{ $this->formatBytes($row['upload_bytes']) }}</td>
                             <td class="px-3 py-1.5 text-gray-700">{{ $this->formatBytes($row['download_bytes']) }}</td>
                             <td class="px-3 py-1.5 text-gray-500">{{ $row['terminate_cause'] ?? '-' }}</td>

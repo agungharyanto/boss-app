@@ -10,6 +10,7 @@ use Database\Factories\PppPackageFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
@@ -92,6 +93,17 @@ class PppPackage extends Model
     public function commissionRate(): HasOne
     {
         return $this->hasOne(CommissionRate::class);
+    }
+
+    /**
+     * v0.12.5 — baris matrix Template Konfig CPE (WanConfigTemplate) untuk
+     * paket ini, satu per Tipe Modem (plus paling banyak satu baris
+     * `modem_type_id` NULL = default/fallback paket ini). Lihat
+     * `wan_config_templates` migration untuk constraint uniqueness-nya.
+     */
+    public function wanConfigTemplates(): HasMany
+    {
+        return $this->hasMany(WanConfigTemplate::class);
     }
 
     /**
@@ -223,5 +235,29 @@ class PppPackage extends Model
             ->where('is_active', true)
             ->when($ignoreId !== null, fn ($query) => $query->where('id', '!=', $ignoreId))
             ->first();
+    }
+
+    /**
+     * v0.12.2 — satu sumber kebenaran untuk "paket ini gratis SECARA
+     * STRUKTURAL" (mis. `PPPoE-Remote` #17, paket fallback tanpa harga
+     * jual sama sekali) — BUKAN `promo_price = 0` di atas paket berbayar,
+     * yang TIDAK diperiksa method ini sama sekali. Dipakai identik dari 3
+     * tempat yang bisa menerbitkan invoice: `RenewalInvoiceService::
+     * issuePaidForPeriod()` (alur "Perpanjang"), `PppoeVlan10MigrationService::
+     * migrateOne()` (migrasi Track A), dan `GenerateDueInvoices` (command
+     * recurring harian) — kalau aturan ini pernah berubah, cukup 1 tempat.
+     *
+     * Sengaja menerima objek `?PppPackage` yang SUDAH di-resolve pemanggil
+     * (bukan sebuah id) — setiap pemanggil butuh objek paketnya sendiri
+     * untuk keperluan lain (nominal/nama/dll), jadi method ini murni logic
+     * tanpa query tambahan, tidak query dua kali untuk paket yang sama.
+     * `$package === null` (pelanggan tanpa paket sama sekali) SENGAJA
+     * `false` di sini — beda pertanyaan dari "paket ini gratis", dan
+     * perilaku lama (amount jatuh ke 0.0 fallback, invoice tetap terbit)
+     * tidak diubah oleh guard ini.
+     */
+    public static function hasZeroSellPrice(?self $package): bool
+    {
+        return $package !== null && (float) $package->sell_price === 0.0;
     }
 }

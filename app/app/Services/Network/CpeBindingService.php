@@ -4,6 +4,7 @@ namespace App\Services\Network;
 
 use App\Enums\CpeActionStatus;
 use App\Enums\CpeDeviceStatus;
+use App\Enums\ModemTypeAssignmentSource;
 use App\Enums\WorkOrderDeviceType;
 use App\Exceptions\CpeBindingException;
 use App\Models\CpeBindingRejection;
@@ -69,6 +70,23 @@ class CpeBindingService
             'serial_number' => $device->serial_number,
             'bound_at' => now(),
         ];
+
+        // v0.12.7 — Tipe Modem yang teknisi isi saat scan
+        // (work_order_devices.modem_type_id, v0.12.4) dibawa ke
+        // cpe_devices di titik binding ini. HANYA kalau teknisi genuinely
+        // mengisinya — field-nya opsional (StoreWorkOrderDeviceRequest),
+        // jadi kalau null, JANGAN masukkan key ini ke $attributes sama
+        // sekali: updateOrCreate() di bawah lalu tidak menyentuh
+        // cpe_devices.modem_type_id yang mungkin sudah ke-set
+        // auto-suggest (ModemTypeSuggestionService, v0.12.5) sebelumnya —
+        // seorang teknisi yang tidak isi field ini TIDAK BOLEH diam-diam
+        // menimpa hasil auto-suggest yang sudah benar dengan NULL.
+        // Sumber 'manual' (bukan 'auto') — teknisi mengisi ini eksplisit,
+        // beda dari hasil pencocokan OUI otomatis.
+        if ($device->modem_type_id !== null) {
+            $attributes['modem_type_id'] = $device->modem_type_id;
+            $attributes['modem_type_source'] = ModemTypeAssignmentSource::Manual;
+        }
 
         $genieAcsDevice = $this->findByStoredSerial($device->serial_number);
 

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Internal;
 
 use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\PushWanConfigCpeDeviceRequest;
 use App\Http\Requests\RebootCpeDeviceRequest;
 use App\Http\Requests\ReplaceCpeModemRequest;
 use App\Http\Requests\SetCpeSsidEnabledRequest;
@@ -13,8 +14,11 @@ use App\Http\Resources\CpeActionLogResource;
 use App\Models\CpeDevice;
 use App\Services\Network\CpeActionService;
 use App\Services\Network\CpeBindingService;
+use App\Services\Network\CpeModemTypeAssignmentService;
+use App\Services\Network\WanConfigPushService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use InvalidArgumentException;
 
 /**
  * Session-authenticated (routes/web.php) counterpart to
@@ -137,5 +141,50 @@ class CpeDeviceActionController extends Controller
             ['id' => $newDevice->id],
             'Modem berhasil diganti. Kalau device baru belum pernah dikenal GenieACS, statusnya akan "Menunggu Koneksi Pertama" sampai dia inform pertama kali.'
         );
+    }
+
+    /**
+     * v0.12.6 — "Push Konfig Sekarang", tombol manual di Detail Perangkat
+     * CPE (reuse pola reboot()/syncNow() di atas). Sama service persis
+     * yang dipanggil otomatis dari SubscriptionRenewalService::renew()
+     * saat admin Ganti Paket — lihat WanConfigPushService's own docblock
+     * untuk keterbatasan yang disengaja (hanya update WAN1 PPPoE
+     * username/password, tidak VLAN/WAN2).
+     */
+    public function pushWanConfig(PushWanConfigCpeDeviceRequest $request, CpeDevice $cpeDevice, WanConfigPushService $service): JsonResponse
+    {
+        $log = $service->push($cpeDevice, $request->user());
+
+        $message = match ($log->status->value) {
+            'delivered' => 'Push Konfig terkirim — akan diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil). Ini BUKAN konfirmasi perangkat sudah menjalankannya.',
+            'skipped' => 'Push Konfig dilewati: '.$log->failed_reason,
+            default => 'Push Konfig GAGAL dikirim: '.$log->failed_reason,
+        };
+
+        return $this->success(new CpeActionLogResource($log), $message);
+    }
+
+    /**
+     * v0.12.5 — override manual Tipe Modem di Detail Perangkat CPE
+     * (dropdown + submit). `modem_type_id` null = hapus assignment.
+     * SELALU menang atas apa pun yang ada sebelumnya (auto-suggest atau
+     * manual lain) — lihat CpeModemTypeAssignmentService::assignManually()'s
+     * own docblock.
+     */
+    public function assignModemType(Request $request, CpeDevice $cpeDevice, CpeModemTypeAssignmentService $service): JsonResponse
+    {
+        $this->authorize('manage', $cpeDevice);
+
+        $validated = $request->validate([
+            'modem_type_id' => ['nullable', 'integer'],
+        ]);
+
+        try {
+            $service->assignManually($cpeDevice, $validated['modem_type_id'] ?? null);
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage(), 'data' => null, 'meta' => []], 422);
+        }
+
+        return $this->success(null, 'Tipe Modem berhasil diperbarui.');
     }
 }

@@ -1144,9 +1144,51 @@ tertentu, atau kosong = ODP direct).
 CRUD dasar data teknisi (`user_id` wajib menunjuk `users` row yang sudah
 ada — tidak ada pembuatan user baru dari endpoint ini).
 
+### `POST /technicians/{technician}/token` (v0.12.3)
+
+Terbitkan token Sanctum baru untuk akun user teknisi ini — **revoke SEMUA
+token lama miliknya** dulu (1 teknisi = 1 token aktif). Authorize lewat
+`TechnicianPolicy::manage` (admin `technicians.manage`, atau reseller
+owner/staff untuk teknisi milik reseller-nya sendiri). Response:
+`data.token` — plaintext, **hanya muncul di response ini, sekali** (sama
+seperti setiap penerbitan token Sanctum normal — tidak bisa dilihat lagi
+setelahnya). 422 kalau teknisi berstatus Nonaktif. Padanan CLI: `php
+artisan technician:token {technician_id}` (print ke console, logic sama
+lewat `TechnicianTokenService`).
+
 ### `GET /work-orders` · `GET /work-orders/{work_order}`
 
 Daftar/detail work order, filter `?status=`.
+
+**v0.12.3 — Technician-scoped API (permission `work_orders.technician`,
+role `teknisi`)**: pemegang token teknisi melihat daftar/detail yang
+di-scope ke DUA jalur INDEPENDEN (`WorkOrderPolicy`, tidak pernah
+disinkronkan satu sama lain): (1) `work_orders.technician_id` miliknya
+(assignment resmi admin lewat `POST .../assign`, dicek real-time — begitu
+admin meng-assign ulang ke teknisi lain, akses lama otomatis hilang tanpa
+langkah tambahan), atau (2) sudah klaim mandiri lewat `POST .../claim` di
+bawah. Work order yang masih unclaimed (belum ada assignment maupun
+klaim) DAN belum `completed`/`cancelled` tetap terlihat semua pemegang
+permission ini (untuk di-browse sebelum diklaim) — begitu WO punya
+assignment atau klaim (siapa pun), teknisi lain di luar dua jalur di atas
+tidak lagi melihatnya (403 kalau akses langsung by-id).
+
+### `GET /work-orders/lookup-by-serial?serial={sn}` (v0.12.3)
+
+Cari work order lewat serial number perangkat yang sudah di-scan
+(`work_order_devices.serial_number`). 404 kalau tidak ketemu (atau
+ketemu tapi di tenant lain). Otorisasi sama seperti `GET /work-orders/
+{work_order}` di atas — untuk pemegang token teknisi, 403 kalau WO-nya
+sudah di-assign/diklaim teknisi lain.
+
+### `POST /work-orders/{work_order}/claim` (v0.12.3)
+
+Klaim mandiri oleh teknisi yang sedang login (`work_orders.technician`) —
+**genuinely terpisah** dari `POST .../assign` (assignment admin): TIDAK
+mengubah status WO, TIDAK menyentuh `technician_id`. Idempoten (klaim
+ulang oleh teknisi yang sama = 200, bukan baris kedua). 422 kalau WO
+sudah `completed`/`cancelled`. Akun tanpa baris `Technician` terkait
+(mis. admin murni) → 403.
 
 ### `POST /work-orders`
 

@@ -124,8 +124,11 @@
                  no dummy/placeholder row, no empty section header. --}}
         </div>
 
-        {{-- Panel kanan — status jaringan/sinyal dari TR-069. --}}
-        <div class="bg-white border border-gray-200 rounded-md p-5 space-y-4">
+        {{-- Panel kanan — status jaringan/sinyal dari TR-069. v0.12.6
+             Bagian 3 — section "Tipe Modem" (v0.12.5) DIGABUNG ke sini
+             (bukan section terpisah lagi di bawah), lihat x-data
+             tambahan `editingModemType` di root panel ini. --}}
+        <div class="bg-white border border-gray-200 rounded-md p-5 space-y-4" x-data="{ editingModemType: false }">
             <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">{{ __('Status Jaringan') }}</h2>
 
             <dl class="grid grid-cols-1 sm:grid-cols-2 gap-y-3 text-sm">
@@ -149,7 +152,48 @@
                         <button type="button" onclick="cpeRevealPppoePassword({{ $device->id }})" id="cpe-pppoe-reveal-btn-{{ $device->id }}" class="text-primary hover:underline text-xs ml-2">{{ __('Tampilkan') }}</button>
                     </dd>
                 @endif
+
+                <dt class="text-gray-500">{{ __('Tipe Modem') }}</dt>
+                <dd class="text-gray-800">
+                    @if ($device->modemType)
+                        {{ $device->modemType->name }}
+                        <span class="ml-1 px-2 py-0.5 rounded-full text-xs {{ $device->modem_type_source->badgeClasses() }}">
+                            {{ $device->modem_type_source->label() }}
+                        </span>
+                    @else
+                        <span class="text-gray-400">{{ __('Belum ada Tipe Modem ter-assign.') }}</span>
+                    @endif
+                </dd>
+
+                @if ($device->modemType)
+                    <dt class="text-gray-500">{{ __('WiFi Band') }}</dt>
+                    <dd class="text-gray-800">
+                        <span class="px-2 py-0.5 rounded-full text-xs {{ $device->modemType->is_dual_band ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600' }}">
+                            {{ $device->modemType->is_dual_band ? __('Dual-Band') : __('2.4GHz saja') }}
+                        </span>
+                    </dd>
+                @endif
             </dl>
+
+            @if ($canManage)
+                <div>
+                    <button type="button" @click="editingModemType = !editingModemType" class="text-primary hover:underline text-xs" x-text="editingModemType ? '{{ __('Batal') }}' : '{{ __('Ubah Tipe Modem') }}'"></button>
+                </div>
+
+                <div x-show="editingModemType" x-cloak class="border-t border-gray-200 pt-4 space-y-3">
+                    <label class="block text-sm font-medium mb-1">{{ __('Pilih Tipe Modem (Manual)') }}</label>
+                    <select id="cpe-modem-type-select-{{ $device->id }}" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                        <option value="">{{ __('-- Tidak ada / Hapus assignment --') }}</option>
+                        @foreach ($modemTypes as $modemType)
+                            <option value="{{ $modemType->id }}" @selected($device->modem_type_id === $modemType->id)>
+                                {{ $modemType->name }}{{ $modemType->is_active ? '' : ' ('.__('Nonaktif').')' }}
+                            </option>
+                        @endforeach
+                    </select>
+                    <div class="text-xs text-red-600" id="cpe-modem-type-error-{{ $device->id }}"></div>
+                    <button type="button" onclick="cpeAssignModemType({{ $device->id }})" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">{{ __('Terapkan') }}</button>
+                </div>
+            @endif
 
             <div>
                 <h3 class="text-xs font-medium text-gray-500 uppercase mb-2">{{ __('Attached VLANs') }}</h3>
@@ -195,90 +239,114 @@
         @livewire('network.cpe-signal-history-graph', ['cpeDeviceId' => $device->id], key('cpe-signal-history-graph-'.$device->id))
     </div>
 
-    {{-- v0.8.4 — "Riwayat Dialup" (radacct via RadiusSessionHistoryService),
-         same full-width standalone-section placement as the RX Power graph
-         above — a separate concern (RADIUS accounting, not GenieACS/SNMP),
-         so its own component/section rather than folded into either
-         existing panel. --}}
+    {{-- v0.12.6 Bagian 2 — "Grafik Pemakaian" (radacct, 30 hari terakhir),
+         full-width, langsung di bawah RX Power per urutan layout Bagian 3.
+         Component ini punya headernya sendiri di dalam view-nya (pola
+         sama seperti RX Power/DeviceTrafficGraph). --}}
     <div class="bg-white border border-gray-200 rounded-md p-5 mt-6">
-        @livewire('network.cpe-dialup-history', ['cpeDeviceId' => $device->id], key('cpe-dialup-history-'.$device->id))
+        @livewire('network.cpe-usage-history-graph', ['cpeDeviceId' => $device->id], key('cpe-usage-history-graph-'.$device->id))
     </div>
 
-    {{-- WiFi/SSID — semua SSID yang ditemukan discovery, bukan cuma SSID1.
-         "Ganti WiFi" (2026-08-17) is now per-row here instead of one
-         standalone form below — a single flat form could only ever target
-         SSID index 1, but this table can have several real indices (see
-         CpeParameterResolverService::resolveWlanConfigurations()). Each row
-         gets its OWN <tbody x-data="{open:false}"> (valid HTML — a <table>
-         may contain multiple <tbody> elements) so the collapse state for
-         one SSID's edit form is fully independent of every other row's —
-         a single shared x-data on the outer <table>/<tbody> would have
-         opened/closed every row's form together. --}}
-    <div class="bg-white border border-gray-200 rounded-md p-5 mt-6">
-        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">{{ __('WiFi / SSID') }}</h2>
-        @if (count($wlanConfigurations) > 0)
-            <div class="overflow-x-auto border border-gray-200 rounded-md">
-                <table class="min-w-full text-sm">
-                    <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
-                        <tr>
-                            <th class="px-3 py-1.5 text-left">{{ __('Index') }}</th>
-                            <th class="px-3 py-1.5 text-left">{{ __('SSID') }}</th>
-                            <th class="px-3 py-1.5 text-left">{{ __('Status') }}</th>
-                            @if ($canManage)
-                                <th class="px-3 py-1.5 text-left">{{ __('Aksi') }}</th>
-                            @endif
-                        </tr>
-                    </thead>
-                    @foreach ($wlanConfigurations as $wlan)
-                        <tbody class="divide-y divide-gray-100" x-data="{ open: false }">
-                            <tr @if ($wlan['ssid'] === null) class="text-gray-400" @endif>
-                                <td class="px-3 py-1.5">{{ $wlan['index'] }}</td>
-                                <td class="px-3 py-1.5">{{ $wlan['ssid'] ?? __('(kosong)') }}</td>
-                                <td class="px-3 py-1.5">
-                                    @if ($wlan['enabled'] === true)
-                                        <span class="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">{{ __('Aktif') }}</span>
-                                    @elseif ($wlan['enabled'] === false)
-                                        <span class="px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-500">{{ __('Nonaktif') }}</span>
-                                    @else
-                                        -
+    {{-- v0.12.6 Bagian 3 — reshuffle: WiFi/SSID (kiri, + Client Terhubung
+         di bawahnya) berdampingan dengan Riwayat Dialup (kanan), bukan
+         lagi dua section full-width bertumpuk. --}}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+        <div class="space-y-6">
+            {{-- WiFi/SSID — semua SSID yang ditemukan discovery, bukan cuma
+                 SSID1. "Ganti WiFi" (2026-08-17) is now per-row here instead
+                 of one standalone form below — a single flat form could only
+                 ever target SSID index 1, but this table can have several
+                 real indices (see
+                 CpeParameterResolverService::resolveWlanConfigurations()).
+                 Each row gets its OWN <tbody x-data="{open:false}"> (valid
+                 HTML — a <table> may contain multiple <tbody> elements) so
+                 the collapse state for one SSID's edit form is fully
+                 independent of every other row's — a single shared x-data on
+                 the outer <table>/<tbody> would have opened/closed every
+                 row's form together. --}}
+            <div class="bg-white border border-gray-200 rounded-md p-5">
+                <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">{{ __('WiFi / SSID') }}</h2>
+                @if (count($wlanConfigurations) > 0)
+                    <div class="overflow-x-auto border border-gray-200 rounded-md">
+                        <table class="min-w-full text-sm">
+                            <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
+                                <tr>
+                                    <th class="px-3 py-1.5 text-left">{{ __('Index') }}</th>
+                                    <th class="px-3 py-1.5 text-left">{{ __('SSID') }}</th>
+                                    <th class="px-3 py-1.5 text-left">{{ __('Status') }}</th>
+                                    @if ($canManage)
+                                        <th class="px-3 py-1.5 text-left">{{ __('Aksi') }}</th>
                                     @endif
-                                </td>
-                                @if ($canManage)
-                                    <td class="px-3 py-1.5 whitespace-nowrap">
-                                        <button type="button" @click="open = !open" class="text-primary hover:underline text-xs" x-text="open ? '{{ __('Tutup') }}' : '{{ __('Edit') }}'"></button>
-                                        <button type="button" onclick="cpeToggleSsid({{ $device->id }}, {{ (int) $wlan['index'] }}, {{ $wlan['enabled'] === true ? 'true' : 'false' }})" class="text-xs ml-2 hover:underline {{ $wlan['enabled'] === true ? 'text-red-600' : 'text-green-600' }}">
-                                            {{ $wlan['enabled'] === true ? __('Nonaktifkan') : __('Aktifkan') }}
-                                        </button>
-                                    </td>
-                                @endif
-                            </tr>
-                            @if ($canManage)
-                                <tr x-show="open" x-cloak>
-                                    <td colspan="4" class="px-3 py-3 bg-gray-50">
-                                        <div class="max-w-sm space-y-2">
-                                            <p class="text-xs text-gray-500">{{ __('Isi salah satu atau keduanya. Perintah ini TIDAK instan — diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil).') }}</p>
-                                            <div>
-                                                <label class="block text-xs font-medium mb-1">{{ __('SSID Baru') }}</label>
-                                                <input type="text" id="cpe-wifi-ssid-{{ $device->id }}-{{ $wlan['index'] }}" maxlength="32" class="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm">
-                                            </div>
-                                            <div>
-                                                <label class="block text-xs font-medium mb-1">{{ __('Password Baru') }}</label>
-                                                <input type="password" id="cpe-wifi-password-{{ $device->id }}-{{ $wlan['index'] }}" maxlength="63" class="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm">
-                                                <p class="text-xs text-gray-400 mt-1">{{ __('8-63 karakter (standar WPA-PSK).') }}</p>
-                                            </div>
-                                            <div class="text-xs text-red-600" id="cpe-wifi-error-{{ $device->id }}-{{ $wlan['index'] }}"></div>
-                                            <button type="button" onclick="cpeSubmitWifi({{ $device->id }}, {{ (int) $wlan['index'] }})" class="px-3 py-1.5 bg-primary text-white rounded-md hover:opacity-90 text-xs">{{ __('Kirim Perintah') }}</button>
-                                        </div>
-                                    </td>
                                 </tr>
-                            @endif
-                        </tbody>
-                    @endforeach
-                </table>
+                            </thead>
+                            @foreach ($wlanConfigurations as $wlan)
+                                <tbody class="divide-y divide-gray-100" x-data="{ open: false }">
+                                    <tr @if ($wlan['ssid'] === null) class="text-gray-400" @endif>
+                                        <td class="px-3 py-1.5">{{ $wlan['index'] }}</td>
+                                        <td class="px-3 py-1.5">{{ $wlan['ssid'] ?? __('(kosong)') }}</td>
+                                        <td class="px-3 py-1.5">
+                                            @if ($wlan['enabled'] === true)
+                                                <span class="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">{{ __('Aktif') }}</span>
+                                            @elseif ($wlan['enabled'] === false)
+                                                <span class="px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-500">{{ __('Nonaktif') }}</span>
+                                            @else
+                                                -
+                                            @endif
+                                        </td>
+                                        @if ($canManage)
+                                            <td class="px-3 py-1.5 whitespace-nowrap">
+                                                <button type="button" @click="open = !open" class="text-primary hover:underline text-xs" x-text="open ? '{{ __('Tutup') }}' : '{{ __('Edit') }}'"></button>
+                                                <button type="button" onclick="cpeToggleSsid({{ $device->id }}, {{ (int) $wlan['index'] }}, {{ $wlan['enabled'] === true ? 'true' : 'false' }})" class="text-xs ml-2 hover:underline {{ $wlan['enabled'] === true ? 'text-red-600' : 'text-green-600' }}">
+                                                    {{ $wlan['enabled'] === true ? __('Nonaktifkan') : __('Aktifkan') }}
+                                                </button>
+                                            </td>
+                                        @endif
+                                    </tr>
+                                    @if ($canManage)
+                                        <tr x-show="open" x-cloak>
+                                            <td colspan="4" class="px-3 py-3 bg-gray-50">
+                                                <div class="max-w-sm space-y-2">
+                                                    <p class="text-xs text-gray-500">{{ __('Isi salah satu atau keduanya. Perintah ini TIDAK instan — diterapkan saat perangkat terhubung berikutnya (atau langsung kalau Connection Request kebetulan berhasil).') }}</p>
+                                                    <div>
+                                                        <label class="block text-xs font-medium mb-1">{{ __('SSID Baru') }}</label>
+                                                        <input type="text" id="cpe-wifi-ssid-{{ $device->id }}-{{ $wlan['index'] }}" maxlength="32" class="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm">
+                                                    </div>
+                                                    <div>
+                                                        <label class="block text-xs font-medium mb-1">{{ __('Password Baru') }}</label>
+                                                        <input type="password" id="cpe-wifi-password-{{ $device->id }}-{{ $wlan['index'] }}" maxlength="63" class="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm">
+                                                        <p class="text-xs text-gray-400 mt-1">{{ __('8-63 karakter (standar WPA-PSK).') }}</p>
+                                                    </div>
+                                                    <div class="text-xs text-red-600" id="cpe-wifi-error-{{ $device->id }}-{{ $wlan['index'] }}"></div>
+                                                    <button type="button" onclick="cpeSubmitWifi({{ $device->id }}, {{ (int) $wlan['index'] }})" class="px-3 py-1.5 bg-primary text-white rounded-md hover:opacity-90 text-xs">{{ __('Kirim Perintah') }}</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    @endif
+                                </tbody>
+                            @endforeach
+                        </table>
+                    </div>
+                @else
+                    <p class="text-sm text-gray-500">-</p>
+                @endif
             </div>
-        @else
-            <p class="text-sm text-gray-500">-</p>
-        @endif
+
+            {{-- v0.12.6 Bagian 3 — Client Terhubung dipindah ke sini (dulu
+                 bagian dari _actions-and-history.blade.php di paling bawah
+                 halaman) — lihat _connected-hosts.blade.php's own docblock. --}}
+            <div class="bg-white border border-gray-200 rounded-md p-5">
+                @include('cpe-devices._connected-hosts', ['device' => $device, 'connectedHosts' => $connectedHosts])
+            </div>
+        </div>
+
+        {{-- v0.8.4 — "Riwayat Dialup" (radacct via RadiusSessionHistoryService)
+             — a separate concern (RADIUS accounting, not GenieACS/SNMP), so
+             its own component/section rather than folded into either
+             existing panel. v0.12.6 Bagian 3 — sekarang berdampingan dengan
+             WiFi/SSID (kolom kanan), bukan lagi full-width sendirian. --}}
+        <div class="bg-white border border-gray-200 rounded-md p-5">
+            @livewire('network.cpe-dialup-history', ['cpeDeviceId' => $device->id], key('cpe-dialup-history-'.$device->id))
+        </div>
     </div>
 
     {{-- Ethernet ports — hanya ditampilkan kalau device ini punya data
@@ -318,7 +386,7 @@
          profiles adalah data billing/paket, bukan TR-069/GenieACS. --}}
 
     <div class="bg-white border border-gray-200 rounded-md p-5 mt-6 space-y-6">
-        @include('cpe-devices._actions-and-history', ['device' => $device, 'canManage' => $canManage, 'historyLogs' => $historyLogs, 'connectedHosts' => $connectedHosts])
+        @include('cpe-devices._actions-and-history', ['device' => $device, 'canManage' => $canManage, 'historyLogs' => $historyLogs])
     </div>
 </div>
 
@@ -361,6 +429,17 @@
             // an immediate reload would just show the same stale data.
             window.cpeSyncNow = function (id) {
                 cpeFetch(`/api/internal/cpe-devices/${id}/sync-now`, { method: 'POST' }).then(({ ok, body }) => {
+                    cpeFlash(body.message, !ok);
+                });
+            };
+
+            // v0.12.6 — "Push Konfig Sekarang", sama posture Sync Sekarang
+            // (tidak instan, tidak perlu confirm() — bukan aksi destruktif).
+            // Skipped (bukan error) tetap ditampilkan sebagai flash biasa,
+            // bukan warna merah — cpeFlash's `!ok` hanya untuk HTTP non-2xx,
+            // response 200 dgn status skipped tetap masuk cabang sukses.
+            window.cpePushWanConfig = function (id) {
+                cpeFetch(`/api/internal/cpe-devices/${id}/push-wan-config`, { method: 'POST' }).then(({ ok, body }) => {
                     cpeFlash(body.message, !ok);
                 });
             };
@@ -409,6 +488,27 @@
                     body: JSON.stringify({ ssid_index: ssidIndex, enabled: !currentlyEnabled }),
                 }).then(({ ok, body }) => {
                     cpeFlash(body.message, !ok);
+                });
+            };
+
+            // v0.12.5 — reload halaman setelah sukses (bukan cuma flash
+            // message) karena section Tipe Modem menampilkan badge/nilai
+            // yang harus fresh setelah assignment berubah, beda dari
+            // reboot/wifi yang cukup flash message saja.
+            window.cpeAssignModemType = function (id) {
+                const select = document.getElementById(`cpe-modem-type-select-${id}`);
+                const errorEl = document.getElementById(`cpe-modem-type-error-${id}`);
+                errorEl.textContent = '';
+                cpeFetch(`/api/internal/cpe-devices/${id}/modem-type`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ modem_type_id: select.value || null }),
+                }).then(({ ok, body }) => {
+                    if (!ok) {
+                        errorEl.textContent = body.message || 'Gagal menyimpan.';
+                        return;
+                    }
+                    window.location.reload();
                 });
             };
 

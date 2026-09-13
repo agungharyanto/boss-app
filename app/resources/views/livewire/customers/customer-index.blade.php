@@ -80,17 +80,36 @@
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Nama</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Telepon</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Jatuh Tempo') }}</th>
                     <th class="px-4 py-2"></th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-200">
                 @forelse ($customers as $customer)
+                    @php
+                        $latestInvoice = $latestInvoiceByCustomer[$customer->id] ?? null;
+                    @endphp
                     <tr wire:key="customer-{{ $customer->id }}">
                         <td class="px-4 py-2 font-mono text-sm">{{ $customer->cid ?? '—' }}</td>
                         <td class="px-4 py-2">{{ $customer->name }}</td>
                         <td class="px-4 py-2">{{ $customer->phone_number }}</td>
                         <td class="px-4 py-2">
                             <span class="px-2 py-1 text-xs rounded-full bg-gray-100">{{ $customer->status->label() }}</span>
+                        </td>
+                        <td class="px-4 py-2 whitespace-nowrap">
+                            @if ($latestInvoice)
+                                <span class="text-sm text-gray-600">{{ $latestInvoice->due_date->toDateString() }}</span>
+                                @php
+                                    $dueBadgeClass = match ($latestInvoice->status->value) {
+                                        'paid' => 'bg-green-100 text-green-700',
+                                        'overdue' => 'bg-red-100 text-red-700',
+                                        default => 'bg-gray-100 text-gray-500',
+                                    };
+                                @endphp
+                                <span class="ml-1 px-2 py-0.5 rounded-full text-xs {{ $dueBadgeClass }}">{{ $latestInvoice->status->label() }}</span>
+                            @else
+                                <span class="text-sm text-gray-400">—</span>
+                            @endif
                         </td>
                         <td class="px-4 py-2 text-right whitespace-nowrap">
                             <button type="button" wire:click="openRenew({{ $customer->id }})"
@@ -107,7 +126,7 @@
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="5" class="px-4 py-6 text-center text-gray-500">{{ __('Belum ada data pelanggan.') }}</td>
+                        <td colspan="6" class="px-4 py-6 text-center text-gray-500">{{ __('Belum ada data pelanggan.') }}</td>
                     </tr>
                 @endforelse
             </tbody>

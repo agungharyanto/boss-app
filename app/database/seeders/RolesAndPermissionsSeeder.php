@@ -256,11 +256,18 @@ class RolesAndPermissionsSeeder extends Seeder
      * only posture as resellers.* / tax engine — reseller owner/staff
      * access their OWN reseller's ODPs/technicians/work orders instead via
      * reseller_users membership (see OdpPolicy/TechnicianPolicy/
-     * WorkOrderPolicy), never via these Spatie permissions. The existing
-     * `teknisi` role (a Referrer type used for field registration/commission,
-     * unrelated to the new Technician model) deliberately does NOT get
-     * these automatically — a technician's own scoped access, if ever
-     * needed, is new scope for a later sprint, not assumed here.
+     * WorkOrderPolicy), never via these Spatie permissions.
+     *
+     * v0.12.3 — `work_orders.technician`, KHUSUS role `teknisi` (BUKAN
+     * admin tier — makna permission ini "akses ter-scope ke assignment/
+     * klaim diri sendiri", admin sudah punya `.manage` admin-wide). Beda
+     * dari catatan lama di sini yang bilang `teknisi` "deliberately does
+     * NOT get these automatically" — itu masih benar untuk `.view`/
+     * `.manage` (tetap admin-wide, tetap tidak diberikan ke `teknisi`),
+     * permission BARU ini yang genuinely scoped. Lihat WorkOrderPolicy's
+     * own docblock untuk mekanisme scoping-nya (2 jalur independen:
+     * assignment resmi via technician_id, atau klaim mandiri lewat
+     * work_order_technicians).
      */
     private function seedInstallationPermissions(): void
     {
@@ -271,13 +278,16 @@ class RolesAndPermissionsSeeder extends Seeder
             'technicians.manage',
             'work_orders.view',
             'work_orders.manage',
+            'work_orders.technician',
         ];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        $this->giveToAdminTier($permissions);
+        $this->giveToAdminTier(['odps.view', 'odps.manage', 'technicians.view', 'technicians.manage', 'work_orders.view', 'work_orders.manage']);
+
+        Role::findByName('teknisi', 'web')->givePermissionTo('work_orders.technician');
     }
 
     /**

@@ -29,6 +29,7 @@ class WorkOrder extends Model
         'equipment_ready',
         'scheduled_at',
         'completed_at',
+        'technician_confirmed_at',
         'notes',
     ];
 
@@ -39,6 +40,7 @@ class WorkOrder extends Model
             'equipment_ready' => 'boolean',
             'scheduled_at' => 'datetime',
             'completed_at' => 'datetime',
+            'technician_confirmed_at' => 'datetime',
         ];
     }
 

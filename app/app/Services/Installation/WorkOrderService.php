@@ -9,6 +9,7 @@ use App\Enums\WorkOrderStatus;
 use App\Exceptions\IncompleteWorkOrderException;
 use App\Exceptions\InvalidWorkOrderStatusTransitionException;
 use App\Exceptions\WorkOrderClaimException;
+use App\Exceptions\WorkOrderNotConfirmedException;
 use App\Models\OdpPort;
 use App\Models\Subscription;
 use App\Models\Technician;
@@ -16,6 +17,7 @@ use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
 use App\Models\WorkOrderTechnician;
 use App\Services\Network\CpeBindingService;
+use App\Services\Network\WanConfigPushService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -25,6 +27,8 @@ class WorkOrderService
     public function __construct(
         private readonly OdpLocatorService $odpLocator,
         private readonly CpeBindingService $cpeBinding,
+        private readonly TechnicianActionOtpService $technicianOtp,
+        private readonly WanConfigPushService $wanConfigPush,
     ) {}
 
     /**
@@ -132,7 +136,12 @@ class WorkOrderService
      * even if photos/devices happen to be incomplete too — the transition
      * check takes priority over the readiness check). Only once the jump
      * itself is legal do we require all 4 photo types and at least 1
-     * scanned device.
+     * scanned device — then (v0.12.7 Langkah 3) that the technician has
+     * confirmed the installation via WhatsApp OTP. Confirmation is checked
+     * LAST, after readiness, on purpose: a technician fills in photos/
+     * devices first, THEN requests+verifies the OTP as the final step
+     * before submitting "Selesai" — matching the real-world order of
+     * operations, not an arbitrary code-ordering choice.
      */
     public function complete(WorkOrder $workOrder): WorkOrder
     {
@@ -141,6 +150,10 @@ class WorkOrderService
         }
 
         $this->assertReadyToComplete($workOrder);
+
+        if ($workOrder->technician_confirmed_at === null) {
+            throw new WorkOrderNotConfirmedException;
+        }
 
         $workOrder->update(['status' => WorkOrderStatus::Completed, 'completed_at' => now()]);
 
@@ -156,13 +169,69 @@ class WorkOrderService
         // had a momentary hiccup — ReconcileCpeDevices' reconciliation loop
         // exists precisely so a binding that didn't happen here can still
         // resolve later.
+        $cpeDevice = null;
         try {
-            $this->cpeBinding->bindFromWorkOrder($workOrder);
+            $cpeDevice = $this->cpeBinding->bindFromWorkOrder($workOrder);
         } catch (Throwable $e) {
             Log::warning("WorkOrderService: CPE binding failed for work order #{$workOrder->id} — {$e->getMessage()}");
         }
 
+        // v0.12.7 Langkah 4 — Push Konfig untuk instalasi BARU (beda dari
+        // hook Ganti Paket di SubscriptionRenewalService::renew(), v0.12.6
+        // — di sana push dipicu perubahan ppp_package_id, di sini dipicu
+        // instalasi PSB selesai). Best-effort, SAMA posture dengan binding
+        // di atas dan hook renew() — kegagalan push (device belum pernah
+        // connect, tidak ada Template cocok, dll) TIDAK BOLEH membatalkan
+        // penyelesaian work order itu sendiri; teknisi yang sudah berdiri
+        // di lokasi pelanggan tidak boleh terjebak gara-gara GenieACS
+        // sedang bermasalah sesaat. Hanya dicoba kalau binding di atas
+        // genuinely menghasilkan CpeDevice (null kalau binding sendiri
+        // gagal/exception, tidak ada device untuk di-push).
+        if ($cpeDevice !== null) {
+            try {
+                $this->wanConfigPush->push($cpeDevice, null);
+            } catch (Throwable $e) {
+                Log::warning("WorkOrderService: Push Konfig gagal untuk CpeDevice #{$cpeDevice->id} (work order #{$workOrder->id}) — {$e->getMessage()}");
+            }
+        }
+
         return $workOrder->fresh();
+    }
+
+    /**
+     * v0.12.7 Langkah 3 — mengirim OTP WhatsApp ke NOMOR TEKNISI SENDIRI
+     * (bukan pelanggan) untuk mengonfirmasi instalasi yang baru saja dia
+     * kerjakan. Scope OTP diikat ke id work order ini spesifik (lihat
+     * confirmationScope()) — kode untuk WO #A tidak bisa dipakai untuk WO
+     * #B.
+     *
+     * @throws TechnicianOtpException saat rate-limited atau template WA belum di-seed
+     */
+    public function requestConfirmation(WorkOrder $workOrder, Technician $technician): void
+    {
+        $this->technicianOtp->issue(
+            $technician,
+            $this->confirmationScope($workOrder),
+            "mengonfirmasi instalasi selesai untuk pelanggan {$workOrder->customer->name}",
+            $workOrder->customer,
+        );
+    }
+
+    /**
+     * @throws TechnicianOtpException saat kode salah/kedaluwarsa/percobaan habis
+     */
+    public function confirmByTechnician(WorkOrder $workOrder, Technician $technician, string $code): WorkOrder
+    {
+        $this->technicianOtp->verify($technician, $this->confirmationScope($workOrder), $code);
+
+        $workOrder->update(['technician_confirmed_at' => now()]);
+
+        return $workOrder->fresh();
+    }
+
+    private function confirmationScope(WorkOrder $workOrder): string
+    {
+        return "wo-confirm:{$workOrder->id}";
     }
 
     /**
@@ -182,12 +251,20 @@ class WorkOrderService
         return $workOrder->fresh();
     }
 
-    public function addDevice(WorkOrder $workOrder, WorkOrderDeviceType $deviceType, string $macAddress, string $serialNumber): WorkOrderDevice
+    /**
+     * v0.12.7 — $modemTypeId opsional (teknisi mungkin tidak selalu tahu/
+     * isi ini saat scan) — disimpan ke work_order_devices.modem_type_id
+     * (kolom sudah ada sejak v0.12.4). Belum menyentuh cpe_devices sama
+     * sekali di sini — itu tugas CpeBindingService::bindFromWorkOrder()
+     * saat WO di-complete (lihat method itu sendiri).
+     */
+    public function addDevice(WorkOrder $workOrder, WorkOrderDeviceType $deviceType, string $macAddress, string $serialNumber, ?int $modemTypeId = null): WorkOrderDevice
     {
         return $workOrder->devices()->create([
             'device_type' => $deviceType,
             'mac_address' => $macAddress,
             'serial_number' => $serialNumber,
+            'modem_type_id' => $modemTypeId,
             'scanned_at' => now(),
         ]);
     }

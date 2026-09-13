@@ -131,6 +131,10 @@ Route::prefix('v1')->group(function () {
             Route::post('work-orders/{work_order}/verify', [WorkOrderController::class, 'verify']);
             Route::post('work-orders/{work_order}/assign', [WorkOrderController::class, 'assign']);
             Route::post('work-orders/{work_order}/claim', [WorkOrderController::class, 'claim']);
+            // v0.12.7 Langkah 3 — OTP WhatsApp konfirmasi teknisi, gerbang
+            // terakhir sebelum complete() di bawah.
+            Route::post('work-orders/{work_order}/request-confirmation', [WorkOrderController::class, 'requestConfirmation']);
+            Route::post('work-orders/{work_order}/confirm', [WorkOrderController::class, 'confirm']);
             Route::post('work-orders/{work_order}/start', [WorkOrderController::class, 'start']);
             Route::post('work-orders/{work_order}/photos', [WorkOrderController::class, 'storePhoto']);
             Route::post('work-orders/{work_order}/devices', [WorkOrderController::class, 'storeDevice']);

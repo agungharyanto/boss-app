@@ -2693,3 +2693,44 @@ Dua fitur QR yang genuinely terpisah dari alur PSB (Pasang Baru), beda tujuan da
 - Format payload QR itu sendiri (URL langsung? Token? ID terenkripsi?).
 - Detail endpoint publik (fitur 1) vs protected (fitur 2) — termasuk apakah fitur 2 perlu terhubung ke
   mekanisme token teknisi yang sedang dibangun di v0.12.3 (Technician-scoped API).
+
+**Kebutuhan cetak fisik (baru, dicatat dari planning chat v0.13.0, 2026-09-14)** — saat teknisi claim
+WorkOrder, sistem perlu otomatis generate 2 item cetak: (a) sticker QR modem — ukuran cetak setara kertas
+undangan/invitation-size, ditempel di sticker fisik yang sudah ada di modem; (b) label CID pelanggan —
+ditempel di titik ODP. Ini soal **PRODUKSI CETAK FISIK saat WO claim**, beda dari poin 1 & 2 di atas yang
+soal "scan" oleh pelanggan/teknisi SETELAH instalasi selesai — kemungkinan besar dua kebutuhan ini saling
+melengkapi (label CID di ODP bisa jadi bentuk fisik dari "QR di ODP" poin 2 di atas, tapi belum tentu
+formatnya sama — perlu diklarifikasi saat decision-gate).
+
+**Trigger baru yang perlu di-scope** (belum ada di catatan poin 1 & 2 lama): WorkOrder claim event.
+
+**Pertanyaan terbuka tambahan** (menyertai kebutuhan cetak fisik di atas):
+- Mekanisme cetak: browser print langsung / generate PDF dulu / printer thermal khusus label?
+- Apakah 1 trigger cetak menghasilkan kedua item (sticker QR modem + label CID ODP) sekaligus, atau
+  terpisah?
+- Apakah "label CID ODP" ini item yang SAMA dengan "QR di ODP untuk lookup teknisi" (poin 2 di atas), atau
+  dua kebutuhan berbeda yang kebetulan sama-sama ditempel di titik ODP?
+
+**Status tetap Backlog, belum ada decision-gate, TIDAK terkait cluster v0.13.x (WhatsApp 2-Arah)** — meski
+sumber idenya sama-sama muncul dari planning chat v0.13.0, kebutuhan cetak fisik ini bukan bagian dari
+scope kerja v0.13.1-v0.13.5 yang sedang berjalan.
+
+## Backlog — Integrasi Chatwoot
+
+**Status: Backlog (ide awal, belum discope).** Ide awal dari planning chat v0.13.0 (WhatsApp 2-Arah),
+2026-09-14 — belum ada decision-gate, masih tahap ide. **TIDAK terkait langsung ke scope v0.13.1-5 yang
+sedang dikerjakan** — perlu chat/decision-gate terpisah kalau mau dilanjutkan.
+
+Chatwoot adalah customer support platform open-source dengan fitur "API Channel" (custom channel generik
+via webhook) yang bisa dijembatani ke WhatsApp Gateway custom (Go/whatsmeow) tanpa perlu WhatsApp Business
+Cloud API resmi.
+
+**Pertanyaan arsitektur besar yang BELUM diputuskan**: apakah Chatwoot jadi pengganti state machine
+percakapan custom yang sedang dibangun di v0.13.2-4, atau tambahan terpisah khusus percakapan CS manusia
+(di luar alur otomatis seperti OTP/WA-bot PSB) sementara state machine custom tetap jalan untuk alur
+otomatis.
+
+**Catatan teknis relevan**: whatsmeow tidak mendukung interactive button/list message (dikonfirmasi dari
+GitHub discussion resmi whatsmeow — fitur itu cuma ada di WhatsApp Business Cloud API resmi Meta), jadi
+desain UX Chatwoot (kalau jadi dipakai) tetap harus berbasis teks/balasan biasa, bukan tombol interaktif,
+sama seperti batasan yang sudah berlaku untuk state machine custom kita.

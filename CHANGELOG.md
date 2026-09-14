@@ -3,6 +3,68 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.12.0 — PPPoE Provisioning, Technician API & Template Konfig CPE (merged `develop`→`main`, tagged `v0.12.0`)
+
+**Penutup cluster v0.12.x — 7 sub-versi (v0.12.1-v0.12.7), 3 komponen utama.** Provisioning kredensial
+PPPoE (`radcheck`) hasil instalasi teknisi, API/otorisasi resmi teknisi (menggantikan bridge CS manual
+sementara dari v0.7.5), dan Template Konfig CPE + Push Konfig (manual maupun otomatis saat Ganti Paket/PSB
+baru).
+
+**Ringkasan per sub-versi:**
+- **v0.12.1** — fondasi OTP generik: `ActionOtpService` diekstrak dari `ReferrerActionOtpService` (yang
+  jadi thin wrapper), `TechnicianActionOtpService` baru — siap dipakai tapi belum ada caller runtime
+  sampai v0.12.7.
+- **v0.12.2** — `RadcheckWriterService` (penulis PERTAMA ke `radius_db.radcheck` di codebase ini),
+  `subscriptions.expires_at`, migrasi 527 username PPPoE VLAN10 (`test-x86-bajastu`) ke `radcheck`/
+  `radreply` dengan Framed-Pool 3-tingkat, dashboard Invoice + badge status di Daftar Pelanggan, section
+  Kredensial PPPoE di Detail Pelanggan.
+- **v0.12.3** — Technician-scoped WorkOrder API (token Sanctum khusus teknisi, klaim/lookup/scoping
+  Work Order), perluasan `WorkOrderPolicy::manage()` mencakup permission `work_orders.technician`.
+- **v0.12.4** — skema Template Konfig CPE: tabel `modem_types` + `wan_config_templates` (matrix
+  Paket × Tipe Modem), `work_order_devices.modem_type_id`.
+- **v0.12.5** — UI Template Konfig CPE + CRUD Tipe Modem, revisi arsitektur (dibedakan HANYA oleh Tipe
+  Modem, sempat dicoba matrix Paket×Tipe Modem lalu di-revert), `WanConfigTemplateSuggestionService`
+  (auto-suggest on-demand di Detail Perangkat CPE).
+- **v0.12.6** — reshuffle layout Detail Perangkat CPE, modal "Riwayat" di Grafik Pemakaian (pola sama RX
+  Power History), section Push Konfig manual di `/remote-config`, investigasi akurasi Upload/Download
+  Riwayat Dialup (Download radacct tidak akurat — dicatat sebagai catatan header, bukan diperbaiki karena
+  akar masalah ada di sisi NAS/akunting, bukan kode BOSS App), limit Riwayat Dialup 10 baris + hapus kolom
+  NAS.
+- **v0.12.7 (penutup)** — wiring PSB (Pasang Baru) end-to-end: field Tipe Modem di step scan device
+  teknisi, copy `modem_type_id` saat binding CPE, endpoint `request-confirmation`/`confirm` (OTP WhatsApp
+  konfirmasi teknisi lewat `TechnicianActionOtpService`, caller runtime pertamanya), guard
+  `technician_confirmed_at` sebelum `WorkOrderService::complete()` mengizinkan transisi ke Completed,
+  trigger `WanConfigPushService::push()` otomatis (best-effort) di `complete()` untuk PSB baru — caller
+  ke-4 service itu (sebelumnya: hook Ganti Paket v0.12.6, tombol manual Detail Perangkat CPE, tombol
+  manual `/remote-config`). Diverifikasi manual end-to-end oleh Agung (WA OTP dikonfirmasi diterima).
+
+**3 insiden ditemukan + diperbaiki selama development, semua sudah dipulihkan — dicatat sebagai jejak
+sesuai pola project:**
+1. **Overlap `radcheck` 293 baris (v0.12.2)** — dari 527 username migrasi PPPoE VLAN10, 293 di antaranya
+   ternyata overlap dengan batch migrasi `ro-hotspot` sebelumnya (`radcheck`/`radreply` global, tidak
+   NAS-scoped). Dipulihkan byte-exact ke state pre-write dari backup — 291/293 nilainya identik (tanpa
+   dampak nyata), 1 genuinely beda (username Yakun/customer #54, sengaja TIDAK diubah per keputusan
+   eksplisit Agung).
+2. **Bug duplikasi akibat migrasi tidak idempoten (v0.12.2)** — nama `subscriptions` hasil migrasi Track A
+   sempat dibuat bervariasi per paket (mis. "HomeFixed-30Mbps"), padahal `firstOrNew()` mencari
+   berdasarkan nama yang seharusnya konstan — akibatnya re-run kedua tidak menemukan baris lama dan
+   membuat DUPLIKAT (527 subscription + 233 invoice duplikat sempat benar-benar tercipta di produksi).
+   Diperbaiki: nama subscription dipaksa selalu konstan, 527 baris lama di-backfill ke nama yang sama,
+   duplikat yang sempat tercipta dihapus manual — dikonfirmasi balik ke idempoten lewat re-run nyata
+   (`invoice_number` kembali ke `000001`, row count stabil).
+3. **Insiden soft-delete `PppPackage` ~8 detik (v0.12.4)** — saat verifikasi `restrictOnDelete()` pada FK
+   `wan_config_templates.ppp_package_id`/`modem_type_id`, ditemukan FK itu HANYA memblokir hard-delete,
+   TIDAK memblokir soft-delete — `PppPackage` #17 "PPPoE-Remote" (paket produksi) sempat ter-soft-delete
+   tak sengaja selama proses pengujian ini sebelum segera dipulihkan (`restore()`). Ditutup dengan validasi
+   aplikasi-level eksplisit (`WanConfigTemplateService::assertReferencesAlive()`, lookup scoped yang
+   otomatis mengecualikan baris soft-deleted) di v0.12.5 — kelas bug yang sama persis dengan insiden
+   `CustomerIpPool`/`NetworkProfileGroup` di cluster v0.14.x, jadi sudah dikenali polanya sebelum
+   memperbaiki.
+
+**Verifikasi penutup**: full regression suite (satu-satunya titik cek penuh di seluruh cluster v0.12.x)
+**1925 passed, 0 failed, 5888 assertions**, Pint clean. Merge `feature/v0.12.7-psb-wiring` → `develop` →
+`main`, tag annotated `v0.12.0`.
+
 ## v0.7.8.1 — Auto-WAN CT-COM: fix instance-number + WAN2 dynamic WCD-creation + remediasi buildPrecondition (merged `develop`→`main`, tagged `v0.7.8.1`)
 
 **Patch ke slot v0.7.8 (pola `v0.14.5.1`-`.4`) — menutup KNOWN BUG yang di-ship v0.7.8 (`preset_loop`

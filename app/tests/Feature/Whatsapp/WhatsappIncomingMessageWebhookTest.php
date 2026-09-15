@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Whatsapp;
 
+use App\Models\Reseller;
+use App\Models\Tenant;
 use App\Models\WhatsappIncomingMessage;
 use App\Support\WhatsappHmac;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -139,5 +141,49 @@ class WhatsappIncomingMessageWebhookTest extends TestCase
 
         $response->assertJsonPath('data.result', 'rejected');
         $this->assertDatabaseCount('whatsapp_incoming_messages', 0);
+    }
+
+    // --- reseller_id resolution (perluasan) ---
+
+    public function test_session_key_direct_resolves_to_null_reseller_id(): void
+    {
+        $response = $this->postSigned($this->validPayload(['session_key' => 'direct']));
+
+        $response->assertJsonPath('data.result', 'recorded');
+        $this->assertDatabaseHas('whatsapp_incoming_messages', [
+            'session_key' => 'direct',
+            'reseller_id' => null,
+        ]);
+    }
+
+    public function test_session_key_matching_a_real_reseller_resolves_to_its_id(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+
+        $response = $this->postSigned($this->validPayload(['session_key' => (string) $reseller->id]));
+
+        $response->assertJsonPath('data.result', 'recorded');
+        $this->assertDatabaseHas('whatsapp_incoming_messages', [
+            'session_key' => (string) $reseller->id,
+            'reseller_id' => $reseller->id,
+        ]);
+    }
+
+    /**
+     * session_key numerik tapi tidak cocok reseller manapun (mis. reseller
+     * sudah dihapus) — TETAP direkam (reseller_id null), webhook TIDAK
+     * ditolak. Konsisten "selalu simpan + 200, jangan bikin whatsmeow retry".
+     */
+    public function test_session_key_with_no_matching_reseller_still_records_with_null_reseller_id(): void
+    {
+        $response = $this->postSigned($this->validPayload(['session_key' => '999999']));
+
+        $response->assertOk();
+        $response->assertJsonPath('data.result', 'recorded');
+        $this->assertDatabaseHas('whatsapp_incoming_messages', [
+            'session_key' => '999999',
+            'reseller_id' => null,
+        ]);
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Services\Whatsapp;
 
+use App\Models\Reseller;
 use App\Models\WhatsappIncomingMessage;
 use App\Support\WhatsappHmac;
 use Illuminate\Support\Carbon;
@@ -67,6 +68,7 @@ class WhatsappIncomingMessageService
             ['message_id' => $messageId],
             [
                 'session_key' => $sessionKey,
+                'reseller_id' => $this->resolveResellerId($sessionKey),
                 'sender_phone' => $senderPhone,
                 'chat_jid' => $chatJid,
                 'text' => $text,
@@ -76,5 +78,39 @@ class WhatsappIncomingMessageService
         );
 
         return true;
+    }
+
+    /**
+     * `session_key` -> `reseller_id`, perluasan scoping reseller. `session_key`
+     * TIDAK PERNAH dikirim eksplisit dari sisi Go — nilainya SELALU
+     * `(string) reseller_id` atau literal 'direct' (dikonfirmasi via
+     * App\Models\WhatsappSession::sessionKeyFor(), satu-satunya sumber
+     * session_key yang pernah ada). 'direct' -> null. Numerik yang TERNYATA
+     * tidak cocok reseller manapun (reseller sudah dihapus, atau data yang
+     * genuinely rusak) -> log warning + tetap null, TIDAK menolak webhook —
+     * konsisten prinsip "selalu simpan + respons 200, jangan bikin whatsmeow
+     * retry" yang sudah berlaku di seluruh modul ini.
+     */
+    private function resolveResellerId(string $sessionKey): ?int
+    {
+        if ($sessionKey === 'direct') {
+            return null;
+        }
+
+        if (! ctype_digit($sessionKey)) {
+            Log::warning("WhatsappIncomingMessageService: session_key '{$sessionKey}' bukan 'direct' maupun numerik — reseller_id disimpan null.");
+
+            return null;
+        }
+
+        $reseller = Reseller::find((int) $sessionKey);
+
+        if ($reseller === null) {
+            Log::warning("WhatsappIncomingMessageService: session_key {$sessionKey} tidak cocok reseller manapun yang masih ada — reseller_id disimpan null.");
+
+            return null;
+        }
+
+        return $reseller->id;
     }
 }

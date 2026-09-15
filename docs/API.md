@@ -1139,6 +1139,17 @@ ulang. **TIDAK ADA state machine/routing/business logic di v0.13.1 ini** —
 murni bukti pesan masuk berhasil ditangkap end-to-end, scope
 lanjutannya (v0.13.2+) belum dibangun.
 
+**`reseller_id` (perluasan v0.13.1)** — di-resolve dari `session_key`
+(`WhatsappIncomingMessageService::resolveResellerId()`), TIDAK dikirim
+eksplisit oleh Go: literal `'direct'` -> `null`; numerik -> `reseller_id`
+itu kalau reseller-nya masih ada (soft-delete/hard-delete aman, `Reseller`
+pakai `SoftDeletes`), else `null` + `Log::warning` — TIDAK PERNAH menolak
+webhook karena reseller tidak ketemu, konsisten "selalu simpan + 200".
+Dipakai tab "Pesan Masuk" (`/whatsapp-gateway`) untuk scoping: admin lihat
+semua + filter opsional, reseller (via `reseller_users` membership aktif)
+otomatis `WHERE reseller_id = miliknya sendiri`, ditegakkan di query, bukan
+di UI.
+
 ## Installation / Work Order (v0.5.0)
 
 Semua endpoint di bawah ada di dalam grup middleware `reseller.context` —

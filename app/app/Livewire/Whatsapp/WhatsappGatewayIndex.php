@@ -5,6 +5,7 @@ namespace App\Livewire\Whatsapp;
 use App\Enums\WhatsappEventType;
 use App\Models\Reseller;
 use App\Models\WhatsappGatewaySettings as WhatsappGatewaySettingsModel;
+use App\Models\WhatsappIncomingMessage;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
 use App\Models\WhatsappSession;
@@ -41,6 +42,13 @@ class WhatsappGatewayIndex extends Component
 
     public string $statusFilter = '';
 
+    // Dipakai BERSAMA oleh tab Antrian (WhatsappMessageLog.reseller_id) DAN
+    // tab Pesan Masuk (WhatsappIncomingMessage.reseller_id, v0.13.1
+    // perluasan) — satu properti, sesuai instruksi reuse PERSIS pola filter
+    // yang sama; keduanya adalah kolom `reseller_id` (int) dengan makna
+    // yang identik (admin-only, "Semua Reseller" default). Kolom baru
+    // $incomingSessionFilter yang sempat ada sebelum keputusan reuse ini
+    // dihapus lagi.
     public ?int $resellerFilter = null;
 
     public int $rateLimitDelayMin = 5;
@@ -337,6 +345,42 @@ class WhatsappGatewayIndex extends Component
             ->latest()
             ->paginate(15);
 
+        $resellers = $isAdmin ? Reseller::orderBy('name')->get() : collect();
+
+        // "Pesan Masuk" (v0.13.1, diperluas) — sekarang VISIBLE untuk
+        // reseller juga (bukan admin-only lagi), tapi scoping ditegakkan
+        // di QUERY-nya, bukan cuma UI (defense-in-depth):
+        // - Admin: lihat semua (termasuk reseller_id null / Direct),
+        //   filter opsional via $resellerFilter (reuse PERSIS pola Antrian
+        //   di atas — properti yang sama).
+        // - Reseller (context resolved dari reseller_users membership
+        //   aktif, App\Support\ResellerContext): WHERE reseller_id = milik
+        //   sendiri secara eksplisit — tidak pernah bergantung pada scope
+        //   Eloquent global (model ini memang tidak punya satu pun, lihat
+        //   docblock model), supaya tidak ada jalan bocor lewat properti
+        //   Livewire yang dipaksa dari luar (mis. force-set $tab).
+        // - Bukan admin & bukan reseller (mustahil tercapai — viewAny()
+        //   WhatsappSessionPolicy sudah mensyaratkan salah satu): null,
+        //   tab tidak dirender di blade.
+        $canSeeIncoming = $isAdmin || $context->hasReseller();
+
+        $incomingMessages = match (true) {
+            $isAdmin => WhatsappIncomingMessage::query()
+                ->when($this->resellerFilter !== null, fn ($q) => $q->where('reseller_id', $this->resellerFilter))
+                ->latest('received_at')
+                ->paginate(15, ['*'], 'incoming-page'),
+            $context->hasReseller() => WhatsappIncomingMessage::query()
+                ->where('reseller_id', $context->reseller()->id)
+                ->latest('received_at')
+                ->paginate(15, ['*'], 'incoming-page'),
+            default => null,
+        };
+
+        $resellersById = $resellers->keyBy('id');
+        if (! $isAdmin && $context->hasReseller()) {
+            $resellersById->put($context->reseller()->id, $context->reseller());
+        }
+
         return view('livewire.whatsapp.whatsapp-gateway-index', [
             'isAdmin' => $isAdmin,
             'mySession' => $mySession,
@@ -344,7 +388,10 @@ class WhatsappGatewayIndex extends Component
             'resellerSessions' => $resellerSessions,
             'templates' => $templates,
             'logs' => $logs,
-            'resellers' => $isAdmin ? Reseller::orderBy('name')->get() : collect(),
+            'resellers' => $resellers,
+            'canSeeIncoming' => $canSeeIncoming,
+            'incomingMessages' => $incomingMessages,
+            'resellersById' => $resellersById,
         ]);
     }
 }

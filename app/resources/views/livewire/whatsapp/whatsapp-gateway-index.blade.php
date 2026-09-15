@@ -20,6 +20,12 @@
         @endif
         <button wire:click="setTab('template')" class="px-3 py-2 text-sm font-medium {{ $tab === 'template' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Template Pesan</button>
         <button wire:click="setTab('antrian')" class="px-3 py-2 text-sm font-medium {{ $tab === 'antrian' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Antrian</button>
+        {{-- v0.13.1 perluasan: visible untuk admin MAUPUN reseller (scoping
+             ditegakkan di query render(), bukan di sini) — beda dari Rate
+             Limit yang tetap admin-only. --}}
+        @if ($canSeeIncoming)
+            <button wire:click="setTab('pesan-masuk')" class="px-3 py-2 text-sm font-medium {{ $tab === 'pesan-masuk' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Pesan Masuk</button>
+        @endif
         @if ($isAdmin)
             <button wire:click="setTab('settings')" class="px-3 py-2 text-sm font-medium {{ $tab === 'settings' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Rate Limit</button>
         @endif
@@ -224,6 +230,58 @@
         </div>
 
         <div class="mt-4">{{ $logs->links() }}</div>
+    @endif
+
+    {{-- PESAN MASUK (admin + reseller, v0.13.1 diperluas) — read-only, tidak ada Aksi/Retry.
+         Scoping reseller ditegakkan di query render(), BUKAN di blade — lihat komentar di sana. --}}
+    @if ($canSeeIncoming && $tab === 'pesan-masuk')
+        @if ($isAdmin)
+            <div class="mb-4 flex gap-3 items-center">
+                <select wire:model.live="resellerFilter" class="rounded-md border-gray-300 text-sm">
+                    <option value="">Semua Reseller</option>
+                    @foreach ($resellers as $reseller)
+                        <option value="{{ $reseller->id }}">{{ $reseller->name }}</option>
+                    @endforeach
+                </select>
+            </div>
+        @endif
+
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <thead>
+                    <tr class="text-left text-gray-500 border-b border-gray-200">
+                        <th class="py-2 pr-4">Waktu</th>
+                        <th class="py-2 pr-4">Nomor</th>
+                        <th class="py-2 pr-4">Session</th>
+                        <th class="py-2 pr-4">Pesan</th>
+                        <th class="py-2 pr-4">Nama Kontak</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @forelse ($incomingMessages as $msg)
+                        <tr class="border-b border-gray-100">
+                            <td class="py-2 pr-4 whitespace-nowrap">{{ $msg->received_at->format('d/m/Y H:i') }}</td>
+                            <td class="py-2 pr-4 whitespace-nowrap">{{ $msg->sender_phone }}</td>
+                            <td class="py-2 pr-4 whitespace-nowrap">
+                                @if ($msg->reseller_id === null)
+                                    Direct (ISP A)
+                                @else
+                                    {{ $resellersById->get($msg->reseller_id)?->name ?? 'Reseller #'.$msg->reseller_id }}
+                                @endif
+                            </td>
+                            <td class="py-2 pr-4 max-w-md" title="{{ $msg->text }}">
+                                {{ Str::limit($msg->text, 80) }}
+                            </td>
+                            <td class="py-2 pr-4 whitespace-nowrap">{{ $msg->push_name ?? '—' }}</td>
+                        </tr>
+                    @empty
+                        <tr><td colspan="5" class="py-4 text-gray-400">Belum ada pesan masuk.</td></tr>
+                    @endforelse
+                </tbody>
+            </table>
+        </div>
+
+        <div class="mt-4">{{ $incomingMessages->links() }}</div>
     @endif
 
     {{-- SETTINGS (admin only) --}}

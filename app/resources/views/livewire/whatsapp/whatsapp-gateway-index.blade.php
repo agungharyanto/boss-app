@@ -43,15 +43,29 @@
                     Hubungkan Nomor WhatsApp Reseller
                 </button>
             @else
-                <p class="text-sm">
-                    Status:
-                    <span class="font-medium {{ $mySession->status->value === 'connected' ? 'text-green-600' : 'text-amber-600' }}">
-                        {{ $mySession->status->label() }}
+                <p class="text-sm flex items-center justify-between">
+                    <span>
+                        Status:
+                        <span class="font-medium {{ $mySession->status->value === 'connected' ? 'text-green-600' : ($mySession->status->value === 'rejected_duplicate' ? 'text-red-600' : 'text-amber-600') }}">
+                            {{ $mySession->status->label() }}
+                        </span>
+                        @if ($mySession->phone_number)
+                            — {{ $mySession->phone_number }}
+                        @endif
                     </span>
-                    @if ($mySession->phone_number)
-                        — {{ $mySession->phone_number }}
+                    @if ($mySession->status->value === 'connected')
+                        <button
+                            wire:click="logout({{ $mySession->id }})"
+                            wire:confirm="Logout sesi ini? Sesi akan diputus dari server WhatsApp dan perlu dipasangkan ulang."
+                            class="text-red-600 hover:underline text-xs shrink-0 ml-2"
+                        >
+                            Logout
+                        </button>
                     @endif
                 </p>
+                @if ($mySession->status_reason)
+                    <p class="text-sm text-red-600">{{ $mySession->status_reason }}</p>
+                @endif
 
                 @if ($mySession->status->value !== 'connected')
                     @include('livewire.whatsapp.partials.pairing-connect-panel', ['session' => $mySession, 'labelPrefix' => 'Anda'])
@@ -77,7 +91,7 @@
                 <p class="text-sm flex items-center justify-between">
                     <span>
                         Status:
-                        <span class="font-medium {{ $directSession->status->value === 'connected' ? 'text-green-600' : 'text-amber-600' }}">
+                        <span class="font-medium {{ $directSession->status->value === 'connected' ? 'text-green-600' : ($directSession->status->value === 'rejected_duplicate' ? 'text-red-600' : 'text-amber-600') }}">
                             {{ $directSession->status->label() }}
                         </span>
                         @if ($directSession->phone_number)
@@ -94,6 +108,9 @@
                         </button>
                     @endif
                 </p>
+                @if ($directSession->status_reason)
+                    <p class="text-sm text-red-600">{{ $directSession->status_reason }}</p>
+                @endif
 
                 @if ($directSession->status->value !== 'connected')
                     @include('livewire.whatsapp.partials.pairing-connect-panel', ['session' => $directSession, 'labelPrefix' => 'ISP A'])
@@ -118,8 +135,11 @@
                     @forelse ($resellerSessions as $session)
                         <tr class="border-b border-gray-100">
                             <td class="py-2 pr-4">{{ $session->reseller?->name }}</td>
-                            <td class="py-2 pr-4 {{ $session->status->value === 'connected' ? 'text-green-600' : 'text-amber-600' }}">
+                            <td class="py-2 pr-4 {{ $session->status->value === 'connected' ? 'text-green-600' : ($session->status->value === 'rejected_duplicate' ? 'text-red-600' : 'text-amber-600') }}">
                                 {{ $session->status->label() }}
+                                @if ($session->status_reason)
+                                    <span class="block text-xs text-red-600 font-normal">{{ $session->status_reason }}</span>
+                                @endif
                             </td>
                             <td class="py-2 pr-4">{{ $session->phone_number ?? '—' }}</td>
                         </tr>
@@ -261,7 +281,19 @@
                     @forelse ($incomingMessages as $msg)
                         <tr class="border-b border-gray-100">
                             <td class="py-2 pr-4 whitespace-nowrap">{{ $msg->received_at->format('d/m/Y H:i') }}</td>
-                            <td class="py-2 pr-4 whitespace-nowrap">{{ $msg->sender_phone }}</td>
+                            <td class="py-2 pr-4 whitespace-nowrap">
+                                @if ($msg->is_lid)
+                                    {{-- Nomor asli gagal di-resolve dari WhatsApp LID (Linked ID) —
+                                         sender_phone di baris ini tetap tersimpan mentah di DB (raw
+                                         LID, buat debugging developer), tapi TIDAK PERNAH ditampilkan
+                                         ke user sebagai kolom "Nomor" — digit LID mentah terlihat
+                                         seperti nomor telepon padahal bukan, lihat CLAUDE.md
+                                         "bug LID". --}}
+                                    <span class="text-gray-400 italic" title="Nomor asli gagal di-resolve dari WhatsApp — bukan gagal permanen, bisa ter-update otomatis begitu nomor ini ketahuan di pesan berikutnya.">Nomor tidak tersedia</span>
+                                @else
+                                    {{ $msg->sender_phone }}
+                                @endif
+                            </td>
                             <td class="py-2 pr-4 whitespace-nowrap">
                                 @if ($msg->reseller_id === null)
                                     Direct (ISP A)

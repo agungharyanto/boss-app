@@ -97,11 +97,19 @@ func StrPtr(s string) *string { return &s }
 type IncomingMessagePayload struct {
 	SessionKey  string `json:"session_key"`
 	SenderPhone string `json:"sender_phone"`
-	ChatJID     string `json:"chat_jid"`
-	Text        string `json:"text"`
-	MessageID   string `json:"message_id"`
-	Timestamp   int64  `json:"timestamp"`
-	PushName    string `json:"push_name"`
+	// IsLid — true kalau SenderPhone di atas adalah raw WhatsApp LID
+	// (Linked ID), BUKAN nomor telepon asli — terjadi saat pengirim
+	// pakai AddressingMode LID dan resolusi ke PN gagal di SEMUA fallback
+	// (SenderAlt kosong DAN tidak ada mapping tersimpan di LIDStore
+	// lokal, lihat internal/session/manager.go::resolveSenderPhone()).
+	// false berarti SenderPhone genuinely nomor telepon (baik pengirim
+	// AddressingMode PN dari awal, maupun LID yang berhasil di-resolve).
+	IsLid     bool   `json:"is_lid"`
+	ChatJID   string `json:"chat_jid"`
+	Text      string `json:"text"`
+	MessageID string `json:"message_id"`
+	Timestamp int64  `json:"timestamp"`
+	PushName  string `json:"push_name"`
 }
 
 // NotifyIncomingMessage — pola PERSIS NotifySessionStatus() di atas: HMAC

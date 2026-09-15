@@ -108,6 +108,64 @@ class WhatsappIncomingMessageTabTest extends TestCase
             ->assertSee('Reseller Uji Coba');
     }
 
+    // --- placeholder "Nomor tidak tersedia" (fix bug LID, 2026-09-15 —
+    //     badge "LID" kecil DIGANTI placeholder ini, raw LID digit TIDAK
+    //     PERNAH ditampilkan ke user meski tetap tersimpan di DB) ---
+
+    public function test_placeholder_is_shown_and_raw_lid_digits_never_render_for_a_message_with_is_lid_true(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        WhatsappIncomingMessage::create([
+            'session_key' => 'direct',
+            'reseller_id' => null,
+            'sender_phone' => '44435932971043',
+            'is_lid' => true,
+            'chat_jid' => '44435932971043@lid',
+            'message_id' => 'MSG-LID-1',
+            'text' => 'Pesan dari kontak LID',
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(WhatsappGatewayIndex::class)
+            ->set('tab', 'pesan-masuk')
+            ->assertSee('Nomor tidak tersedia')
+            // Digit LID mentah TIDAK PERNAH boleh terlihat seperti nomor
+            // telepon di UI — ini persis masalah yang mau ditutup.
+            ->assertDontSee('44435932971043');
+
+        // Nilai mentahnya TETAP tersimpan di DB untuk debugging developer —
+        // cuma tidak ditampilkan ke user.
+        $this->assertDatabaseHas('whatsapp_incoming_messages', [
+            'message_id' => 'MSG-LID-1',
+            'sender_phone' => '44435932971043',
+            'is_lid' => true,
+        ]);
+    }
+
+    public function test_placeholder_is_not_shown_for_a_normal_phone_number_message(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        WhatsappIncomingMessage::create([
+            'session_key' => 'direct',
+            'reseller_id' => null,
+            'sender_phone' => '087884374939',
+            'is_lid' => false,
+            'chat_jid' => '6287884374939@s.whatsapp.net',
+            'message_id' => 'MSG-NON-LID-1',
+            'text' => 'Pesan dari nomor biasa',
+            'received_at' => now(),
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(WhatsappGatewayIndex::class)
+            ->set('tab', 'pesan-masuk')
+            ->assertSee('087884374939')
+            ->assertDontSee('Nomor tidak tersedia');
+    }
+
     /**
      * $resellerFilter DISHARE dengan tab Pesan Keluar (reuse PERSIS pola yang
      * sama, satu properti) — set lewat filter di sini juga valid.

@@ -20,6 +20,7 @@ class WhatsappSession extends Model
         'reseller_id',
         'phone_number',
         'status',
+        'status_reason',
         'qr_code_data',
         'last_connected_at',
         'last_disconnected_at',

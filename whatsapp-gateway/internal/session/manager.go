@@ -29,6 +29,7 @@ import (
 	"github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -637,6 +638,65 @@ func (m *Manager) registerHandlers(e *entry) {
 	})
 }
 
+// resolveSenderPhone — investigasi + keputusan Agung 2026-09-15 (bug LID:
+// sender_phone kadang tersimpan sebagai raw WhatsApp LID — mis.
+// 44435932971043 — bukan nomor HP asli). Referensi: GitHub discussion
+// whatsmeow #905 (komunitas, terverifikasi production independen).
+//
+// PENTING: deteksi LID TIDAK PERNAH pakai evt.Info.AddressingMode —
+// dikonfirmasi via referensi komunitas field itu KADANG KOSONG walau Sender
+// genuinely LID (tergantung tipe event/device pengirim), jadi tidak cukup
+// robust dipakai sebagai kondisi utama. Kondisi utama yang dipakai di sini
+// adalah sender.Server == types.HiddenUserServer — dikonfirmasi langsung
+// dari source whatsmeow yang di-pin (types/jid.go: HiddenUserServer = "lid"
+// adalah nilai JID.Server untuk LID, konstan yang sama dipakai
+// message.go::parseMessageSource() sendiri untuk membedakan cabang LID/PN).
+//
+// Urutan fallback:
+//
+//	a. sender.Server != HiddenUserServer -> bukan LID sama sekali, pakai
+//	   sender.User apa adanya. is_lid=false.
+//	b. LID DAN senderAlt terisi (types.MessageInfo.SenderAlt, diisi
+//	   whatsmeow LANGSUNG dari attribute node XML pesan yang sama —
+//	   message.go::parseMessageSource(), BUKAN hasil lookup async
+//	   terpisah) -> pakai senderAlt.User (PN asli). is_lid=false — sender
+//	   aslinya LID, tapi kita BERHASIL dapat PN, bukan kegagalan.
+//	c. LID DAN senderAlt kosong -> fallback query LOKAL (bukan network
+//	   call ke server WhatsApp — whatsmeow tidak expose method publik
+//	   untuk itu) ke LIDStore.GetPNForLID(ctx, sender) — mapping yang
+//	   sudah pernah tersimpan dari histori (whatsmeow otomatis
+//	   menyimpannya tiap kali SATU pesan dari kontak itu PERNAH membawa
+//	   senderAlt terisi, lihat message.go::handleEncryptedMessage() ->
+//	   StoreLIDPNMapping() — jadi "belum pernah kontak" adalah skenario
+//	   realistis satu-satunya mapping ini kosong). is_lid=false kalau
+//	   ketemu.
+//	d. Masih tidak ketemu -> PN genuinely tidak tersedia dari sisi kita di
+//	   titik ini, bukan bug yang bisa diperbaiki lebih lanjut (lihat
+//	   laporan investigasi 2026-09-15) -> simpan sender.User APA ADANYA
+//	   (raw LID, TIDAK dikonversi ToLocalIndonesian — itu bukan nomor).
+//	   is_lid=true.
+//
+// lidStore diterima sebagai parameter (bukan diambil langsung dari
+// e.client.Store.LIDs di dalam fungsi) supaya fungsi ini testable tanpa
+// membangun *whatsmeow.Client sungguhan — lihat manager_lid_test.go.
+func resolveSenderPhone(ctx context.Context, sender, senderAlt types.JID, lidStore store.LIDStore) (phone string, isLid bool) {
+	if sender.Server != types.HiddenUserServer {
+		return jidnorm.ToLocalIndonesian(sender.User), false
+	}
+
+	if !senderAlt.IsEmpty() {
+		return jidnorm.ToLocalIndonesian(senderAlt.User), false
+	}
+
+	if lidStore != nil {
+		if pn, err := lidStore.GetPNForLID(ctx, sender); err == nil && !pn.IsEmpty() {
+			return jidnorm.ToLocalIndonesian(pn.User), false
+		}
+	}
+
+	return sender.User, true
+}
+
 // onIncomingMessage — v0.13.1, listener pesan masuk (padanan case
 // events.Message di eventHandler() contoh resmi whatsmeow, client_test.go —
 // lihat komentar di atas package ini). Filter IsFromMe/IsGroup diterapkan DI
@@ -665,11 +725,18 @@ func (m *Manager) onIncomingMessage(e *entry, evt *events.Message) {
 		return
 	}
 
-	slog.Info("incoming text message", "sessionKey", e.key, "sender", evt.Info.Sender.User, "messageId", evt.Info.ID)
+	var lidStore store.LIDStore
+	if e.client != nil && e.client.Store != nil {
+		lidStore = e.client.Store.LIDs
+	}
+	senderPhone, isLid := resolveSenderPhone(context.Background(), evt.Info.Sender, evt.Info.SenderAlt, lidStore)
+
+	slog.Info("incoming text message", "sessionKey", e.key, "sender", evt.Info.Sender.User, "messageId", evt.Info.ID, "isLid", isLid)
 
 	m.notifier.NotifyIncomingMessage(webhook.IncomingMessagePayload{
 		SessionKey:  e.key,
-		SenderPhone: jidnorm.ToLocalIndonesian(evt.Info.Sender.User),
+		SenderPhone: senderPhone,
+		IsLid:       isLid,
 		ChatJID:     evt.Info.Chat.String(),
 		Text:        text,
 		MessageID:   evt.Info.ID,

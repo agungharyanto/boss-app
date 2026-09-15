@@ -186,4 +186,195 @@ class WhatsappIncomingMessageWebhookTest extends TestCase
             'reseller_id' => null,
         ]);
     }
+
+    // --- is_lid (fix bug LID, 2026-09-15) ---
+
+    public function test_is_lid_true_is_recorded_when_gateway_sends_it(): void
+    {
+        $response = $this->postSigned($this->validPayload([
+            'sender_phone' => '44435932971043',
+            'chat_jid' => '44435932971043@lid',
+            'is_lid' => true,
+        ]));
+
+        $response->assertJsonPath('data.result', 'recorded');
+        $this->assertDatabaseHas('whatsapp_incoming_messages', [
+            'sender_phone' => '44435932971043',
+            'is_lid' => true,
+        ]);
+    }
+
+    public function test_is_lid_false_is_recorded_when_gateway_sends_it(): void
+    {
+        $response = $this->postSigned($this->validPayload(['is_lid' => false]));
+
+        $response->assertJsonPath('data.result', 'recorded');
+        $this->assertDatabaseHas('whatsapp_incoming_messages', [
+            'message_id' => $this->validPayload()['message_id'],
+            'is_lid' => false,
+        ]);
+    }
+
+    /**
+     * Backward-compat — payload lama (sebelum fix bug LID) tidak mengirim
+     * field ini sama sekali. validPayload() TIDAK menyertakan is_lid
+     * secara default, jadi test ini mereproduksi persis payload lama.
+     * Harus tetap direkam (bukan ditolak) dengan default false — konsisten
+     * dengan default kolom DB.
+     */
+    public function test_missing_is_lid_field_defaults_to_false(): void
+    {
+        $payload = $this->validPayload();
+        $this->assertArrayNotHasKey('is_lid', $payload);
+
+        $response = $this->postSigned($payload);
+
+        $response->assertJsonPath('data.result', 'recorded');
+        $this->assertDatabaseHas('whatsapp_incoming_messages', [
+            'message_id' => $payload['message_id'],
+            'is_lid' => false,
+        ]);
+    }
+
+    // --- retroactive backfill LID (lanjutan fix bug LID, 2026-09-15) ---
+
+    /**
+     * Skenario inti: kontak sudah kirim 3 pesan LAMA (is_lid=true, LID
+     * sama, chat_jid sama persis "@lid") sebelum PN-nya pernah berhasil
+     * di-resolve. Pesan ke-4 dari kontak yang SAMA (chat_jid identik)
+     * akhirnya datang dengan PN berhasil di-resolve (is_lid=false) —
+     * SEMUA 4 baris (3 lama + 1 baru) harus sender_phone SAMA + is_lid
+     * false setelahnya, bukan cuma baris ke-4.
+     */
+    public function test_resolving_a_lid_contact_retroactively_backfills_all_older_messages_from_the_same_contact(): void
+    {
+        $lidChatJid = '44435932971043@lid';
+        for ($i = 1; $i <= 3; $i++) {
+            WhatsappIncomingMessage::create([
+                'session_key' => 'direct',
+                'reseller_id' => null,
+                'sender_phone' => '44435932971043',
+                'is_lid' => true,
+                'chat_jid' => $lidChatJid,
+                'message_id' => "MSG-OLD-{$i}",
+                'text' => "Pesan lama ke-{$i}",
+                'received_at' => now(),
+            ]);
+        }
+
+        $response = $this->postSigned($this->validPayload([
+            'sender_phone' => '081234567890',
+            'chat_jid' => $lidChatJid,
+            'is_lid' => false,
+            'message_id' => 'MSG-NEW-RESOLVED',
+        ]));
+
+        $response->assertJsonPath('data.result', 'recorded');
+
+        foreach (['MSG-OLD-1', 'MSG-OLD-2', 'MSG-OLD-3', 'MSG-NEW-RESOLVED'] as $messageId) {
+            $this->assertDatabaseHas('whatsapp_incoming_messages', [
+                'message_id' => $messageId,
+                'sender_phone' => '081234567890',
+                'is_lid' => false,
+            ]);
+        }
+    }
+
+    /**
+     * Isolasi ketat — kontak B (LID/chat_jid BEDA) yang juga is_lid=true
+     * TIDAK BOLEH ikut ter-update saat kontak A ter-resolve, meski
+     * sama-sama masih is_lid=true di waktu yang sama.
+     */
+    public function test_resolving_one_lid_contact_never_touches_a_different_lid_contact(): void
+    {
+        WhatsappIncomingMessage::create([
+            'session_key' => 'direct',
+            'reseller_id' => null,
+            'sender_phone' => '221032002642155',
+            'is_lid' => true,
+            'chat_jid' => '221032002642155@lid', // kontak B — LID BEDA
+            'message_id' => 'MSG-CONTACT-B',
+            'text' => 'Pesan dari kontak B yang belum resolve',
+            'received_at' => now(),
+        ]);
+
+        $response = $this->postSigned($this->validPayload([
+            'sender_phone' => '081234567890',
+            'chat_jid' => '44435932971043@lid', // kontak A — LID lain
+            'is_lid' => false,
+            'message_id' => 'MSG-CONTACT-A-RESOLVED',
+        ]));
+
+        $response->assertJsonPath('data.result', 'recorded');
+
+        // Kontak B TIDAK tersentuh sama sekali — masih raw LID, is_lid=true.
+        $this->assertDatabaseHas('whatsapp_incoming_messages', [
+            'message_id' => 'MSG-CONTACT-B',
+            'sender_phone' => '221032002642155',
+            'is_lid' => true,
+        ]);
+    }
+
+    /**
+     * Baris baru yang RESOLUSINYA SENDIRI gagal (masih is_lid=true) tidak
+     * pernah memicu backfill apa pun — tidak ada PN baru untuk dibagikan
+     * ke baris lama.
+     */
+    public function test_a_new_message_that_is_still_lid_does_not_trigger_any_backfill(): void
+    {
+        $lidChatJid = '44435932971043@lid';
+        WhatsappIncomingMessage::create([
+            'session_key' => 'direct',
+            'reseller_id' => null,
+            'sender_phone' => '44435932971043',
+            'is_lid' => true,
+            'chat_jid' => $lidChatJid,
+            'message_id' => 'MSG-OLD-STILL-LID',
+            'text' => 'Pesan lama',
+            'received_at' => now(),
+        ]);
+
+        $response = $this->postSigned($this->validPayload([
+            'sender_phone' => '44435932971043',
+            'chat_jid' => $lidChatJid,
+            'is_lid' => true,
+            'message_id' => 'MSG-NEW-STILL-LID',
+        ]));
+
+        $response->assertJsonPath('data.result', 'recorded');
+
+        // Keduanya tetap raw LID + is_lid=true — tidak ada yang berubah.
+        $this->assertDatabaseHas('whatsapp_incoming_messages', [
+            'message_id' => 'MSG-OLD-STILL-LID',
+            'sender_phone' => '44435932971043',
+            'is_lid' => true,
+        ]);
+        $this->assertDatabaseHas('whatsapp_incoming_messages', [
+            'message_id' => 'MSG-NEW-STILL-LID',
+            'sender_phone' => '44435932971043',
+            'is_lid' => true,
+        ]);
+    }
+
+    /**
+     * Duplikat/retry message_id yang sudah ada (wasRecentlyCreated=false)
+     * TIDAK memicu backfill lagi — idempotency guard yang sudah ada
+     * (firstOrCreate) sudah cukup, method ini cuma jaring pengaman
+     * tambahan supaya replay webhook tidak melakukan UPDATE percuma
+     * berulang-ulang (harmless kalau terjadi, tapi tidak seharusnya).
+     */
+    public function test_replaying_an_already_recorded_resolved_message_does_not_error_or_double_process(): void
+    {
+        $payload = $this->validPayload([
+            'sender_phone' => '081234567890',
+            'chat_jid' => '44435932971043@lid',
+            'is_lid' => false,
+            'message_id' => 'MSG-REPLAY',
+        ]);
+
+        $this->postSigned($payload)->assertJsonPath('data.result', 'recorded');
+        $this->postSigned($payload)->assertJsonPath('data.result', 'recorded');
+
+        $this->assertSame(1, WhatsappIncomingMessage::where('message_id', 'MSG-REPLAY')->count());
+    }
 }

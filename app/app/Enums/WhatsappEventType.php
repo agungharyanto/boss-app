@@ -20,6 +20,19 @@ enum WhatsappEventType: string
      */
     case ReferrerActionOtp = 'referrer_action_otp';
 
+    /**
+     * 2026-09-15 — dikirim ke NOMOR WA FISIK itu sendiri (bukan Customer/
+     * Referrer/Technician), lewat SESSION LAMA yang masih aktif, saat
+     * WhatsappSessionService::applyStatus() menolak percobaan pairing
+     * kedua nomor yang sama ke session BOSS App lain. Penerima non-entitas
+     * seperti ReferrerActionOtp — reuse WhatsappGatewayService::
+     * buildAndQueueForRecipient(), TAPI dengan $resellerId eksplisit
+     * (session LAMA milik reseller mana pun, BUKAN selalu 'direct' seperti
+     * ReferrerActionOtp) supaya pesan genuinely terkirim lewat WhatsApp
+     * yang benar-benar masih terhubung ke nomor itu.
+     */
+    case DuplicateSessionAttempt = 'duplicate_session_attempt';
+
     public function label(): string
     {
         return match ($this) {
@@ -28,6 +41,7 @@ enum WhatsappEventType: string
             self::CustomerRegistered => 'Pelanggan Terdaftar',
             self::CustomerSuspendedReminder => 'Pengingat Pelanggan Suspend',
             self::ReferrerActionOtp => 'Kode OTP Aksi Referrer',
+            self::DuplicateSessionAttempt => 'Percobaan Pairing Sesi Duplikat',
         };
     }
 }

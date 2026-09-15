@@ -2,9 +2,11 @@
 
 namespace App\Services\Whatsapp;
 
+use App\Enums\WhatsappEventType;
 use App\Enums\WhatsappSessionStatus;
 use App\Models\WhatsappSession;
 use App\Support\WhatsappHmac;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use ValueError;
@@ -13,6 +15,10 @@ class WhatsappSessionService
 {
     public function __construct(
         private readonly WhatsappHmac $hmac,
+        // WhatsappGatewayService cuma depends WhatsappTemplateService —
+        // tidak circular. Dipakai SATU tempat: notifikasi WA
+        // duplicate_session_attempt di rejectDuplicateSession() di bawah.
+        private readonly WhatsappGatewayService $gatewayService,
     ) {}
 
     /**
@@ -241,6 +247,28 @@ class WhatsappSessionService
      */
     public function logout(WhatsappSession $session): bool
     {
+        if (! $this->callGatewayLogout($session->sessionKey())) {
+            return false;
+        }
+
+        // Reflect segera di sisi Laravel — webhook logged_out yang sama
+        // juga akan datang menyusul dan menerapkan status yang sama
+        // (idempotent, bukan konflik).
+        $this->applyStatus($session, WhatsappSessionStatus::LoggedOut, null, null);
+
+        return true;
+    }
+
+    /**
+     * HTTP call gateway logout MURNI — diekstrak dari logout() publik di
+     * atas supaya bisa dipakai rejectDuplicateSession() TANPA memicu
+     * applyStatus(LoggedOut) di akhirnya (yang akan menimpa status
+     * `rejected_duplicate` + status_reason yang baru saja di-set jadi
+     * "Logout" generik, menghilangkan penjelasan kenapa session ini
+     * ditolak).
+     */
+    private function callGatewayLogout(string $sessionKey): bool
+    {
         $baseUrl = config('services.whatsapp_gateway.url');
 
         if (! $baseUrl) {
@@ -249,7 +277,6 @@ class WhatsappSessionService
             return false;
         }
 
-        $sessionKey = $session->sessionKey();
         $timestamp = time();
         $body = '';
         $signature = $this->hmac->sign($body, $timestamp);
@@ -265,11 +292,6 @@ class WhatsappSessionService
 
             return false;
         }
-
-        // Reflect segera di sisi Laravel — webhook logged_out yang sama
-        // juga akan datang menyusul dan menerapkan status yang sama
-        // (idempotent, bukan konflik).
-        $this->applyStatus($session, WhatsappSessionStatus::LoggedOut, null, null);
 
         return true;
     }
@@ -298,8 +320,26 @@ class WhatsappSessionService
         return WhatsappSession::withoutGlobalScopes()->where('reseller_id', (int) $sessionKey)->first();
     }
 
+    /**
+     * `applyStatus()` adalah SATU-SATUNYA titik `phone_number` ditulis ke
+     * DB — dipanggil dari updateStatusFromWebhook() (webhook real-time)
+     * DAN reconcileFromGateway() (polling hourly, fallback kalau webhook
+     * hilang). Guard duplikat 1-nomor-1-session HARUS di sini, bukan
+     * cuma di salah satu pemanggil, supaya KEDUA jalur tertutup —
+     * dikonfirmasi lewat investigasi 2026-09-15 sebelum menulis kode ini.
+     */
     private function applyStatus(WhatsappSession $session, WhatsappSessionStatus $status, ?string $phoneNumber, ?string $qrCodeData): void
     {
+        if ($status === WhatsappSessionStatus::Connected && $phoneNumber !== null) {
+            $activeDuplicate = $this->findActiveDuplicateSession($session, $phoneNumber);
+
+            if ($activeDuplicate !== null) {
+                $this->rejectDuplicateSession($session, $phoneNumber, $activeDuplicate);
+
+                return;
+            }
+        }
+
         $updates = ['status' => $status];
 
         if ($phoneNumber !== null) {
@@ -312,10 +352,121 @@ class WhatsappSessionService
 
         if ($status === WhatsappSessionStatus::Connected) {
             $updates['last_connected_at'] = now();
+            // rejected_duplicate lama (kalau ada) sudah bukan relevan lagi
+            // begitu session ini genuinely berhasil connected bersih.
+            $updates['status_reason'] = null;
         } elseif (in_array($status, [WhatsappSessionStatus::Disconnected, WhatsappSessionStatus::LoggedOut], true)) {
             $updates['last_disconnected_at'] = now();
         }
 
-        $session->update($updates);
+        try {
+            $session->update($updates);
+        } catch (QueryException $e) {
+            // Race condition safety net — SELECT check di atas ("adakah
+            // duplikat AKTIF sekarang") lolos tidak menemukan apa pun,
+            // tapi SESAAT SETELAHNYA request LAIN untuk phone_number yang
+            // SAMA sudah lebih dulu commit sebagai connected (2 webhook
+            // hampir bersamaan). Partial unique index
+            // whatsapp_sessions_connected_phone_unique (migration
+            // 2026_09_15_100000) menolak UPDATE ini secara ATOMIK di
+            // level DB — genuinely race, bukan bug logic. Sengaja TIDAK
+            // pakai lockForUpdate()/DB::transaction() manual di atas: row
+            // lock pada 2 baris BERBEDA (session A vs session B) tidak
+            // benar-benar mencegah race ini (baris B belum match filter
+            // phone_number SAAT request A membaca), constraint DB di
+            // level statement inilah yang jadi source of truth akhir yang
+            // genuinely atomik — lebih sederhana dan tidak kalah aman.
+            if ($status === WhatsappSessionStatus::Connected && $this->isConnectedPhoneUniqueViolation($e)) {
+                $activeDuplicate = $this->findActiveDuplicateSession($session, $phoneNumber);
+
+                if ($activeDuplicate !== null) {
+                    $this->rejectDuplicateSession($session, $phoneNumber, $activeDuplicate);
+
+                    return;
+                }
+            }
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Session lain (session_key BERBEDA — `id != $session->id`) yang
+     * SEDANG connected dengan phone_number yang SAMA. Re-pairing nomor
+     * yang sama ke session ITU SENDIRI (mis. reseller logout lalu connect
+     * ulang) TIDAK match filter `id != $session->id` — bukan duplikat,
+     * diizinkan seperti biasa, tanpa logic tambahan apa pun.
+     */
+    private function findActiveDuplicateSession(WhatsappSession $session, string $phoneNumber): ?WhatsappSession
+    {
+        return WhatsappSession::withoutGlobalScopes()
+            ->where('id', '!=', $session->id)
+            ->where('phone_number', $phoneNumber)
+            ->where('status', WhatsappSessionStatus::Connected)
+            ->first();
+    }
+
+    /**
+     * SQLSTATE 23505 = Postgres unique_violation (driver produksi).
+     * SQLite (driver test suite, phpunit.xml) tidak expose SQLSTATE
+     * standar untuk ini — pesan errornya literal mengandung "UNIQUE
+     * constraint failed" — dicek keduanya supaya portable ke driver mana
+     * pun test suite jalan, gotcha driver yang sudah berulang kali
+     * dicatat di CLAUDE.md. `whatsapp_sessions_connected_phone_unique`
+     * dicek di pesan supaya tidak salah tangkap unique violation LAIN
+     * yang genuinely bukan soal ini (mis. constraint tidak terkait).
+     */
+    private function isConnectedPhoneUniqueViolation(QueryException $e): bool
+    {
+        if (($e->errorInfo[0] ?? null) === '23505') {
+            return str_contains($e->getMessage(), 'whatsapp_sessions_connected_phone_unique');
+        }
+
+        return str_contains($e->getMessage(), 'UNIQUE constraint failed')
+            && str_contains($e->getMessage(), 'whatsapp_sessions.phone_number');
+    }
+
+    /**
+     * Session BARU (baru saja pairing) DITOLAK karena nomornya sudah
+     * `connected` di session lain: (a) status jadi rejected_duplicate +
+     * status_reason jelas (BUKAN disimpan sebagai connected), (b) paksa
+     * logout gateway session BARU (supaya WhatsApp-nya benar-benar
+     * terputus, tidak menggantung sebagai linked device kedua — via
+     * callGatewayLogout() LANGSUNG, BUKAN logout() publik, supaya
+     * webhook logged_out susulan tidak menimpa status_reason yang baru
+     * saja di-set), (c) kirim notifikasi WA OTOMATIS ke nomor itu sendiri
+     * LEWAT SESSION LAMA yang masih aktif (`$activeSession`, bukan
+     * session baru yang barusan ditolak).
+     */
+    private function rejectDuplicateSession(WhatsappSession $newSession, string $phoneNumber, WhatsappSession $activeSession): void
+    {
+        $attemptedResellerName = $newSession->reseller_id !== null
+            ? $newSession->reseller?->name ?? "Reseller #{$newSession->reseller_id}"
+            : 'ISP A (Langsung)';
+
+        Log::warning(
+            "WhatsappSessionService: rejected duplicate phone_number={$phoneNumber} for new session_key={$newSession->sessionKey()} — already connected on session_key={$activeSession->sessionKey()}."
+        );
+
+        $newSession->update([
+            'status' => WhatsappSessionStatus::RejectedDuplicate,
+            'status_reason' => "Nomor ini sudah digunakan di BOSS App dengan sesi yang lain ({$attemptedResellerName} mencoba pairing pada ".now()->format('d/m/Y H:i').').',
+            'qr_code_data' => null,
+        ]);
+
+        $this->callGatewayLogout($newSession->sessionKey());
+
+        $this->gatewayService->buildAndQueueForRecipient(
+            WhatsappEventType::DuplicateSessionAttempt,
+            $activeSession->tenant_id,
+            $phoneNumber,
+            [
+                'reseller_name' => $attemptedResellerName,
+                'attempted_at' => now()->format('d/m/Y H:i'),
+                'company_name' => $activeSession->tenant?->name,
+            ],
+            null,
+            $activeSession->reseller_id,
+        );
     }
 }

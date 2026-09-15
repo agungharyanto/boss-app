@@ -12,6 +12,7 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Models\WhatsappSession;
 use App\Services\Whatsapp\WhatsappSessionService;
+use App\Support\ResellerContext;
 use App\Support\WhatsappHmac;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -49,6 +50,29 @@ class WhatsappGatewayLogoutTest extends TestCase
             'status' => $status,
             'phone_number' => '6281389014113',
         ]);
+    }
+
+    private function resellerSession(Reseller $reseller, WhatsappSessionStatus $status = WhatsappSessionStatus::Connected, string $phoneNumber = '6281234567890'): WhatsappSession
+    {
+        return WhatsappSession::withoutGlobalScopes()->create([
+            'tenant_id' => $reseller->tenant_id,
+            'reseller_id' => $reseller->id,
+            'status' => $status,
+            'phone_number' => $phoneNumber,
+        ]);
+    }
+
+    private function resellerOwner(Reseller $reseller): User
+    {
+        $owner = User::factory()->create(['tenant_id' => $reseller->tenant_id]);
+        ResellerUser::create([
+            'reseller_id' => $reseller->id,
+            'user_id' => $owner->id,
+            'role' => ResellerUserRole::Owner,
+            'status' => ResellerUserStatus::Active,
+        ]);
+
+        return $owner;
     }
 
     public function test_logout_posts_to_the_gateway_url(): void
@@ -221,5 +245,90 @@ class WhatsappGatewayLogoutTest extends TestCase
             ->test(WhatsappGatewayIndex::class)
             ->call('logout', $session->id)
             ->assertForbidden();
+    }
+
+    // --- tombol Logout di tab Konfigurasi (reseller) — 2026-09-15 ---
+
+    public function test_reseller_sees_a_logout_button_in_konfigurasi_tab_when_connected(): void
+    {
+        $reseller = Reseller::factory()->create(['tenant_id' => Tenant::factory()->create()->id]);
+        $owner = $this->resellerOwner($reseller);
+        $session = $this->resellerSession($reseller);
+        app(ResellerContext::class)->set($reseller);
+
+        Livewire::actingAs($owner)
+            ->test(WhatsappGatewayIndex::class)
+            ->set('tab', 'konfigurasi')
+            ->assertSee('Logout')
+            ->assertSeeHtml("logout({$session->id})");
+    }
+
+    public function test_reseller_does_not_see_a_logout_button_in_konfigurasi_tab_when_not_connected(): void
+    {
+        $reseller = Reseller::factory()->create(['tenant_id' => Tenant::factory()->create()->id]);
+        $owner = $this->resellerOwner($reseller);
+        $session = $this->resellerSession($reseller, WhatsappSessionStatus::QrPending);
+        app(ResellerContext::class)->set($reseller);
+
+        Livewire::actingAs($owner)
+            ->test(WhatsappGatewayIndex::class)
+            ->set('tab', 'konfigurasi')
+            ->assertDontSeeHtml("logout({$session->id})");
+    }
+
+    /**
+     * Reseller klik Logout dari sesinya sendiri yang connected (BUKAN
+     * rejected_duplicate — tombol Logout memang cuma pernah muncul saat
+     * status connected, lihat blade) — status jadi LoggedOut, dan
+     * status_reason TETAP null (logout manual biasa, bukan ditolak sistem
+     * seperti fitur cegah-dobel-session yang baru dibangun — dua alur
+     * yang genuinely berbeda, tidak boleh tertukar pesannya).
+     */
+    public function test_reseller_can_logout_their_own_session_via_konfigurasi_tab(): void
+    {
+        Http::fake([
+            'whatsapp-gateway-test/sessions/*/logout' => Http::response(['success' => true], 200),
+        ]);
+
+        $reseller = Reseller::factory()->create(['tenant_id' => Tenant::factory()->create()->id]);
+        $owner = $this->resellerOwner($reseller);
+        $session = $this->resellerSession($reseller);
+        app(ResellerContext::class)->set($reseller);
+
+        Livewire::actingAs($owner)
+            ->test(WhatsappGatewayIndex::class)
+            ->call('logout', $session->id)
+            ->assertHasNoErrors();
+
+        $session->refresh();
+        $this->assertSame(WhatsappSessionStatus::LoggedOut, $session->status);
+        $this->assertNull($session->status_reason);
+        $this->assertNotSame('rejected_duplicate', $session->status->value);
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), "whatsapp-gateway-test/sessions/{$reseller->id}/logout"));
+    }
+
+    /**
+     * Isolasi — reseller B tidak bisa logout sesi milik reseller A, sama
+     * sekali TERPISAH dari "reseller tidak bisa logout sesi direct" yang
+     * sudah dites di atas (beda skenario: di sini KEDUANYA sama-sama
+     * reseller, bukan reseller-vs-admin).
+     */
+    public function test_reseller_b_cannot_logout_reseller_as_session(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $resellerA = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $resellerB = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $sessionA = $this->resellerSession($resellerA);
+        $ownerB = $this->resellerOwner($resellerB);
+        app(ResellerContext::class)->set($resellerB);
+
+        Livewire::actingAs($ownerB)
+            ->test(WhatsappGatewayIndex::class)
+            ->call('logout', $sessionA->id)
+            ->assertForbidden();
+
+        // Sesi A tidak tersentuh sama sekali.
+        $this->assertSame(WhatsappSessionStatus::Connected, $sessionA->fresh()->status);
     }
 }

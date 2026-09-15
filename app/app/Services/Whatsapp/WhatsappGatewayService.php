@@ -86,6 +86,16 @@ class WhatsappGatewayService
      * tenant ini — pemanggil harus memperlakukan itu sebagai "pesan gagal
      * dikirim", bukan menelannya diam.
      *
+     * `$resellerId` (2026-09-15, default null = perilaku lama) — SESI mana
+     * yang dipakai mengirim. Default null berarti sesi "direct" (perilaku
+     * asli method ini, tetap dipakai `buildAndQueueForReferrer()`/
+     * `ActionOtpService` — Referrer tidak punya reseller). Diisi eksplisit
+     * saat pemanggil PERLU mengirim lewat sesi reseller TERTENTU — satu-
+     * satunya pemakai saat ini: notifikasi `duplicate_session_attempt`
+     * (WhatsappSessionService), yang WAJIB terkirim lewat session LAMA
+     * yang genuinely masih terhubung ke nomor itu (bisa jadi milik
+     * reseller mana pun, bukan selalu 'direct').
+     *
      * @param  array<string, string|int|null>  $variables
      */
     public function buildAndQueueForRecipient(
@@ -94,11 +104,12 @@ class WhatsappGatewayService
         string $phone,
         array $variables,
         ?Customer $relatedCustomer = null,
+        ?int $resellerId = null,
     ): ?WhatsappMessageLog {
-        $template = $this->templateService->resolve($eventType, $tenantId, null);
+        $template = $this->templateService->resolve($eventType, $tenantId, $resellerId);
 
         if ($template === null) {
-            Log::warning("WhatsappGatewayService: no active template resolved for {$eventType->value} (tenant_id={$tenantId}, recipient path) — skipping send.");
+            Log::warning("WhatsappGatewayService: no active template resolved for {$eventType->value} (tenant_id={$tenantId}, reseller_id={$resellerId}, recipient path) — skipping send.");
 
             return null;
         }
@@ -107,7 +118,7 @@ class WhatsappGatewayService
 
         $log = WhatsappMessageLog::create([
             'tenant_id' => $tenantId,
-            'reseller_id' => null,
+            'reseller_id' => $resellerId,
             'customer_id' => $relatedCustomer?->id,
             'invoice_id' => null,
             'phone_number' => WhatsappPhone::normalize($phone),
@@ -118,7 +129,7 @@ class WhatsappGatewayService
             'queued_at' => now(),
         ]);
 
-        $sessionKey = WhatsappSession::sessionKeyFor(null);
+        $sessionKey = WhatsappSession::sessionKeyFor($resellerId);
 
         SendWhatsappMessageJob::dispatch($log->id)->onQueue('whatsapp-'.$sessionKey);
 

@@ -47,6 +47,10 @@ class WhatsappIncomingMessageService
         $messageId = $payload['message_id'] ?? null;
         $text = $payload['text'] ?? null;
         $timestamp = $payload['timestamp'] ?? null;
+        // is_lid — opsional untuk backward-compat (payload lama sebelum
+        // fix bug LID tidak mengirim field ini sama sekali), default false
+        // konsisten dengan default kolom DB.
+        $isLid = (bool) ($payload['is_lid'] ?? false);
 
         if (! is_string($sessionKey) || $sessionKey === ''
             || ! is_string($senderPhone) || $senderPhone === ''
@@ -64,12 +68,13 @@ class WhatsappIncomingMessageService
         // Go). Sebuah baris yang SUDAH ada tidak di-update ulang — message_id
         // yang sama secara definisi membawa isi yang sama, tidak ada yang
         // perlu direfresh.
-        WhatsappIncomingMessage::firstOrCreate(
+        $message = WhatsappIncomingMessage::firstOrCreate(
             ['message_id' => $messageId],
             [
                 'session_key' => $sessionKey,
                 'reseller_id' => $this->resolveResellerId($sessionKey),
                 'sender_phone' => $senderPhone,
+                'is_lid' => $isLid,
                 'chat_jid' => $chatJid,
                 'text' => $text,
                 'push_name' => $payload['push_name'] ?? null,
@@ -77,7 +82,71 @@ class WhatsappIncomingMessageService
             ]
         );
 
+        // Retroactive backfill LID (fix bug LID, lanjutan 2026-09-15) —
+        // HANYA saat baris ini GENUINELY baru dibuat (bukan re-post
+        // duplikat message_id yang sudah ada — wasRecentlyCreated) DAN
+        // resolusinya berhasil (bukan is_lid lagi). Baris duplikat/masih
+        // is_lid tidak punya PN baru apa pun untuk di-backfill-kan.
+        if ($message->wasRecentlyCreated && ! $isLid) {
+            $this->backfillResolvedLid($message);
+        }
+
         return true;
+    }
+
+    /**
+     * Begitu PN sebuah kontak LID berhasil di-resolve (baris BARU
+     * is_lid=false), UPDATE semua baris LAMA dari kontak yang SAMA yang
+     * masih is_lid=true — sender_phone-nya ikut terisi PN yang baru
+     * ketahuan itu, is_lid jadi false juga. Query UPDATE sederhana
+     * inline, BUKAN job/queue — dampak performa kecil (cuma jalan saat
+     * kontak LID baru pertama kali ke-resolve, jarang terjadi).
+     *
+     * Identifier "kontak yang sama": `chat_jid` — dikonfirmasi CUKUP
+     * STABIL untuk skenario ini via investigasi source whatsmeow
+     * (message.go::parseMessageSource(), whatsapp-gateway module cache)
+     * sebelum menulis method ini, BUKAN diasumsikan:
+     * - Untuk chat 1-on-1 (satu-satunya yang pernah ditangkap
+     *   onIncomingMessage()), `Chat = Sender.ToNonAD()` — Chat MENGIKUTI
+     *   addressing mode Sender pesan itu sendiri.
+     * - Baris LAMA yang is_lid=true SELALU chat_jid berakhiran "@lid"
+     *   (cabang "e" resolveSenderPhone di sisi Go hanya tercapai kalau
+     *   Sender.Server genuinely LID) — dan LID itu sendiri adalah ID
+     *   PERMANEN per akun WhatsApp pengirim (bukan berubah acak antar
+     *   pesan), dikonfirmasi juga dari data nyata (baris berturut dari
+     *   kontak yang sama SELALU chat_jid identik persis selama masih
+     *   LID-addressed).
+     * - Filter `is_lid = true` di WHERE clause di bawah OTOMATIS
+     *   membatasi matching hanya ke baris yang genuinely LID-addressed
+     *   dengan LID SAMA PERSIS — isolasi ketat antar kontak berbeda
+     *   didapat gratis dari kombinasi `chat_jid` + `is_lid=true` ini,
+     *   tidak perlu kolom identifier terpisah.
+     *
+     * KETERBATASAN DIKETAHUI, bukan bug — celah struktural yang TIDAK
+     * ditutup di sini (di luar scope yang diminta): kalau WhatsApp server
+     * MEMIGRASIKAN kontak ini sepenuhnya dari LID-addressed ke
+     * PN-addressed (proses nyata, lihat `store.Device.
+     * LIDMigrationTimestamp`/`Client::storeLIDSyncMessage()` di
+     * whatsmeow — WhatsApp mengirim payload migrasi PN<->LID ke client
+     * dari waktu ke waktu, di luar kendali kita), pesan berikutnya dari
+     * kontak itu datang dengan `Sender.Server` BUKAN LID lagi sama
+     * sekali — `chat_jid`-nya jadi "<PN>@s.whatsapp.net", BEDA dari
+     * chat_jid lama, sehingga backfill ini TIDAK terpicu untuk skenario
+     * itu (baris lama tetap is_lid=true). Menutupnya butuh reverse-lookup
+     * PN->LID (whatsmeow punya `LIDStore::GetLIDForPN()` di sisi Go)
+     * yang tidak diminta scope ini — dicatat sebagai jejak, bukan
+     * dikerjakan diam-diam.
+     */
+    private function backfillResolvedLid(WhatsappIncomingMessage $resolvedMessage): void
+    {
+        WhatsappIncomingMessage::query()
+            ->where('chat_jid', $resolvedMessage->chat_jid)
+            ->where('is_lid', true)
+            ->where('id', '!=', $resolvedMessage->id)
+            ->update([
+                'sender_phone' => $resolvedMessage->sender_phone,
+                'is_lid' => false,
+            ]);
     }
 
     /**

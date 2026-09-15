@@ -8,6 +8,7 @@ use App\Models\ResellerUser;
 use App\Models\Technician;
 use App\Models\User;
 use App\Models\WorkOrder;
+use App\Support\WhatsappPhone;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -30,21 +31,33 @@ use RuntimeException;
 class StaffService
 {
     /**
-     * @param  array{name: string, email: string, phone?: ?string, role: string, tenant_id: int}  $data
+     * v0.22.2 — `phone` sekarang WAJIB (alat login utama), `email` jadi
+     * opsional. `WhatsappPhone::normalize()` dipanggil di sini SEBAGAI
+     * DEFENSE-IN-DEPTH (caller Livewire sudah menormalisasi sebelum
+     * `Rule::unique()`-nya sendiri dijalankan, supaya deteksi duplikat
+     * apple-to-apple — lihat `StaffIndex::createStaff()`) — memanggilnya
+     * lagi di sini idempoten (nomor yang sudah `62xxx` tidak berubah),
+     * jadi aman dipanggil dua kali, dan `StaffService` tetap benar kalau
+     * suatu saat dipanggil langsung tanpa lewat Livewire.
+     *
+     * @param  array{name: string, email?: ?string, phone: string, role: string, tenant_id: int}  $data
      * @return array{user: User, generated_password: string}
      */
     public function create(array $data): array
     {
         return DB::transaction(function () use ($data) {
             $generatedPassword = Str::password(16);
+            $email = $data['email'] ?? null;
 
             $user = User::create([
                 'tenant_id' => $data['tenant_id'],
                 'name' => $data['name'],
-                'email' => $data['email'],
-                'phone' => $data['phone'] ?? null,
+                'email' => $email,
+                'phone' => WhatsappPhone::normalize($data['phone']),
                 'password' => Hash::make($generatedPassword),
-                'email_verified_at' => now(),
+                // Cuma masuk akal diberi tanggal verifikasi kalau memang
+                // punya email untuk diverifikasi.
+                'email_verified_at' => $email !== null ? now() : null,
             ]);
 
             $user->assignRole($data['role']);
@@ -55,18 +68,18 @@ class StaffService
 
     /**
      * Nama/email/HP/role saja — TANPA password (password auto-sent/regenerate
-     * adalah scope v0.22.3, bukan di sini). `syncRoles()` dipakai (bukan
+     * adalah scope v0.22.4, bukan di sini). `syncRoles()` dipakai (bukan
      * `assignRole()`) supaya role lama benar-benar lepas — satu staff cuma
      * boleh punya satu role di CRUD ini (single-choice, dikunci eksplisit).
      *
-     * @param  array{name: string, email: string, phone?: ?string, role: string}  $data
+     * @param  array{name: string, email?: ?string, phone: string, role: string}  $data
      */
     public function update(User $user, array $data): User
     {
         $user->update([
             'name' => $data['name'],
-            'email' => $data['email'],
-            'phone' => $data['phone'] ?? null,
+            'email' => $data['email'] ?? null,
+            'phone' => WhatsappPhone::normalize($data['phone']),
         ]);
 
         $user->syncRoles([$data['role']]);

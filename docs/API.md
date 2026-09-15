@@ -1121,6 +1121,35 @@ Autentikasi lewat HMAC-SHA256 (`App\Support\WhatsappHmac`, header
 dari static-token Xendit. Selalu balas `200` apa pun hasilnya, sama seperti
 `/webhooks/xendit`.
 
+### `POST /whatsapp/webhook/incoming-message` (v0.13.1)
+
+**Publik** (di luar `auth:sanctum`, throttle `60,1`), pola HMAC/auth/respons
+PERSIS `session-status` di atas — dipanggil `whatsapp-gateway` (Go/
+whatsmeow) setiap pesan teks masuk 1-on-1 (bukan grup, bukan dari device
+sendiri, keduanya sudah difilter di sisi Go sebelum webhook ini pernah
+dipanggil). Body: `session_key`, `sender_phone` (format lokal `0xxx`, SAMA
+konvensi `customers.phone_number`/`technicians.phone` — bukan `62xxx`
+seperti `whatsapp_message_logs.phone_number`), `chat_jid`, `text`,
+`message_id`, `timestamp`, `push_name`. Disimpan mentah ke
+`whatsapp_incoming_messages` (`App\Services\Whatsapp\
+WhatsappIncomingMessageService::recordFromWebhook()`), idempoten lewat
+`firstOrCreate` by `message_id` (unique) — whatsmeow bisa mengirim ulang
+event yang sama (retry/offline-sync), baris yang sudah ada tidak di-update
+ulang. **TIDAK ADA state machine/routing/business logic di v0.13.1 ini** —
+murni bukti pesan masuk berhasil ditangkap end-to-end, scope
+lanjutannya (v0.13.2+) belum dibangun.
+
+**`reseller_id` (perluasan v0.13.1)** — di-resolve dari `session_key`
+(`WhatsappIncomingMessageService::resolveResellerId()`), TIDAK dikirim
+eksplisit oleh Go: literal `'direct'` -> `null`; numerik -> `reseller_id`
+itu kalau reseller-nya masih ada (soft-delete/hard-delete aman, `Reseller`
+pakai `SoftDeletes`), else `null` + `Log::warning` — TIDAK PERNAH menolak
+webhook karena reseller tidak ketemu, konsisten "selalu simpan + 200".
+Dipakai tab "Pesan Masuk" (`/whatsapp-gateway`) untuk scoping: admin lihat
+semua + filter opsional, reseller (via `reseller_users` membership aktif)
+otomatis `WHERE reseller_id = miliknya sendiri`, ditegakkan di query, bukan
+di UI.
+
 ## Installation / Work Order (v0.5.0)
 
 Semua endpoint di bawah ada di dalam grup middleware `reseller.context` —

@@ -630,7 +630,51 @@ func (m *Manager) registerHandlers(e *entry) {
 
 		case *events.KeepAliveTimeout:
 			slog.Warn("keepalive timeout", "sessionKey", e.key, "errorCount", v.ErrorCount)
+
+		case *events.Message:
+			m.onIncomingMessage(e, v)
 		}
+	})
+}
+
+// onIncomingMessage — v0.13.1, listener pesan masuk (padanan case
+// events.Message di eventHandler() contoh resmi whatsmeow, client_test.go —
+// lihat komentar di atas package ini). Filter IsFromMe/IsGroup diterapkan DI
+// SINI, sebelum apa pun diteruskan ke Laravel — gateway ini konteksnya
+// percakapan 1-on-1 customer/teknisi ke nomor bisnis, bukan grup, dan pesan
+// dari device kita sendiri (mis. pesan yang kita kirim lewat WhatsApp app
+// asli, bukan lewat SendMessage()) bukan "pesan masuk" yang relevan.
+//
+// TIDAK ADA state machine/routing/business logic di sini — v0.13.1 murni
+// menangkap+meneruskan payload mentah ke Laravel lewat webhook. Keputusan
+// apa yang dilakukan dengan isi pesan ini (v0.13.2+) sama sekali bukan
+// urusan package ini.
+func (m *Manager) onIncomingMessage(e *entry, evt *events.Message) {
+	if evt.Info.IsFromMe || evt.Info.IsGroup {
+		return
+	}
+
+	text := evt.Message.GetConversation()
+	if text == "" {
+		text = evt.Message.GetExtendedTextMessage().GetText()
+	}
+
+	if text == "" {
+		// Bukan pesan teks (media/lokasi/stiker/dll) — v0.13.1 cuma
+		// menangani teks, sesuai instruksi. Bukan error, tidak perlu log.
+		return
+	}
+
+	slog.Info("incoming text message", "sessionKey", e.key, "sender", evt.Info.Sender.User, "messageId", evt.Info.ID)
+
+	m.notifier.NotifyIncomingMessage(webhook.IncomingMessagePayload{
+		SessionKey:  e.key,
+		SenderPhone: jidnorm.ToLocalIndonesian(evt.Info.Sender.User),
+		ChatJID:     evt.Info.Chat.String(),
+		Text:        text,
+		MessageID:   evt.Info.ID,
+		Timestamp:   evt.Info.Timestamp.Unix(),
+		PushName:    evt.Info.PushName,
 	})
 }
 

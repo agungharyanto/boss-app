@@ -5,6 +5,7 @@ namespace App\Livewire\Whatsapp;
 use App\Enums\WhatsappEventType;
 use App\Models\Reseller;
 use App\Models\WhatsappGatewaySettings as WhatsappGatewaySettingsModel;
+use App\Models\WhatsappIncomingMessage;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
 use App\Models\WhatsappSession;
@@ -41,6 +42,13 @@ class WhatsappGatewayIndex extends Component
 
     public string $statusFilter = '';
 
+    // Dipakai BERSAMA oleh tab Pesan Keluar (WhatsappMessageLog.reseller_id) DAN
+    // tab Pesan Masuk (WhatsappIncomingMessage.reseller_id, v0.13.1
+    // perluasan) — satu properti, sesuai instruksi reuse PERSIS pola filter
+    // yang sama; keduanya adalah kolom `reseller_id` (int) dengan makna
+    // yang identik (admin-only, "Semua Reseller" default). Kolom baru
+    // $incomingSessionFilter yang sempat ada sebelum keputusan reuse ini
+    // dihapus lagi.
     public ?int $resellerFilter = null;
 
     public int $rateLimitDelayMin = 5;
@@ -67,9 +75,44 @@ class WhatsappGatewayIndex extends Component
     /** id sesi yang kode pairing-nya baru saja diterbitkan — supaya tampil di panel yang benar. */
     public ?int $pairingCodeSessionId = null;
 
+    /**
+     * Reseller yang login sebagai (dari App\Support\ResellerContext, null =
+     * admin/staff langsung). Resolve SEKALI di mount(), disimpan sebagai
+     * public property — BUKAN dipanggil ulang lewat app(ResellerContext::class)
+     * tiap render() (seperti sebelumnya). ResellerContext di-resolve oleh
+     * middleware `reseller.context`, yang HANYA berjalan di route GET awal
+     * (`/whatsapp-gateway`, routes/web.php) — route internal Livewire
+     * (`POST .../livewire/update`, didaftarkan package Livewire sendiri,
+     * bukan lewat routes/web.php) TIDAK PERNAH dibungkus middleware itu.
+     * Dikonfirmasi langsung: `php artisan route:list -vv` untuk route itu
+     * cuma menunjukkan EncryptCookies/AddQueuedCookiesToResponse/
+     * StartSession/ShareErrorsFromSession/ValidateCsrfToken/
+     * SubstituteBindings/SetLocale/RequireLivewireHeaders — nol
+     * reseller.context. Akibatnya `app(ResellerContext::class)->hasReseller()`
+     * SELALU false di request Livewire manapun SETELAH request GET pertama
+     * (klik tab, dst) — bug nyata, bukan cuma soal tab "Pesan Masuk"
+     * (ditemukan v0.13.1, tapi PRE-EXISTING, bukan diperkenalkan sub-versi
+     * ini): $mySession dan $resellerIdForTemplates di render() ikut rusak
+     * dengan cara yang sama. Livewire otomatis mem-persist PUBLIC PROPERTY
+     * lewat siklus hydrate/dehydrate antar request (bukan lewat middleware
+     * apa pun) — itu sebabnya resolve sekali + simpan properti adalah
+     * satu-satunya cara nilainya tetap benar di render() kedua dst.
+     *
+     * Method AKSI (createSession/editTemplate/saveTemplate/
+     * resetTemplateToDefault) punya bug KELAS SAMA (masing-masing dulu
+     * panggil app(ResellerContext::class) sendiri, ditemukan lewat grep
+     * menyeluruh — persis 4 method ini yang punya pola itu) — SUDAH
+     * DIPERBAIKI juga, semuanya baca $this->resellerId, tidak pernah
+     * resolve ulang dari container setelah mount().
+     */
+    public ?int $resellerId = null;
+
     public function mount(): void
     {
         $this->authorize('viewAny', WhatsappSession::class);
+
+        $context = app(ResellerContext::class);
+        $this->resellerId = $context->hasReseller() ? $context->reseller()->id : null;
 
         if ($this->isAdmin()) {
             $this->tab = 'overview';
@@ -97,16 +140,14 @@ class WhatsappGatewayIndex extends Component
      */
     public function createSession(WhatsappSessionService $service): void
     {
-        $context = app(ResellerContext::class);
         $isAdmin = $this->isAdmin();
-
-        $resellerId = $context->hasReseller() ? $context->reseller()->id : null;
+        $resellerId = $this->resellerId;
 
         if (! $isAdmin && $resellerId === null) {
             abort(403, 'Tidak terikat ke reseller manapun.');
         }
 
-        $tenantId = $isAdmin ? auth()->user()->tenant_id : $context->reseller()->tenant_id;
+        $tenantId = $isAdmin ? auth()->user()->tenant_id : Reseller::findOrFail($resellerId)->tenant_id;
 
         $this->authorize('manage', new WhatsappSession(['reseller_id' => $isAdmin ? null : $resellerId]));
 
@@ -182,8 +223,7 @@ class WhatsappGatewayIndex extends Component
 
     public function editTemplate(string $eventType): void
     {
-        $context = app(ResellerContext::class);
-        $resellerId = $context->hasReseller() ? $context->reseller()->id : null;
+        $resellerId = $this->resellerId;
 
         $template = WhatsappMessageTemplate::withoutGlobalScopes()
             ->where('tenant_id', auth()->user()->tenant_id)
@@ -199,8 +239,7 @@ class WhatsappGatewayIndex extends Component
 
     public function saveTemplate(WhatsappTemplateService $service): void
     {
-        $context = app(ResellerContext::class);
-        $resellerId = $context->hasReseller() ? $context->reseller()->id : null;
+        $resellerId = $this->resellerId;
 
         $this->authorize('manage', new WhatsappMessageTemplate(['reseller_id' => $resellerId]));
 
@@ -221,16 +260,13 @@ class WhatsappGatewayIndex extends Component
 
     public function resetTemplateToDefault(string $eventType, WhatsappTemplateService $service): void
     {
-        $context = app(ResellerContext::class);
-
-        if (! $context->hasReseller()) {
+        if ($this->resellerId === null) {
             return;
         }
 
-        $reseller = $context->reseller();
-        $this->authorize('manage', new WhatsappMessageTemplate(['reseller_id' => $reseller->id]));
+        $this->authorize('manage', new WhatsappMessageTemplate(['reseller_id' => $this->resellerId]));
 
-        $service->resetToDefault(auth()->user()->tenant_id, $reseller->id, WhatsappEventType::from($eventType));
+        $service->resetToDefault(auth()->user()->tenant_id, $this->resellerId, WhatsappEventType::from($eventType));
 
         session()->flash('status', 'Template direset ke default ISP.');
     }
@@ -285,11 +321,10 @@ class WhatsappGatewayIndex extends Component
 
     public function render()
     {
-        $context = app(ResellerContext::class);
         $isAdmin = $this->isAdmin();
 
-        $mySession = $context->hasReseller()
-            ? WhatsappSession::where('reseller_id', $context->reseller()->id)->first()
+        $mySession = $this->resellerId !== null
+            ? WhatsappSession::where('reseller_id', $this->resellerId)->first()
             : null;
 
         // Shown in its own dedicated block (admin manages this one
@@ -304,7 +339,7 @@ class WhatsappGatewayIndex extends Component
             ? WhatsappSession::with('reseller')->whereNotNull('reseller_id')->orderBy('reseller_id')->get()
             : collect();
 
-        $resellerIdForTemplates = $context->hasReseller() ? $context->reseller()->id : null;
+        $resellerIdForTemplates = $this->resellerId;
 
         $templates = collect(WhatsappEventType::cases())->map(function (WhatsappEventType $eventType) use ($resellerIdForTemplates) {
             $own = WhatsappMessageTemplate::withoutGlobalScopes()
@@ -337,6 +372,42 @@ class WhatsappGatewayIndex extends Component
             ->latest()
             ->paginate(15);
 
+        $resellers = $isAdmin ? Reseller::orderBy('name')->get() : collect();
+
+        // "Pesan Masuk" (v0.13.1, diperluas) — sekarang VISIBLE untuk
+        // reseller juga (bukan admin-only lagi), tapi scoping ditegakkan
+        // di QUERY-nya, bukan cuma UI (defense-in-depth):
+        // - Admin: lihat semua (termasuk reseller_id null / Direct),
+        //   filter opsional via $resellerFilter (reuse PERSIS pola Pesan
+        //   Keluar di atas — properti yang sama).
+        // - Reseller (context resolved dari reseller_users membership
+        //   aktif, App\Support\ResellerContext): WHERE reseller_id = milik
+        //   sendiri secara eksplisit — tidak pernah bergantung pada scope
+        //   Eloquent global (model ini memang tidak punya satu pun, lihat
+        //   docblock model), supaya tidak ada jalan bocor lewat properti
+        //   Livewire yang dipaksa dari luar (mis. force-set $tab).
+        // - Bukan admin & bukan reseller (mustahil tercapai — viewAny()
+        //   WhatsappSessionPolicy sudah mensyaratkan salah satu): null,
+        //   tab tidak dirender di blade.
+        $canSeeIncoming = $isAdmin || $this->resellerId !== null;
+
+        $incomingMessages = match (true) {
+            $isAdmin => WhatsappIncomingMessage::query()
+                ->when($this->resellerFilter !== null, fn ($q) => $q->where('reseller_id', $this->resellerFilter))
+                ->latest('received_at')
+                ->paginate(15, ['*'], 'incoming-page'),
+            $this->resellerId !== null => WhatsappIncomingMessage::query()
+                ->where('reseller_id', $this->resellerId)
+                ->latest('received_at')
+                ->paginate(15, ['*'], 'incoming-page'),
+            default => null,
+        };
+
+        $resellersById = $resellers->keyBy('id');
+        if (! $isAdmin && $this->resellerId !== null) {
+            $resellersById->put($this->resellerId, Reseller::find($this->resellerId));
+        }
+
         return view('livewire.whatsapp.whatsapp-gateway-index', [
             'isAdmin' => $isAdmin,
             'mySession' => $mySession,
@@ -344,7 +415,10 @@ class WhatsappGatewayIndex extends Component
             'resellerSessions' => $resellerSessions,
             'templates' => $templates,
             'logs' => $logs,
-            'resellers' => $isAdmin ? Reseller::orderBy('name')->get() : collect(),
+            'resellers' => $resellers,
+            'canSeeIncoming' => $canSeeIncoming,
+            'incomingMessages' => $incomingMessages,
+            'resellersById' => $resellersById,
         ]);
     }
 }

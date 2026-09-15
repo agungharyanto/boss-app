@@ -137,4 +137,89 @@ class WorkOrderShowLivewireTest extends TestCase
         $this->assertSame('NewSsid', $device->ssid);
         $this->assertSame('oldpassword1', $device->wifi_password);
     }
+
+    // --- v0.26.1 — "Jadwalkan Kunjungan" ---
+
+    public function test_view_only_admin_does_not_see_the_atur_jadwal_button(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => $reseller->id]);
+        $viewer = User::factory()->create(['tenant_id' => $tenant->id]);
+        $viewer->givePermissionTo(Permission::firstOrCreate(['name' => 'work_orders.view', 'guard_name' => 'web']));
+
+        Livewire::actingAs($viewer)
+            ->test(WorkOrderShow::class, ['work_order' => $workOrder])
+            ->assertOk()
+            ->assertDontSee('Atur Jadwal');
+    }
+
+    public function test_work_order_without_a_schedule_shows_the_belum_ada_janji_message(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => $reseller->id, 'scheduled_at' => null]);
+        $owner = $this->resellerOwner($tenant, $reseller);
+
+        Livewire::actingAs($owner)
+            ->test(WorkOrderShow::class, ['work_order' => $workOrder])
+            ->assertSee('Belum ada janji spesifik')
+            ->assertSee('Atur Jadwal');
+    }
+
+    public function test_saving_a_schedule_persists_it_and_flashes_a_message(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => $reseller->id, 'scheduled_at' => null]);
+        $owner = $this->resellerOwner($tenant, $reseller);
+
+        Livewire::actingAs($owner)
+            ->test(WorkOrderShow::class, ['work_order' => $workOrder])
+            ->call('startEditingSchedule')
+            ->set('scheduledAtInput', '2026-10-05T09:00')
+            ->call('saveSchedule')
+            ->assertSet('editingSchedule', false)
+            ->assertSee('tersimpan');
+
+        $this->assertSame('2026-10-05 09:00:00', $workOrder->fresh()->scheduled_at->format('Y-m-d H:i:s'));
+    }
+
+    public function test_saving_an_empty_schedule_clears_an_existing_one(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => $reseller->id,
+            'scheduled_at' => '2026-10-01 10:00:00',
+        ]);
+        $owner = $this->resellerOwner($tenant, $reseller);
+
+        Livewire::actingAs($owner)
+            ->test(WorkOrderShow::class, ['work_order' => $workOrder])
+            ->call('startEditingSchedule')
+            ->assertSet('scheduledAtInput', '2026-10-01T10:00')
+            ->set('scheduledAtInput', '')
+            ->call('saveSchedule');
+
+        $this->assertNull($workOrder->fresh()->scheduled_at);
+    }
+
+    public function test_an_invalid_schedule_value_shows_a_validation_error(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => $reseller->id, 'scheduled_at' => null]);
+        $owner = $this->resellerOwner($tenant, $reseller);
+
+        Livewire::actingAs($owner)
+            ->test(WorkOrderShow::class, ['work_order' => $workOrder])
+            ->call('startEditingSchedule')
+            ->set('scheduledAtInput', 'bukan-tanggal')
+            ->call('saveSchedule')
+            ->assertHasErrors(['scheduledAtInput']);
+
+        $this->assertNull($workOrder->fresh()->scheduled_at);
+    }
 }

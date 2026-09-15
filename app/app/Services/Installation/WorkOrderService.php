@@ -37,16 +37,27 @@ class WorkOrderService
      * port. The port is re-checked under a row lock right before reserving
      * it (not just trusted from the locate query) to avoid two work orders
      * racing for the same port between locate and reserve.
+     *
+     * v0.26.1 — `$scheduledAt` (nullable) is the customer's specific
+     * visit-appointment day+time, set by sales/admin at creation time.
+     * Stored as-is on `work_orders.scheduled_at`, nothing else reads it
+     * yet — v0.26.2 (a scheduled command, NOT built this sub-version)
+     * will use it to decide WHEN a work order gets dispatched to its
+     * assigned technician: a null value means "no specific appointment,
+     * dispatch immediately once assigned"; a real value means "dispatch
+     * exactly 2 hours before this timestamp". This method itself does
+     * NOT trigger any dispatch/notification — v0.26.1 is wiring only.
      */
-    public function createFromSubscription(Subscription $subscription): WorkOrder
+    public function createFromSubscription(Subscription $subscription, ?string $scheduledAt = null): WorkOrder
     {
-        return DB::transaction(function () use ($subscription) {
+        return DB::transaction(function () use ($subscription, $scheduledAt) {
             $workOrder = WorkOrder::create([
                 'tenant_id' => $subscription->tenant_id,
                 'reseller_id' => $subscription->reseller_id,
                 'subscription_id' => $subscription->id,
                 'customer_id' => $subscription->customer_id,
                 'status' => WorkOrderStatus::PendingOdpCheck,
+                'scheduled_at' => $scheduledAt,
             ]);
 
             $candidate = $this->odpLocator->findNearestAvailable($subscription->customer);
@@ -86,6 +97,25 @@ class WorkOrderService
         if ($equipmentReady && $workOrder->odp_port_id !== null) {
             $this->transition($workOrder, WorkOrderStatus::Ready);
         }
+
+        return $workOrder->fresh();
+    }
+
+    /**
+     * v0.26.1 — set/ubah/kosongkan janji hari+jam kunjungan SETELAH work
+     * order sudah dibuat (mis. sales belum tahu jadwalnya saat create,
+     * atau perlu reschedule) — genuinely satu-satunya jalur "edit"
+     * lain selain `createFromSubscription()`, dipakai dari `WorkOrderShow`
+     * (tidak ada create-form UI di codebase ini per investigasi v0.26.0
+     * Langkah 0 — WO dibuat API-only, jadi UI yang relevan untuk field ini
+     * adalah halaman detail WO yang sudah ada, bukan form create baru).
+     * Sengaja TIDAK membatasi status WO yang boleh di-reschedule — tidak
+     * diminta secara eksplisit, dan status Completed/Cancelled tetap
+     * boleh punya scheduled_at historis yang benar.
+     */
+    public function scheduleVisit(WorkOrder $workOrder, ?string $scheduledAt): WorkOrder
+    {
+        $workOrder->update(['scheduled_at' => $scheduledAt]);
 
         return $workOrder->fresh();
     }

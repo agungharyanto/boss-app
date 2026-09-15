@@ -4,6 +4,7 @@ namespace App\Livewire\Staff;
 
 use App\Models\User;
 use App\Services\StaffService;
+use App\Support\WhatsappPhone;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Validate;
@@ -33,10 +34,14 @@ class StaffIndex extends Component
     #[Validate('required|string|max:255')]
     public string $name = '';
 
-    #[Validate('required|email|max:255')]
-    public string $email = '';
+    // v0.22.2 — jadi OPSIONAL (dulu wajib). Tipe nullable supaya bisa
+    // di-null-kan sebelum validate() saat dikosongkan — lihat
+    // createStaff()/updateStaff().
+    #[Validate('nullable|email|max:255')]
+    public ?string $email = '';
 
-    #[Validate('nullable|string|max:30')]
+    // v0.22.2 — jadi WAJIB (dulu opsional), alat login utama.
+    #[Validate('required|string|max:30')]
     public string $phone = '';
 
     #[Validate('required|string')]
@@ -56,10 +61,10 @@ class StaffIndex extends Component
     #[Validate('required|string|max:255')]
     public string $editName = '';
 
-    #[Validate('required|email|max:255')]
-    public string $editEmail = '';
+    #[Validate('nullable|email|max:255')]
+    public ?string $editEmail = '';
 
-    #[Validate('nullable|string|max:30')]
+    #[Validate('required|string|max:30')]
     public string $editPhone = '';
 
     #[Validate('required|string')]
@@ -79,17 +84,26 @@ class StaffIndex extends Component
     {
         $this->authorize('create', User::class);
 
+        // Normalize/null-kan SEBELUM validate() — supaya Rule::unique()
+        // membandingkan nilai yang SUDAH sama bentuknya dengan yang
+        // tersimpan di DB (StaffService sendiri menormalisasi lagi saat
+        // simpan, idempoten — lihat docblock-nya), dan supaya string
+        // kosong dianggap benar-benar kosong oleh rule 'nullable' (bukan
+        // bergantung perilaku implisit Livewire terhadap '').
+        $this->phone = WhatsappPhone::normalize($this->phone);
+        $this->email = $this->email !== '' ? $this->email : null;
+
         $this->validate([
             'name' => 'required|string|max:255',
-            'email' => ['required', 'email', 'max:255', Rule::unique(User::class, 'email')],
-            'phone' => 'nullable|string|max:30',
+            'email' => ['nullable', 'email', 'max:255', Rule::unique(User::class, 'email')],
+            'phone' => ['required', 'string', 'max:30', Rule::unique(User::class, 'phone')],
             'role' => 'required|string|in:'.implode(',', Role::pluck('name')->all()),
         ]);
 
         $result = $service->create([
             'name' => $this->name,
             'email' => $this->email,
-            'phone' => $this->phone !== '' ? $this->phone : null,
+            'phone' => $this->phone,
             'role' => $this->role,
             'tenant_id' => auth()->user()->tenant_id,
         ]);
@@ -122,17 +136,20 @@ class StaffIndex extends Component
         $user = User::where('tenant_id', auth()->user()->tenant_id)->findOrFail($this->editingUserId);
         $this->authorize('update', $user);
 
+        $this->editPhone = WhatsappPhone::normalize($this->editPhone);
+        $this->editEmail = $this->editEmail !== '' ? $this->editEmail : null;
+
         $this->validate([
             'editName' => 'required|string|max:255',
-            'editEmail' => ['required', 'email', 'max:255', Rule::unique(User::class, 'email')->ignore($user->id)],
-            'editPhone' => 'nullable|string|max:30',
+            'editEmail' => ['nullable', 'email', 'max:255', Rule::unique(User::class, 'email')->ignore($user->id)],
+            'editPhone' => ['required', 'string', 'max:30', Rule::unique(User::class, 'phone')->ignore($user->id)],
             'editRole' => 'required|string|in:'.implode(',', Role::pluck('name')->all()),
         ]);
 
         $service->update($user, [
             'name' => $this->editName,
             'email' => $this->editEmail,
-            'phone' => $this->editPhone !== '' ? $this->editPhone : null,
+            'phone' => $this->editPhone,
             'role' => $this->editRole,
         ]);
 

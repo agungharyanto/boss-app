@@ -38,6 +38,14 @@ class LoginIdentifierResolver
      * tenant, sama persis pola `ReferrerLoginController` lama (ambil yang
      * pertama by id kalau ada tabrakan lintas tenant, kasus yang tidak
      * terjadi di deployment single-tenant sekarang).
+     *
+     * SENGAJA tidak dinormalisasi di sini — `referrers.phone` sudah ada
+     * sejak v0.9.2, formatnya apa adanya seperti diketik admin dulu,
+     * tidak pernah lewat `WhatsappPhone::normalize()`. Menormalisasi baru
+     * di titik lookup ini berisiko membuat baris lama yang formatnya
+     * beda-beda jadi tidak ketemu lagi — perilaku method ini TIDAK diubah
+     * sama sekali oleh v0.22.2 (lihat `resolvePhoneUser()` di bawah untuk
+     * jalur baru yang menormalisasi).
      */
     public function resolveReferrerUser(string $phone): ?User
     {
@@ -49,5 +57,34 @@ class LoginIdentifierResolver
             ->first();
 
         return $referrer !== null ? User::find($referrer->user_id) : null;
+    }
+
+    /**
+     * v0.22.2 — input non-email (nomor HP), satu titik orkestrasi dipakai
+     * bareng Fortify::authenticateUsing() DAN ReferrerLoginController agar
+     * urutannya tidak bisa didrift antar caller. Cek `users.phone` (staff)
+     * DULU, baru fallback ke `resolveReferrerUser()` (Referrer) kalau
+     * tidak ketemu — staff diprioritaskan karena akun staff dikelola admin
+     * (StaffService), lebih sedikit dan lebih terpercaya identitasnya
+     * dibanding akun Referrer yang self-service.
+     *
+     * Dinormalisasi via `WhatsappPhone::normalize()` di sisi lookup ini
+     * supaya "0812.../+62812.../62812..." semua dianggap nomor yang sama
+     * — `StaffService::create()`/`update()` menormalisasi SAAT SIMPAN
+     * juga (lihat docblock-nya), jadi kedua sisi konsisten. Fallback ke
+     * `resolveReferrerUser($phone)` memakai `$phone` MENTAH (bukan
+     * `$normalized`) — perilaku jalur Referrer sengaja tidak diubah.
+     */
+    public function resolvePhoneUser(string $phone): ?User
+    {
+        $normalized = WhatsappPhone::normalize($phone);
+
+        $staff = User::where('phone', $normalized)->first();
+
+        if ($staff !== null) {
+            return $staff;
+        }
+
+        return $this->resolveReferrerUser($phone);
     }
 }

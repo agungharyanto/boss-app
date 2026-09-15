@@ -74,12 +74,12 @@
                 @error('name') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             </div>
             <div>
-                <label class="block text-sm font-medium text-gray-700">{{ __('Email') }}</label>
+                <label class="block text-sm font-medium text-gray-700">{{ __('Email') }} <span class="text-gray-400 font-normal">({{ __('opsional') }})</span></label>
                 <input type="email" wire:model="email" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                 @error('email') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             </div>
             <div>
-                <label class="block text-sm font-medium text-gray-700">{{ __('Nomor HP') }} <span class="text-gray-400 font-normal">({{ __('opsional') }})</span></label>
+                <label class="block text-sm font-medium text-gray-700">{{ __('Nomor HP') }} <span class="text-xs text-gray-500 font-normal">({{ __('wajib — alat login utama') }})</span></label>
                 <input type="text" wire:model="phone" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                 @error('phone') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             </div>
@@ -133,11 +133,11 @@
                                         @error('editName') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                                     </div>
                                     <div>
-                                        <input type="email" wire:model="editEmail" placeholder="{{ __('Email') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                        <input type="email" wire:model="editEmail" placeholder="{{ __('Email (opsional)') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                                         @error('editEmail') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                                     </div>
                                     <div>
-                                        <input type="text" wire:model="editPhone" placeholder="{{ __('Nomor HP') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                        <input type="text" wire:model="editPhone" placeholder="{{ __('Nomor HP (wajib)') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                                         @error('editPhone') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                                     </div>
                                     <div>
@@ -155,8 +155,8 @@
                             </td>
                         @else
                             <td class="px-4 py-2 text-sm text-gray-800">{{ $member->name }}</td>
-                            <td class="px-4 py-2 text-sm text-gray-600">{{ $member->email }}</td>
-                            <td class="px-4 py-2 text-sm text-gray-600">{{ $member->phone ?? '—' }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-600">{{ $member->email ?? '—' }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-600">{{ $member->phone }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $member->roles->first()?->name ?? '—' }}</td>
                             <td class="px-4 py-2 text-sm">
                                 <span class="px-2 py-0.5 rounded-full text-xs {{ $member->is_disabled ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700' }}">

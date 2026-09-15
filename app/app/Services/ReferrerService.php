@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Referrer;
 use App\Models\User;
+use App\Support\WhatsappPhone;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -107,18 +108,34 @@ class ReferrerService
      *
      * users.email has no real use for a Referrer account (login is phone +
      * password, see the referrer portal login flow) but the column is
-     * NOT NULL + globally unique at the schema level — a deterministic
-     * placeholder keyed off the Referrer's own id (unique by construction)
-     * is synthesized here rather than asking the admin to type one in.
+     * globally unique at the schema level — a deterministic placeholder
+     * keyed off the Referrer's own id (unique by construction) is
+     * synthesized here rather than asking the admin to type one in.
+     *
+     * v0.22.2 — users.phone is now NOT NULL + UNIQUE globally (real
+     * consequence of that migration, found and fixed while building it:
+     * this was the ONE other genuinely active feature besides StaffService
+     * that calls User::create() — it would have started throwing a raw
+     * QueryException on every single call otherwise). Sourced from the
+     * Referrer's own phone (normalized) — referrers.phone is only unique
+     * PER TENANT, so a cross-tenant collision is a real, if rare,
+     * possibility; checked explicitly here so it surfaces as a clear
+     * message instead of a raw DB constraint violation.
      */
     private function attachNewLoginAccount(Referrer $referrer): string
     {
         $generatedPassword = Str::password(16);
+        $normalizedPhone = WhatsappPhone::normalize($referrer->phone);
+
+        if (User::where('phone', $normalizedPhone)->exists()) {
+            throw new InvalidArgumentException('Nomor HP Referrer ini sudah dipakai akun login lain (staff atau Referrer lain) — tidak bisa membuat akun login baru dengan nomor yang sama.');
+        }
 
         $user = User::create([
             'tenant_id' => $referrer->tenant_id,
             'name' => $referrer->name,
             'email' => "referrer-{$referrer->id}@portal.local",
+            'phone' => $normalizedPhone,
             'password' => Hash::make($generatedPassword),
             'email_verified_at' => now(),
         ]);

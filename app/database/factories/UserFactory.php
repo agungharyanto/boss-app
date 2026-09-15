@@ -29,6 +29,11 @@ class UserFactory extends Factory
             'tenant_id' => Tenant::factory(),
             'name' => fake()->name(),
             'email' => fake()->unique()->safeEmail(),
+            // v0.22.2 — users.phone sekarang NOT NULL + UNIQUE (alat login
+            // utama). fake()->unique() supaya ratusan test lain di
+            // codebase ini yang membuat User::factory()->create() tanpa
+            // eksplisit set phone tidak collision satu sama lain.
+            'phone' => fake()->unique()->numerify('08##########'),
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),

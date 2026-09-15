@@ -24,6 +24,7 @@ class WhatsappMessageTemplateSeeder extends Seeder
             WhatsappEventType::CustomerRegistered->value => 'Halo {customer_name}, terima kasih telah mendaftar layanan {package_name} di {company_name}. Tim kami akan segera menghubungi Anda untuk proses instalasi.',
             WhatsappEventType::CustomerSuspendedReminder->value => 'Halo {customer_name}, layanan Anda saat ini berstatus suspend. Segera lakukan pembayaran tertunggak agar layanan dapat diaktifkan kembali. Hubungi {company_name} untuk bantuan.',
             WhatsappEventType::ReferrerActionOtp->value => 'Halo {referrer_name}, kode verifikasi Anda: *{otp_code}*. Digunakan untuk: {action_label}. Berlaku {otp_minutes} menit. JANGAN bagikan kode ini ke siapa pun — {company_name}.',
+            WhatsappEventType::DuplicateSessionAttempt->value => 'Nomor WhatsApp Anda baru saja dicoba dipasang ulang di BOSS App pada akun {reseller_name} ({attempted_at}). Kalau ini bukan Anda, harap segera hubungi admin ISP Anda — {company_name}.',
         ];
 
         Tenant::all()->each(function (Tenant $tenant) use ($defaults) {

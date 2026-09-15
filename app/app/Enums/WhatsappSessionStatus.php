@@ -9,6 +9,17 @@ enum WhatsappSessionStatus: string
     case Disconnected = 'disconnected';
     case LoggedOut = 'logged_out';
 
+    /**
+     * Nomor WA fisik yang baru saja pairing SUDAH terhubung di session
+     * BOSS App lain (session_key berbeda) — WhatsappSessionService::
+     * applyStatus() menolaknya SEBELUM disimpan sebagai `connected`, paksa
+     * logout sisi gateway, dan kirim notifikasi WA lewat session lama yang
+     * masih aktif. Reason lengkapnya ada di `whatsapp_sessions.status_reason`
+     * (migration `2026_09_15_100000_...`) — label di bawah cuma ringkas,
+     * UI menampilkan status_reason di sampingnya untuk penjelasan penuh.
+     */
+    case RejectedDuplicate = 'rejected_duplicate';
+
     public function label(): string
     {
         return match ($this) {
@@ -16,6 +27,7 @@ enum WhatsappSessionStatus: string
             self::Connected => 'Terhubung',
             self::Disconnected => 'Terputus',
             self::LoggedOut => 'Logout',
+            self::RejectedDuplicate => 'Ditolak (Nomor Duplikat)',
         };
     }
 

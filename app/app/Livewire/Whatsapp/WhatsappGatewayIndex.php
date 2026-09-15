@@ -98,10 +98,12 @@ class WhatsappGatewayIndex extends Component
      * apa pun) — itu sebabnya resolve sekali + simpan properti adalah
      * satu-satunya cara nilainya tetap benar di render() kedua dst.
      *
-     * CATATAN scope: method AKSI (createSession/editTemplate/saveTemplate/
-     * resetTemplateToDefault) masih punya bug KELAS SAMA (masing-masing
-     * panggil app(ResellerContext::class) sendiri) — TIDAK disentuh di sini,
-     * di luar scope perbaikan tab ini, dilaporkan terpisah.
+     * Method AKSI (createSession/editTemplate/saveTemplate/
+     * resetTemplateToDefault) punya bug KELAS SAMA (masing-masing dulu
+     * panggil app(ResellerContext::class) sendiri, ditemukan lewat grep
+     * menyeluruh — persis 4 method ini yang punya pola itu) — SUDAH
+     * DIPERBAIKI juga, semuanya baca $this->resellerId, tidak pernah
+     * resolve ulang dari container setelah mount().
      */
     public ?int $resellerId = null;
 
@@ -138,16 +140,14 @@ class WhatsappGatewayIndex extends Component
      */
     public function createSession(WhatsappSessionService $service): void
     {
-        $context = app(ResellerContext::class);
         $isAdmin = $this->isAdmin();
-
-        $resellerId = $context->hasReseller() ? $context->reseller()->id : null;
+        $resellerId = $this->resellerId;
 
         if (! $isAdmin && $resellerId === null) {
             abort(403, 'Tidak terikat ke reseller manapun.');
         }
 
-        $tenantId = $isAdmin ? auth()->user()->tenant_id : $context->reseller()->tenant_id;
+        $tenantId = $isAdmin ? auth()->user()->tenant_id : Reseller::findOrFail($resellerId)->tenant_id;
 
         $this->authorize('manage', new WhatsappSession(['reseller_id' => $isAdmin ? null : $resellerId]));
 
@@ -223,8 +223,7 @@ class WhatsappGatewayIndex extends Component
 
     public function editTemplate(string $eventType): void
     {
-        $context = app(ResellerContext::class);
-        $resellerId = $context->hasReseller() ? $context->reseller()->id : null;
+        $resellerId = $this->resellerId;
 
         $template = WhatsappMessageTemplate::withoutGlobalScopes()
             ->where('tenant_id', auth()->user()->tenant_id)
@@ -240,8 +239,7 @@ class WhatsappGatewayIndex extends Component
 
     public function saveTemplate(WhatsappTemplateService $service): void
     {
-        $context = app(ResellerContext::class);
-        $resellerId = $context->hasReseller() ? $context->reseller()->id : null;
+        $resellerId = $this->resellerId;
 
         $this->authorize('manage', new WhatsappMessageTemplate(['reseller_id' => $resellerId]));
 
@@ -262,16 +260,13 @@ class WhatsappGatewayIndex extends Component
 
     public function resetTemplateToDefault(string $eventType, WhatsappTemplateService $service): void
     {
-        $context = app(ResellerContext::class);
-
-        if (! $context->hasReseller()) {
+        if ($this->resellerId === null) {
             return;
         }
 
-        $reseller = $context->reseller();
-        $this->authorize('manage', new WhatsappMessageTemplate(['reseller_id' => $reseller->id]));
+        $this->authorize('manage', new WhatsappMessageTemplate(['reseller_id' => $this->resellerId]));
 
-        $service->resetToDefault(auth()->user()->tenant_id, $reseller->id, WhatsappEventType::from($eventType));
+        $service->resetToDefault(auth()->user()->tenant_id, $this->resellerId, WhatsappEventType::from($eventType));
 
         session()->flash('status', 'Template direset ke default ISP.');
     }

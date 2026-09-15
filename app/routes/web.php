@@ -53,6 +53,7 @@ use App\Livewire\Resellers\ResellerIndex;
 use App\Livewire\Resellers\ResellerShow;
 use App\Livewire\Settings\PaymentGatewaySettings;
 use App\Livewire\Settings\ThemeSettings;
+use App\Livewire\Staff\StaffIndex;
 use App\Livewire\Tax\ResellerTaxPolicyIndex;
 use App\Livewire\Tax\TaxComponentIndex;
 use App\Livewire\Whatsapp\WhatsappGatewayIndex;
@@ -312,6 +313,7 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
 
     Route::get('/settings/theme', ThemeSettings::class)->name('settings.theme');
     Route::get('/settings/payment-gateway', PaymentGatewaySettings::class)->name('settings.payment-gateway');
+    Route::get('/staff', StaffIndex::class)->name('staff.index');
     Route::get('/cpe-parameter-maps', CpeParameterMapIndex::class)->name('cpe-parameter-maps.index');
 
     // v0.8.2 — platform-level, same posture as /cpe-parameter-maps above:

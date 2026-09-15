@@ -164,4 +164,65 @@ class UnifiedLoginTest extends TestCase
     {
         $this->get('/referrer/login')->assertRedirect(route('login'));
     }
+
+    /**
+     * v0.22.1 — CRUD Staff (Manajemen User). Staff yang di-disable harus
+     * diblokir login di jalur Fortify utama (`/login`), dengan pesan BEDA
+     * dari 'auth.failed' generik (kredensial di titik ini sudah terbukti
+     * benar, jadi pesan lebih spesifik tidak membocorkan info baru).
+     */
+    public function test_a_disabled_staff_account_is_blocked_at_the_main_login_with_a_distinct_message(): void
+    {
+        $user = $this->staffUser('disabled-staff@boss.local', 'rahasia123');
+        $user->update(['is_disabled' => true]);
+
+        $response = $this->from('/login')->post('/login', ['login' => 'disabled-staff@boss.local', 'password' => 'rahasia123']);
+
+        $response->assertSessionHasErrors(['login' => __('auth.account_disabled')]);
+        $this->assertGuest();
+    }
+
+    /**
+     * Jalur KEDUA yang genuinely independen dari Fortify::authenticateUsing()
+     * — legacy `/referrer/login` POST controller (guard/login manual sendiri).
+     * WAJIB dapat check yang sama, kalau tidak akun disabled bisa lolos lewat
+     * rute lama ini (resolver menerima identifier email juga di field `phone`).
+     */
+    public function test_a_disabled_staff_account_is_also_blocked_at_the_legacy_referrer_login_post_path(): void
+    {
+        $user = $this->staffUser('disabled-legacy@boss.local', 'rahasia123');
+        $user->update(['is_disabled' => true]);
+
+        $response = $this->from('/referrer/login')->post('/referrer/login', ['phone' => 'disabled-legacy@boss.local', 'password' => 'rahasia123']);
+
+        $response->assertSessionHasErrors(['phone' => __('auth.account_disabled')]);
+        $this->assertGuest();
+    }
+
+    public function test_a_disabled_referrer_account_is_blocked_with_the_distinct_message_too(): void
+    {
+        $referrer = $this->referrerUser('081234509999', 'rahasia123');
+        $referrer->user->update(['is_disabled' => true]);
+
+        $response = $this->from('/login')->post('/login', ['login' => '081234509999', 'password' => 'rahasia123']);
+
+        $response->assertSessionHasErrors(['login' => __('auth.account_disabled')]);
+        $this->assertGuest();
+    }
+
+    public function test_re_enabling_a_disabled_staff_account_allows_login_again(): void
+    {
+        $user = $this->staffUser('re-enable@boss.local', 'rahasia123');
+        $user->update(['is_disabled' => true]);
+
+        $this->post('/login', ['login' => 're-enable@boss.local', 'password' => 'rahasia123']);
+        $this->assertGuest();
+
+        $user->update(['is_disabled' => false]);
+
+        $response = $this->post('/login', ['login' => 're-enable@boss.local', 'password' => 'rahasia123']);
+
+        $response->assertRedirect('/');
+        $this->assertAuthenticatedAs($user);
+    }
 }

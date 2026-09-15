@@ -314,4 +314,96 @@ class UnifiedLoginTest extends TestCase
         $this->assertAuthenticatedAs($staff);
         $this->assertNotEquals($referrer->user->id, auth()->id());
     }
+
+    /**
+     * Membuat baris `users` dengan `phone` MENTAH — SENGAJA bypass
+     * `WhatsappPhone::normalize()`, mereplikasi persis kondisi akun LAMA
+     * (mis. Agung Haryanto, id=37) yang dibuat SEBELUM `StaffService::
+     * create()`/`update()` menormalisasi saat simpan — beda dari
+     * `staffUser()` di atas yang SUDAH menormalisasi sebelum disimpan.
+     */
+    private function staffUserWithRawPhone(string $email, string $password, string $rawPhone): User
+    {
+        $user = User::factory()->create([
+            'email' => $email,
+            'password' => Hash::make($password),
+            'phone' => $rawPhone,
+        ]);
+        $user->assignRole('superadmin');
+
+        return $user;
+    }
+
+    /**
+     * FIX v0.22.2 — bug login via HP untuk akun LAMA yang phone-nya belum
+     * pernah lewat `WhatsappPhone::normalize()` (akar masalah: normalize-
+     * on-save `StaffService` TIDAK retroaktif ke baris yang sudah ada
+     * sebelum revisi itu — lihat migration
+     * `2026_09_15_150000_normalize_existing_users_phone_data`).
+     *
+     * Sengaja MENJALANKAN migration data itu langsung di dalam test (bukan
+     * cuma mengandalkan `RefreshDatabase`'s migrate di awal, yang berjalan
+     * SEBELUM baris User ini dibuat) — supaya test ini benar-benar
+     * membuktikan urutan kejadian yang sama seperti insiden nyata: (1) ada
+     * baris `users.phone` mentah lebih dulu, (2) migration data
+     * menormalisasi, (3) login baru berhasil sesudahnya — bukan cuma
+     * membuktikan resolver-nya sendiri (yang logic-nya memang sudah benar
+     * sejak awal, root cause-nya di DATA, bukan di kode resolver).
+     */
+    public function test_login_works_for_a_pre_existing_account_after_the_phone_normalization_data_migration_runs(): void
+    {
+        // Format mentah PERSIS seperti yang tersimpan di baris Agung yang
+        // memicu insiden ini ('087884374939', tanpa kode negara/plus).
+        $rawPhone = '087884374939';
+        $user = $this->staffUserWithRawPhone('agung-raw@boss.local', 'rahasia123', $rawPhone);
+
+        // Kondisi SEBELUM fix: kolom masih mentah, resolver (yang
+        // menormalisasi INPUT) tidak pernah match.
+        $this->assertSame($rawPhone, $user->fresh()->phone);
+        $this->post('/login', ['login' => $rawPhone, 'password' => 'rahasia123']);
+        $this->assertGuest();
+
+        // Jalankan migration data yang sama seperti yang genuinely
+        // dijalankan terhadap DB produksi/dev untuk fix insiden ini.
+        (require database_path('migrations/2026_09_15_150000_normalize_existing_users_phone_data.php'))->up();
+
+        $this->assertSame(WhatsappPhone::normalize($rawPhone), $user->fresh()->phone);
+
+        // Login harus berhasil sekarang — dites dengan BERBAGAI format,
+        // termasuk format mentah PERSIS yang dulu tersimpan (skenario yang
+        // dulu gagal), bukan cuma format yang sudah rapi.
+        foreach ([$rawPhone, '+6287884374939', '6287884374939', '0878-8437-4939'] as $format) {
+            $this->post('/logout');
+            $response = $this->post('/login', ['login' => $format, 'password' => 'rahasia123']);
+
+            $response->assertRedirect('/');
+            $this->assertAuthenticatedAs($user);
+        }
+    }
+
+    /**
+     * Guard tabrakan migration data — kalau 2 baris `users.phone` mentah
+     * setelah dinormalisasi jadi identik, migration HARUS berhenti dengan
+     * exception jelas SEBELUM menulis apa pun (tidak pernah memaksa salah
+     * satu menang begitu saja).
+     */
+    public function test_the_phone_normalization_data_migration_stops_on_a_collision_without_writing_anything(): void
+    {
+        $userA = $this->staffUserWithRawPhone('a@boss.local', 'rahasia123', '087884374939');
+        $userB = $this->staffUserWithRawPhone('b@boss.local', 'rahasia123', '+6287884374939');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/tabrakan/');
+
+        try {
+            (require database_path('migrations/2026_09_15_150000_normalize_existing_users_phone_data.php'))->up();
+        } finally {
+            // Meski assertion di bawah tidak pernah dieksekusi (exception
+            // sudah keluar dari try), kalau suatu saat guard ini regresi
+            // dan TIDAK throw, finally ini tetap membuktikan tidak ada
+            // baris yang berubah — bukti "tidak pernah dipaksa".
+            $this->assertSame('087884374939', $userA->fresh()->phone);
+            $this->assertSame('+6287884374939', $userB->fresh()->phone);
+        }
+    }
 }

@@ -145,6 +145,66 @@ class WhatsappIncomingMessageTabTest extends TestCase
             ->assertSee('Pesan Masuk');
     }
 
+    /**
+     * Regresi bug nyata (dilaporkan Agung 2026-09-15): tab "Pesan Masuk"
+     * ADA di load awal, tapi HILANG setelah pindah tab lewat Livewire (klik
+     * "Template Pesan"/"Antrian"), dan tetap hilang walau balik lagi —
+     * cuma pulih dengan full page reload.
+     *
+     * Akar masalah (dikonfirmasi `php artisan route:list -vv`): route
+     * internal Livewire (`POST .../livewire/update`) TIDAK PERNAH dibungkus
+     * middleware `reseller.context` (yang cuma jalan di route GET awal
+     * `/whatsapp-gateway`) — jadi App\Support\ResellerContext (singleton
+     * container) genuinely KOSONG lagi di setiap request Livewire
+     * SETELAH request GET pertama, di PRODUKSI SUNGGUHAN.
+     *
+     * `Livewire::test()` yang biasa TIDAK bisa mereproduksi ini — container
+     * (dan singleton ResellerContext di dalamnya) tetap SATU instance yang
+     * sama sepanjang satu method test PHPUnit, beda dari produksi nyata
+     * (setiap request HTTP = container baru). Test ini secara eksplisit
+     * mereset ResellerContext DI TENGAH pengujian (mensimulasikan persis
+     * apa yang genuinely terjadi di request Livewire kedua produksi) untuk
+     * membuktikan fix (resolve $resellerId SEKALI di mount(), simpan
+     * sebagai public property — Livewire mem-persist property lewat
+     * hydrate/dehydrate, bukan lewat middleware) benar-benar menutup bug
+     * ini, bukan cuma "kebetulan lolos" karena container test tidak pernah
+     * di-reset.
+     */
+    public function test_pesan_masuk_tab_survives_reseller_context_reset_between_livewire_requests(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $owner = $this->resellerOwner($tenant, $reseller);
+
+        $component = Livewire::actingAs($owner)
+            ->test(WhatsappGatewayIndex::class)
+            ->assertSee('Pesan Masuk');
+
+        // Simulasikan persis apa yang genuinely terjadi di request Livewire
+        // KEDUA di produksi — middleware `reseller.context` tidak pernah
+        // jalan lagi, jadi singleton-nya balik ke default kosong.
+        app(ResellerContext::class)->set(null);
+
+        $component->set('tab', 'template')
+            ->assertSee('Pesan Masuk')
+            ->assertSee('Template Pesan');
+
+        // Reset lagi sebelum interaksi ketiga — membuktikan ini tahan
+        // berulang kali, bukan cuma sekali kebetulan lolos.
+        app(ResellerContext::class)->set(null);
+
+        $component->set('tab', 'antrian')
+            ->assertSee('Pesan Masuk')
+            ->assertSee('Antrian');
+
+        app(ResellerContext::class)->set(null);
+
+        $component->set('tab', 'pesan-masuk')
+            ->assertOk()
+            ->assertSee('Pesan Masuk')
+            ->assertSee('Belum ada pesan masuk.');
+    }
+
     public function test_reseller_sees_their_own_incoming_messages(): void
     {
         $tenant = Tenant::factory()->create();

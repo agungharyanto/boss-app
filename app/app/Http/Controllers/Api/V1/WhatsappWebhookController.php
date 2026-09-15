@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
+use App\Services\Whatsapp\WhatsappIncomingMessageService;
 use App\Services\Whatsapp\WhatsappSessionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -40,5 +41,31 @@ class WhatsappWebhookController extends Controller
         }
 
         return $this->success(['result' => $applied ? 'applied' : 'rejected'], 'Webhook diterima');
+    }
+
+    /**
+     * v0.13.1 — POST /api/v1/whatsapp/webhook/incoming-message. Pola PERSIS
+     * sessionStatus() di atas: selalu HTTP 200 apa pun hasilnya (hindari
+     * whatsapp-gateway retry-loop — meski NotifyIncomingMessage sisi Go
+     * sendiri tidak retry, konsistensi respons tetap dijaga sama).
+     */
+    public function incomingMessage(Request $request, WhatsappIncomingMessageService $service): JsonResponse
+    {
+        try {
+            $recorded = $service->recordFromWebhook(
+                $request->getContent(),
+                $request->header('X-Whatsapp-Signature'),
+                $request->header('X-Whatsapp-Timestamp'),
+                $request->all(),
+            );
+        } catch (Throwable $e) {
+            Log::error('Whatsapp incoming-message webhook threw an unexpected exception', [
+                'message' => $e->getMessage(),
+            ]);
+
+            return $this->success(['result' => 'error_logged'], 'Webhook diterima');
+        }
+
+        return $this->success(['result' => $recorded ? 'recorded' : 'rejected'], 'Webhook diterima');
     }
 }

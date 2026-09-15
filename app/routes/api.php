@@ -61,6 +61,12 @@ Route::prefix('v1')->group(function () {
     Route::post('whatsapp/webhook/session-status', [WhatsappWebhookController::class, 'sessionStatus'])
         ->middleware('throttle:60,1');
 
+    // Public — same posture as session-status above. v0.13.1 — listener
+    // pesan masuk, HMAC verification inside
+    // WhatsappIncomingMessageService::recordFromWebhook stands in for auth.
+    Route::post('whatsapp/webhook/incoming-message', [WhatsappWebhookController::class, 'incomingMessage'])
+        ->middleware('throttle:60,1');
+
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/me', function () {
             return response()->json([

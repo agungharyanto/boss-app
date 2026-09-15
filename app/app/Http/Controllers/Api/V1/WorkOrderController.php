@@ -80,11 +80,23 @@ class WorkOrderController extends Controller
     {
         $subscription = Subscription::findOrFail($request->validated('subscription_id'));
 
-        $workOrder = $service->createFromSubscription($subscription);
+        $workOrder = $service->createFromSubscription($subscription, $request->validated('scheduled_at'));
 
         return $this->success(new WorkOrderResource($workOrder->load(self::WITH)), 'Work order berhasil dibuat', [], 201);
     }
 
+    /**
+     * v0.26.1 — titik create KEDUA yang genuinely ada di codebase ini
+     * (rute `POST subscriptions/{subscription}/work-order`), TANPA
+     * FormRequest sama sekali — tidak menerima body apa pun sejak awal.
+     * SENGAJA tidak diperluas menerima `scheduled_at` di sub-versi ini —
+     * menambah validasi ad-hoc di sini tanpa FormRequest melanggar
+     * BOSS-006 ("Validation goes through Form Requests"). WO yang dibuat
+     * lewat jalur ini tetap valid (scheduled_at null = dispatch segera,
+     * v0.26.2), cuma tidak bisa langsung membawa janji spesifik. Dicatat
+     * sebagai gap yang diketahui, bukan diperbaiki diam-diam — lihat
+     * laporan v0.26.1.
+     */
     public function storeFromSubscription(Subscription $subscription, WorkOrderService $service): JsonResponse
     {
         $this->authorize('create', [WorkOrder::class, $subscription]);

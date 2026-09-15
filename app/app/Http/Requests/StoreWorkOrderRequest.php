@@ -36,6 +36,12 @@ class StoreWorkOrderRequest extends FormRequest
                 'required',
                 Rule::exists(Subscription::class, 'id')->where('tenant_id', $this->user()->tenant_id),
             ],
+            // v0.26.1 — janji hari+jam kunjungan calon pelanggan, diisi
+            // sales/admin SAAT WO dibuat. Nullable dengan sengaja: WO tanpa
+            // janji spesifik tetap valid (v0.26.2 akan men-dispatch WO itu
+            // SEGERA, bukan menunggu window jadwal — lihat
+            // WorkOrderService::createFromSubscription()'s own docblock).
+            'scheduled_at' => ['nullable', 'date'],
         ];
     }
 }

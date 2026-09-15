@@ -2,8 +2,10 @@
 
 namespace Tests\Feature\Staff;
 
+use App\Enums\ReferrerType;
 use App\Enums\WorkOrderStatus;
 use App\Livewire\Staff\StaffIndex;
+use App\Models\Referrer;
 use App\Models\Reseller;
 use App\Models\ResellerUser;
 use App\Models\Technician;
@@ -278,5 +280,201 @@ class StaffIndexLivewireTest extends TestCase
 
         $this->assertDatabaseHas('users', ['id' => $staff->id]);
         $this->assertDatabaseHas('technicians', ['id' => $technician->id]);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // v0.22.3 — checkbox "Jadikan juga Referrer"
+    // ═══════════════════════════════════════════════════════════════
+
+    public static function referrerEligibleRoles(): array
+    {
+        return [
+            'sales_internal' => ['sales_internal'],
+            'sales_freelance' => ['sales_freelance'],
+            'customer_service' => ['customer_service'],
+            'teknisi' => ['teknisi'],
+        ];
+    }
+
+    public static function referrerIneligibleRoles(): array
+    {
+        return [
+            'superadmin' => ['superadmin'],
+            'administrator' => ['administrator'],
+            'noc' => ['noc'],
+            'billing' => ['billing'],
+            'finance' => ['finance'],
+        ];
+    }
+
+    /**
+     * @dataProvider referrerEligibleRoles
+     */
+    public function test_referrer_checkbox_is_visible_for_eligible_roles(string $role): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('showCreateForm', true)
+            ->set('role', $role)
+            ->assertSee('Jadikan juga Referrer');
+    }
+
+    /**
+     * @dataProvider referrerIneligibleRoles
+     */
+    public function test_referrer_checkbox_is_not_visible_for_ineligible_roles(string $role): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('showCreateForm', true)
+            ->set('role', $role)
+            ->assertDontSee('Jadikan juga Referrer');
+    }
+
+    /**
+     * Ganti role dari eligible ke tidak-eligible (mis. sudah sempat
+     * dicentang lalu ganti pikiran soal role) harus mereset checkbox +
+     * tipe-nya secara otomatis (`updatedRole()`) — bukan cuma
+     * disembunyikan di UI sementara nilainya masih "nyangkut" di server.
+     */
+    public function test_changing_role_away_from_an_eligible_role_resets_the_referrer_checkbox(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('role', 'sales_internal')
+            ->set('wantsReferrer', true)
+            ->assertSet('referrerType', 'sales')
+            ->set('role', 'billing')
+            ->assertSet('wantsReferrer', false)
+            ->assertSet('referrerType', '');
+    }
+
+    public function test_creating_a_staff_with_the_referrer_checkbox_checked_creates_and_links_a_referrer(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('name', 'Staff Sales Referrer')
+            ->set('phone', '081234611111')
+            ->set('role', 'sales_internal')
+            ->set('wantsReferrer', true)
+            ->assertSet('referrerType', 'sales')
+            ->call('createStaff')
+            ->assertHasNoErrors();
+
+        $staff = User::where('name', 'Staff Sales Referrer')->firstOrFail();
+        $referrer = Referrer::withoutGlobalScopes()->where('user_id', $staff->id)->first();
+
+        $this->assertNotNull($referrer);
+        $this->assertSame(ReferrerType::Sales, $referrer->type);
+        $this->assertTrue($referrer->is_active);
+    }
+
+    /**
+     * customer_service tidak punya padanan `ReferrerType` otomatis — admin
+     * WAJIB pilih manual, submit tanpa memilih harus ditolak validasi.
+     */
+    public function test_referrer_type_is_required_when_the_checkbox_is_checked_for_customer_service(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('name', 'Staff CS Referrer')
+            ->set('phone', '081234622222')
+            ->set('role', 'customer_service')
+            ->set('wantsReferrer', true)
+            ->assertSet('referrerType', '')
+            ->call('createStaff')
+            ->assertHasErrors(['referrerType' => 'required']);
+
+        $this->assertDatabaseMissing('users', ['name' => 'Staff CS Referrer']);
+    }
+
+    /**
+     * Checkbox tidak dicentang (default) — staff dibuat seperti biasa,
+     * tidak ada Referrer sama sekali, tidak ada validasi referrerType yang
+     * ikut memblokir.
+     */
+    public function test_creating_a_staff_without_checking_the_referrer_checkbox_creates_no_referrer(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('name', 'Staff Sales Biasa')
+            ->set('phone', '081234633333')
+            ->set('role', 'sales_internal')
+            ->call('createStaff')
+            ->assertHasNoErrors();
+
+        $staff = User::where('name', 'Staff Sales Biasa')->firstOrFail();
+        $this->assertSame(0, Referrer::withoutGlobalScopes()->where('user_id', $staff->id)->count());
+    }
+
+    public function test_the_referrer_column_shows_active_for_a_linked_staff_and_dash_otherwise(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+
+        $linkedStaff = User::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Staff Ber-Referrer']);
+        $linkedStaff->assignRole('teknisi');
+        Referrer::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $linkedStaff->id, 'is_active' => true]);
+
+        $plainStaff = User::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Staff Polos']);
+        $plainStaff->assignRole('noc');
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->assertSeeInOrder(['Staff Ber-Referrer', 'Ya, aktif'])
+            ->assertSee('Staff Polos');
+    }
+
+    /**
+     * Disable/enable staff yang punya Referrer ter-link — Referrer ikut
+     * cascade status-nya, dieksekusi lewat jalur Livewire penuh (bukan
+     * cuma level service, sudah dites di `StaffServiceTest`).
+     */
+    public function test_disabling_a_staff_with_a_linked_referrer_deactivates_it_and_enabling_reactivates_it(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $staff = User::factory()->create(['tenant_id' => $tenant->id]);
+        $staff->assignRole('teknisi');
+        $referrer = Referrer::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $staff->id, 'is_active' => true]);
+
+        Livewire::actingAs($admin)->test(StaffIndex::class)->call('toggleDisable', $staff->id);
+        $this->assertFalse($referrer->fresh()->is_active);
+
+        Livewire::actingAs($admin)->test(StaffIndex::class)->call('toggleDisable', $staff->id);
+        $this->assertTrue($referrer->fresh()->is_active);
+    }
+
+    /**
+     * Delete staff dengan Referrer ter-link tetap boleh (tidak diblokir) —
+     * Referrer-nya tetap ada, cuma `user_id` jadi null.
+     */
+    public function test_deleting_a_staff_with_a_linked_referrer_succeeds_and_leaves_the_referrer_with_a_null_user_id(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $staff = User::factory()->create(['tenant_id' => $tenant->id]);
+        $staff->assignRole('sales_freelance');
+        $referrer = Referrer::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $staff->id]);
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->call('deleteStaff', $staff->id)
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseMissing('users', ['id' => $staff->id]);
+        $this->assertDatabaseHas('referrers', ['id' => $referrer->id, 'user_id' => null]);
     }
 }

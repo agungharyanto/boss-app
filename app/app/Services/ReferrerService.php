@@ -59,6 +59,59 @@ class ReferrerService
     }
 
     /**
+     * Counterpart `deactivate()` — dipakai `StaffService::enable()` v0.22.3
+     * saat staff yang punya Referrer ter-link di-enable kembali (Referrer
+     * ikut aktif lagi, mengikuti status staff).
+     */
+    public function activate(Referrer $referrer): Referrer
+    {
+        $referrer->update(['is_active' => true]);
+
+        return $referrer->fresh();
+    }
+
+    /**
+     * v0.22.3 — dipanggil `StaffService::create()` saat admin mencentang
+     * "Jadikan juga Referrer" saat membuat staff baru: bikin Referrer BARU
+     * lalu langsung link ke User staff yang baru dibuat, reuse
+     * `linkExistingUser()` (bukan duplikat logic link).
+     *
+     * Guard eksplisit terhadap unique `(tenant_id, phone)` SEBELUM insert —
+     * `referrers.phone` cuma unik PER TENANT (beda dari `users.phone` yang
+     * global sejak v0.22.2), jadi kalau di tenant yang sama SUDAH ADA
+     * Referrer lain dengan nomor HP yang sama (belum tentu ter-link ke user
+     * manapun), insert baru akan tabrakan — dicek dulu di sini supaya
+     * kegagalannya berupa pesan jelas (dikonfirmasi Agung: staff TETAP
+     * berhasil dibuat, cuma link Referrer-nya yang gagal — lihat caller),
+     * bukan `QueryException` mentah dari constraint DB.
+     *
+     * @param  array{name: string, phone: string, type: string, tenant_id: int}  $data
+     */
+    public function createAndLinkToStaff(array $data, User $staffUser): Referrer
+    {
+        return DB::transaction(function () use ($data, $staffUser) {
+            $exists = Referrer::withoutGlobalScopes()
+                ->where('tenant_id', $data['tenant_id'])
+                ->where('phone', $data['phone'])
+                ->exists();
+
+            if ($exists) {
+                throw new InvalidArgumentException('Tidak bisa dijadikan Referrer — sudah ada Referrer lain dengan nomor HP yang sama di tenant ini. Hubungi admin untuk urus link secara manual.');
+            }
+
+            $referrer = Referrer::create([
+                'tenant_id' => $data['tenant_id'],
+                'name' => $data['name'],
+                'phone' => $data['phone'],
+                'type' => $data['type'],
+                'is_active' => ! $staffUser->is_disabled,
+            ]);
+
+            return $this->linkExistingUser($referrer, $staffUser);
+        });
+    }
+
+    /**
      * Generates a brand-new User + random password for a Referrer that
      * currently has none (referrer.user_id is null) — the "generate akun
      * baru kapan saja lewat aksi terpisah di halaman edit" path.

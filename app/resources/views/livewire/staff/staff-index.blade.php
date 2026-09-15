@@ -66,6 +66,12 @@
         </div>
     @enderror
 
+    @if ($referrerLinkResultMessage)
+        <div class="mb-6 p-4 rounded-md border {{ $referrerLinkFailed ? 'border-red-300 bg-red-50' : 'border-green-300 bg-green-50' }}">
+            <p class="text-sm {{ $referrerLinkFailed ? 'text-red-700' : 'text-green-700' }}">{{ $referrerLinkResultMessage }}</p>
+        </div>
+    @endif
+
     @if ($showCreateForm)
         <form wire:submit="createStaff" class="mb-6 p-4 border border-gray-200 rounded-md bg-gray-50 space-y-3">
             <div>
@@ -85,7 +91,7 @@
             </div>
             <div>
                 <label class="block text-sm font-medium text-gray-700">{{ __('Role') }}</label>
-                <select wire:model="role" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                <select wire:model.live="role" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                     <option value="">{{ __('Pilih role') }}</option>
                     @foreach ($roles as $roleName)
                         <option value="{{ $roleName }}">{{ $roleName }}</option>
@@ -93,6 +99,32 @@
                 </select>
                 @error('role') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             </div>
+
+            @if ($this->referrerCheckboxVisible())
+                <div class="p-3 border border-primary/30 bg-primary/5 rounded-md space-y-3">
+                    <label class="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="checkbox" wire:model.live="wantsReferrer" class="rounded border-gray-300">
+                        {{ __('Jadikan juga Referrer') }}
+                    </label>
+
+                    @if ($wantsReferrer)
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">{{ __('Tipe Referrer') }}</label>
+                            <select wire:model="referrerType" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                <option value="">{{ __('Pilih tipe') }}</option>
+                                @foreach ($referrerTypes as $type)
+                                    <option value="{{ $type->value }}">{{ $type->label() }}</option>
+                                @endforeach
+                            </select>
+                            @error('referrerType') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+                            <p class="text-xs text-gray-500 mt-1">
+                                {{ __('Akun Referrer dibuat dengan nama & nomor HP yang sama, lalu langsung ter-link ke akun staff ini (2 baris data terpisah, bukan digabung).') }}
+                            </p>
+                        </div>
+                    @endif
+                </div>
+            @endif
+
             <p class="text-xs text-gray-500">
                 {{ __('Password login acak dibuat otomatis dan ditampilkan sekali di layar ini setelah disimpan.') }}
             </p>
@@ -119,6 +151,7 @@
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('HP') }}</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Role') }}</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status') }}</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Referrer?') }}</th>
                     <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">{{ __('Aksi') }}</th>
                 </tr>
             </thead>
@@ -126,7 +159,7 @@
                 @forelse ($staff as $member)
                     <tr wire:key="staff-{{ $member->id }}">
                         @if ($editingUserId === $member->id)
-                            <td colspan="6" class="px-4 py-3">
+                            <td colspan="7" class="px-4 py-3">
                                 <form wire:submit="updateStaff" class="grid grid-cols-1 md:grid-cols-5 gap-3 items-start">
                                     <div>
                                         <input type="text" wire:model="editName" placeholder="{{ __('Nama') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
@@ -163,30 +196,45 @@
                                     {{ $member->is_disabled ? __('Disabled') : __('Enabled') }}
                                 </span>
                             </td>
+                            <td class="px-4 py-2 text-sm">
+                                @if ($member->referrer)
+                                    <span class="px-2 py-0.5 rounded-full text-xs {{ $member->referrer->is_active ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500' }}">
+                                        {{ $member->referrer->is_active ? __('Ya, aktif') : __('Ya, nonaktif') }}
+                                    </span>
+                                @else
+                                    <span class="text-gray-400 text-xs">{{ __('Tidak') }}</span>
+                                @endif
+                            </td>
                             <td class="px-4 py-2 text-sm text-right space-x-2 whitespace-nowrap">
                                 @if ($canManage)
                                     <button wire:click="edit({{ $member->id }})" class="text-primary hover:underline">{{ __('Edit') }}</button>
 
                                     @if ($member->is_disabled)
-                                        <button wire:click="toggleDisable({{ $member->id }})" wire:confirm="{{ __('Enable akun ini? Staff akan bisa login kembali.') }}" class="text-primary hover:underline">
+                                        <button wire:click="toggleDisable({{ $member->id }})" wire:confirm="{{ $member->referrer ? __('Enable akun ini? Staff akan bisa login kembali, dan akun Referrer terkait ikut diaktifkan lagi.') : __('Enable akun ini? Staff akan bisa login kembali.') }}" class="text-primary hover:underline">
                                             {{ __('Enable') }}
                                         </button>
                                     @else
-                                        <button wire:click="toggleDisable({{ $member->id }})" wire:confirm="{{ __('Disable akun ini? Staff tidak akan bisa login sampai di-enable kembali.') }}" class="text-red-600 hover:underline">
+                                        <button wire:click="toggleDisable({{ $member->id }})" wire:confirm="{{ $member->referrer && $member->referrer->is_active ? __('Disable akun ini? Staff tidak akan bisa login sampai di-enable kembali, dan akun Referrer terkait ikut dinonaktifkan.') : __('Disable akun ini? Staff tidak akan bisa login sampai di-enable kembali.') }}" class="text-red-600 hover:underline">
                                             {{ __('Disable') }}
                                         </button>
                                     @endif
 
-                                    <button wire:click="deleteStaff({{ $member->id }})" wire:confirm="{{ __('Hapus akun staff ini secara PERMANEN? Tidak bisa dibatalkan.') }}" class="text-red-600 hover:underline">
-                                        {{ __('Hapus') }}
-                                    </button>
+                                    @if ($member->referrer && $member->referrer->is_active)
+                                        <button wire:click="deleteStaff({{ $member->id }})" wire:confirm="{{ __('Staff ini juga Referrer aktif — data referral tetap ada tapi kehilangan akses login. Yakin hapus akun staff ini secara PERMANEN?') }}" class="text-red-600 hover:underline">
+                                            {{ __('Hapus') }}
+                                        </button>
+                                    @else
+                                        <button wire:click="deleteStaff({{ $member->id }})" wire:confirm="{{ __('Hapus akun staff ini secara PERMANEN? Tidak bisa dibatalkan.') }}" class="text-red-600 hover:underline">
+                                            {{ __('Hapus') }}
+                                        </button>
+                                    @endif
                                 @endif
                             </td>
                         @endif
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="6" class="px-4 py-6 text-center text-sm text-gray-500">
+                        <td colspan="7" class="px-4 py-6 text-center text-sm text-gray-500">
                             {{ __('Belum ada staff.') }}
                         </td>
                     </tr>

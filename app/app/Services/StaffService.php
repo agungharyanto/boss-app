@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\WorkOrderStatus;
 use App\Models\CpeActionLog;
+use App\Models\Referrer;
 use App\Models\ResellerUser;
 use App\Models\Technician;
 use App\Models\User;
@@ -13,6 +14,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 /**
  * v0.22.1 — CRUD Staff (Manajemen User). Mirror pola ReferrerService untuk
@@ -31,6 +33,18 @@ use RuntimeException;
 class StaffService
 {
     /**
+     * `ReferrerService` opsional dengan default instantiate baru — supaya
+     * `new StaffService()` (dipakai luas di test-test lama) tetap valid
+     * tanpa perlu diubah satu per satu, sekaligus tetap bisa
+     * dependency-injected lewat container (Livewire method injection)
+     * seperti method lain di kelas ini.
+     */
+    public function __construct(private ?ReferrerService $referrerService = null)
+    {
+        $this->referrerService ??= new ReferrerService;
+    }
+
+    /**
      * v0.22.2 — `phone` sekarang WAJIB (alat login utama), `email` jadi
      * opsional. `WhatsappPhone::normalize()` dipanggil di sini SEBAGAI
      * DEFENSE-IN-DEPTH (caller Livewire sudah menormalisasi sebelum
@@ -40,12 +54,25 @@ class StaffService
      * jadi aman dipanggil dua kali, dan `StaffService` tetap benar kalau
      * suatu saat dipanggil langsung tanpa lewat Livewire.
      *
+     * v0.22.3 — `$referrerData` opsional: kalau diisi (checkbox "Jadikan
+     * juga Referrer" dicentang), bikin `Referrer` baru + link ke User yang
+     * baru dibuat lewat `ReferrerService::createAndLinkToStaff()` — REUSE,
+     * bukan duplikat logic Referrer di sini. Dijalankan di TRANSAKSI
+     * TERPISAH dari pembuatan User (bukan satu transaksi besar) — supaya
+     * kegagalan link Referrer (mis. collision `(tenant_id, phone)`, lihat
+     * docblock `createAndLinkToStaff()`) TIDAK ikut membatalkan User staff
+     * yang sudah berhasil dibuat (dikunci eksplisit oleh Agung: "staff
+     * tetap berhasil dibuat, cuma link Referrer-nya yang gagal").
+     * Kegagalan itu dilaporkan lewat `referrer_link_error`, bukan
+     * exception — caller (Livewire) yang menampilkannya ke admin.
+     *
      * @param  array{name: string, email?: ?string, phone: string, role: string, tenant_id: int}  $data
-     * @return array{user: User, generated_password: string}
+     * @param  array{type: string}|null  $referrerData  null = staff biasa, tidak dijadikan Referrer
+     * @return array{user: User, generated_password: string, referrer: ?Referrer, referrer_link_error: ?string}
      */
-    public function create(array $data): array
+    public function create(array $data, ?array $referrerData = null): array
     {
-        return DB::transaction(function () use ($data) {
+        $result = DB::transaction(function () use ($data) {
             $generatedPassword = Str::password(16);
             $email = $data['email'] ?? null;
 
@@ -64,6 +91,35 @@ class StaffService
 
             return ['user' => $user->fresh(), 'generated_password' => $generatedPassword];
         });
+
+        $referrer = null;
+        $referrerLinkError = null;
+
+        if ($referrerData !== null) {
+            try {
+                $referrer = $this->referrerService->createAndLinkToStaff([
+                    'tenant_id' => $data['tenant_id'],
+                    'name' => $data['name'],
+                    // Format NORMALIZED (62xxx) — konsisten dengan
+                    // users.phone, bukan raw seperti diketik admin (lihat
+                    // keputusan kickoff v0.22.3). $result['user']->phone
+                    // sudah pasti dinormalisasi dari langkah create() User
+                    // di atas, dipakai apa adanya (bukan $data['phone']
+                    // mentah).
+                    'phone' => $result['user']->phone,
+                    'type' => $referrerData['type'],
+                ], $result['user']);
+            } catch (Throwable $e) {
+                $referrerLinkError = $e->getMessage();
+            }
+        }
+
+        return [
+            'user' => $result['user'],
+            'generated_password' => $result['generated_password'],
+            'referrer' => $referrer,
+            'referrer_link_error' => $referrerLinkError,
+        ];
     }
 
     /**
@@ -92,19 +148,55 @@ class StaffService
      * dicek di titik login (lihat FortifyServiceProvider::authenticateUsing()
      * dan ReferrerLoginController::login()). UI harus pakai teks
      * "Disable"/"Enable", BUKAN "Aktifkan"/"Nonaktifkan" — dikunci eksplisit.
+     *
+     * v0.22.3 — kalau staff ini punya Referrer ter-link (checkbox "Jadikan
+     * juga Referrer" saat create), Referrer ikut nonaktif otomatis
+     * (dikunci Agung: status Referrer MENGIKUTI status staff). Cuma
+     * disentuh kalau genuinely masih aktif — `ReferrerService::deactivate()`
+     * idempoten juga, tapi mengecek dulu di sini menghindari `updated_at`
+     * berubah tanpa perubahan nilai untuk Referrer yang sudah nonaktif.
      */
     public function disable(User $user): User
     {
         $user->update(['is_disabled' => true]);
 
+        $referrer = $this->linkedReferrer($user);
+
+        if ($referrer !== null && $referrer->is_active) {
+            $this->referrerService->deactivate($referrer);
+        }
+
         return $user->fresh();
     }
 
+    /**
+     * v0.22.3 — counterpart `disable()`: Referrer ter-link ikut aktif
+     * lagi, mengikuti status staff.
+     */
     public function enable(User $user): User
     {
         $user->update(['is_disabled' => false]);
 
+        $referrer = $this->linkedReferrer($user);
+
+        if ($referrer !== null && ! $referrer->is_active) {
+            $this->referrerService->activate($referrer);
+        }
+
         return $user->fresh();
+    }
+
+    /**
+     * Referrer yang ter-link ke akun staff ini lewat `referrers.user_id`
+     * (checkbox "Jadikan juga Referrer" saat create, v0.22.3) — `null`
+     * kalau tidak ada (staff biasa). `withoutGlobalScopes()` sengaja —
+     * method ini dipanggil dari `disable()`/`enable()`/`delete()` yang
+     * bisa berjalan di luar konteks request Livewire/Auth (mis. command
+     * line/queue), sama posture guard `delete()` lain di kelas ini.
+     */
+    public function linkedReferrer(User $user): ?Referrer
+    {
+        return Referrer::withoutGlobalScopes()->where('user_id', $user->id)->first();
     }
 
     /**
@@ -134,6 +226,18 @@ class StaffService
      *
      * Setiap relasi lain yang menunjuk ke `users` sudah `nullOnDelete()`
      * (histori tetap utuh, aktor jadi null) — TIDAK memblokir delete.
+     *
+     * v0.22.3 — `referrers.user_id` TERMASUK yang `nullOnDelete()` sejak
+     * migration `agents` yang paling awal (BUKAN hal baru dari sub-versi
+     * ini) — kalau staff yang punya Referrer ter-link di-delete, DB SENDIRI
+     * otomatis men-set `referrers.user_id = NULL`, tanpa kode tambahan apa
+     * pun di sini. Ini SENGAJA TIDAK diblokir (beda dari 3 guard di atas)
+     * — dikunci eksplisit oleh Agung: pelajaran dari insiden Kamisem
+     * (v0.22.1), Referrer harus tetap independen secara data, cuma
+     * kehilangan akses login-nya. `linkedReferrer()` di atas dipanggil
+     * CALLER (StaffIndex) SEBELUM `delete()` untuk menampilkan pesan
+     * konfirmasi yang berbeda kalau staff ini genuinely Referrer aktif —
+     * bukan blocking guard di service ini.
      *
      * @throws RuntimeException kalau masih ada relasi yang nyantol, pesan
      *                          spesifik per kasus (bukan generik).

@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Staff;
 
+use App\Enums\ReferrerType;
 use App\Models\User;
 use App\Services\StaffService;
 use App\Support\WhatsappPhone;
@@ -27,6 +28,27 @@ class StaffIndex extends Component
     use AuthorizesRequests;
     use WithPagination;
 
+    /**
+     * v0.22.3 — role yang boleh dicentang "Jadikan juga Referrer". Dikunci
+     * eksplisit di decision-gate v0.22.0 — role lain (superadmin,
+     * administrator, noc, billing, finance) tidak pernah menampilkan
+     * checkbox ini sama sekali.
+     */
+    public const REFERRER_ELIGIBLE_ROLES = ['sales_internal', 'sales_freelance', 'customer_service', 'teknisi'];
+
+    /**
+     * Auto-prefill `App\Enums\ReferrerType` (nilai backed enum-nya) sesuai
+     * role staff — cuma buat 3 dari 4 role yang ada padanan jelas. Role
+     * `customer_service` SENGAJA tidak ada di sini (`ReferrerType` tidak
+     * punya case untuk itu, dikonfirmasi Agung) — admin wajib pilih manual
+     * lewat dropdown, tidak ada default.
+     */
+    private const ROLE_TO_REFERRER_TYPE = [
+        'sales_internal' => 'sales',
+        'sales_freelance' => 'freelance',
+        'teknisi' => 'teknisi',
+    ];
+
     public string $search = '';
 
     public bool $showCreateForm = false;
@@ -48,6 +70,17 @@ class StaffIndex extends Component
     public string $role = '';
 
     /**
+     * v0.22.3 — checkbox "Jadikan juga Referrer", cuma relevan (dan cuma
+     * dirender) untuk role di `REFERRER_ELIGIBLE_ROLES`. `updatedRole()`
+     * mereset ini otomatis kalau role diganti ke yang tidak diizinkan —
+     * `wire:model.live="role"` di blade memastikan reset ini terjadi
+     * SEBELUM submit, bukan cuma dicegah di server saat validate().
+     */
+    public bool $wantsReferrer = false;
+
+    public string $referrerType = '';
+
+    /**
      * Shown exactly once right after a staff account is created — never
      * re-derivable/re-shown once dismissed, StaffService never persists it
      * anywhere beyond this in-memory property (sama pola ReferrerIndex).
@@ -55,6 +88,16 @@ class StaffIndex extends Component
     public ?string $generatedPassword = null;
 
     public ?string $generatedPasswordForName = null;
+
+    /**
+     * v0.22.3 — diisi setelah createStaff() SUKSES kalau checkbox Referrer
+     * dicentang: pesan sukses/gagal link Referrer, ditampilkan berdampingan
+     * dengan panel password (staff-nya SENDIRI tetap dianggap berhasil
+     * dibuat terlepas dari hasil ini — lihat StaffService::create()).
+     */
+    public ?string $referrerLinkResultMessage = null;
+
+    public bool $referrerLinkFailed = false;
 
     public ?int $editingUserId = null;
 
@@ -80,6 +123,30 @@ class StaffIndex extends Component
         $this->resetPage();
     }
 
+    /**
+     * v0.22.3 — dipanggil otomatis oleh Livewire (`wire:model.live="role"`)
+     * setiap kali role di dropdown create berubah. Role yang tidak
+     * diizinkan checkbox Referrer mereset `wantsReferrer`/`referrerType`
+     * seketika (bukan cuma disembunyikan di UI) — mencegah nilai lama
+     * "nyangkut" kalau admin sempat centang lalu ganti pikiran soal role.
+     */
+    public function updatedRole(string $value): void
+    {
+        if (! in_array($value, self::REFERRER_ELIGIBLE_ROLES, true)) {
+            $this->wantsReferrer = false;
+            $this->referrerType = '';
+
+            return;
+        }
+
+        $this->referrerType = self::ROLE_TO_REFERRER_TYPE[$value] ?? '';
+    }
+
+    public function referrerCheckboxVisible(): bool
+    {
+        return in_array($this->role, self::REFERRER_ELIGIBLE_ROLES, true);
+    }
+
     public function createStaff(StaffService $service): void
     {
         $this->authorize('create', User::class);
@@ -93,11 +160,20 @@ class StaffIndex extends Component
         $this->phone = WhatsappPhone::normalize($this->phone);
         $this->email = $this->email !== '' ? $this->email : null;
 
+        // wantsReferrer cuma efektif kalau role-nya genuinely diizinkan —
+        // pertahanan server-side, bukan cuma andalkan updatedRole() sudah
+        // membersihkan properti ini (payload Livewire bisa dimanipulasi
+        // klien).
+        $wantsReferrer = $this->wantsReferrer && in_array($this->role, self::REFERRER_ELIGIBLE_ROLES, true);
+
         $this->validate([
             'name' => 'required|string|max:255',
             'email' => ['nullable', 'email', 'max:255', Rule::unique(User::class, 'email')],
             'phone' => ['required', 'string', 'max:30', Rule::unique(User::class, 'phone')],
             'role' => 'required|string|in:'.implode(',', Role::pluck('name')->all()),
+            'referrerType' => $wantsReferrer
+                ? ['required', 'string', Rule::in(array_column(ReferrerType::cases(), 'value'))]
+                : ['nullable'],
         ]);
 
         $result = $service->create([
@@ -106,12 +182,24 @@ class StaffIndex extends Component
             'phone' => $this->phone,
             'role' => $this->role,
             'tenant_id' => auth()->user()->tenant_id,
-        ]);
+        ], $wantsReferrer ? ['type' => $this->referrerType] : null);
+
+        $this->referrerLinkResultMessage = null;
+        $this->referrerLinkFailed = false;
+
+        if ($wantsReferrer) {
+            if ($result['referrer'] !== null) {
+                $this->referrerLinkResultMessage = __('Akun Referrer juga berhasil dibuat & ter-link ke staff ini.');
+            } else {
+                $this->referrerLinkFailed = true;
+                $this->referrerLinkResultMessage = __('Staff berhasil dibuat, TAPI gagal dijadikan Referrer: :error', ['error' => $result['referrer_link_error']]);
+            }
+        }
 
         $this->generatedPassword = $result['generated_password'];
         $this->generatedPasswordForName = $result['user']->name;
 
-        $this->reset(['name', 'email', 'phone', 'role', 'showCreateForm']);
+        $this->reset(['name', 'email', 'phone', 'role', 'showCreateForm', 'wantsReferrer', 'referrerType']);
     }
 
     public function edit(int $userId): void
@@ -185,7 +273,7 @@ class StaffIndex extends Component
 
     public function dismissGeneratedPassword(): void
     {
-        $this->reset(['generatedPassword', 'generatedPasswordForName']);
+        $this->reset(['generatedPassword', 'generatedPasswordForName', 'referrerLinkResultMessage', 'referrerLinkFailed']);
     }
 
     public function render()
@@ -199,13 +287,17 @@ class StaffIndex extends Component
         // SATU-SATUNYA hal yang membedakan akun staff sungguhan dari akun
         // portal-only di skema ini — memastikan cakupan halaman ini
         // benar-benar staff, bukan "semua baris users".
+        //
+        // v0.22.3 — eager load relasi `referrer` (User::referrer(), HasOne)
+        // untuk kolom "Referrer?" di tabel + teks wire:confirm delete yang
+        // dinamis di blade — tanpa ini setiap baris akan N+1 query.
         $staff = User::where('tenant_id', auth()->user()->tenant_id)
             ->whereHas('roles')
             ->when($this->search, fn ($query) => $query->where(function ($q) {
                 $q->where('name', 'like', "%{$this->search}%")
                     ->orWhere('email', 'like', "%{$this->search}%");
             }))
-            ->with('roles')
+            ->with(['roles', 'referrer'])
             ->orderBy('name')
             ->paginate(15);
 
@@ -213,6 +305,8 @@ class StaffIndex extends Component
             'staff' => $staff,
             'roles' => Role::orderBy('name')->pluck('name'),
             'canManage' => auth()->user()->can('create', User::class),
+            'referrerEligibleRoles' => self::REFERRER_ELIGIBLE_ROLES,
+            'referrerTypes' => ReferrerType::cases(),
         ]);
     }
 
@@ -223,6 +317,7 @@ class StaffIndex extends Component
             'email' => 'Email',
             'phone' => 'Nomor HP',
             'role' => 'Role',
+            'referrerType' => 'Tipe Referrer',
             'editName' => 'Nama',
             'editEmail' => 'Email',
             'editPhone' => 'Nomor HP',

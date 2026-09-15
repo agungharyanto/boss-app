@@ -40,10 +40,12 @@ class FortifyServiceProvider extends ServiceProvider
 
         // Login terpadu (satu pintu di `/`): field `login` = "Email atau
         // Nomor HP" (lihat config/fortify.php 'username' => 'login').
-        // - input berformat email  → jalur staff (tabel users, guard web)
-        // - selain itu (nomor HP)  → jalur Referrer (cari Referrer aktif
-        //   dengan nomor itu → user tertaut), reuse LoginIdentifierResolver
-        //   (dipakai bareng ReferrerLoginController jalur lama).
+        // - input berformat email → jalur staff via `users.email`.
+        // - selain itu (nomor HP) → v0.22.2: `resolvePhoneUser()` cek
+        //   `users.phone` (staff) DULU, baru fallback ke Referrer kalau
+        //   tidak ketemu — satu titik orkestrasi dipakai bareng
+        //   `ReferrerLoginController` jalur lama, supaya urutannya tidak
+        //   bisa didrift antar caller.
         // Kembalikan null pada kegagalan APA PUN → Fortify melempar
         // ValidationException dengan trans('auth.failed') yang identik untuk
         // kedua jalur (tidak membocorkan identitas terdaftar / jalur mana).
@@ -59,7 +61,7 @@ class FortifyServiceProvider extends ServiceProvider
 
             $user = $resolver->isEmail($identifier)
                 ? $resolver->resolveStaffUser($identifier)
-                : $resolver->resolveReferrerUser($identifier);
+                : $resolver->resolvePhoneUser($identifier);
 
             if ($user === null || ! Hash::check($password, $user->password)) {
                 return null;

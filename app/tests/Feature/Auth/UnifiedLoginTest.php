@@ -5,6 +5,7 @@ namespace Tests\Feature\Auth;
 use App\Models\Referrer;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Support\WhatsappPhone;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -26,9 +27,22 @@ class UnifiedLoginTest extends TestCase
         RateLimiter::clear('login');
     }
 
-    private function staffUser(string $email = 'staff@boss.local', string $password = 'rahasia123'): User
+    /**
+     * `$phone`, kalau diisi, DISIMPAN DALAM BENTUK TERNORMALISASI — mirror
+     * persis apa yang genuinely dilakukan StaffService::create() di
+     * produksi (lihat WhatsappPhone::normalize()), supaya test ini
+     * membuktikan resolusi login yang sama seperti kondisi nyata, bukan
+     * kondisi buatan yang kebetulan lolos.
+     */
+    private function staffUser(string $email = 'staff@boss.local', string $password = 'rahasia123', ?string $phone = null): User
     {
-        $user = User::factory()->create(['email' => $email, 'password' => Hash::make($password)]);
+        $attributes = ['email' => $email, 'password' => Hash::make($password)];
+
+        if ($phone !== null) {
+            $attributes['phone'] = WhatsappPhone::normalize($phone);
+        }
+
+        $user = User::factory()->create($attributes);
         $user->assignRole('superadmin');
 
         return $user;
@@ -224,5 +238,80 @@ class UnifiedLoginTest extends TestCase
 
         $response->assertRedirect('/');
         $this->assertAuthenticatedAs($user);
+    }
+
+    /**
+     * v0.22.2 — Login via Nomor HP + Email Opsional. `resolvePhoneUser()`
+     * cek `users.phone` (staff) DULU — format apa pun yang diketik
+     * ('0812...'/'+62812...'/'62812...') harus resolve ke user yang sama
+     * karena keduanya (input login DAN nilai tersimpan) sama-sama
+     * dinormalisasi lewat `WhatsappPhone::normalize()`.
+     */
+    public function test_staff_logs_in_with_phone_format_0812(): void
+    {
+        $user = $this->staffUser('staff-phone@boss.local', 'rahasia123', phone: '087884374939');
+
+        $response = $this->post('/login', ['login' => '087884374939', 'password' => 'rahasia123']);
+
+        $response->assertRedirect('/');
+        $this->assertAuthenticatedAs($user);
+    }
+
+    public function test_staff_logs_in_with_phone_format_plus62(): void
+    {
+        $user = $this->staffUser('staff-phone2@boss.local', 'rahasia123', phone: '087884374939');
+
+        $response = $this->post('/login', ['login' => '+6287884374939', 'password' => 'rahasia123']);
+
+        $response->assertRedirect('/');
+        $this->assertAuthenticatedAs($user);
+    }
+
+    public function test_staff_still_logs_in_with_email_as_before(): void
+    {
+        $user = $this->staffUser('staff-email-only@boss.local', 'rahasia123', phone: '081200000001');
+
+        $response = $this->post('/login', ['login' => 'staff-email-only@boss.local', 'password' => 'rahasia123']);
+
+        $response->assertRedirect('/');
+        $this->assertAuthenticatedAs($user);
+    }
+
+    /**
+     * Regresi jalur Referrer — TIDAK boleh rusak oleh `resolvePhoneUser()`
+     * yang baru. `test_referrer_logs_in_with_phone_and_lands_on_the_portal()`
+     * di atas sudah membuktikan ini untuk kasus normal (tidak ada staff
+     * dengan phone yang sama) — dipertahankan tanpa modifikasi sebagai
+     * bukti utama regresi tidak terjadi.
+     */
+    public function test_referrer_login_is_unaffected_when_no_staff_shares_the_phone_number(): void
+    {
+        $referrer = $this->referrerUser('081234509876');
+
+        $response = $this->post('/login', ['login' => '081234509876', 'password' => 'rahasia123']);
+
+        $response->assertRedirect('/');
+        $this->assertAuthenticatedAs($referrer->user);
+    }
+
+    /**
+     * Edge case eksplisit dari kickoff — staff DAN Referrer sama-sama
+     * pegang nomor HP yang PERSIS SAMA. Resolusi HARUS memenangkan jalur
+     * staff (`users.phone` dicek duluan di `resolvePhoneUser()`) — dua
+     * akun sekaligus punya password berbeda, jadi login dengan password
+     * staff harus lolos sebagai staff, BUKAN gagal atau nyasar ke akun
+     * Referrer.
+     */
+    public function test_when_staff_and_referrer_share_the_same_phone_number_staff_wins(): void
+    {
+        $sharedPhone = '081234567890';
+        $staff = $this->staffUser('shared-phone-staff@boss.local', 'passwordstaff', phone: $sharedPhone);
+        $referrer = $this->referrerUser($sharedPhone, 'passwordreferrer');
+
+        $response = $this->post('/login', ['login' => $sharedPhone, 'password' => 'passwordstaff']);
+
+        $response->assertRedirect('/');
+        $this->assertAuthenticatedAs($staff);
+        $this->assertNotEquals($referrer->user->id, auth()->id());
     }
 }

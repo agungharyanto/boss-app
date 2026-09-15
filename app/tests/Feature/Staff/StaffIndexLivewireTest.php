@@ -59,6 +59,7 @@ class StaffIndexLivewireTest extends TestCase
             ->test(StaffIndex::class)
             ->set('name', "Staff {$role}")
             ->set('email', "staff-{$role}@boss.local")
+            ->set('phone', '081234500000')
             ->set('role', $role)
             ->call('createStaff')
             ->assertHasNoErrors();
@@ -84,11 +85,54 @@ class StaffIndexLivewireTest extends TestCase
             ->test(StaffIndex::class)
             ->set('name', 'Tanpa Role')
             ->set('email', 'tanpa-role@boss.local')
+            ->set('phone', '081234500001')
             ->set('role', '')
             ->call('createStaff')
             ->assertHasErrors(['role' => 'required']);
 
         $this->assertDatabaseMissing('users', ['email' => 'tanpa-role@boss.local']);
+    }
+
+    /**
+     * v0.22.2 — email jadi opsional. Staff tetap bisa dibuat tanpa email,
+     * login sepenuhnya lewat nomor HP.
+     */
+    public function test_creating_a_staff_account_without_email_succeeds(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('name', 'Tanpa Email')
+            ->set('email', '')
+            ->set('phone', '081234500002')
+            ->set('role', 'noc')
+            ->call('createStaff')
+            ->assertHasNoErrors();
+
+        $created = User::where('name', 'Tanpa Email')->firstOrFail();
+        $this->assertNull($created->email);
+        $this->assertTrue($created->hasRole('noc'));
+    }
+
+    /**
+     * v0.22.2 — phone jadi WAJIB (alat login utama), berbeda dari v0.22.1
+     * yang dulu opsional. Validasi 'required' di layer Livewire.
+     */
+    public function test_creating_a_staff_account_without_phone_is_rejected_by_validation(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('name', 'Tanpa HP')
+            ->set('email', 'tanpa-hp@boss.local')
+            ->set('phone', '')
+            ->set('role', 'noc')
+            ->call('createStaff')
+            ->assertHasErrors(['phone' => 'required']);
+
+        $this->assertDatabaseMissing('users', ['email' => 'tanpa-hp@boss.local']);
     }
 
     public function test_access_is_denied_for_a_role_other_than_superadmin_or_administrator(): void

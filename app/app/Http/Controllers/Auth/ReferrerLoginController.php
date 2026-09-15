@@ -38,7 +38,7 @@ class ReferrerLoginController extends Controller
 
         $user = $resolver->isEmail($data['phone'])
             ? $resolver->resolveStaffUser($data['phone'])
-            : $resolver->resolveReferrerUser($data['phone']);
+            : $resolver->resolvePhoneUser($data['phone']);
 
         if ($user === null || ! Hash::check($data['password'], $user->password)) {
             throw ValidationException::withMessages(['phone' => __('auth.failed')]);

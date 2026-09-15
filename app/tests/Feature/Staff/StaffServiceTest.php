@@ -11,6 +11,7 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Models\WorkOrder;
 use App\Services\StaffService;
+use App\Support\WhatsappPhone;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -67,24 +68,35 @@ class StaffServiceTest extends TestCase
         $this->assertTrue($user->hasRole($role));
         $this->assertCount(1, $user->roles);
         $this->assertSame($tenant->id, $user->tenant_id);
-        $this->assertSame('081234567890', $user->phone);
+        // v0.22.2 — phone dinormalisasi WhatsappPhone::normalize() saat
+        // simpan (alat login utama). '081234567890' -> '6281234567890'.
+        $this->assertSame(WhatsappPhone::normalize('081234567890'), $user->phone);
         $this->assertFalse($user->is_disabled);
         $this->assertNotEmpty($result['generated_password']);
         $this->assertTrue(Hash::check($result['generated_password'], $user->password));
     }
 
-    public function test_create_allows_a_null_phone(): void
+    /**
+     * v0.22.2 — email jadi opsional (dulu wajib), phone jadi wajib (dulu
+     * opsional) — kebalikan dari kondisi lama yang diuji test ini sebelum
+     * direvisi (dulu bernama test_create_allows_a_null_phone).
+     */
+    public function test_create_allows_a_null_email(): void
     {
         $tenant = Tenant::factory()->create();
 
         $result = (new StaffService)->create([
-            'name' => 'Tanpa HP',
-            'email' => 'tanpa-hp@boss.local',
+            'name' => 'Tanpa Email',
+            'phone' => '081234500000',
             'role' => 'noc',
             'tenant_id' => $tenant->id,
         ]);
 
-        $this->assertNull($result['user']->phone);
+        $user = $result['user'];
+
+        $this->assertNull($user->email);
+        $this->assertNull($user->email_verified_at);
+        $this->assertSame(WhatsappPhone::normalize('081234500000'), $user->phone);
     }
 
     public function test_create_never_persists_the_generated_password_in_plaintext_anywhere_else(): void
@@ -94,6 +106,7 @@ class StaffServiceTest extends TestCase
         $result = (new StaffService)->create([
             'name' => 'Staff Test',
             'email' => 'plaintext-check@boss.local',
+            'phone' => '081200000001',
             'role' => 'noc',
             'tenant_id' => $tenant->id,
         ]);
@@ -109,6 +122,7 @@ class StaffServiceTest extends TestCase
         $result = (new StaffService)->create([
             'name' => 'Before',
             'email' => 'before@boss.local',
+            'phone' => '081200000002',
             'role' => 'customer_service',
             'tenant_id' => $tenant->id,
         ]);
@@ -124,7 +138,8 @@ class StaffServiceTest extends TestCase
 
         $this->assertSame('After', $updated->name);
         $this->assertSame('after@boss.local', $updated->email);
-        $this->assertSame('089900001111', $updated->phone);
+        // v0.22.2 — update() juga menormalisasi phone saat simpan.
+        $this->assertSame(WhatsappPhone::normalize('089900001111'), $updated->phone);
         $this->assertTrue($updated->hasRole('billing'));
         $this->assertFalse($updated->hasRole('customer_service'));
         $this->assertCount(1, $updated->roles);
@@ -137,6 +152,7 @@ class StaffServiceTest extends TestCase
         $result = (new StaffService)->create([
             'name' => 'Toggle Test',
             'email' => 'toggle@boss.local',
+            'phone' => '081200000003',
             'role' => 'finance',
             'tenant_id' => $tenant->id,
         ]);
@@ -155,6 +171,7 @@ class StaffServiceTest extends TestCase
         $result = (new StaffService)->create([
             'name' => 'Bersih',
             'email' => 'bersih@boss.local',
+            'phone' => '081200000004',
             'role' => 'finance',
             'tenant_id' => $tenant->id,
         ]);
@@ -172,6 +189,7 @@ class StaffServiceTest extends TestCase
         $result = (new StaffService)->create([
             'name' => 'Anggota Reseller',
             'email' => 'anggota-reseller@boss.local',
+            'phone' => '081200000005',
             'role' => 'sales_internal',
             'tenant_id' => $tenant->id,
         ]);
@@ -200,6 +218,7 @@ class StaffServiceTest extends TestCase
         $result = (new StaffService)->create([
             'name' => 'Teknisi Sibuk',
             'email' => 'teknisi-sibuk@boss.local',
+            'phone' => '081200000006',
             'role' => 'teknisi',
             'tenant_id' => $tenant->id,
         ]);
@@ -227,6 +246,7 @@ class StaffServiceTest extends TestCase
         $result = (new StaffService)->create([
             'name' => 'Teknisi Lama',
             'email' => 'teknisi-lama@boss.local',
+            'phone' => '081200000007',
             'role' => 'teknisi',
             'tenant_id' => $tenant->id,
         ]);
@@ -251,6 +271,7 @@ class StaffServiceTest extends TestCase
         $result = (new StaffService)->create([
             'name' => 'Pernah Aksi CPE',
             'email' => 'aksi-cpe@boss.local',
+            'phone' => '081200000008',
             'role' => 'noc',
             'tenant_id' => $tenant->id,
         ]);

@@ -109,7 +109,7 @@ class WhatsappIncomingMessageTabTest extends TestCase
     }
 
     /**
-     * $resellerFilter DISHARE dengan tab Antrian (reuse PERSIS pola yang
+     * $resellerFilter DISHARE dengan tab Pesan Keluar (reuse PERSIS pola yang
      * sama, satu properti) — set lewat filter di sini juga valid.
      */
     public function test_admin_reseller_filter_narrows_the_list(): void
@@ -148,7 +148,7 @@ class WhatsappIncomingMessageTabTest extends TestCase
     /**
      * Regresi bug nyata (dilaporkan Agung 2026-09-15): tab "Pesan Masuk"
      * ADA di load awal, tapi HILANG setelah pindah tab lewat Livewire (klik
-     * "Template Pesan"/"Antrian"), dan tetap hilang walau balik lagi —
+     * "Template Pesan"/"Pesan Keluar"), dan tetap hilang walau balik lagi —
      * cuma pulih dengan full page reload.
      *
      * Akar masalah (dikonfirmasi `php artisan route:list -vv`): route
@@ -195,7 +195,7 @@ class WhatsappIncomingMessageTabTest extends TestCase
 
         $component->set('tab', 'antrian')
             ->assertSee('Pesan Masuk')
-            ->assertSee('Antrian');
+            ->assertSee('Pesan Keluar');
 
         app(ResellerContext::class)->set(null);
 

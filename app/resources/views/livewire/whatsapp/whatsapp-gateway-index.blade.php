@@ -2,9 +2,9 @@
     <h1 class="text-2xl font-semibold mb-2" style="color: var(--color-text)">WhatsApp Gateway</h1>
     <p class="text-sm text-gray-500 mb-6">
         @if ($isAdmin)
-            Overview seluruh sesi (reseller + direct), template default ISP, dan antrian gabungan.
+            Overview seluruh sesi (reseller + direct), template default ISP, dan pesan keluar gabungan.
         @else
-            Konfigurasi, template pesan, dan antrian WhatsApp untuk reseller Anda.
+            Konfigurasi, template pesan, dan pesan keluar WhatsApp untuk reseller Anda.
         @endif
     </p>
 
@@ -19,7 +19,7 @@
             <button wire:click="setTab('konfigurasi')" class="px-3 py-2 text-sm font-medium {{ $tab === 'konfigurasi' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Konfigurasi</button>
         @endif
         <button wire:click="setTab('template')" class="px-3 py-2 text-sm font-medium {{ $tab === 'template' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Template Pesan</button>
-        <button wire:click="setTab('antrian')" class="px-3 py-2 text-sm font-medium {{ $tab === 'antrian' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Antrian</button>
+        <button wire:click="setTab('antrian')" class="px-3 py-2 text-sm font-medium {{ $tab === 'antrian' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Pesan Keluar</button>
         {{-- v0.13.1 perluasan: visible untuk admin MAUPUN reseller (scoping
              ditegakkan di query render(), bukan di sini) — beda dari Rate
              Limit yang tetap admin-only. --}}

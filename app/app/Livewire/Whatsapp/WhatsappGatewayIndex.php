@@ -42,7 +42,7 @@ class WhatsappGatewayIndex extends Component
 
     public string $statusFilter = '';
 
-    // Dipakai BERSAMA oleh tab Antrian (WhatsappMessageLog.reseller_id) DAN
+    // Dipakai BERSAMA oleh tab Pesan Keluar (WhatsappMessageLog.reseller_id) DAN
     // tab Pesan Masuk (WhatsappIncomingMessage.reseller_id, v0.13.1
     // perluasan) — satu properti, sesuai instruksi reuse PERSIS pola filter
     // yang sama; keduanya adalah kolom `reseller_id` (int) dengan makna
@@ -378,8 +378,8 @@ class WhatsappGatewayIndex extends Component
         // reseller juga (bukan admin-only lagi), tapi scoping ditegakkan
         // di QUERY-nya, bukan cuma UI (defense-in-depth):
         // - Admin: lihat semua (termasuk reseller_id null / Direct),
-        //   filter opsional via $resellerFilter (reuse PERSIS pola Antrian
-        //   di atas — properti yang sama).
+        //   filter opsional via $resellerFilter (reuse PERSIS pola Pesan
+        //   Keluar di atas — properti yang sama).
         // - Reseller (context resolved dari reseller_users membership
         //   aktif, App\Support\ResellerContext): WHERE reseller_id = milik
         //   sendiri secara eksplisit — tidak pernah bergantung pada scope

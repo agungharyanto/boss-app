@@ -2,8 +2,12 @@
 
 namespace App\Services\Whatsapp;
 
+use App\Enums\WhatsappConversationDirection;
+use App\Enums\WhatsappEventType;
 use App\Models\Reseller;
+use App\Models\Tenant;
 use App\Models\WhatsappIncomingMessage;
+use App\Models\WhatsappSession;
 use App\Support\WhatsappHmac;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
@@ -15,14 +19,21 @@ use Illuminate\Support\Facades\Log;
  * namespace ini (WhatsappSessionService/WhatsappTemplateService/
  * WhatsappGatewayService).
  *
- * TIDAK ADA state machine/routing/business logic di sini — murni simpan
- * mentah + idempotency guard. Keputusan apa yang dilakukan dengan isi pesan
- * ini (v0.13.2+) sama sekali bukan urusan service ini.
+ * Simpan mentah + idempotency guard (v0.13.1) TETAP di sini, TIDAK
+ * berubah. v0.13.3 menambah ROUTING setelahnya — inline di
+ * recordFromWebhook() (bukan Event/Listener terpisah: di seluruh
+ * codebase ini cuma ada 1 pasang Event/Listener, OdpCapacityExhausted —
+ * pola dominan project adalah pemanggilan service langsung, konsisten
+ * dengan itu). Business logic PSB/OTP spesifik TETAP bukan urusan
+ * service ini — itu v0.13.4, dipanggil dari titik yang sama nanti.
  */
 class WhatsappIncomingMessageService
 {
     public function __construct(
         private readonly WhatsappHmac $hmac,
+        private readonly WhatsappConversationStateService $stateService,
+        private readonly WhatsappTechnicianAuthService $technicianAuthService,
+        private readonly WhatsappGatewayService $gatewayService,
     ) {}
 
     /**
@@ -91,7 +102,109 @@ class WhatsappIncomingMessageService
             $this->backfillResolvedLid($message);
         }
 
+        // v0.13.3 — routing state machine. HANYA untuk baris yang GENUINELY
+        // baru (sama alasan backfill LID di atas — pesan duplikat/retry
+        // webhook sudah pernah di-routing sekali, tidak perlu diulang).
+        //
+        // KETERBATASAN DIKETAHUI (belum ditangani, bukan bug): kalau
+        // is_lid=true (raw LID, bukan nomor asli — lihat fix bug LID),
+        // $senderPhone berisi digit LID mentah, yang TIDAK PERNAH cocok
+        // dengan state Redis maupun technicians.phone manapun (keduanya
+        // dikunci nomor telepon asli format "0xxx") — pesan dari kontak
+        // LID yang gagal resolve akan SELALU jatuh ke fallback generik,
+        // meski kontak itu genuinely teknisi terdaftar yang nomornya
+        // cuma belum ke-resolve. Tidak fatal (tetap ada respons, bukan
+        // silent fail), tapi dicatat sebagai gap — tidak diminta scope
+        // ini untuk ditangani.
+        if ($message->wasRecentlyCreated) {
+            $this->routeToConversationOrFallback($senderPhone, $text, $message->reseller_id);
+        }
+
         return true;
+    }
+
+    /**
+     * Alur keputusan v0.13.3 untuk 1 pesan masuk baru:
+     *   1. Ada state percakapan aktif untuk nomor ini? -> catat pesan
+     *      masuk ke audit trail state itu (logMessage()). v0.13.3 BELUM
+     *      punya business logic PSB nyata untuk di-advance() (itu
+     *      v0.13.4) — cabang ini murni memastikan jalur "ada state aktif"
+     *      genuinely benar/teruji, bukan menjalankan logic PSB apa pun.
+     *   2. Tidak ada state aktif, TAPI nomor ini teknisi TERAUTORISASI
+     *      dengan WorkOrder aktif (WhatsappTechnicianAuthService)? ->
+     *      balas "fitur sedang dikembangkan" (WhatsappEventType::
+     *      TechnicianFeaturePending) — BUKAN disamakan dengan fallback
+     *      generik, karena penerimanya jelas teknisi sah.
+     *   3. Tidak match keduanya -> fallback generik (WhatsappEventType::
+     *      UnrecognizedMessageFallback), selalu lewat sesi "direct"
+     *      (tidak ada entitas yang dikenali sama sekali dari pesan ini).
+     */
+    private function routeToConversationOrFallback(string $phone, string $text, ?int $resellerId): void
+    {
+        $current = $this->stateService->getCurrent($phone);
+
+        if ($current !== null) {
+            $this->stateService->logMessage(
+                $phone,
+                (string) $current['scope'],
+                WhatsappConversationDirection::Inbound,
+                $text,
+                $current['step'] ?? null,
+            );
+
+            return;
+        }
+
+        $workOrder = $this->technicianAuthService->resolveAuthorizedTechnicianForActiveWorkOrder($phone);
+
+        if ($workOrder !== null) {
+            $this->gatewayService->buildAndQueueForRecipient(
+                WhatsappEventType::TechnicianFeaturePending,
+                $workOrder->tenant_id,
+                $phone,
+                [
+                    'technician_name' => $workOrder->technician->name,
+                    'company_name' => $workOrder->tenant?->name,
+                ],
+            );
+
+            return;
+        }
+
+        $tenantId = $this->resolveTenantIdForFallback($resellerId);
+
+        if ($tenantId === null) {
+            Log::warning("WhatsappIncomingMessageService: tidak bisa resolve tenant_id untuk fallback ke phone={$phone} — pesan tidak dibalas.");
+
+            return;
+        }
+
+        $this->gatewayService->buildAndQueueForRecipient(
+            WhatsappEventType::UnrecognizedMessageFallback,
+            $tenantId,
+            $phone,
+            [
+                'company_name' => Tenant::find($tenantId)?->name,
+            ],
+        );
+    }
+
+    /**
+     * Fallback generik selalu lewat sesi "direct" (tidak ada entitas yang
+     * dikenali dari pesan ini) — tenant_id-nya diambil dari reseller yang
+     * SUDAH ter-resolve di baris pesan ini kalau ada (session reseller
+     * tertentu), atau tenant pemilik sesi "direct" itu sendiri kalau
+     * $resellerId null. Null hanya kalau genuinely tidak ada sesi direct
+     * sama sekali (belum pernah setup WhatsApp Gateway) — dicatat warning,
+     * bukan exception, konsisten prinsip "jangan bikin whatsmeow retry".
+     */
+    private function resolveTenantIdForFallback(?int $resellerId): ?int
+    {
+        if ($resellerId !== null) {
+            return Reseller::find($resellerId)?->tenant_id;
+        }
+
+        return WhatsappSession::withoutGlobalScopes()->whereNull('reseller_id')->value('tenant_id');
     }
 
     /**

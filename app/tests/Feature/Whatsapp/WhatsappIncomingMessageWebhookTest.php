@@ -2,11 +2,23 @@
 
 namespace Tests\Feature\Whatsapp;
 
+use App\Enums\WhatsappConversationDirection;
+use App\Enums\WhatsappEventType;
+use App\Enums\WorkOrderStatus;
+use App\Jobs\SendWhatsappMessageJob;
 use App\Models\Reseller;
+use App\Models\Technician;
 use App\Models\Tenant;
+use App\Models\WhatsappConversationLog;
 use App\Models\WhatsappIncomingMessage;
+use App\Models\WhatsappMessageLog;
+use App\Models\WhatsappMessageTemplate;
+use App\Models\WhatsappSession;
+use App\Models\WorkOrder;
+use App\Services\Whatsapp\WhatsappConversationStateService;
 use App\Support\WhatsappHmac;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -376,5 +388,114 @@ class WhatsappIncomingMessageWebhookTest extends TestCase
         $this->postSigned($payload)->assertJsonPath('data.result', 'recorded');
 
         $this->assertSame(1, WhatsappIncomingMessage::where('message_id', 'MSG-REPLAY')->count());
+    }
+
+    // --- routing v0.13.3 (state machine / auth teknisi / fallback) ---
+
+    /**
+     * Ada state percakapan aktif untuk nomor ini -> pesan dicatat via
+     * logMessage() ke audit trail state ITU (bukan guard teknisi, bukan
+     * fallback). v0.13.3 belum punya business logic PSB nyata untuk
+     * di-advance() (itu v0.13.4) — cabang ini murni memastikan jalur
+     * "ada state aktif" genuinely benar/teruji.
+     */
+    public function test_a_message_with_an_active_conversation_state_is_logged_under_that_state(): void
+    {
+        Queue::fake();
+
+        $phone = '081234567890';
+        $stateId = app(WhatsappConversationStateService::class)->open($phone, 'some-scope', ['step' => 'awal']);
+
+        $this->postSigned($this->validPayload([
+            'sender_phone' => $phone,
+            'text' => 'ini pesan lanjutan',
+            'message_id' => 'MSG-STATE-ACTIVE',
+        ]))->assertJsonPath('data.result', 'recorded');
+
+        $log = WhatsappConversationLog::where('state_id', $stateId)
+            ->where('direction', WhatsappConversationDirection::Inbound)
+            ->first();
+
+        $this->assertNotNull($log);
+        $this->assertSame('ini pesan lanjutan', $log->content);
+
+        // TIDAK ada pesan balasan apa pun dikirim (bukan guard teknisi,
+        // bukan fallback) — state aktif punya prioritas tertinggi.
+        Queue::assertNotPushed(SendWhatsappMessageJob::class);
+    }
+
+    /**
+     * Tidak ada state aktif, TAPI nomor ini teknisi TERAUTORISASI dengan
+     * WorkOrder aktif -> balas "fitur sedang dikembangkan", BUKAN
+     * fallback generik.
+     */
+    public function test_a_message_from_an_authorized_technician_without_active_state_gets_the_feature_pending_reply(): void
+    {
+        Queue::fake();
+
+        $technician = Technician::factory()->create(['phone' => '081234567890', 'name' => 'Budi Teknisi']);
+        WorkOrder::factory()->create([
+            'tenant_id' => $technician->tenant_id,
+            'technician_id' => $technician->id,
+            'status' => WorkOrderStatus::Assigned,
+        ]);
+
+        WhatsappMessageTemplate::create([
+            'tenant_id' => $technician->tenant_id,
+            'reseller_id' => null,
+            'event_type' => WhatsappEventType::TechnicianFeaturePending,
+            'content' => 'Halo {technician_name}, fitur ini masih dikembangkan — {company_name}.',
+            'is_active' => true,
+        ]);
+
+        $this->postSigned($this->validPayload([
+            'sender_phone' => '081234567890',
+            'text' => 'halo min',
+            'message_id' => 'MSG-TECHNICIAN',
+        ]))->assertJsonPath('data.result', 'recorded');
+
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => '6281234567890',
+            'event_type' => WhatsappEventType::TechnicianFeaturePending->value,
+        ]);
+        $log = WhatsappMessageLog::where('event_type', WhatsappEventType::TechnicianFeaturePending->value)->first();
+        $this->assertStringContainsString('Budi Teknisi', $log->rendered_content);
+
+        Queue::assertPushed(SendWhatsappMessageJob::class);
+    }
+
+    /**
+     * Tidak match state aktif, tidak match teknisi manapun -> fallback
+     * generik "pesan tidak dikenali".
+     */
+    public function test_a_message_that_matches_nothing_gets_the_generic_fallback_reply(): void
+    {
+        Queue::fake();
+
+        $tenant = Tenant::factory()->create();
+        // Fallback SELALU lewat sesi "direct" (reseller_id null) —
+        // resolveTenantIdForFallback() butuh baris ini untuk resolve
+        // tenant_id-nya.
+        WhatsappSession::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);
+        WhatsappMessageTemplate::create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'event_type' => WhatsappEventType::UnrecognizedMessageFallback,
+            'content' => 'Maaf, pesan Anda tidak dikenali — {company_name}.',
+            'is_active' => true,
+        ]);
+
+        $this->postSigned($this->validPayload([
+            'sender_phone' => '089900001111',
+            'text' => 'halo ini siapa',
+            'message_id' => 'MSG-UNKNOWN',
+        ]))->assertJsonPath('data.result', 'recorded');
+
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => '6289900001111',
+            'event_type' => WhatsappEventType::UnrecognizedMessageFallback->value,
+        ]);
+
+        Queue::assertPushed(SendWhatsappMessageJob::class);
     }
 }

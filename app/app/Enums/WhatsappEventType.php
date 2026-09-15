@@ -33,6 +33,28 @@ enum WhatsappEventType: string
      */
     case DuplicateSessionAttempt = 'duplicate_session_attempt';
 
+    /**
+     * v0.13.3 — pesan masuk dari nomor yang TERAUTORISASI sebagai teknisi
+     * dengan WorkOrder aktif (`WhatsappTechnicianAuthService::
+     * resolveAuthorizedTechnicianForActiveWorkOrder()`), TAPI belum ada
+     * state percakapan aktif untuk nomor itu — business logic PSB
+     * sesungguhnya belum ada (v0.13.4), jadi sengaja dibalas pesan
+     * "fitur sedang dikembangkan", BUKAN disamakan dengan fallback
+     * generik pesan tak dikenali (penerimanya JELAS teknisi sah, cuma
+     * fiturnya belum siap — beda pesan dari "kamu siapa").
+     */
+    case TechnicianFeaturePending = 'technician_feature_pending';
+
+    /**
+     * v0.13.3 — fallback pesan masuk yang TIDAK match state percakapan
+     * aktif manapun DAN TIDAK match otorisasi teknisi manapun. Satu-
+     * satunya "saya tidak tahu harus ngapain dengan pesan ini" generik di
+     * modul WhatsApp 2-Arah — dikirim lewat sesi "direct" selalu (bukan
+     * konteks reseller tertentu, karena tidak ada entitas yang dikenali
+     * sama sekali dari pesan ini).
+     */
+    case UnrecognizedMessageFallback = 'unrecognized_message_fallback';
+
     public function label(): string
     {
         return match ($this) {
@@ -42,6 +64,8 @@ enum WhatsappEventType: string
             self::CustomerSuspendedReminder => 'Pengingat Pelanggan Suspend',
             self::ReferrerActionOtp => 'Kode OTP Aksi Referrer',
             self::DuplicateSessionAttempt => 'Percobaan Pairing Sesi Duplikat',
+            self::TechnicianFeaturePending => 'Fitur Teknisi Belum Tersedia',
+            self::UnrecognizedMessageFallback => 'Fallback Pesan Tidak Dikenali',
         };
     }
 }

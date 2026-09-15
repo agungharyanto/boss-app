@@ -13,6 +13,23 @@
         <div class="mb-4 text-sm text-green-600">{{ session('status') }}</div>
     @endif
 
+    {{-- v0.26.1 — Jadwal Kunjungan (work_orders.scheduled_at). Belum ada
+         yang membaca field ini untuk dispatch otomatis (itu v0.26.2) —
+         di sini murni tampil + bisa diedit. --}}
+    <div class="mb-6 flex items-center justify-between border border-gray-200 rounded-md p-4">
+        <div>
+            <p class="text-xs text-gray-500 uppercase font-medium mb-1">{{ __('Jadwal Kunjungan') }}</p>
+            <p class="text-sm text-gray-800">
+                {{ $work_order->scheduled_at?->translatedFormat('d M Y, H:i') ?? __('Belum ada janji spesifik') }}
+            </p>
+        </div>
+        @if ($canManage)
+            <button wire:click="startEditingSchedule" class="text-sm text-primary hover:underline">
+                {{ $work_order->scheduled_at ? __('Ubah Jadwal') : __('Atur Jadwal') }}
+            </button>
+        @endif
+    </div>
+
     <p class="mb-6 text-xs text-gray-500 bg-yellow-50 border border-yellow-100 rounded-md p-3">
         {{ __('Jalur input sementara — CS/admin mengisi manual dari info yang direlai teknisi lewat telepon/WA pribadi. Ini bukan form self-service teknisi lapangan (itu masih backlog terpisah).') }}
     </p>
@@ -70,6 +87,33 @@
             </tbody>
         </table>
     </div>
+
+    {{-- v0.26.1 — SCHEDULE MODAL. Kosong = sengaja hapus janji (WO jadi
+         "tanpa jadwal spesifik"), beda dari modal provisioning di bawah
+         yang punya 2 field terpisah. --}}
+    @if ($editingSchedule)
+        <x-modal wire:click.self="cancelEditingSchedule" max-width="max-w-md" panel-class="rounded-md p-6 space-y-4">
+                <h2 class="font-medium">{{ __('Jadwalkan Kunjungan') }}</h2>
+                <p class="text-xs text-gray-500">
+                    {{ __('Kosongkan untuk menghapus janji — work order akan dianggap tanpa jadwal spesifik.') }}
+                </p>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">{{ __('Hari & Jam Kunjungan') }}</label>
+                    <input type="datetime-local" wire:model="scheduledAtInput" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                    @error('scheduledAtInput') <p class="text-xs text-red-600 mt-1">{{ $message }}</p> @enderror
+                </div>
+
+                <div class="flex items-center gap-3 pt-2">
+                    <button wire:click="saveSchedule" wire:loading.attr="disabled" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">
+                        {{ __('Simpan') }}
+                    </button>
+                    <button wire:click="cancelEditingSchedule" type="button" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
+                        {{ __('Batal') }}
+                    </button>
+                </div>
+        </x-modal>
+    @endif
 
     {{-- PROVISIONING MODAL — partial update sungguhan: kosongkan salah satu
          field artinya "tidak diubah sekarang", bukan "hapus". --}}

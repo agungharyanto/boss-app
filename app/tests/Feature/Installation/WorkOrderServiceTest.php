@@ -62,6 +62,49 @@ class WorkOrderServiceTest extends TestCase
         $this->assertSame(OdpPortStatus::Reserved, $port->fresh()->status);
     }
 
+    // --- v0.26.1 — wiring work_orders.scheduled_at (nol dispatch logic di sini, itu v0.26.2) ---
+
+    public function test_create_from_subscription_without_scheduled_at_leaves_it_null(): void
+    {
+        [$subscription] = $this->subscriptionWithNearbyOdp();
+
+        $workOrder = app(WorkOrderService::class)->createFromSubscription($subscription);
+
+        $this->assertNull($workOrder->scheduled_at);
+    }
+
+    public function test_create_from_subscription_with_scheduled_at_persists_it(): void
+    {
+        [$subscription] = $this->subscriptionWithNearbyOdp();
+
+        $workOrder = app(WorkOrderService::class)->createFromSubscription($subscription, '2026-10-01 10:00:00');
+
+        $this->assertNotNull($workOrder->scheduled_at);
+        $this->assertSame('2026-10-01 10:00:00', $workOrder->scheduled_at->format('Y-m-d H:i:s'));
+    }
+
+    public function test_schedule_visit_sets_a_schedule_on_a_work_order_created_without_one(): void
+    {
+        [$subscription] = $this->subscriptionWithNearbyOdp();
+        $workOrder = app(WorkOrderService::class)->createFromSubscription($subscription);
+        $this->assertNull($workOrder->scheduled_at);
+
+        $updated = app(WorkOrderService::class)->scheduleVisit($workOrder, '2026-10-02 14:30:00');
+
+        $this->assertSame('2026-10-02 14:30:00', $updated->scheduled_at->format('Y-m-d H:i:s'));
+    }
+
+    public function test_schedule_visit_with_null_clears_an_existing_schedule(): void
+    {
+        [$subscription] = $this->subscriptionWithNearbyOdp();
+        $workOrder = app(WorkOrderService::class)->createFromSubscription($subscription, '2026-10-01 10:00:00');
+        $this->assertNotNull($workOrder->scheduled_at);
+
+        $updated = app(WorkOrderService::class)->scheduleVisit($workOrder, null);
+
+        $this->assertNull($updated->scheduled_at);
+    }
+
     public function test_create_from_subscription_marks_odp_unavailable_when_no_port_found(): void
     {
         $tenant = Tenant::factory()->create();

@@ -29,6 +29,13 @@ class WorkOrderShow extends Component
 
     public string $wifiPassword = '';
 
+    // v0.26.1 — form edit "Jadwalkan Kunjungan". Nilai HTML
+    // <input type="datetime-local"> ("YYYY-MM-DDTHH:MM"), bukan Carbon —
+    // Livewire cuma boleh bind properti primitif.
+    public bool $editingSchedule = false;
+
+    public string $scheduledAtInput = '';
+
     public function mount(WorkOrder $work_order): void
     {
         $this->authorize('view', $work_order);
@@ -90,6 +97,40 @@ class WorkOrderShow extends Component
 
         session()->flash('status', 'Kredensial WiFi tercatat untuk perangkat ini — akan didorong ke device begitu dikenal GenieACS.');
         $this->closeProvisioningForm();
+    }
+
+    public function startEditingSchedule(): void
+    {
+        $this->authorize('manage', $this->work_order);
+
+        // Format persis yang dipahami <input type="datetime-local"> —
+        // 'Y-m-d\TH:i' (detik dibuang, browser tidak butuh itu).
+        $this->scheduledAtInput = $this->work_order->scheduled_at?->format('Y-m-d\TH:i') ?? '';
+        $this->editingSchedule = true;
+    }
+
+    public function cancelEditingSchedule(): void
+    {
+        $this->reset(['editingSchedule', 'scheduledAtInput']);
+        $this->resetErrorBag();
+    }
+
+    public function saveSchedule(WorkOrderService $service): void
+    {
+        $this->authorize('manage', $this->work_order);
+
+        $this->validate([
+            'scheduledAtInput' => ['nullable', 'date'],
+        ]);
+
+        // Kosong = sengaja dikosongkan (hapus janji, WO jadi "tanpa jadwal
+        // spesifik") — beda dari form provisioning WiFi di atas, field ini
+        // memang cuma satu-satunya nilai yang diedit form ini, jadi kosong
+        // di sini TIDAK ambigu seperti "tidak diisi ulang".
+        $service->scheduleVisit($this->work_order, $this->scheduledAtInput !== '' ? $this->scheduledAtInput : null);
+
+        session()->flash('status', 'Jadwal kunjungan tersimpan.');
+        $this->cancelEditingSchedule();
     }
 
     public function render()

@@ -42,3 +42,30 @@ func NormalizeIndonesian(raw string) string {
 func BuildJID(normalizedNumber string) types.JID {
 	return types.NewJID(normalizedNumber, types.DefaultUserServer)
 }
+
+// ToLocalIndonesian — KEBALIKAN NormalizeIndonesian, v0.13.1. Nomor pengirim
+// pesan masuk dari JID whatsmeow (Info.Sender.User) NATIVE-nya sudah format
+// "62xxx" (kode negara, tanpa 0 di depan) — tapi `customers.phone_number`/
+// `technicians.phone` di boss_db SELALU format lokal "0xxx" (dikonfirmasi
+// 553/553 baris customers saat investigasi kick-off v0.13.1, NOL baris
+// "62xxx"). Fungsi ini HANYA dipakai untuk mengisi field `sender_phone` di
+// payload webhook incoming-message — supaya v0.13.3 (auth teknisi via match
+// phone) dan modul lain yang membaca tabel `whatsapp_incoming_messages` tidak
+// perlu konversi tambahan sendiri-sendiri. `NormalizeIndonesian`/`BuildJID`
+// TIDAK disentuh — tetap dipakai apa adanya oleh jalur kirim pesan (`/send`).
+//
+// Input diasumsikan SUDAH melalui bentuk JID number (hasil `Sender.User`,
+// selalu digit polos) — tetap strip non-digit dulu sebagai jaring pengaman,
+// konsisten dengan gaya defensif NormalizeIndonesian. "62xxx" -> "0xxx";
+// input yang tidak diawali "62" dikembalikan apa adanya setelah strip
+// non-digit (tidak menebak-nebak format lain, sama filosofi
+// NormalizeIndonesian's default branch).
+func ToLocalIndonesian(raw string) string {
+	digits := nonDigit.ReplaceAllString(raw, "")
+
+	if strings.HasPrefix(digits, "62") {
+		return "0" + digits[2:]
+	}
+
+	return digits
+}

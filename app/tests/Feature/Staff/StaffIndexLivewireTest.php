@@ -195,6 +195,29 @@ class StaffIndexLivewireTest extends TestCase
         $this->assertDatabaseHas('users', ['id' => $staff->id]);
     }
 
+    /**
+     * Root cause insiden Kamisem (2026-09-15) — akun Referrer portal
+     * (zero-role by design) dulu ikut muncul di "Manajemen Staff" tanpa
+     * tanda visual apa pun, sampai akhirnya terhapus tanpa disadari itu
+     * akun produksi. `whereHas('roles')` menutup ini secara struktural:
+     * halaman ini tidak pernah lagi bisa menampilkan (apalagi
+     * menawarkan tombol Hapus untuk) akun zero-role.
+     */
+    public function test_a_zero_role_referrer_portal_account_never_appears_in_the_staff_list(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $referrerAccount = User::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Akun Referrer Portal Tanpa Role']);
+        // Sengaja TIDAK assignRole() apa pun — mereplikasi persis
+        // ReferrerService::attachNewLoginAccount() (zero-role by design).
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->assertDontSee('Akun Referrer Portal Tanpa Role');
+
+        $this->assertDatabaseHas('users', ['id' => $referrerAccount->id]);
+    }
+
     public function test_deleting_a_staff_account_that_is_still_an_assigned_technician_shows_the_error_instead_of_deleting(): void
     {
         $tenant = Tenant::factory()->create();

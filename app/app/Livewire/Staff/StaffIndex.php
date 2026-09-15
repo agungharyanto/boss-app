@@ -173,7 +173,17 @@ class StaffIndex extends Component
 
     public function render()
     {
+        // Root cause insiden Kamisem (2026-09-15) — query ini dulu
+        // TIDAK memfilter "punya role Spatie", jadi akun Referrer portal
+        // (zero-role by design, lihat ReferrerService::attachNewLoginAccount())
+        // ikut muncul di "Manajemen Staff" tanpa tanda visual apa pun,
+        // membuat siapa pun bisa salah klik Hapus terhadap akun login
+        // produksi yang genuinely masih dipakai. `whereHas('roles')` —
+        // SATU-SATUNYA hal yang membedakan akun staff sungguhan dari akun
+        // portal-only di skema ini — memastikan cakupan halaman ini
+        // benar-benar staff, bukan "semua baris users".
         $staff = User::where('tenant_id', auth()->user()->tenant_id)
+            ->whereHas('roles')
             ->when($this->search, fn ($query) => $query->where(function ($q) {
                 $q->where('name', 'like', "%{$this->search}%")
                     ->orWhere('email', 'like', "%{$this->search}%");

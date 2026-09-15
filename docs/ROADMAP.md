@@ -2734,3 +2734,55 @@ otomatis.
 GitHub discussion resmi whatsmeow — fitur itu cuma ada di WhatsApp Business Cloud API resmi Meta), jadi
 desain UX Chatwoot (kalau jadi dipakai) tetap harus berbasis teks/balasan biasa, bukan tombol interaktif,
 sama seperti batasan yang sudah berlaku untuk state machine custom kita.
+
+## Backlog — Integrasi mutasi.id (Auto-Reconciliation Bukti Transfer)
+
+**Status: Backlog.** Dicatat dari planning chat v0.13.0, 2026-09-14. **TIDAK terkait langsung v0.13.x yang
+sedang dikerjakan.**
+
+Pelanggan kadang kirim bukti transfer foto/screenshot lewat WA sebelum sistem bisa otomatis cocokkan ke
+mutasi bank. Ide: integrasi ke mutasi.id (atau layanan sejenis — agregator mutasi rekening bank) untuk
+reconciliation otomatis, dikombinasikan dengan kemampuan terima media masuk (v0.13.6 — beda scope, itu
+cuma nangkep gambar, ini soal cocokkan ke data bank).
+
+**Belum ada decision-gate**: bank/rekening mana yang di-cover, format API mutasi.id, matching
+nominal+waktu+nama pengirim, fallback verifikasi manual kalau tidak match otomatis.
+
+## Backlog — Auto-Respons Panggilan WhatsApp Masuk (Call Offer → Reject + Redirect ke Chat)
+
+**Status: Backlog.** Dicatat dari planning chat v0.13.0, 2026-09-14 — soal panggilan WhatsApp/WA Call
+(bukan telepon GSM biasa). Berkaitan dengan arsitektur v0.13.x (state machine + listener + Template Pesan
+existing) tapi trigger baru (CallOffer) di luar scope v0.13.1-6 yang sudah dikunci — perlu decision-gate
+terpisah kalau mau masuk sprint.
+
+Dikonfirmasi via investigasi library: whatsmeow bisa mendeteksi panggilan WA masuk (event `CallOffer` —
+dapat nomor penelepon + tipe audio/video, event `CallTerminate` untuk status akhir), TAPI TIDAK bisa
+mengangkat panggilan dan menjalankan percakapan suara (IVR) — whatsmeow tidak mengimplementasikan
+protokol media/audio WhatsApp Call, cuma signaling metadata.
+
+**Desain yang FEASIBLE**: deteksi `CallOffer` → auto-reject panggilan → kirim WA teks otomatis ke
+penelepon, redirect ke alur teks — kalau nomor sudah terdaftar sebagai customer → tanya keluhan langsung
+(kalau ada tiket/WorkOrder gangguan aktif untuk customer itu, informasikan status tiket yang sudah ada
+alih-alih buat baru); kalau nomor belum terdaftar → tanya CID dulu sebelum lanjut ke keluhan. Ini nyambung
+ke state machine yang dibangun v0.13.2-4 (arsitektur percakapan sudah ada, tinggal trigger baru dari
+`CallOffer` selain dari `Message`).
+
+Isi pesan reject HARUS bisa diedit admin/reseller dari UI, BUKAN hardcoded — reuse mekanisme Template
+Pesan yang sudah ada (`whatsapp_message_templates`, pola reseller-level override dengan fallback default
+ISP, dibangun v0.4.0) — tambah 1 template baru bertipe "call_reject" atau serupa ke sistem yang sama,
+konsisten dengan template-template existing (OTP, invoice due, dsb), BUKAN bikin sistem template terpisah.
+
+**Belum ada decision-gate**: apakah auto-reject dilakukan segera atau tunggu beberapa detik dulu, variable
+apa saja yang tersedia di template (nama pelanggan? CID? nomor?), bagaimana keluhan yang masuk lewat jalur
+ini dibedakan dari keluhan biasa (prioritas lebih tinggi karena customer sempat coba telepon).
+
+## Backlog — Transkripsi Voice Note WhatsApp ke Teks
+
+**Status: Backlog.** Dicatat dari planning chat v0.13.0, 2026-09-14. Terkait v0.13.6 tapi transkripsinya
+sendiri di luar scope awal v0.13.6 (yang cuma capture+simpan).
+
+Kemampuan MENERIMA voice note (audio/PTT) sudah masuk scope v0.13.6 (media masuk, sama seperti foto —
+whatsmeow menangkap `AudioMessage`/PTT lewat event handler yang sama). Tapi TRANSKRIPSI audio ke teks itu
+butuh layanan speech-to-text terpisah (misal Whisper API/Google STT) — belum ada decision-gate: provider
+mana, akurasi Bahasa Indonesia, biaya per menit audio, apakah transkripsi real-time atau on-demand (baru
+ditranskripsi kalau staf klik "lihat teks").

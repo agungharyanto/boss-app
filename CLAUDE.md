@@ -8969,6 +8969,14 @@ hasil rename berhasil start bersih dan `restoreAll()` genuinely me-reconnect ses
 ter-pairing sebelumnya tanpa perlu scan/pairing ulang, dikonfirmasi lewat health-check langsung ke
 hostname/port baru.
 
+## Satu Nomor WA Fisik = Satu Session (governance note, 2026-09-15)
+
+1 nomor WA fisik HANYA BOLEH dipakai di 1 session BOSS App (direct ATAU 1 reseller tertentu, tidak boleh
+dobel) — WhatsApp memperlakukan pairing kedua sebagai linked device dari akun yang sama, bukan entitas
+terpisah, sehingga delivery pesan masuk jadi non-deterministik dan merusak isolasi reseller_id. Sistem
+sekarang mencegah ini otomatis (lihat WhatsappSessionService — validasi nomor duplikat saat pairing
+selesai).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

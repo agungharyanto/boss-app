@@ -164,19 +164,28 @@ tanya balik ke Agung, JANGAN langsung buat branch baru dari `main` tanpa konfirm
 
 ## ATURAN WAJIB — KAPAN MENJALANKAN FULL REGRESSION SUITE (governance note permanen, ditetapkan Agung 2026-09-05)
 
-Full regression suite (1500+ test, ~12 menit) **BERAT** — jangan dijalankan tiap selesai 1 langkah kecil.
-Aturan baku:
+Full regression suite (1500+ test, ~12-16 menit) **BERAT** — jangan dijalankan tiap selesai 1 langkah
+kecil. **Klarifikasi 2026-09-15 (insiden ke-2: aturan lama di bawah ini terbukti ambigu — "merge ke main"
+dulu ditafsirkan sebagai pemicu otomatis full regression, padahal ini sudah 2x menyebabkan full regression
+dijalankan di sub-versi yang BUKAN penutup cluster, mis. v0.13.3 yang masih punya v0.13.4 menyusul di
+cluster WhatsApp 2-Arah yang sama). Aturan baku, DIPERJELAS:**
 
 1. **SEKALI di awal sesi/prompt** — baseline, OPSIONAL (cuma kalau perlu tahu titik mulai bersih).
 2. **Selama iterasi/development di tengah** (belum mau merge) — **CUKUP test SCOPED** ke fitur yang sedang
    dikerjakan: `php artisan test --filter=<NamaFiturTerkait>` (mis. `--filter="PppPackage|NetworkProfileGroup"`).
    BUKAN full suite.
-3. **SEKALI di akhir, TEPAT SEBELUM merge ke `main`** — full suite **WAJIB, TIDAK BOLEH DILEWATI**. Ini
-   gate terakhir sebelum kode masuk `main`. Kalau ada beberapa branch di-merge berturut-turut dalam satu
-   sesi, jalankan full suite sebelum SETIAP merge ke `main` (state `main` bisa berubah di antara merge).
+3. **Full regression suite HANYA dijalankan di 1 titik: saat sub-versi TERAKHIR dari sebuah cluster
+   ditutup (cluster gate) — BUKAN di setiap merge `develop`→`main`.** "Merge ke `main`" BUKAN sinyal
+   otomatis untuk full regression — jangan disamakan. Merge `develop`→`main` untuk sub-versi APA PUN di
+   tengah cluster (bukan sub-versi penutup) **cukup pakai SCOPED test** yang relevan dengan area yang
+   disentuh, persis seperti poin 2 — full suite TIDAK WAJIB untuk merge semacam ini.
+4. **Kalau ragu apakah sebuah sub-versi adalah penutup cluster — TANYA dulu ke Agung, JANGAN asumsi
+   "lebih aman full regression saja".** Menjalankan full regression di titik yang salah bukan pilihan
+   aman default — itu sendiri kesalahan disiplin yang sudah terjadi 2x dan harus dihindari, bukan
+   dianggap sebagai "kelebihan hati-hati yang tidak masalah".
 
-Rasionalnya: mempercepat iterasi tanpa mengurangi jaring pengaman di titik yang benar-benar penting (kode
-masuk `main`). Pint tetap dijalankan per-file yang disentuh seperti biasa (ringan).
+Rasionalnya: mempercepat iterasi tanpa mengurangi jaring pengaman di titik yang benar-benar penting (cluster
+benar-benar tuntas dan siap ditandai). Pint tetap dijalankan per-file yang disentuh seperti biasa (ringan).
 
 ## Sprint-based development — read this before doing anything
 

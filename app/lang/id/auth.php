@@ -9,4 +9,9 @@ return [
     'failed' => 'Email/nomor HP atau password salah.',
     'password' => 'Kata sandi salah.',
     'throttle' => 'Terlalu banyak upaya masuk. Silakan coba lagi dalam :seconds detik.',
+    // v0.22.1 — kredensial genuinely benar tapi akun di-disable admin.
+    // Sengaja pesan BERBEDA dari 'failed' — di sini identitas SUDAH
+    // terverifikasi benar (password cocok), jadi tidak ada risiko
+    // membocorkan info baru dengan memberi pesan lebih spesifik.
+    'account_disabled' => 'Akun Anda dinonaktifkan — hubungi administrator.',
 ];

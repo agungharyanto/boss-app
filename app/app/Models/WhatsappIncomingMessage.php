@@ -20,6 +20,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * pun — pola sama `whatsapp_message_logs.reseller_id`, bukan pola
  * partial-unique-index `reseller_tax_policies` (tidak relevan di sini,
  * banyak baris boleh sama-sama satu reseller).
+ *
+ * `is_lid` (fix bug LID, migration `2026_09_15_090000_...`) — DIKIRIM
+ * eksplisit dari sisi Go (whatsapp-gateway/internal/session/
+ * manager.go::resolveSenderPhone()). true berarti `sender_phone` di baris
+ * ini adalah raw WhatsApp LID (Linked ID) apa adanya, BUKAN nomor telepon
+ * — resolusi ke PN asli gagal di semua fallback (SenderAlt kosong DAN
+ * tidak ada mapping tersimpan di LIDStore lokal whatsmeow). false berarti
+ * `sender_phone` genuinely nomor telepon format lokal "0xxx".
  */
 class WhatsappIncomingMessage extends Model
 {
@@ -27,6 +35,7 @@ class WhatsappIncomingMessage extends Model
         'session_key',
         'reseller_id',
         'sender_phone',
+        'is_lid',
         'chat_jid',
         'message_id',
         'text',
@@ -42,6 +51,7 @@ class WhatsappIncomingMessage extends Model
     protected function casts(): array
     {
         return [
+            'is_lid' => 'boolean',
             'received_at' => 'datetime',
         ];
     }

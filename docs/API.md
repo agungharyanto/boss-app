@@ -1150,6 +1150,23 @@ semua + filter opsional, reseller (via `reseller_users` membership aktif)
 otomatis `WHERE reseller_id = miliknya sendiri`, ditegakkan di query, bukan
 di UI.
 
+**`is_lid` (fix bug LID, 2026-09-15)** — boolean, DIKIRIM eksplisit oleh
+Go (`whatsapp-gateway/internal/session/manager.go::resolveSenderPhone()`).
+Sebagian pengirim WhatsApp diadresskan lewat LID (Linked ID, addressing
+mode privasi baru WhatsApp) alih-alih nomor telepon langsung — `sender_phone`
+di payload tetap diusahakan berupa nomor telepon asli lewat urutan fallback
+(SenderAlt dari event yang sama -> lookup LIDStore lokal whatsmeow yang
+sudah tersimpan dari histori kontak), dan `is_lid` HANYA `true` kalau
+SEMUA fallback itu gagal — di titik itu `sender_phone` berisi raw WhatsApp
+LID apa adanya (BUKAN nomor telepon, dan TIDAK dikonversi ke format lokal
+`0xxx`), sebagai penanda eksplisit alih-alih diam-diam salah. Field
+opsional untuk backward-compat (payload dari versi gateway sebelum fix
+ini tidak mengirimnya sama sekali) — default `false` kalau tidak ada di
+body. Tab "Pesan Masuk" menampilkan placeholder "Nomor tidak tersedia"
+(abu-abu, italic) di kolom Nomor untuk baris `is_lid=true` — raw LID digit
+TIDAK PERNAH ditampilkan ke user (tetap tersimpan di `sender_phone` untuk
+debugging developer).
+
 ## Installation / Work Order (v0.5.0)
 
 Semua endpoint di bawah ada di dalam grup middleware `reseller.context` —

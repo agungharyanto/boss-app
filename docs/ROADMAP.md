@@ -2739,6 +2739,49 @@ formatnya sama — perlu diklarifikasi saat decision-gate).
 sumber idenya sama-sama muncul dari planning chat v0.13.0, kebutuhan cetak fisik ini bukan bagian dari
 scope kerja v0.13.1-v0.13.5 yang sedang berjalan.
 
+**Perluasan dari diskusi lanjutan (2026-09-15)** — masih murni exploratory design, belum ada decision-gate
+implementasi, dicatat di sini supaya tidak hilang:
+
+- **Trigger diperjelas**: pencetakan dilakukan tim OTB **SEBELUM PSB**, begitu WO diturunkan/di-assign —
+  bukan saat teknisi di lokasi. Alasan: data pelanggan + CID + modem sudah lengkap di titik itu,
+  menghilangkan risiko human-error input manual teknisi di lapangan.
+- **Format QR pelanggan diperjelas**: bukan QR generik, tapi encode `wa.me/62xxx` dengan pesan pra-isi
+  yang sudah menyertakan CID (deep link WhatsApp, bukan sekadar identitas). Tetap disertai panduan manual
+  di sticker sebagai fallback.
+- **Media cetak**: kertas label "Tom & Jerry" (produk umum Indonesia, dijual per "nomor" kode — tiap
+  nomor punya ukuran & tata letak grid label yang baku/terstandar per lembar, mis. nomor 107 = 18x50mm,
+  nomor 108 = 18x38mm, dst). Fisik kertasnya tetap A4, tapi sudah di-die-cut jadi banyak slot label kecil
+  per lembar — jauh lebih ekonomis dibanding cetak A4 polos.
+- **Mekanisme cetak yang diinginkan**: sistem generate PDF ukuran A4, isi (QR/CID/teks label)
+  diposisikan PERSIS ke koordinat grid sesuai nomor kode kertas yang dipakai (staf tidak perlu atur
+  margin/ukuran manual — mirip konsep template Avery). Backend perlu menyediakan SEMUA template koordinat
+  grid untuk nomor-nomor kertas Tom & Jerry yang umum dipakai; ADMIN yang memilih dari UI nomor kertas
+  mana yang dipakai (bukan hardcoded 1 ukuran).
+- **Kebutuhan tambahan penting**: 1 lembar kertas fisik biasanya berisi banyak slot (misal slot 1-10), dan
+  slot yang sudah lepas/kepakai sebelumnya (mis. slot 2 sudah kosong dari pemakaian lalu) TIDAK diketahui
+  sistem — BOSS App tidak bisa tahu kondisi fisik kertas yang sedang dipegang staf. Solusi yang
+  diinginkan: UI harus memungkinkan admin/staf MENYUSUN SENDIRI slot nomor berapa saja yang mau dicetak
+  (skip slot yang sudah tidak ada labelnya di lembar fisik yang dipegang), bukan sistem otomatis mulai
+  dari slot 1 selalu — supaya sisa label di lembar yang sudah setengah kepakai tetap bisa dimanfaatkan
+  tanpa mubazir.
+- **Kebutuhan sama (grid/nomor kertas/pemilihan slot) berlaku untuk KEDUA jenis label** (sticker modem DAN
+  label ODP) — cukup beda nomor kertas/ukuran yang dipilih sesuai kebutuhan masing-masing.
+- **Status tetap Backlog**, belum ada decision-gate implementasi — ini exploratory design discussion,
+  belum masuk sprint manapun.
+
+## Backlog — Modul Gudang/Inventory — belum ada nomor versi
+
+**Status: Backlog, ide sangat awal, nol decision-gate.** Disebutkan sekilas dari planning chat v0.13.0,
+2026-09-15 — BOSS App butuh fitur manajemen gudang/inventory (stok modem, kabel, perangkat ODP, kertas
+label, dan barang operasional lain). Belum ada detail apa pun — baru sebatas "perlu dicatat supaya tidak
+hilang". Konteks pemicu: kebutuhan cetak label modem/ODP (lihat entry "Backlog — QR Code Modem & ODP" di
+atas) memunculkan pertanyaan turunan soal ketersediaan stok kertas label, yang mengarah ke kebutuhan modul
+gudang yang lebih luas.
+
+**TIDAK terkait cluster manapun yang sedang berjalan** — kemungkinan besar jadi cluster/versi besar
+tersendiri di masa depan, bukan tambahan kecil ke sprint yang sudah ada. Jangan mulai implementasi apa
+pun sampai ada decision-gate eksplisit terpisah.
+
 ## Backlog — Integrasi Chatwoot
 
 **Status: Backlog (ide awal, belum discope).** Ide awal dari planning chat v0.13.0 (WhatsApp 2-Arah),

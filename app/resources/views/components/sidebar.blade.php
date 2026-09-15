@@ -267,11 +267,15 @@
         [
             'id' => 'pengaturan',
             'label' => __('Pengaturan'),
-            'active' => request()->routeIs('web.settings.*'),
+            'active' => request()->routeIs('web.settings.*') || request()->routeIs('web.staff.*'),
             'links' => array_filter([
                 ['route' => 'web.settings.theme', 'label' => __('Tema')],
                 auth()->user()->can('view', \App\Models\PaymentGatewaySettings::class)
                     ? ['route' => 'web.settings.payment-gateway', 'label' => __('Payment Gateway')]
+                    : null,
+                // v0.22.1 — CRUD Staff (Manajemen User). Gate viewAny UserPolicy.
+                auth()->user()->can('viewAny', \App\Models\User::class)
+                    ? ['route' => 'web.staff.index', 'label' => __('Manajemen Staff')]
                     : null,
             ]),
         ],

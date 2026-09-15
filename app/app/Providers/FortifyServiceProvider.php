@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Laravel\Fortify\Actions\RedirectIfTwoFactorAuthenticatable;
 use Laravel\Fortify\Contracts\LoginResponse as LoginResponseContract;
 use Laravel\Fortify\Fortify;
@@ -60,11 +61,31 @@ class FortifyServiceProvider extends ServiceProvider
                 ? $resolver->resolveStaffUser($identifier)
                 : $resolver->resolveReferrerUser($identifier);
 
-            if ($user !== null && Hash::check($password, $user->password)) {
-                return $user;
+            if ($user === null || ! Hash::check($password, $user->password)) {
+                return null;
             }
 
-            return null;
+            // v0.22.1 — dicek di SINI, bukan sesudahnya: paling awal yang
+            // mungkin setelah kredensial genuinely terverifikasi benar,
+            // SEBELUM Fortify sempat memutuskan redirect 2FA
+            // (RedirectIfTwoFactorAuthenticatable) — akun yang di-disable
+            // tidak pernah sampai ke layar tantangan 2FA sama sekali,
+            // ditolak duluan di titik paling awal. Berlaku untuk KEDUA
+            // jalur (staff/Referrer) karena `is_disabled` ada di tabel
+            // `users` itu sendiri, bukan per-jalur — meski v0.22.1 cuma
+            // membangun UI toggle-nya untuk staff, defense-in-depth ini
+            // otomatis berlaku juga kalau kelak ada akun Referrer yang
+            // di-disable lewat jalur lain.
+            //
+            // Sengaja THROW, bukan `return null` — supaya pesan errornya
+            // BEDA dari 'auth.failed' generik (kredensial di titik ini
+            // sudah TERBUKTI benar, jadi tidak ada risiko membocorkan info
+            // baru dengan pesan lebih spesifik).
+            if ($user->is_disabled) {
+                throw ValidationException::withMessages(['login' => [trans('auth.account_disabled')]]);
+            }
+
+            return $user;
         });
 
         Fortify::createUsersUsing(CreateNewUser::class);

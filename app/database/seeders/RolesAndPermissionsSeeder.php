@@ -68,6 +68,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedHotspotPackagePermissions();
         $this->seedPppPackagePermissions();
         $this->seedFiberNetworkPermissions();
+        $this->seedUserManagementPermissions();
     }
 
     /**
@@ -568,6 +569,23 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedFiberNetworkPermissions(): void
     {
         $permissions = ['network_infrastructure.view', 'network_infrastructure.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
+    }
+
+    /**
+     * v0.22.1 — CRUD Staff (Manajemen User). Tier-admin-only, sama posture
+     * BandwidthProfile/CustomerIpPool/NetworkProfileGroup — tidak ada
+     * carve-out reseller_users sama sekali (kelola akun staff/admin
+     * BUKAN tugas reseller).
+     */
+    private function seedUserManagementPermissions(): void
+    {
+        $permissions = ['users.view', 'users.manage'];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

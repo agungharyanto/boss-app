@@ -44,6 +44,16 @@ class ReferrerLoginController extends Controller
             throw ValidationException::withMessages(['phone' => __('auth.failed')]);
         }
 
+        // v0.22.1 — jalur login KEDUA yang genuinely independen dari
+        // Fortify::authenticateUsing() (guard/login manual di sini, bukan
+        // lewat closure Fortify) — ditemukan lewat investigasi, WAJIB dapat
+        // check yang sama persis atau akun disabled bisa lolos lewat rute
+        // lama ini. Sama alasan: pesan BEDA dari 'auth.failed' karena
+        // kredensial di titik ini sudah terbukti benar.
+        if ($user->is_disabled) {
+            throw ValidationException::withMessages(['phone' => __('auth.account_disabled')]);
+        }
+
         Auth::guard('web')->login($user, (bool) $request->boolean('remember'));
         $request->session()->regenerate();
 

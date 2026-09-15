@@ -2,9 +2,14 @@
 
 namespace Tests\Feature\Staff;
 
+use App\Enums\WorkOrderStatus;
 use App\Livewire\Staff\StaffIndex;
+use App\Models\Reseller;
+use App\Models\ResellerUser;
+use App\Models\Technician;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Models\WorkOrder;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -151,5 +156,60 @@ class StaffIndexLivewireTest extends TestCase
             ->test(StaffIndex::class)
             ->assertSee('Staff Disabled')
             ->assertSee('Disabled');
+    }
+
+    public function test_deleting_a_staff_account_without_relations_succeeds(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $staff = User::factory()->create(['tenant_id' => $tenant->id]);
+        $staff->assignRole('billing');
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->call('deleteStaff', $staff->id)
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseMissing('users', ['id' => $staff->id]);
+    }
+
+    public function test_deleting_a_staff_account_that_still_has_a_reseller_membership_shows_the_error_instead_of_deleting(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Reseller Uji']);
+        $staff = User::factory()->create(['tenant_id' => $tenant->id]);
+        $staff->assignRole('sales_internal');
+        ResellerUser::create([
+            'reseller_id' => $reseller->id,
+            'user_id' => $staff->id,
+            'role' => 'staff',
+            'status' => 'active',
+        ]);
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->call('deleteStaff', $staff->id)
+            ->assertHasErrors(['deleteStaff']);
+
+        $this->assertDatabaseHas('users', ['id' => $staff->id]);
+    }
+
+    public function test_deleting_a_staff_account_that_is_still_an_assigned_technician_shows_the_error_instead_of_deleting(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $staff = User::factory()->create(['tenant_id' => $tenant->id]);
+        $staff->assignRole('teknisi');
+        $technician = Technician::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $staff->id]);
+        WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'technician_id' => $technician->id, 'status' => WorkOrderStatus::Assigned]);
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->call('deleteStaff', $staff->id)
+            ->assertHasErrors(['deleteStaff']);
+
+        $this->assertDatabaseHas('users', ['id' => $staff->id]);
+        $this->assertDatabaseHas('technicians', ['id' => $technician->id]);
     }
 }

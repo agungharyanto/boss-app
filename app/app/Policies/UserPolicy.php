@@ -45,4 +45,16 @@ class UserPolicy
     {
         return $user->tenant_id === $model->tenant_id && $user->can('users.manage');
     }
+
+    /**
+     * v0.22.1 (revisi) — Delete permanen. Sama posture dengan `update()`
+     * (tier-admin + guard tenant_id eksplisit) — cek relasi nyata yang bisa
+     * menahan delete (reseller_users/technicians/cpe_action_logs) ada di
+     * `StaffService::delete()`, bukan di sini; Policy ini murni "siapa
+     * boleh MENCOBA menghapus", bukan "apakah delete-nya akan berhasil".
+     */
+    public function delete(User $user, User $model): bool
+    {
+        return $user->tenant_id === $model->tenant_id && $user->can('users.manage');
+    }
 }

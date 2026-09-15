@@ -2,12 +2,19 @@
 
 namespace Tests\Feature\Staff;
 
+use App\Enums\WorkOrderStatus;
+use App\Models\CpeActionLog;
+use App\Models\Reseller;
+use App\Models\ResellerUser;
+use App\Models\Technician;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Models\WorkOrder;
 use App\Services\StaffService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use RuntimeException;
 use Tests\TestCase;
 
 /**
@@ -50,6 +57,7 @@ class StaffServiceTest extends TestCase
         $result = (new StaffService)->create([
             'name' => 'Staff Test',
             'email' => "staff-{$role}@boss.local",
+            'phone' => '081234567890',
             'role' => $role,
             'tenant_id' => $tenant->id,
         ]);
@@ -59,9 +67,24 @@ class StaffServiceTest extends TestCase
         $this->assertTrue($user->hasRole($role));
         $this->assertCount(1, $user->roles);
         $this->assertSame($tenant->id, $user->tenant_id);
+        $this->assertSame('081234567890', $user->phone);
         $this->assertFalse($user->is_disabled);
         $this->assertNotEmpty($result['generated_password']);
         $this->assertTrue(Hash::check($result['generated_password'], $user->password));
+    }
+
+    public function test_create_allows_a_null_phone(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $result = (new StaffService)->create([
+            'name' => 'Tanpa HP',
+            'email' => 'tanpa-hp@boss.local',
+            'role' => 'noc',
+            'tenant_id' => $tenant->id,
+        ]);
+
+        $this->assertNull($result['user']->phone);
     }
 
     public function test_create_never_persists_the_generated_password_in_plaintext_anywhere_else(): void
@@ -95,11 +118,13 @@ class StaffServiceTest extends TestCase
         $updated = (new StaffService)->update($user, [
             'name' => 'After',
             'email' => 'after@boss.local',
+            'phone' => '089900001111',
             'role' => 'billing',
         ]);
 
         $this->assertSame('After', $updated->name);
         $this->assertSame('after@boss.local', $updated->email);
+        $this->assertSame('089900001111', $updated->phone);
         $this->assertTrue($updated->hasRole('billing'));
         $this->assertFalse($updated->hasRole('customer_service'));
         $this->assertCount(1, $updated->roles);
@@ -122,5 +147,124 @@ class StaffServiceTest extends TestCase
 
         $enabled = (new StaffService)->enable($disabled);
         $this->assertFalse($enabled->is_disabled);
+    }
+
+    public function test_delete_removes_the_user_when_there_are_no_blocking_relations(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Bersih',
+            'email' => 'bersih@boss.local',
+            'role' => 'finance',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+
+        (new StaffService)->delete($user);
+
+        $this->assertDatabaseMissing('users', ['id' => $user->id]);
+    }
+
+    public function test_delete_is_blocked_when_the_staff_still_has_a_reseller_membership(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Reseller Contoh']);
+        $result = (new StaffService)->create([
+            'name' => 'Anggota Reseller',
+            'email' => 'anggota-reseller@boss.local',
+            'role' => 'sales_internal',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+        ResellerUser::create([
+            'reseller_id' => $reseller->id,
+            'user_id' => $user->id,
+            'role' => 'owner',
+            'status' => 'active',
+        ]);
+
+        try {
+            (new StaffService)->delete($user);
+            $this->fail('Delete seharusnya ditolak.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Reseller Contoh', $e->getMessage());
+        }
+
+        $this->assertDatabaseHas('users', ['id' => $user->id]);
+        $this->assertDatabaseHas('reseller_users', ['user_id' => $user->id]);
+    }
+
+    public function test_delete_is_blocked_with_a_specific_count_when_the_staff_is_a_technician_with_active_work_orders(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Teknisi Sibuk',
+            'email' => 'teknisi-sibuk@boss.local',
+            'role' => 'teknisi',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+        $technician = Technician::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $user->id]);
+        WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'technician_id' => $technician->id, 'status' => WorkOrderStatus::Assigned]);
+        WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'technician_id' => $technician->id, 'status' => WorkOrderStatus::InProgress]);
+        // WO selesai — tidak boleh ikut dihitung sebagai "aktif".
+        WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'technician_id' => $technician->id, 'status' => WorkOrderStatus::Completed]);
+
+        try {
+            (new StaffService)->delete($user);
+            $this->fail('Delete seharusnya ditolak.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('2 Work Order aktif', $e->getMessage());
+        }
+
+        $this->assertDatabaseHas('users', ['id' => $user->id]);
+        $this->assertDatabaseHas('technicians', ['id' => $technician->id]);
+    }
+
+    public function test_delete_is_blocked_even_without_active_work_orders_when_a_technician_row_still_exists(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Teknisi Lama',
+            'email' => 'teknisi-lama@boss.local',
+            'role' => 'teknisi',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+        $technician = Technician::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $user->id]);
+        WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'technician_id' => $technician->id, 'status' => WorkOrderStatus::Completed]);
+
+        try {
+            (new StaffService)->delete($user);
+            $this->fail('Delete seharusnya ditolak.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('akun Teknisi', $e->getMessage());
+        }
+
+        $this->assertDatabaseHas('users', ['id' => $user->id]);
+        $this->assertDatabaseHas('technicians', ['id' => $technician->id]);
+    }
+
+    public function test_delete_is_blocked_with_a_count_when_the_staff_has_cpe_action_log_history(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Pernah Aksi CPE',
+            'email' => 'aksi-cpe@boss.local',
+            'role' => 'noc',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+        CpeActionLog::factory()->create(['tenant_id' => $tenant->id, 'performed_by' => $user->id]);
+        CpeActionLog::factory()->create(['tenant_id' => $tenant->id, 'performed_by' => $user->id]);
+
+        try {
+            (new StaffService)->delete($user);
+            $this->fail('Delete seharusnya ditolak.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('2 aksi perangkat CPE', $e->getMessage());
+        }
+
+        $this->assertDatabaseHas('users', ['id' => $user->id]);
     }
 }

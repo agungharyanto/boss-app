@@ -60,6 +60,12 @@
         </div>
     @endif
 
+    @error('deleteStaff')
+        <div class="mb-6 p-4 rounded-md border border-red-300 bg-red-50">
+            <p class="text-sm text-red-700">{{ $message }}</p>
+        </div>
+    @enderror
+
     @if ($showCreateForm)
         <form wire:submit="createStaff" class="mb-6 p-4 border border-gray-200 rounded-md bg-gray-50 space-y-3">
             <div>
@@ -71,6 +77,11 @@
                 <label class="block text-sm font-medium text-gray-700">{{ __('Email') }}</label>
                 <input type="email" wire:model="email" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                 @error('email') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">{{ __('Nomor HP') }} <span class="text-gray-400 font-normal">({{ __('opsional') }})</span></label>
+                <input type="text" wire:model="phone" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                @error('phone') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             </div>
             <div>
                 <label class="block text-sm font-medium text-gray-700">{{ __('Role') }}</label>
@@ -105,6 +116,7 @@
                 <tr>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Nama') }}</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Email') }}</th>
+                    <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('HP') }}</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Role') }}</th>
                     <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{{ __('Status') }}</th>
                     <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">{{ __('Aksi') }}</th>
@@ -114,8 +126,8 @@
                 @forelse ($staff as $member)
                     <tr wire:key="staff-{{ $member->id }}">
                         @if ($editingUserId === $member->id)
-                            <td colspan="5" class="px-4 py-3">
-                                <form wire:submit="updateStaff" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-start">
+                            <td colspan="6" class="px-4 py-3">
+                                <form wire:submit="updateStaff" class="grid grid-cols-1 md:grid-cols-5 gap-3 items-start">
                                     <div>
                                         <input type="text" wire:model="editName" placeholder="{{ __('Nama') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                                         @error('editName') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
@@ -123,6 +135,10 @@
                                     <div>
                                         <input type="email" wire:model="editEmail" placeholder="{{ __('Email') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
                                         @error('editEmail') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+                                    </div>
+                                    <div>
+                                        <input type="text" wire:model="editPhone" placeholder="{{ __('Nomor HP') }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                                        @error('editPhone') <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                                     </div>
                                     <div>
                                         <select wire:model="editRole" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
@@ -140,6 +156,7 @@
                         @else
                             <td class="px-4 py-2 text-sm text-gray-800">{{ $member->name }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $member->email }}</td>
+                            <td class="px-4 py-2 text-sm text-gray-600">{{ $member->phone ?? '—' }}</td>
                             <td class="px-4 py-2 text-sm text-gray-600">{{ $member->roles->first()?->name ?? '—' }}</td>
                             <td class="px-4 py-2 text-sm">
                                 <span class="px-2 py-0.5 rounded-full text-xs {{ $member->is_disabled ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700' }}">
@@ -159,13 +176,17 @@
                                             {{ __('Disable') }}
                                         </button>
                                     @endif
+
+                                    <button wire:click="deleteStaff({{ $member->id }})" wire:confirm="{{ __('Hapus akun staff ini secara PERMANEN? Tidak bisa dibatalkan.') }}" class="text-red-600 hover:underline">
+                                        {{ __('Hapus') }}
+                                    </button>
                                 @endif
                             </td>
                         @endif
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="5" class="px-4 py-6 text-center text-sm text-gray-500">
+                        <td colspan="6" class="px-4 py-6 text-center text-sm text-gray-500">
                             {{ __('Belum ada staff.') }}
                         </td>
                     </tr>

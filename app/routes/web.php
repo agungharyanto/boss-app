@@ -54,6 +54,7 @@ use App\Livewire\Resellers\ResellerIndex;
 use App\Livewire\Resellers\ResellerShow;
 use App\Livewire\Settings\PaymentGatewaySettings;
 use App\Livewire\Settings\ThemeSettings;
+use App\Livewire\Settings\WorkOrderDispatchSettings;
 use App\Livewire\Staff\StaffIndex;
 use App\Livewire\Tax\ResellerTaxPolicyIndex;
 use App\Livewire\Tax\TaxComponentIndex;
@@ -321,6 +322,9 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
 
     Route::get('/settings/theme', ThemeSettings::class)->name('settings.theme');
     Route::get('/settings/payment-gateway', PaymentGatewaySettings::class)->name('settings.payment-gateway');
+    // v0.26.2 — "Komunikasi > Konfig WA Gateway", settings timing
+    // dispatch/reminder Work Order per tenant.
+    Route::get('/settings/work-order-dispatch', WorkOrderDispatchSettings::class)->name('settings.work-order-dispatch');
     Route::get('/staff', StaffIndex::class)->name('staff.index');
     Route::get('/cpe-parameter-maps', CpeParameterMapIndex::class)->name('cpe-parameter-maps.index');
 

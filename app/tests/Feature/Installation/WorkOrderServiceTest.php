@@ -62,7 +62,7 @@ class WorkOrderServiceTest extends TestCase
         $this->assertSame(OdpPortStatus::Reserved, $port->fresh()->status);
     }
 
-    // --- v0.26.1 — wiring work_orders.scheduled_at (nol dispatch logic di sini, itu v0.26.2) ---
+    // --- v0.26.1 — wiring work_orders.scheduled_at ---
 
     public function test_create_from_subscription_without_scheduled_at_leaves_it_null(): void
     {
@@ -81,6 +81,32 @@ class WorkOrderServiceTest extends TestCase
 
         $this->assertNotNull($workOrder->scheduled_at);
         $this->assertSame('2026-10-01 10:00:00', $workOrder->scheduled_at->format('Y-m-d H:i:s'));
+    }
+
+    // --- v0.26.2 — hook dispatchImmediately() (keputusan HYBRID, amendment docblock v0.26.1) ---
+
+    public function test_create_from_subscription_without_scheduled_at_dispatches_immediately(): void
+    {
+        [$subscription] = $this->subscriptionWithNearbyOdp();
+
+        $workOrder = app(WorkOrderService::class)->createFromSubscription($subscription);
+
+        $this->assertNotNull($workOrder->dispatched_at);
+    }
+
+    /**
+     * WO DENGAN janji spesifik TIDAK dispatch di sini — satu-satunya
+     * jalur untuk itu tetap DispatchWorkOrders command (window
+     * scheduled_at - dispatch_offset_minutes), sudah ditest terpisah di
+     * WorkOrderDispatchServiceTest/DispatchWorkOrdersCommandTest.
+     */
+    public function test_create_from_subscription_with_scheduled_at_does_not_dispatch_immediately(): void
+    {
+        [$subscription] = $this->subscriptionWithNearbyOdp();
+
+        $workOrder = app(WorkOrderService::class)->createFromSubscription($subscription, now()->addHours(5)->format('Y-m-d H:i:s'));
+
+        $this->assertNull($workOrder->dispatched_at);
     }
 
     public function test_schedule_visit_sets_a_schedule_on_a_work_order_created_without_one(): void

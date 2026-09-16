@@ -30,6 +30,8 @@ class WorkOrder extends Model
         'scheduled_at',
         'completed_at',
         'technician_confirmed_at',
+        'dispatched_at',
+        'last_reminder_sent_at',
         'notes',
     ];
 
@@ -41,6 +43,8 @@ class WorkOrder extends Model
             'scheduled_at' => 'datetime',
             'completed_at' => 'datetime',
             'technician_confirmed_at' => 'datetime',
+            'dispatched_at' => 'datetime',
+            'last_reminder_sent_at' => 'date',
         ];
     }
 

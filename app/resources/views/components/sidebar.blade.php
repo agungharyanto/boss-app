@@ -155,10 +155,15 @@
         [
             'id' => 'komunikasi',
             'label' => __('Komunikasi'),
-            'active' => request()->routeIs('web.whatsapp-gateway.*'),
+            'active' => request()->routeIs('web.whatsapp-gateway.*') || request()->routeIs('web.settings.work-order-dispatch'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\WhatsappSession::class)
                     ? ['route' => 'web.whatsapp-gateway.index', 'label' => __('WhatsApp Gateway')]
+                    : null,
+                // v0.26.2 — reuse work_orders.manage (tier-admin, sudah
+                // ada), tidak ada permission baru dibuat untuk halaman ini.
+                auth()->user()->can('work_orders.manage')
+                    ? ['route' => 'web.settings.work-order-dispatch', 'label' => __('Konfig WA Gateway')]
                     : null,
             ]),
         ],

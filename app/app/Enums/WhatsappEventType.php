@@ -85,6 +85,34 @@ enum WhatsappEventType: string
      */
     case StaffInitialPasswordValue = 'staff_initial_password_value';
 
+    /**
+     * v0.26.3 — WO "dispatch" (siap dikerjakan) ATAU reminder H+ untuk WO
+     * yang belum selesai. Penerima: TEKNISI (`technicians.phone`), bukan
+     * Customer/Referrer — dikirim lewat `WhatsappGatewayService::
+     * buildAndQueueForRecipient()` seperti biasa (bukan jalur `Referrer`).
+     *
+     * SATU event type mencakup DUA situasi (dispatch awal vs reminder) —
+     * `WhatsappTemplateService::resolve()` cuma resolve 1 template per
+     * event_type, tidak ada sub-varian bawaan, jadi bedanya dituangkan
+     * lewat variabel `{status_notice}` (isi beda tergantung `$isReminder`
+     * di `WorkOrderDispatchService`), bukan 2 template terpisah — lihat
+     * `WhatsappMessageTemplateSeeder`'s own default content.
+     *
+     * BROADCAST, bukan ke 1 penerima — keputusan Agung eksplisit
+     * (decision-gate v0.26.3): WA japri dikirim ke SEMUA teknisi aktif
+     * tenant terkait saat dispatch awal (siapa cepat dia dapat — assign
+     * manual di /work-orders murni tracking, bukan penentu siapa dapat
+     * notifikasi). Untuk reminder: kalau `technician_id` sudah terisi
+     * (assign manual sudah terjadi), kirim CUMA ke teknisi itu; kalau
+     * belum, broadcast lagi ke semua teknisi aktif — lihat
+     * `WorkOrderDispatchService::notifyTechnicians()`.
+     *
+     * Kirim ke GRUP WA tetap placeholder (`Log::info()` TODO(v0.26.4)) —
+     * `whatsapp-gateway/` (Go/whatsmeow) belum punya kapabilitas kirim ke
+     * JID grup (`@g.us`) sama sekali, di luar scope v0.26.3.
+     */
+    case WorkOrderDispatched = 'work_order_dispatched';
+
     public function label(): string
     {
         return match ($this) {
@@ -98,6 +126,7 @@ enum WhatsappEventType: string
             self::UnrecognizedMessageFallback => 'Fallback Pesan Tidak Dikenali',
             self::StaffInitialPasswordNotice => 'Password Awal Staff — Pengantar',
             self::StaffInitialPasswordValue => 'Password Awal Staff — Nilai Password',
+            self::WorkOrderDispatched => 'Work Order Dispatch/Reminder Teknisi',
         };
     }
 }

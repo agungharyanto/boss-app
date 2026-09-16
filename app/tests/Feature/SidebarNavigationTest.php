@@ -156,6 +156,22 @@ class SidebarNavigationTest extends TestCase
     }
 
     /**
+     * v0.26.2c — "Subscriptions" (form Buat Langganan) di-unlink dari
+     * sidebar, BUKAN dihapus rute-nya — registrasi sekarang jadi satu
+     * pintu (Customer+Subscription+WO), halaman ini masih dipakai untuk
+     * pelanggan existing yang nambah langganan baru.
+     */
+    public function test_subscriptions_link_is_gone_from_the_sidebar(): void
+    {
+        $user = $this->userWithRole('superadmin');
+
+        $response = $this->actingAs($user)->get('/customers');
+
+        $response->assertDontSee('Subscriptions');
+        $response->assertDontSee(route('web.subscriptions.index'), false);
+    }
+
+    /**
      * "Referrer" + "Rate Komisi" dipindah dari cluster "Operasional" ke
      * "Billing & Finance". Cluster "Operasional" sekarang tinggal
      * "Reseller" (dibiarkan 1-item, keputusan membubarkan menunggu

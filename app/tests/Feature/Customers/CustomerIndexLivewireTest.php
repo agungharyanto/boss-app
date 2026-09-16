@@ -26,6 +26,26 @@ class CustomerIndexLivewireTest extends TestCase
         return $user;
     }
 
+    /**
+     * v0.26.2c — "+ Pelanggan Baru" (form CreateCustomerAction inline,
+     * duplikat fungsi Registrasi Pelanggan) dihapus dari daftar pelanggan.
+     * Registrasi jadi satu pintu (Customer+Subscription+WO) lewat
+     * "Registrasi Pelanggan" — tombol itu satu-satunya yang tersisa.
+     */
+    public function test_pelanggan_baru_button_is_gone_registrasi_pelanggan_remains(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $manager = User::factory()->create(['tenant_id' => $tenant->id]);
+        $manager->givePermissionTo(Permission::firstOrCreate(['name' => 'customers.view', 'guard_name' => 'web']));
+        $manager->givePermissionTo(Permission::firstOrCreate(['name' => 'customers.manage', 'guard_name' => 'web']));
+        $manager->givePermissionTo(Permission::firstOrCreate(['name' => 'register-customer', 'guard_name' => 'web']));
+
+        Livewire::actingAs($manager)
+            ->test(CustomerIndex::class)
+            ->assertDontSee('+ Pelanggan Baru')
+            ->assertSee('Registrasi Pelanggan');
+    }
+
     public function test_search_by_name_is_case_insensitive(): void
     {
         $tenant = Tenant::factory()->create();

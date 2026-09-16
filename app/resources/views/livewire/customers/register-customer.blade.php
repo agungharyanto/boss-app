@@ -43,7 +43,7 @@
         <p class="text-xs text-gray-500 -mt-2">Input manual dulu — peta interaktif menyusul.</p>
 
         <div>
-            <label class="block text-sm font-medium text-gray-700">Paket</label>
+            <label class="block text-sm font-medium text-gray-700">Paket <span class="text-red-600">*</span></label>
             <select wire:model.live="ppp_package_id" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                 <option value="">— Pilih paket —</option>
                 @foreach ($availablePackages as $package)
@@ -54,6 +54,14 @@
             @if ($availablePackages->isEmpty())
                 <p class="text-xs text-gray-500 mt-1">Belum ada Profil PPP aktif — buat dulu di Billing &amp; Finance &rarr; Profil Paket &rarr; Profil PPP.</p>
             @endif
+            <p class="text-xs text-gray-500 mt-1">Registrasi langsung membuat Subscription + Work Order untuk paket ini.</p>
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-gray-700">Janji Kunjungan <span class="text-gray-400 font-normal">(opsional)</span></label>
+            <input type="datetime-local" wire:model="scheduledVisitAt" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+            <p class="text-xs text-gray-500 mt-1">Kosongkan kalau Work Order boleh langsung keluar segera, tanpa janji kunjungan spesifik.</p>
+            @error('scheduledVisitAt') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
         </div>
 
         <div>

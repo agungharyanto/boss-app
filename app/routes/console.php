@@ -1,5 +1,6 @@
 <?php
 
+use App\Console\Commands\DispatchWorkOrders;
 use App\Console\Commands\GenerateDueInvoices;
 use App\Console\Commands\MarkOverdueInvoices;
 use App\Console\Commands\ReconcileCpeDevices;
@@ -128,3 +129,12 @@ Schedule::command(SyncCpeSignalHistory::class)->cron('*/20 * * * *')->runInBackg
 // ->runInBackground() — see SyncCpeDeviceStatus above; ~53s run, still
 // enough to shove the scheduler loop past a `*/5` slot for the fast jobs.
 Schedule::command(SyncContainerStats::class)->everyFiveMinutes()->runInBackground()->withoutOverlapping();
+
+// v0.26.2 — WO Auto-Dispatch. everyMinute() paling halus (bukan cron tetap
+// tiap 15 menit) supaya cadence SEBENARNYA configurable per tenant lewat
+// work_order_dispatch_settings.command_interval_minutes, dibaca dan
+// di-self-gate di dalam DispatchWorkOrders::handle() sendiri — pola sama
+// SendWhatsappDueReminders di atas (everyMinute + self-gate dari config),
+// bedanya varian gate: interval sejak last_dispatch_run_at per tenant,
+// bukan cek jam tetap.
+Schedule::command(DispatchWorkOrders::class)->everyMinute();

@@ -25,20 +25,26 @@ use Illuminate\Support\Facades\Log;
  *     reminder harian.
  *
  * v0.26.3 — notifikasi WA `WhatsappEventType::WorkOrderDispatched` genuinely
- * dikirim sekarang (dulu placeholder `Log::info()` TODO(v0.26.3)). Kirim ke
- * GRUP WA TETAP placeholder (`Log::info()` TODO(v0.26.4)) — gateway Go belum
- * punya kapabilitas kirim ke JID grup, di luar scope sub-versi ini.
+ * dikirim (dulu placeholder `Log::info()` TODO(v0.26.3)). BROADCAST, bukan
+ * ke 1 teknisi — keputusan Agung eksplisit (decision-gate v0.26.3, lihat
+ * docblock `WhatsappEventType::WorkOrderDispatched`): di titik DISPATCH
+ * AWAL, `technician_id` HAMPIR SELALU masih null secara struktural
+ * (`assignTechnician()` cuma valid dari status `Ready`, jauh SETELAH
+ * dispatch terjadi) — jadi WA japri di titik ini SELALU broadcast ke semua
+ * teknisi aktif tenant terkait, "siapa cepat dia dapat". Untuk REMINDER,
+ * beda: kalau assign manual SUDAH terjadi (`technician_id` terisi) di
+ * titik reminder tercapai, kirim CUMA ke teknisi itu (lebih personal,
+ * "tugas Anda belum selesai"); kalau belum, broadcast lagi persis seperti
+ * dispatch awal.
  *
- * BROADCAST, bukan ke 1 teknisi — keputusan Agung eksplisit (decision-gate
- * v0.26.3, lihat docblock `WhatsappEventType::WorkOrderDispatched`): di
- * titik DISPATCH AWAL, `technician_id` HAMPIR SELALU masih null secara
- * struktural (`assignTechnician()` cuma valid dari status `Ready`, jauh
- * SETELAH dispatch terjadi) — jadi WA japri di titik ini SELALU broadcast
- * ke semua teknisi aktif tenant terkait, "siapa cepat dia dapat". Untuk
- * REMINDER, beda: kalau assign manual SUDAH terjadi (`technician_id`
- * terisi) di titik reminder tercapai, kirim CUMA ke teknisi itu (lebih
- * personal, "tugas Anda belum selesai"); kalau belum, broadcast lagi
- * persis seperti dispatch awal.
+ * v0.26.4 — kirim JUGA ke GRUP WA genuinely dikerjakan sekarang (dulu
+ * placeholder TODO(v0.26.4)) — KONDISIONAL, hanya kalau tenant sudah
+ * setup `work_order_dispatch_settings.wa_group_jid` (Settings "Komunikasi
+ * > Konfig WA Gateway", dropdown "Pilih Grup WhatsApp"). Tenant yang belum
+ * setup grup TETAP jalan normal (cuma japri individu seperti sebelumnya,
+ * bukan prasyarat, tidak pernah error). Event type + isi pesan REUSE
+ * PERSIS `WhatsappEventType::WorkOrderDispatched` yang sama dengan japri —
+ * lihat `messageVariablesFor()`.
  */
 class WorkOrderDispatchService
 {
@@ -48,17 +54,20 @@ class WorkOrderDispatchService
      * Dipanggil `WorkOrderService::createFromSubscription()` — WO tanpa
      * janji spesifik dispatch SEKETIKA saat dibuat. Dijalankan DI DALAM
      * transaksi `createFromSubscription()` sendiri (tidak buka transaksi
-     * baru di sini).
+     * baru di sini). Tidak menerima `$settings` sebagai parameter (beda
+     * dari runDispatchCycle()/runReminderCycle() yang dipanggil command
+     * dan sudah punya baris settings di tangan) — resolve sendiri di sini.
      */
     public function dispatchImmediately(WorkOrder $workOrder): void
     {
         $workOrder->update(['dispatched_at' => now()]);
 
-        $this->notifyTechnicians($workOrder, isReminder: false);
+        $settings = WorkOrderDispatchSettings::forTenant($workOrder->tenant_id);
 
-        // TODO(v0.26.4): broadcast juga ke grup WA — belum ada
-        // kapabilitasnya di whatsapp-gateway/ (Go/whatsmeow) sama sekali.
-        Log::info("WorkOrderDispatchService: WO #{$workOrder->id} dispatched segera saat create (tanpa janji spesifik) — japri teknisi dikirim, grup masih TODO(v0.26.4).");
+        $this->notifyTechnicians($workOrder, isReminder: false);
+        $this->notifyGroupIfConfigured($workOrder, $settings->wa_group_jid, isReminder: false);
+
+        Log::info("WorkOrderDispatchService: WO #{$workOrder->id} dispatched segera saat create (tanpa janji spesifik).");
     }
 
     /**
@@ -89,10 +98,9 @@ class WorkOrderDispatchService
             $workOrder->update(['dispatched_at' => $now]);
 
             $this->notifyTechnicians($workOrder, isReminder: false);
+            $this->notifyGroupIfConfigured($workOrder, $settings->wa_group_jid, isReminder: false);
 
-            // TODO(v0.26.4): broadcast juga ke grup WA — belum ada
-            // kapabilitasnya di whatsapp-gateway/ (Go/whatsmeow) sama sekali.
-            Log::info("WorkOrderDispatchService: WO #{$workOrder->id} dispatched (window offset {$settings->dispatch_offset_minutes} menit sebelum janji tercapai) — japri teknisi dikirim, grup masih TODO(v0.26.4).");
+            Log::info("WorkOrderDispatchService: WO #{$workOrder->id} dispatched (window offset {$settings->dispatch_offset_minutes} menit sebelum janji tercapai).");
             $dispatched++;
         }
 
@@ -112,10 +120,9 @@ class WorkOrderDispatchService
             $workOrder->update(['dispatched_at' => $now]);
 
             $this->notifyTechnicians($workOrder, isReminder: false);
+            $this->notifyGroupIfConfigured($workOrder, $settings->wa_group_jid, isReminder: false);
 
-            // TODO(v0.26.4): broadcast juga ke grup WA — sama seperti kasus
-            // dispatch lain di atas.
-            Log::info("WorkOrderDispatchService: WO #{$workOrder->id} dispatched segera oleh command (safety-net, tanpa janji spesifik) — japri teknisi dikirim, grup masih TODO(v0.26.4).");
+            Log::info("WorkOrderDispatchService: WO #{$workOrder->id} dispatched segera oleh command (safety-net, tanpa janji spesifik).");
             $dispatched++;
         }
 
@@ -162,8 +169,9 @@ class WorkOrderDispatchService
                 $this->notifyTechnicians($workOrder, isReminder: true);
             }
 
-            // TODO(v0.26.4): broadcast juga ke grup WA.
-            Log::info("WorkOrderDispatchService: reminder H+ untuk WO #{$workOrder->id} (status masih {$workOrder->status->value}, belum Completed sejak dispatch) — japri teknisi dikirim, grup masih TODO(v0.26.4).");
+            $this->notifyGroupIfConfigured($workOrder, $settings->wa_group_jid, isReminder: true);
+
+            Log::info("WorkOrderDispatchService: reminder H+ untuk WO #{$workOrder->id} (status masih {$workOrder->status->value}, belum Completed sejak dispatch).");
             $reminded++;
         }
 
@@ -226,28 +234,63 @@ class WorkOrderDispatchService
      */
     private function sendTo(WorkOrder $workOrder, Collection $technicians, bool $isReminder): void
     {
-        $statusNotice = $isReminder
-            ? 'REMINDER — Work Order ini belum selesai, mohon segera ditindaklanjuti.'
-            : 'Work Order baru tersedia untuk direspons.';
-
         foreach ($technicians as $technician) {
             $this->whatsapp->buildAndQueueForRecipient(
                 WhatsappEventType::WorkOrderDispatched,
                 $workOrder->tenant_id,
                 $technician->phone,
-                [
-                    'technician_name' => $technician->name,
-                    'work_order_id' => $workOrder->id,
-                    'customer_name' => $workOrder->customer?->name,
-                    'customer_address' => $workOrder->customer?->address,
-                    'service_type' => $workOrder->subscription?->name,
-                    'scheduled_at' => $workOrder->scheduled_at?->translatedFormat('d M Y H:i') ?? 'Tidak ada janji spesifik — segera',
-                    'status_notice' => $statusNotice,
-                ],
+                $this->messageVariablesFor($workOrder, $technician->name, $isReminder),
                 $workOrder->customer,
                 $workOrder->reseller_id,
             );
         }
+    }
+
+    /**
+     * v0.26.4 — kirim JUGA ke grup WA, KONDISIONAL: hanya kalau tenant ini
+     * sudah setup `wa_group_jid` (null = belum setup, skip diam-diam, TIDAK
+     * error — bukan prasyarat). Isi pesan REUSE PERSIS
+     * `messageVariablesFor()` yang sama dengan japri individu, `technician_name`
+     * diisi "Tim Teknisi" (grup tidak punya 1 teknisi spesifik yang disapa).
+     */
+    private function notifyGroupIfConfigured(WorkOrder $workOrder, ?string $groupJid, bool $isReminder): void
+    {
+        if ($groupJid === null || $groupJid === '') {
+            return;
+        }
+
+        $this->whatsapp->buildAndQueueForGroup(
+            WhatsappEventType::WorkOrderDispatched,
+            $workOrder->tenant_id,
+            $groupJid,
+            $this->messageVariablesFor($workOrder, 'Tim Teknisi', $isReminder),
+            $workOrder->reseller_id,
+        );
+    }
+
+    /**
+     * Variabel template `WhatsappEventType::WorkOrderDispatched`, dipakai
+     * BERSAMA oleh `sendTo()` (japri individu/broadcast) DAN
+     * `notifyGroupIfConfigured()` (grup) — satu sumber kebenaran, supaya
+     * isi pesan tidak pernah drift antara dua jalur kirim.
+     *
+     * @return array<string, string|int|null>
+     */
+    private function messageVariablesFor(WorkOrder $workOrder, string $technicianName, bool $isReminder): array
+    {
+        $statusNotice = $isReminder
+            ? 'REMINDER — Work Order ini belum selesai, mohon segera ditindaklanjuti.'
+            : 'Work Order baru tersedia untuk direspons.';
+
+        return [
+            'technician_name' => $technicianName,
+            'work_order_id' => $workOrder->id,
+            'customer_name' => $workOrder->customer?->name,
+            'customer_address' => $workOrder->customer?->address,
+            'service_type' => $workOrder->subscription?->name,
+            'scheduled_at' => $workOrder->scheduled_at?->translatedFormat('d M Y H:i') ?? 'Tidak ada janji spesifik — segera',
+            'status_notice' => $statusNotice,
+        ];
     }
 
     private function isWithinReminderWindow(WorkOrderDispatchSettings $settings): bool

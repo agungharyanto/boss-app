@@ -12,6 +12,18 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * v0.26.4 — `phone_number` DIPAKAI ULANG untuk menyimpan JID GRUP mentah
+ * (bentuk "xxxxxxxxxx-xxxxxxxxxx@g.us") untuk baris yang dibuat lewat
+ * `WhatsappGatewayService::buildAndQueueForGroup()` — Opsi A, dikonfirmasi
+ * eksplisit Agung (bukan kolom baru `group_jid`, demi menghindari migration).
+ * Nilainya TIDAK PERNAH lewat `WhatsappPhone::normalize()` untuk baris jenis
+ * ini (fungsi itu khusus nomor telepon individu, akan merusak string JID
+ * grup kalau dipaksakan). Cara membedakan baris individu vs grup: baris
+ * grup selalu dikirim lewat `SendWhatsappGroupMessageJob` (bukan
+ * `SendWhatsappMessageJob`) — tidak ada flag/kolom terpisah untuk ini,
+ * kelas Job-nya sendiri yang jadi penanda.
+ */
 class WhatsappMessageLog extends Model
 {
     /** @use HasFactory<WhatsappMessageLogFactory> */

@@ -144,6 +144,45 @@ sinkron kalau berubah."
   membentuk JID, siapa pun yang membentuknya (Go atau tetap di Laravel via `WhatsappPhone::normalize()` —
   saat ini SUDAH dilakukan dobel, defense-in-depth, di kedua sisi).
 
+### Endpoint 6 — `GET /sessions/:sessionKey/groups` (v0.26.4)
+
+- **Guna**: daftar SEMUA grup WhatsApp yang nomor bot session ini sudah jadi anggota — dipanggil
+  `WhatsappSessionService::listGroups()`, dipakai dropdown "Pilih Grup WhatsApp" di halaman Settings
+  ("Komunikasi → Konfig WA Gateway"). Ditampilkan APA ADANYA, tanpa filter nama/kata kunci apa pun
+  (keputusan eksplisit Agung) — kalau bot anggota 10 grup, 10 grup itu semua yang dikembalikan.
+- **Request**: tanpa body (HMAC ditandatangani atas body kosong `""`, pola sama `GET /sessions/:key/qr`).
+- **Response sukses**: `{ success: true, message: "OK", data: null, meta: {}, groups: [{ jid: "1203xxxxxxxxxxxxxxxxxx@g.us", name: "Nama Grup" }, ...] }` —
+  HTTP 200. `groups` di level teratas, sibling dari `data` (pola sama `sessions`/`qr_code_data`).
+- **Response gagal**: HTTP 500, `{ success: false, message: "<error>", data: null, meta: {} }` — mis. sesi
+  belum connected (`session not connected`) atau kegagalan `client.GetJoinedGroups()` whatsmeow.
+- **Sumber data**: `whatsmeow.Client.GetJoinedGroups(ctx)` (dikonfirmasi langsung ada di versi whatsmeow
+  yang dipakai, `go doc` terhadap module cache — bukan asumsi versi lain). `GroupInfo.JID` dari method ini
+  SUDAH bentuk JID final (`Server="g.us"`), tidak perlu dibangun manual. Hanya 2 field yang diekspos ke
+  Laravel (`jid`, `name`) — BUKAN struct `GroupInfo` mentah (banyak field internal seperti `Participants`/
+  `OwnerJID` tidak relevan buat dropdown, berpotensi membocorkan metadata tidak perlu).
+
+### Endpoint 7 — `POST /sessions/:sessionKey/send-group` (v0.26.4)
+
+- **Guna**: kirim 1 pesan teks ke GRUP (bukan individu) — dipanggil `SendWhatsappGroupMessageJob::sendToGateway()`.
+  Endpoint TERPISAH dari `POST /sessions/:key/send`, bukan field opsional tambahan di situ — "1 endpoint =
+  1 tanggung jawab", dan karena bentuk JID grup butuh validasi berbeda total (lihat di bawah).
+- **Request body**: `{ "group_jid": "1203xxxxxxxxxxxxxxxxxx@g.us", "message": "<teks>" }`. `group_jid` HARUS
+  string JID grup lengkap (hasil `GET /sessions/:key/groups`), **BUKAN nomor telepon** — `phone_number`
+  Laravel yang berisi JID grup (Opsi A, lihat `WhatsappMessageLog`'s docblock) diteruskan APA ADANYA ke
+  field `group_jid` ini, TIDAK pernah lewat `WhatsappPhone::normalize()`.
+- **Response sukses**: sama persis `/send` — `{ success: true, message: "Sent", data: null, meta: {} }`.
+- **Response gagal**: HTTP 502, `{ success: false, message: "<error>", data: null, meta: {}, permanent?: true }`.
+  Field `permanent` (BOOLEAN, cuma muncul kalau `true` — TIDAK ADA di kegagalan transien) menandakan
+  kegagalan PERMANEN: bot sudah bukan/tidak-lagi anggota grup itu (`whatsmeow.ErrNotInGroup`, dikonfirmasi
+  lewat pembacaan langsung source `send.go` — `client.SendMessage()` ke JID grup memanggil
+  `getCachedGroupData()` dulu untuk resolve anggota, gagal dengan error ini kalau device kita bukan
+  anggota, dibungkus `fmt.Errorf("failed to get group members: %w", err)`). Laravel memakai flag ini untuk
+  TIDAK retry berulang (percuma — grup itu tidak akan "kembali" sendiri), beda dari timeout/koneksi
+  transien yang genuinely layak dicoba ulang.
+- **Validasi bentuk JID**: `types.ParseJID(group_jid)` lalu guard eksplisit `Server == "g.us"` — defense-in-
+  depth di sisi Go, tidak cuma percaya request dari Laravel sudah genuinely JID grup (JID individu yang
+  salah kirim ke endpoint ini ditolak dengan error jelas, bukan diam-diam terkirim ke satu nomor).
+
 ### Ringkasan bentuk response — WAJIB dipertahankan di implementasi baru
 
 | Field | Lokasi | Endpoint yang pakai |
@@ -152,12 +191,15 @@ sinkron kalau berubah."
 | `sessions` | level teratas (BUKAN di `data`) | `GET /sessions` |
 | `qr_code_data` | level teratas | `GET /sessions/:key/qr` |
 | `pairing_code` | level teratas | `POST /sessions/:key/pair` |
+| `groups` | level teratas | `GET /sessions/:key/groups` (v0.26.4) |
+| `permanent` | level teratas, cuma ada kalau `true` | `POST /sessions/:key/send-group` (v0.26.4), kegagalan permanen |
 
 Kode status HTTP yang dipakai: `200` (sukses), `401` (HMAC invalid), `422` (validasi input gagal — body
-kosong/field wajib hilang), `500` (kegagalan proses internal — QR/pairing), `502` (kegagalan kirim pesan
-— dipilih beda dari 500 supaya Laravel bisa membedakan "gateway itu sendiri error" vs "pesan spesifik ini
-gagal dikirim", meski saat ini `SendWhatsappMessageJob` tidak benar-benar membedakan keduanya, cuma cek
-`successful()`).
+kosong/field wajib hilang), `500` (kegagalan proses internal — QR/pairing/list grup), `502` (kegagalan
+kirim pesan — dipilih beda dari 500 supaya Laravel bisa membedakan "gateway itu sendiri error" vs "pesan
+spesifik ini gagal dikirim", meski saat ini `SendWhatsappMessageJob` tidak benar-benar membedakan
+keduanya, cuma cek `successful()`; `SendWhatsappGroupMessageJob` v0.26.4 SATU LEVEL LEBIH JAUH — juga cek
+field `permanent` untuk memutuskan retry atau tidak).
 
 ---
 

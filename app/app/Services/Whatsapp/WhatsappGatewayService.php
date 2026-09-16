@@ -4,6 +4,7 @@ namespace App\Services\Whatsapp;
 
 use App\Enums\WhatsappEventType;
 use App\Enums\WhatsappMessageStatus;
+use App\Jobs\SendWhatsappGroupMessageJob;
 use App\Jobs\SendWhatsappMessageJob;
 use App\Models\Customer;
 use App\Models\Invoice;
@@ -132,6 +133,63 @@ class WhatsappGatewayService
         $sessionKey = WhatsappSession::sessionKeyFor($resellerId);
 
         SendWhatsappMessageJob::dispatch($log->id)->onQueue('whatsapp-'.$sessionKey);
+
+        return $log;
+    }
+
+    /**
+     * v0.26.4 — kembaran `buildAndQueueForRecipient()`, TAPI penerimanya
+     * GRUP (bukan nomor individu manapun). Keputusan Opsi A eksplisit
+     * dikonfirmasi Agung: KOLOM `whatsapp_message_logs.phone_number`
+     * DIPAKAI ULANG untuk menyimpan JID grup MENTAH — bukan kolom baru
+     * `group_jid` (tanpa migration). `$groupJid` diisi APA ADANYA, TIDAK
+     * PERNAH lewat `WhatsappPhone::normalize()` (fungsi itu khusus nomor
+     * telepon individu — akan MERUSAK string JID grup kalau dipaksakan,
+     * strip semua karakter non-digit). Lihat docblock
+     * `WhatsappMessageLog::$phone_number` untuk penjelasan lengkap.
+     *
+     * Dispatch `SendWhatsappGroupMessageJob` (BUKAN `SendWhatsappMessageJob`)
+     * — job terpisah yang POST ke endpoint Go `/send-group`, bukan `/send`.
+     * `relatedCustomer` sengaja TIDAK ada di signature ini — notifikasi
+     * grup (mis. "WO baru tersedia") secara alami tidak terikat SATU
+     * customer tertentu untuk keperluan tampilan Antrian WA, beda dari
+     * `buildAndQueueForRecipient()` yang punya kasus 1-customer-1-pesan.
+     *
+     * @param  array<string, string|int|null>  $variables
+     */
+    public function buildAndQueueForGroup(
+        WhatsappEventType $eventType,
+        int $tenantId,
+        string $groupJid,
+        array $variables,
+        ?int $resellerId = null,
+    ): ?WhatsappMessageLog {
+        $template = $this->templateService->resolve($eventType, $tenantId, $resellerId);
+
+        if ($template === null) {
+            Log::warning("WhatsappGatewayService: no active template resolved for {$eventType->value} (tenant_id={$tenantId}, reseller_id={$resellerId}, group path) — skipping send.");
+
+            return null;
+        }
+
+        $rendered = $this->templateService->render($template->content, $variables);
+
+        $log = WhatsappMessageLog::create([
+            'tenant_id' => $tenantId,
+            'reseller_id' => $resellerId,
+            'customer_id' => null,
+            'invoice_id' => null,
+            'phone_number' => $groupJid,
+            'event_type' => $eventType,
+            'template_id' => $template->id,
+            'rendered_content' => $rendered,
+            'status' => WhatsappMessageStatus::Queued,
+            'queued_at' => now(),
+        ]);
+
+        $sessionKey = WhatsappSession::sessionKeyFor($resellerId);
+
+        SendWhatsappGroupMessageJob::dispatch($log->id)->onQueue('whatsapp-'.$sessionKey);
 
         return $log;
     }

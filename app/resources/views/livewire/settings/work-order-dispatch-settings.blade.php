@@ -1,7 +1,7 @@
 <div class="p-6 max-w-2xl mx-auto">
     <h1 class="text-2xl font-semibold text-gray-800 mb-1">{{ __('Konfig WA Gateway') }}</h1>
     <p class="text-sm text-gray-500 mb-6">
-        {{ __('Pengaturan timing dispatch & reminder Work Order. Notifikasi WhatsApp sungguhan belum aktif — sub-versi ini cuma menyiapkan jadwalnya.') }}
+        {{ __('Pengaturan timing dispatch & reminder Work Order, dan grup WhatsApp opsional untuk broadcast notifikasinya.') }}
     </p>
 
     @if (session('status'))
@@ -39,14 +39,37 @@
         </div>
 
         <div>
-            <label class="block text-sm font-medium text-gray-700">{{ __('Nama Grup WhatsApp') }} <span class="text-gray-400 font-normal">({{ __('opsional') }})</span></label>
-            <input type="text" wire:model="waGroupName" placeholder="{{ __('Grup Notifikasi Teknisi') }}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
-            @error('waGroupName') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
-        </div>
+            <div class="flex items-center justify-between">
+                <label class="block text-sm font-medium text-gray-700">{{ __('Pilih Grup WhatsApp') }} <span class="text-gray-400 font-normal">({{ __('opsional') }})</span></label>
+                <button type="button" wire:click="reloadGroups" wire:loading.attr="disabled" class="text-xs text-primary hover:underline">
+                    {{ __('Muat Ulang Daftar Grup') }}
+                </button>
+            </div>
+            <p class="text-xs text-gray-500 mb-1">
+                {{ __('Semua grup yang nomor bot ini sudah jadi anggota — tanpa filter. Kosongkan untuk menonaktifkan broadcast ke grup.') }}
+            </p>
 
-        <div>
-            <label class="block text-sm font-medium text-gray-700">{{ __('JID Grup WhatsApp') }}</label>
-            <input type="text" disabled placeholder="{{ __('Belum tersedia — menunggu v0.26.4') }}" class="mt-1 block w-full rounded-md border-gray-200 bg-gray-100 text-gray-400 shadow-sm cursor-not-allowed">
+            @if (! $sessionConnected)
+                <select disabled class="mt-1 block w-full rounded-md border-gray-200 bg-gray-100 text-gray-400 shadow-sm cursor-not-allowed">
+                    <option>{{ __('Sesi WhatsApp belum terhubung') }}</option>
+                </select>
+            @elseif ($groupsLoadFailed)
+                <select disabled class="mt-1 block w-full rounded-md border-gray-200 bg-gray-100 text-gray-400 shadow-sm cursor-not-allowed">
+                    <option>{{ __('Belum ada grup ditemukan, atau gagal memuat — coba Muat Ulang') }}</option>
+                </select>
+            @else
+                <select wire:model.live="waGroupJid" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                    <option value="">{{ __('— Tidak ada (nonaktif) —') }}</option>
+                    @foreach ($groupOptions as $group)
+                        <option value="{{ $group['jid'] }}">{{ $group['name'] }}</option>
+                    @endforeach
+                </select>
+            @endif
+            @error('waGroupJid') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+
+            @if ($waGroupJid)
+                <p class="text-xs text-gray-400 mt-1">{{ __('JID:') }} <span class="font-mono">{{ $waGroupJid }}</span></p>
+            @endif
         </div>
 
         <button type="submit" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90">

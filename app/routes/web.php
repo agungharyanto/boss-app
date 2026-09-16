@@ -12,6 +12,7 @@ use App\Http\Controllers\FiberNodePhotoController;
 use App\Http\Controllers\VpnScriptDownloadController;
 use App\Http\Middleware\EnsureAdminPanelAccess;
 use App\Livewire\Auth\ReferrerForgotPassword;
+use App\Livewire\Auth\StaffForgotPassword;
 use App\Livewire\Billing\InvoiceIndex;
 use App\Livewire\Billing\ReconciliationReport;
 use App\Livewire\Billing\SubscriptionIndex;
@@ -118,6 +119,13 @@ Route::middleware('guest')->group(function () {
     Route::get('/referrer/forgot-password', ReferrerForgotPassword::class)
         ->middleware('throttle:20,1')
         ->name('referrer.password.request');
+
+    // v0.22.4 — kembaran di atas untuk akun STAFF (bukan Referrer). Pola
+    // sama persis (StaffActionOtpService, scope
+    // "staff_password_reset:{id}") — lihat docblock StaffForgotPassword.
+    Route::get('/staff/forgot-password', StaffForgotPassword::class)
+        ->middleware('throttle:20,1')
+        ->name('staff.password.request');
 });
 
 // v0.9.2 — admin.panel closes the "no middleware blocks cross-persona

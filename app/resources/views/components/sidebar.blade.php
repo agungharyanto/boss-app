@@ -3,7 +3,7 @@
         [
             'id' => 'pelanggan',
             'label' => __('Pelanggan'),
-            'active' => request()->routeIs('web.customers.*'),
+            'active' => request()->routeIs('web.customers.*') || request()->routeIs('web.work-orders.*'),
             'links' => array_filter([
                 ['route' => 'web.customers.index', 'label' => __('Daftar Pelanggan')],
                 auth()->user()->can('register-customer')
@@ -17,6 +17,14 @@
                 // CustomerPolicy::update inside the component.
                 auth()->user()->can('viewAny', \App\Models\Customer::class)
                     ? ['route' => 'web.customers.coordinates', 'label' => __('Lengkapi Koordinat')]
+                    : null,
+                // v0.26.2b — daftar WO (bukan CRUD). Gate sama persis dengan
+                // WorkOrderIndex::mount() (WorkOrderPolicy::viewAny), bukan
+                // dobel-definisi — admin/NOC lihat semua, reseller cuma
+                // lihat WO miliknya, teknisi cuma WO yang di-assign ke
+                // dirinya (WorkOrderPolicy::scopeForTechnician).
+                auth()->user()->can('viewAny', \App\Models\WorkOrder::class)
+                    ? ['route' => 'web.work-orders.index', 'label' => __('Work Order')]
                     : null,
             ]),
         ],
@@ -68,9 +76,12 @@
                 auth()->user()->can('viewAny', \App\Models\ResellerTaxPolicy::class)
                     ? ['route' => 'web.reseller-tax-policies.index', 'label' => __('Reseller Tax Policy')]
                     : null,
-                auth()->user()->can('viewAny', \App\Models\Subscription::class)
-                    ? ['route' => 'web.subscriptions.index', 'label' => __('Subscriptions')]
-                    : null,
+                // v0.26.2c — di-unlink dari sidebar (BUKAN dihapus route-
+                // nya): registrasi sekarang jadi satu pintu (Customer +
+                // Subscription + WO sekaligus, lihat RegistrationService),
+                // halaman "Buat Langganan" ini tetap dipakai untuk kasus
+                // pelanggan existing yang nambah langganan baru — cuma
+                // tidak lagi dilink dari menu utama.
                 auth()->user()->can('viewAny', \App\Models\Invoice::class)
                     ? ['route' => 'web.invoices.index', 'label' => __('Invoices')]
                     : null,
@@ -155,10 +166,15 @@
         [
             'id' => 'komunikasi',
             'label' => __('Komunikasi'),
-            'active' => request()->routeIs('web.whatsapp-gateway.*'),
+            'active' => request()->routeIs('web.whatsapp-gateway.*') || request()->routeIs('web.settings.work-order-dispatch'),
             'links' => array_filter([
                 auth()->user()->can('viewAny', \App\Models\WhatsappSession::class)
                     ? ['route' => 'web.whatsapp-gateway.index', 'label' => __('WhatsApp Gateway')]
+                    : null,
+                // v0.26.2 — reuse work_orders.manage (tier-admin, sudah
+                // ada), tidak ada permission baru dibuat untuk halaman ini.
+                auth()->user()->can('work_orders.manage')
+                    ? ['route' => 'web.settings.work-order-dispatch', 'label' => __('Konfig WA Gateway')]
                     : null,
             ]),
         ],

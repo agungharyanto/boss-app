@@ -29,6 +29,7 @@ class WorkOrderService
         private readonly CpeBindingService $cpeBinding,
         private readonly TechnicianActionOtpService $technicianOtp,
         private readonly WanConfigPushService $wanConfigPush,
+        private readonly WorkOrderDispatchService $dispatch,
     ) {}
 
     /**
@@ -40,13 +41,21 @@ class WorkOrderService
      *
      * v0.26.1 — `$scheduledAt` (nullable) is the customer's specific
      * visit-appointment day+time, set by sales/admin at creation time.
-     * Stored as-is on `work_orders.scheduled_at`, nothing else reads it
-     * yet — v0.26.2 (a scheduled command, NOT built this sub-version)
-     * will use it to decide WHEN a work order gets dispatched to its
-     * assigned technician: a null value means "no specific appointment,
-     * dispatch immediately once assigned"; a real value means "dispatch
-     * exactly 2 hours before this timestamp". This method itself does
-     * NOT trigger any dispatch/notification — v0.26.1 is wiring only.
+     * Stored as-is on `work_orders.scheduled_at`.
+     *
+     * v0.26.2 — AMENDED dari docblock v0.26.1 di atas (dulu bilang "This
+     * method itself does NOT trigger any dispatch" — itu SUDAH TIDAK LAGI
+     * benar, keputusan HYBRID dikunci Agung di kickoff v0.26.2): kalau
+     * `$scheduledAt` null (tanpa janji spesifik), WO ini dispatch SEKETIKA
+     * di sini lewat `WorkOrderDispatchService::dispatchImmediately()` —
+     * TIDAK menunggu `DispatchWorkOrders` command jalan (maks 1 menit
+     * lagi). WO DENGAN `$scheduledAt` TETAP TIDAK dispatch di sini —
+     * satu-satunya jalur untuk itu tetap `DispatchWorkOrders` command,
+     * yang mengecek window `scheduled_at - dispatch_offset_minutes`.
+     * `DispatchWorkOrders` tetap jadi safety-net untuk WO tanpa janji yang
+     * entah bagaimana lolos dari hook ini (mis. dibuat sebelum sub-versi
+     * ini di-deploy) — idempotent by construction (`whereNull('dispatched_at')`),
+     * jadi memanggil hook ini TIDAK membuat command itu jadi redundan.
      */
     public function createFromSubscription(Subscription $subscription, ?string $scheduledAt = null): WorkOrder
     {
@@ -59,6 +68,10 @@ class WorkOrderService
                 'status' => WorkOrderStatus::PendingOdpCheck,
                 'scheduled_at' => $scheduledAt,
             ]);
+
+            if ($scheduledAt === null) {
+                $this->dispatch->dispatchImmediately($workOrder);
+            }
 
             $candidate = $this->odpLocator->findNearestAvailable($subscription->customer);
 

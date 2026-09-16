@@ -9,15 +9,6 @@
                         Registrasi Pelanggan
                     </a>
                 @endif
-
-                @if ($canCreate)
-                    <button
-                        wire:click="$set('showCreateForm', {{ $showCreateForm ? 'false' : 'true' }})"
-                        class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90"
-                    >
-                        {{ $showCreateForm ? 'Batal' : __('+ Pelanggan Baru') }}
-                    </button>
-                @endif
             </div>
         @endunless
     </div>
@@ -33,29 +24,6 @@
     @endif
     @if ($renewError)
         <p class="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{{ $renewError }}</p>
-    @endif
-
-    @if (! $referrerView && $showCreateForm)
-        <form wire:submit="createCustomer" class="mb-6 p-4 border border-gray-200 rounded-md bg-gray-50 space-y-3">
-            <div>
-                <label class="block text-sm font-medium text-gray-700">Nama</label>
-                <input type="text" wire:model="name" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
-                @error('name') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-gray-700">Alamat</label>
-                <textarea wire:model="address" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm"></textarea>
-                @error('address') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-gray-700">Nomor Telepon Utama</label>
-                <input type="text" wire:model="phone_number" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
-                @error('phone_number') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
-            </div>
-            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
-                Simpan
-            </button>
-        </form>
     @endif
 
     <div class="flex gap-3 mb-4">

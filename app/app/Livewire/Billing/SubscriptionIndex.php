@@ -5,6 +5,7 @@ namespace App\Livewire\Billing;
 use App\Models\Customer;
 use App\Models\Subscription;
 use App\Services\Billing\RenewalInvoiceService;
+use App\Services\Installation\WorkOrderService;
 use App\Services\InvoiceService;
 use App\Services\SubscriptionService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
@@ -28,12 +29,23 @@ class SubscriptionIndex extends Component
 
     public string $billing_cycle_day = '';
 
+    /**
+     * v0.26.2b — "Janji Kunjungan" (opsional). Kosong = "segera, tanpa
+     * janji" (keputusan bisnis yang sudah dikunci sejak decision-gate
+     * v0.26.0). Diteruskan ke WorkOrderService::createFromSubscription()
+     * SEGERA setelah Subscription baru berhasil dibuat — dikunci Agung di
+     * kickoff v0.26.2b: form "Registrasi Pelanggan" TIDAK PERNAH sampai ke
+     * titik createFromSubscription() sama sekali (investigasi Langkah 0),
+     * form "Buat Langganan" INI yang genuinely jadi titik WO lahir.
+     */
+    public ?string $scheduledVisitAt = '';
+
     public function mount(): void
     {
         $this->authorize('viewAny', Subscription::class);
     }
 
-    public function createSubscription(SubscriptionService $service): void
+    public function createSubscription(SubscriptionService $service, WorkOrderService $workOrderService): void
     {
         $this->authorize('create', Subscription::class);
 
@@ -44,20 +56,43 @@ class SubscriptionIndex extends Component
         // us before (see TaxComponentIndex's mini-form bug).
         $hasPricing = $this->reseller_package_pricing_id !== '';
 
+        // String kosong TIDAK dianggap null oleh rule 'nullable' Laravel
+        // (cuma NULL genuine yang di-skip) — dinormalisasi eksplisit di
+        // sini SEBELUM validate(), sama disiplin StaffIndex::createStaff().
+        $this->scheduledVisitAt = $this->scheduledVisitAt !== '' ? $this->scheduledVisitAt : null;
+
         $data = $this->validate([
             'customer_id' => 'required|exists:customers,id',
             'name' => $hasPricing ? 'nullable|string|max:255' : 'required|string|max:255',
             'monthly_amount' => $hasPricing ? 'nullable|numeric|min:0' : 'required|numeric|min:0',
             'billing_cycle_day' => 'required|integer|min:1|max:31',
+            // v0.26.2b — kosong = "segera, tanpa janji" (valid, TIDAK
+            // required). Diisi = wajib di masa depan, minimal beberapa
+            // saat dari sekarang — 'after:now' cukup ketat untuk menolak
+            // input jam yang sudah lewat tanpa perlu ambang tambahan.
+            'scheduledVisitAt' => ['nullable', 'date', 'after:now'],
         ]);
 
         $customer = Customer::findOrFail($data['customer_id']);
         unset($data['customer_id']);
         $data['reseller_package_pricing_id'] = $hasPricing ? $this->reseller_package_pricing_id : null;
+        $scheduledVisitAt = $data['scheduledVisitAt'] ?? null;
+        unset($data['scheduledVisitAt']);
 
-        $service->create($customer, $data);
+        $subscription = $service->create($customer, $data);
 
-        $this->reset(['customer_id', 'name', 'monthly_amount', 'reseller_package_pricing_id', 'billing_cycle_day', 'showCreateForm']);
+        // v0.26.2b — WO lahir SEGERA saat Subscription dibuat (keputusan
+        // Agung di kickoff v0.26.2b, lihat docblock $scheduledVisitAt di
+        // atas) — bukan aksi terpisah yang perlu authorize() sendiri,
+        // murni efek samping otomatis dari create Subscription yang sudah
+        // ter-authorize di atas. WO tanpa scheduledVisitAt dispatch
+        // LANGSUNG (v0.26.2's hook di createFromSubscription()); WO
+        // dengan scheduledVisitAt menunggu DispatchWorkOrders command
+        // sesuai window offset — TIDAK dispatch immediately meski di titik
+        // create ini.
+        $workOrderService->createFromSubscription($subscription, $scheduledVisitAt);
+
+        $this->reset(['customer_id', 'name', 'monthly_amount', 'reseller_package_pricing_id', 'billing_cycle_day', 'scheduledVisitAt', 'showCreateForm']);
     }
 
     public function suspend(int $id, SubscriptionService $service): void

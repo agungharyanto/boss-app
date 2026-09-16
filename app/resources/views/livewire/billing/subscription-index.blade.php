@@ -44,6 +44,12 @@
                 <input type="number" min="1" max="31" wire:model="billing_cycle_day" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                 @error('billing_cycle_day') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
             </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700">{{ __('Janji Kunjungan') }} <span class="text-gray-400 font-normal">({{ __('opsional') }})</span></label>
+                <input type="datetime-local" wire:model="scheduledVisitAt" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                <p class="text-xs text-gray-500 mt-1">{{ __('Kosongkan kalau Work Order boleh langsung keluar segera, tanpa janji kunjungan spesifik.') }}</p>
+                @error('scheduledVisitAt') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+            </div>
             <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
                 {{ __('Simpan') }}
             </button>

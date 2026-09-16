@@ -26,6 +26,7 @@ use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
 use App\Livewire\Installation\OdpEdit;
+use App\Livewire\Installation\WorkOrderIndex;
 use App\Livewire\Installation\WorkOrderShow;
 use App\Livewire\Network\BandwidthProfileIndex;
 use App\Livewire\Network\CapacityReport;
@@ -211,6 +212,8 @@ Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
             Route::post('/{cpe_device}/push-wan-config', [CpeDeviceActionController::class, 'pushWanConfig'])->name('push-wan-config');
             Route::delete('/{cpe_device}', [CpeDeviceActionController::class, 'destroy'])->name('destroy');
         });
+        // v0.26.2b — list saja (bukan CRUD), lihat docblock WorkOrderIndex.
+        Route::get('/work-orders', WorkOrderIndex::class)->name('work-orders.index');
         Route::get('/work-orders/{work_order}', WorkOrderShow::class)->name('work-orders.show');
     });
 

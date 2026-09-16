@@ -3,7 +3,7 @@
         [
             'id' => 'pelanggan',
             'label' => __('Pelanggan'),
-            'active' => request()->routeIs('web.customers.*'),
+            'active' => request()->routeIs('web.customers.*') || request()->routeIs('web.work-orders.*'),
             'links' => array_filter([
                 ['route' => 'web.customers.index', 'label' => __('Daftar Pelanggan')],
                 auth()->user()->can('register-customer')
@@ -17,6 +17,14 @@
                 // CustomerPolicy::update inside the component.
                 auth()->user()->can('viewAny', \App\Models\Customer::class)
                     ? ['route' => 'web.customers.coordinates', 'label' => __('Lengkapi Koordinat')]
+                    : null,
+                // v0.26.2b — daftar WO (bukan CRUD). Gate sama persis dengan
+                // WorkOrderIndex::mount() (WorkOrderPolicy::viewAny), bukan
+                // dobel-definisi — admin/NOC lihat semua, reseller cuma
+                // lihat WO miliknya, teknisi cuma WO yang di-assign ke
+                // dirinya (WorkOrderPolicy::scopeForTechnician).
+                auth()->user()->can('viewAny', \App\Models\WorkOrder::class)
+                    ? ['route' => 'web.work-orders.index', 'label' => __('Work Order')]
                     : null,
             ]),
         ],

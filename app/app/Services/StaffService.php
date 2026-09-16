@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\WhatsappEventType;
 use App\Enums\WorkOrderStatus;
 use App\Models\CpeActionLog;
 use App\Models\Referrer;
@@ -9,9 +10,12 @@ use App\Models\ResellerUser;
 use App\Models\Technician;
 use App\Models\User;
 use App\Models\WorkOrder;
+use App\Services\Whatsapp\WhatsappGatewayService;
+use App\Services\Whatsapp\WhatsappTemplateService;
 use App\Support\WhatsappPhone;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -33,15 +37,18 @@ use Throwable;
 class StaffService
 {
     /**
-     * `ReferrerService` opsional dengan default instantiate baru — supaya
-     * `new StaffService()` (dipakai luas di test-test lama) tetap valid
-     * tanpa perlu diubah satu per satu, sekaligus tetap bisa
-     * dependency-injected lewat container (Livewire method injection)
-     * seperti method lain di kelas ini.
+     * `ReferrerService`/`WhatsappGatewayService` opsional dengan default
+     * instantiate baru — supaya `new StaffService()` (dipakai luas di
+     * test-test lama) tetap valid tanpa perlu diubah satu per satu,
+     * sekaligus tetap bisa dependency-injected lewat container (Livewire
+     * method injection) seperti method lain di kelas ini.
      */
-    public function __construct(private ?ReferrerService $referrerService = null)
-    {
+    public function __construct(
+        private ?ReferrerService $referrerService = null,
+        private ?WhatsappGatewayService $whatsappGateway = null,
+    ) {
         $this->referrerService ??= new ReferrerService;
+        $this->whatsappGateway ??= new WhatsappGatewayService(new WhatsappTemplateService);
     }
 
     /**
@@ -114,6 +121,16 @@ class StaffService
             }
         }
 
+        // v0.22.4 — dijalankan TERAKHIR, SETELAH bagian Referrer (bukan
+        // sebelum) — User sudah pasti tersimpan sejak transaksi di atas
+        // commit, jadi urutan relatif terhadap Referrer tidak krusial;
+        // ditaruh di akhir supaya method ini tetap linear untuk dibaca.
+        // Non-fatal by design (try-catch, sama posture referrer_link_error
+        // di atas) — kegagalan kirim WA (mis. sesi "direct" belum
+        // connected, template belum di-seed) TIDAK PERNAH menggagalkan
+        // create() staff yang sudah berhasil disimpan.
+        $this->sendInitialPasswordMessages($result['user'], $result['generated_password']);
+
         return [
             'user' => $result['user'],
             'generated_password' => $result['generated_password'],
@@ -123,10 +140,51 @@ class StaffService
     }
 
     /**
-     * Nama/email/HP/role saja — TANPA password (password auto-sent/regenerate
-     * adalah scope v0.22.4, bukan di sini). `syncRoles()` dipakai (bukan
-     * `assignRole()`) supaya role lama benar-benar lepas — satu staff cuma
-     * boleh punya satu role di CRUD ini (single-choice, dikunci eksplisit).
+     * v0.22.4 — 2 PESAN TERPISAH ke `users.phone`, dikunci eksplisit oleh
+     * Agung (bukan digabung 1 pesan panjang):
+     *  1. `StaffInitialPasswordNotice` — teks penjelasan (template biasa,
+     *     bisa diedit admin lewat UI Template WA).
+     *  2. `StaffInitialPasswordValue` — password POLOS itu sendiri, tanpa
+     *     karakter/format lain menempel (gampang tap-hold copy di WA).
+     *     SENGAJA lewat `queueRawForRecipient()` (bukan
+     *     `buildAndQueueForRecipient()`) — tidak pernah melalui sistem
+     *     Template WA sama sekali, supaya isi pesan ini TERJAMIN SECARA
+     *     STRUKTURAL tetap persis password, tidak bisa "dirusak" admin
+     *     lewat edit template (lihat docblock `WhatsappEventType::
+     *     StaffInitialPasswordValue`).
+     *
+     * Non-fatal — dibungkus try-catch di `create()` (pemanggil satu-
+     * satunya), kegagalan di sini di-log tapi tidak pernah menggagalkan
+     * pembuatan staff yang sudah tersimpan.
+     */
+    private function sendInitialPasswordMessages(User $staff, string $password): void
+    {
+        try {
+            $this->whatsappGateway->buildAndQueueForRecipient(
+                WhatsappEventType::StaffInitialPasswordNotice,
+                $staff->tenant_id,
+                $staff->phone,
+                ['recipient_name' => $staff->name, 'company_name' => $staff->tenant?->name],
+            );
+
+            $this->whatsappGateway->queueRawForRecipient(
+                WhatsappEventType::StaffInitialPasswordValue,
+                $staff->tenant_id,
+                $staff->phone,
+                $password,
+            );
+        } catch (Throwable $e) {
+            Log::warning("StaffService: gagal mengantre pesan password awal ke WhatsApp untuk staff #{$staff->id}: {$e->getMessage()}");
+        }
+    }
+
+    /**
+     * Nama/email/HP/role saja — TANPA password (password auto-sent saat
+     * create() saja — lihat sendInitialPasswordMessages(); update() tidak
+     * pernah mengubah/mengirim ulang password). `syncRoles()` dipakai
+     * (bukan `assignRole()`) supaya role lama benar-benar lepas — satu
+     * staff cuma boleh punya satu role di CRUD ini (single-choice, dikunci
+     * eksplisit).
      *
      * @param  array{name: string, email?: ?string, phone: string, role: string}  $data
      */

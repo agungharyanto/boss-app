@@ -55,6 +55,36 @@ enum WhatsappEventType: string
      */
     case UnrecognizedMessageFallback = 'unrecognized_message_fallback';
 
+    /**
+     * v0.22.4 — pesan 1 dari 2 saat `StaffService::create()` berhasil:
+     * teks penjelasan ("ini password login kamu"). Template BIASA (bisa
+     * diedit admin lewat UI Template WA, seperti event type lain) —
+     * dikirim lewat `WhatsappGatewayService::buildAndQueueForRecipient()`
+     * SEPERTI BIASA. Pasangan `StaffInitialPasswordValue` di bawah adalah
+     * pesan ke-2, SENGAJA event type TERPISAH (bukan digabung 1 pesan)
+     * karena `buildAndQueueForRecipient()` cuma resolve SATU template per
+     * event type per panggilan — 2 pesan = 2 event type.
+     */
+    case StaffInitialPasswordNotice = 'staff_initial_password_notice';
+
+    /**
+     * v0.22.4 — pesan 2 dari 2: password POLOS itu sendiri, tanpa
+     * karakter/format apa pun menempel (biar gampang tap-hold copy di WA),
+     * dikirim SEGERA setelah `StaffInitialPasswordNotice`. SENGAJA TIDAK
+     * pernah melalui `WhatsappTemplateService::resolve()`/`render()` —
+     * `WhatsappMessageLog` untuk event ini dibuat manual dengan
+     * `template_id = null` + `rendered_content = $password` mentah
+     * langsung di kode (`StaffService::sendInitialPasswordMessages()`) —
+     * satu-satunya cara MENJAMIN SECARA STRUKTURAL isi pesan ini tetap
+     * polos, karena kalau lewat template yang bisa diedit admin lewat UI
+     * Template WA, tidak ada jaminan admin tidak menambah teks lain di
+     * sekitar `{password}`. Konsekuensi: event type ini TIDAK PERNAH
+     * muncul sebagai opsi yang bisa diedit di halaman Template WA (lihat
+     * `WhatsappTemplateService`/seeder — sengaja tidak di-seed template
+     * apa pun untuknya).
+     */
+    case StaffInitialPasswordValue = 'staff_initial_password_value';
+
     public function label(): string
     {
         return match ($this) {
@@ -66,6 +96,8 @@ enum WhatsappEventType: string
             self::DuplicateSessionAttempt => 'Percobaan Pairing Sesi Duplikat',
             self::TechnicianFeaturePending => 'Fitur Teknisi Belum Tersedia',
             self::UnrecognizedMessageFallback => 'Fallback Pesan Tidak Dikenali',
+            self::StaffInitialPasswordNotice => 'Password Awal Staff — Pengantar',
+            self::StaffInitialPasswordValue => 'Password Awal Staff — Nilai Password',
         };
     }
 }

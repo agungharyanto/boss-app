@@ -24,12 +24,29 @@ use App\Models\WanConfigTemplate;
 use App\Models\WorkOrderPhoto;
 use App\Services\Installation\WorkOrderService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class WorkOrderServiceTest extends TestCase
 {
     use RefreshDatabase;
+
+    /**
+     * v0.26.3 — jaring pengaman standar (pola StaffServiceTest/
+     * WorkOrderDispatchServiceTest): setiap test di sini yang memanggil
+     * createFromSubscription() SEBELUM Technician dibuat memang aman (0
+     * teknisi aktif saat dispatch → notifyTechnicians() early-return, tidak
+     * ada job WA nyata) — tapi Bus::fake() dipasang di sini juga supaya
+     * refactor test di masa depan yang mengubah urutan tidak diam-diam
+     * memicu sleep(5-10s) x N teknisi tanpa disadari.
+     */
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Bus::fake();
+    }
 
     private function subscriptionWithNearbyOdp(): array
     {

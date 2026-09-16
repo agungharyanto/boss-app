@@ -2,24 +2,54 @@
 
 namespace Tests\Feature\Installation;
 
+use App\Enums\WhatsappEventType;
 use App\Enums\WorkOrderStatus;
+use App\Models\Technician;
 use App\Models\Tenant;
+use App\Models\WhatsappMessageLog;
+use App\Models\WhatsappMessageTemplate;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDispatchSettings;
 use App\Services\Installation\WorkOrderDispatchService;
+use App\Support\WhatsappPhone;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Tests\TestCase;
 
 /**
  * v0.26.2 — logic dispatch/reminder murni, terisolasi dari orkestrasi
  * command (self-throttle per tenant dites terpisah di
- * `DispatchWorkOrdersCommandTest`). Semua assertion di sini TIDAK
- * menyentuh WhatsappMessageLog sama sekali — sub-versi ini sengaja belum
- * mengirim notifikasi apa pun (lihat docblock service).
+ * `DispatchWorkOrdersCommandTest`).
+ *
+ * v0.26.3 — notifikasi WA `WhatsappEventType::WorkOrderDispatched` genuinely
+ * dikirim sekarang, di-assert lewat `whatsapp_message_logs`. `Bus::fake()`
+ * WAJIB di setUp() — `SendWhatsappMessageJob::applyRateLimitDelay()` genuinely
+ * `sleep(5-10s)` tanpa fake (pelajaran sama persis `StaffServiceTest`,
+ * v0.22.4) — WhatsappMessageLog tetap tercipta karena row-nya di-insert
+ * SEBELUM job di-dispatch, `Bus::fake()` cuma mencegah job itu sendiri
+ * genuinely diproses.
  */
 class WorkOrderDispatchServiceTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Bus::fake();
+    }
+
+    private function seedTemplate(Tenant $tenant): void
+    {
+        WhatsappMessageTemplate::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'event_type' => WhatsappEventType::WorkOrderDispatched,
+            'content' => 'Halo {technician_name}, {status_notice} WO #{work_order_id} — {customer_name} ({customer_address}, {service_type}, {scheduled_at}).',
+            'is_active' => true,
+        ]);
+    }
 
     public function test_a_work_order_with_an_appointment_inside_the_offset_window_gets_dispatched(): void
     {
@@ -32,7 +62,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'dispatched_at' => null,
         ]);
 
-        (new WorkOrderDispatchService)->runDispatchCycle($tenant->id, $settings);
+        app(WorkOrderDispatchService::class)->runDispatchCycle($tenant->id, $settings);
 
         $this->assertNotNull($workOrder->fresh()->dispatched_at);
     }
@@ -48,7 +78,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'dispatched_at' => null,
         ]);
 
-        (new WorkOrderDispatchService)->runDispatchCycle($tenant->id, $settings);
+        app(WorkOrderDispatchService::class)->runDispatchCycle($tenant->id, $settings);
 
         $this->assertNull($workOrder->fresh()->dispatched_at);
     }
@@ -63,7 +93,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'dispatched_at' => null,
         ]);
 
-        $count = (new WorkOrderDispatchService)->runDispatchCycle($tenant->id, $settings);
+        $count = app(WorkOrderDispatchService::class)->runDispatchCycle($tenant->id, $settings);
 
         $this->assertSame(1, $count);
         $this->assertNotNull($workOrder->fresh()->dispatched_at);
@@ -80,7 +110,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'dispatched_at' => null,
         ]);
 
-        (new WorkOrderDispatchService)->runDispatchCycle($tenantA->id, $settingsA);
+        app(WorkOrderDispatchService::class)->runDispatchCycle($tenantA->id, $settingsA);
 
         $this->assertNull($otherTenantWorkOrder->fresh()->dispatched_at);
     }
@@ -95,7 +125,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'dispatched_at' => null,
         ]);
 
-        $service = new WorkOrderDispatchService;
+        $service = app(WorkOrderDispatchService::class);
         $first = $service->runDispatchCycle($tenant->id, $settings);
         $dispatchedAtFirstRun = $workOrder->fresh()->dispatched_at;
 
@@ -119,7 +149,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'last_reminder_sent_at' => null,
         ]);
 
-        $count = (new WorkOrderDispatchService)->runReminderCycle($tenant->id, $settings->fresh());
+        $count = app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
 
         $this->assertSame(1, $count);
         $this->assertTrue($workOrder->fresh()->last_reminder_sent_at->isToday());
@@ -138,7 +168,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'last_reminder_sent_at' => null,
         ]);
 
-        $count = (new WorkOrderDispatchService)->runReminderCycle($tenant->id, $settings->fresh());
+        $count = app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
 
         $this->assertSame(0, $count);
         $this->assertNull($workOrder->fresh()->last_reminder_sent_at);
@@ -155,7 +185,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'last_reminder_sent_at' => now()->toDateString(),
         ]);
 
-        $count = (new WorkOrderDispatchService)->runReminderCycle($tenant->id, $settings->fresh());
+        $count = app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
 
         $this->assertSame(0, $count);
     }
@@ -176,7 +206,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'dispatched_at' => null,
         ]);
 
-        (new WorkOrderDispatchService)->runReminderCycle($tenant->id, $settings->fresh());
+        app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
 
         $this->assertNull($workOrder->fresh()->last_reminder_sent_at);
     }
@@ -197,7 +227,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'completed_at' => now(),
         ]);
 
-        (new WorkOrderDispatchService)->runReminderCycle($tenant->id, $settings->fresh());
+        app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
 
         $this->assertNull($workOrder->fresh()->last_reminder_sent_at);
     }
@@ -206,8 +236,141 @@ class WorkOrderDispatchServiceTest extends TestCase
     {
         $workOrder = WorkOrder::factory()->create(['dispatched_at' => null]);
 
-        (new WorkOrderDispatchService)->dispatchImmediately($workOrder);
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
 
         $this->assertNotNull($workOrder->fresh()->dispatched_at);
+    }
+
+    // ── v0.26.3 — broadcast WA japri ke semua teknisi aktif ────────────
+
+    public function test_dispatch_immediately_broadcasts_to_every_active_technician_in_the_tenant(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplate($tenant);
+        $techA = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $techB = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'dispatched_at' => null]);
+
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        $this->assertSame(2, WhatsappMessageLog::withoutGlobalScopes()->where('event_type', WhatsappEventType::WorkOrderDispatched->value)->count());
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => WhatsappPhone::normalize($techA->phone),
+            'event_type' => WhatsappEventType::WorkOrderDispatched->value,
+        ]);
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => WhatsappPhone::normalize($techB->phone),
+            'event_type' => WhatsappEventType::WorkOrderDispatched->value,
+        ]);
+
+        // Dispatch awal — bukan reminder, status_notice tidak mengandung "REMINDER".
+        $log = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderDispatched->value)
+            ->where('phone_number', WhatsappPhone::normalize($techA->phone))
+            ->firstOrFail();
+        $this->assertStringNotContainsString('REMINDER', $log->rendered_content);
+    }
+
+    public function test_broadcast_never_leaks_to_a_technician_in_another_tenant(): void
+    {
+        $tenantA = Tenant::factory()->create();
+        $tenantB = Tenant::factory()->create();
+        $this->seedTemplate($tenantA);
+        $ownTechnician = Technician::factory()->create(['tenant_id' => $tenantA->id]);
+        $otherTechnician = Technician::factory()->create(['tenant_id' => $tenantB->id]);
+        $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenantA->id, 'dispatched_at' => null]);
+
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => WhatsappPhone::normalize($ownTechnician->phone),
+        ]);
+        $this->assertDatabaseMissing('whatsapp_message_logs', [
+            'phone_number' => WhatsappPhone::normalize($otherTechnician->phone),
+        ]);
+    }
+
+    public function test_broadcast_never_reaches_an_inactive_technician(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplate($tenant);
+        $active = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $inactive = Technician::factory()->inactive()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'dispatched_at' => null]);
+
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => WhatsappPhone::normalize($active->phone),
+        ]);
+        $this->assertDatabaseMissing('whatsapp_message_logs', [
+            'phone_number' => WhatsappPhone::normalize($inactive->phone),
+        ]);
+    }
+
+    public function test_dispatch_with_no_active_technician_logs_a_warning_and_does_not_fail(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplate($tenant);
+        $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'dispatched_at' => null]);
+
+        // Nol teknisi aktif di tenant ini — tidak boleh throw, WO tetap dispatched.
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        $this->assertNotNull($workOrder->fresh()->dispatched_at);
+        $this->assertSame(0, WhatsappMessageLog::withoutGlobalScopes()->where('event_type', WhatsappEventType::WorkOrderDispatched->value)->count());
+    }
+
+    public function test_reminder_broadcasts_to_all_active_technicians_when_still_unclaimed(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplate($tenant);
+        $settings = WorkOrderDispatchSettings::forTenant($tenant->id);
+        $settings->update(['reminder_time' => now()->format('H:i'), 'command_interval_minutes' => 15]);
+        $techA = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $techB = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create([
+            'tenant_id' => $tenant->id,
+            'technician_id' => null,
+            'dispatched_at' => now()->subDay(),
+            'last_reminder_sent_at' => null,
+        ]);
+
+        app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
+
+        $this->assertSame(2, WhatsappMessageLog::withoutGlobalScopes()->where('event_type', WhatsappEventType::WorkOrderDispatched->value)->count());
+        $log = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderDispatched->value)
+            ->where('phone_number', WhatsappPhone::normalize($techA->phone))
+            ->firstOrFail();
+        $this->assertStringContainsString('REMINDER', $log->rendered_content);
+    }
+
+    public function test_reminder_sends_only_to_the_assigned_technician_when_already_assigned(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplate($tenant);
+        $settings = WorkOrderDispatchSettings::forTenant($tenant->id);
+        $settings->update(['reminder_time' => now()->format('H:i'), 'command_interval_minutes' => 15]);
+        $assigned = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        // Teknisi lain tetap aktif tapi TIDAK di-assign — tidak boleh ikut kena.
+        $other = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->assigned()->create([
+            'tenant_id' => $tenant->id,
+            'technician_id' => $assigned->id,
+            'dispatched_at' => now()->subDay(),
+            'last_reminder_sent_at' => null,
+        ]);
+
+        app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
+
+        $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()->where('event_type', WhatsappEventType::WorkOrderDispatched->value)->count());
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => WhatsappPhone::normalize($assigned->phone),
+            'event_type' => WhatsappEventType::WorkOrderDispatched->value,
+        ]);
+        $this->assertDatabaseMissing('whatsapp_message_logs', [
+            'phone_number' => WhatsappPhone::normalize($other->phone),
+        ]);
     }
 }

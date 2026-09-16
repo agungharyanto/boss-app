@@ -6,6 +6,7 @@ use App\Models\Tenant;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDispatchSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Tests\TestCase;
 
 /**
@@ -15,10 +16,23 @@ use Tests\TestCase;
  * ditest terisolasi di `WorkOrderDispatchServiceTest` — di sini fokus ke
  * "kapan command efektif jalan", bukan lagi "apa yang dilakukan saat
  * jalan".
+ *
+ * v0.26.3 — `Bus::fake()` di setUp() sebagai jaring pengaman standar
+ * (belum ada `Technician::factory()` di file ini saat ini, jadi 0 teknisi
+ * aktif per tenant test → notifyTechnicians() early-return, TIDAK ada job
+ * WA nyata di-dispatch — tapi konsisten dengan disiplin StaffServiceTest/
+ * WorkOrderDispatchServiceTest, bukan diasumsikan aman selamanya).
  */
 class DispatchWorkOrdersCommandTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Bus::fake();
+    }
 
     public function test_command_dispatches_a_work_order_when_no_previous_run_exists(): void
     {

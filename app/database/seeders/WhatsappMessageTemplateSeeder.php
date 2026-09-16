@@ -31,6 +31,11 @@ class WhatsappMessageTemplateSeeder extends Seeder
             // sini (dan tidak akan pernah) — pesan itu tidak pernah melalui
             // WhatsappTemplateService sama sekali, lihat docblock enum-nya.
             WhatsappEventType::StaffInitialPasswordNotice->value => 'Halo {recipient_name}, akun staff BOSS App Anda sudah dibuat. Password login akan dikirim di pesan berikutnya — {company_name}.',
+            // v0.26.3 — {status_notice} beda isinya tergantung dispatch awal
+            // vs reminder (lihat docblock WhatsappEventType::WorkOrderDispatched
+            // dan WorkOrderDispatchService::notifyTechnicians()), bukan 2
+            // template terpisah — resolve() cuma per event_type.
+            WhatsappEventType::WorkOrderDispatched->value => 'Halo {technician_name}, {status_notice}'.PHP_EOL.'WO #{work_order_id} — {customer_name}'.PHP_EOL.'Alamat: {customer_address}'.PHP_EOL.'Layanan: {service_type}'.PHP_EOL.'Janji Kunjungan: {scheduled_at}'.PHP_EOL.'— {company_name}.',
         ];
 
         Tenant::all()->each(function (Tenant $tenant) use ($defaults) {

@@ -76,9 +76,12 @@
                 auth()->user()->can('viewAny', \App\Models\ResellerTaxPolicy::class)
                     ? ['route' => 'web.reseller-tax-policies.index', 'label' => __('Reseller Tax Policy')]
                     : null,
-                auth()->user()->can('viewAny', \App\Models\Subscription::class)
-                    ? ['route' => 'web.subscriptions.index', 'label' => __('Subscriptions')]
-                    : null,
+                // v0.26.2c — di-unlink dari sidebar (BUKAN dihapus route-
+                // nya): registrasi sekarang jadi satu pintu (Customer +
+                // Subscription + WO sekaligus, lihat RegistrationService),
+                // halaman "Buat Langganan" ini tetap dipakai untuk kasus
+                // pelanggan existing yang nambah langganan baru — cuma
+                // tidak lagi dilink dari menu utama.
                 auth()->user()->can('viewAny', \App\Models\Invoice::class)
                     ? ['route' => 'web.invoices.index', 'label' => __('Invoices')]
                     : null,

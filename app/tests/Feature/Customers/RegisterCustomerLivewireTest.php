@@ -12,12 +12,20 @@ use App\Models\Customer;
 use App\Models\NetworkProfileGroup;
 use App\Models\PppPackage;
 use App\Models\Referrer;
+use App\Models\Subscription;
 use App\Models\User;
+use App\Models\WorkOrder;
+use App\Services\Installation\WorkOrderService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Tests\TestCase;
 
+/**
+ * v0.26.2c — Registrasi Pelanggan jadi satu pintu: Customer + Subscription +
+ * WorkOrder dibuat dalam satu transaksi lewat RegistrationService::register().
+ * ppp_package_id sekarang WAJIB (dulu opsional/dead sejak v0.9.4).
+ */
 class RegisterCustomerLivewireTest extends TestCase
 {
     use RefreshDatabase;
@@ -54,6 +62,7 @@ class RegisterCustomerLivewireTest extends TestCase
     public function test_duplicate_nik_is_rejected_via_the_livewire_registration_form(): void
     {
         $user = $this->userWithRole('sales_internal');
+        $package = $this->package($user->tenant_id);
 
         Customer::factory()->create([
             'tenant_id' => $user->tenant_id,
@@ -67,6 +76,7 @@ class RegisterCustomerLivewireTest extends TestCase
             ->set('address', 'Jl. Merdeka No. 2')
             ->set('phone_number', '081234567899')
             ->set('nik', '3201012501990001')
+            ->set('ppp_package_id', $package->id)
             ->call('register')
             ->assertHasErrors(['nik']);
 
@@ -76,6 +86,7 @@ class RegisterCustomerLivewireTest extends TestCase
     public function test_a_fresh_nik_is_accepted_via_the_livewire_registration_form(): void
     {
         $user = $this->userWithRole('sales_internal');
+        $package = $this->package($user->tenant_id);
 
         $this->actingAs($user);
 
@@ -84,6 +95,7 @@ class RegisterCustomerLivewireTest extends TestCase
             ->set('address', 'Jl. Merdeka No. 3')
             ->set('phone_number', '081234567898')
             ->set('nik', '3201012501990002')
+            ->set('ppp_package_id', $package->id)
             ->call('register')
             ->assertHasNoErrors();
 
@@ -210,5 +222,124 @@ class RegisterCustomerLivewireTest extends TestCase
             'scheme' => null,
             'amount' => null,
         ]);
+    }
+
+    // ── v0.26.2c — satu pintu: Customer + Subscription + WorkOrder ─────
+
+    public function test_registering_without_a_package_is_rejected_and_creates_nothing(): void
+    {
+        $user = $this->userWithRole('sales_internal');
+
+        $this->actingAs($user);
+
+        Livewire::test(RegisterCustomer::class)
+            ->set('name', 'Tanpa Paket')
+            ->set('address', 'Jl. Tanpa Paket No. 1')
+            ->set('phone_number', '081200000099')
+            ->call('register')
+            ->assertHasErrors(['ppp_package_id']);
+
+        $this->assertDatabaseCount('customers', 0);
+        $this->assertDatabaseCount('subscriptions', 0);
+    }
+
+    public function test_registering_with_a_scheduled_visit_creates_a_scheduled_work_order(): void
+    {
+        $user = $this->userWithRole('sales_internal');
+        $package = $this->package($user->tenant_id);
+
+        $this->actingAs($user);
+
+        $scheduledAt = now()->addDays(2)->format('Y-m-d\TH:i');
+
+        Livewire::test(RegisterCustomer::class)
+            ->set('name', 'Pelanggan Janji')
+            ->set('address', 'Jl. Janji No. 1')
+            ->set('phone_number', '081200000010')
+            ->set('ppp_package_id', $package->id)
+            ->set('scheduledVisitAt', $scheduledAt)
+            ->call('register')
+            ->assertHasNoErrors();
+
+        $customer = Customer::where('name', 'Pelanggan Janji')->firstOrFail();
+        $subscription = Subscription::withoutGlobalScopes()->where('customer_id', $customer->id)->firstOrFail();
+        $workOrder = WorkOrder::withoutGlobalScopes()->where('customer_id', $customer->id)->firstOrFail();
+
+        $this->assertSame($package->name, $subscription->name);
+        $this->assertSame((float) $package->sell_price, (float) $subscription->monthly_amount);
+        $this->assertSame(min(now()->day, 28), $subscription->billing_cycle_day);
+        $this->assertNotNull($workOrder->scheduled_at);
+        $this->assertNull($workOrder->dispatched_at);
+    }
+
+    public function test_registering_without_a_scheduled_visit_dispatches_the_work_order_immediately(): void
+    {
+        $user = $this->userWithRole('sales_internal');
+        $package = $this->package($user->tenant_id);
+
+        $this->actingAs($user);
+
+        Livewire::test(RegisterCustomer::class)
+            ->set('name', 'Pelanggan Segera')
+            ->set('address', 'Jl. Segera No. 1')
+            ->set('phone_number', '081200000011')
+            ->set('ppp_package_id', $package->id)
+            ->call('register')
+            ->assertHasNoErrors();
+
+        $customer = Customer::where('name', 'Pelanggan Segera')->firstOrFail();
+        $workOrder = WorkOrder::withoutGlobalScopes()->where('customer_id', $customer->id)->firstOrFail();
+
+        $this->assertNull($workOrder->scheduled_at);
+        $this->assertNotNull($workOrder->dispatched_at);
+    }
+
+    public function test_a_past_scheduled_visit_is_rejected(): void
+    {
+        $user = $this->userWithRole('sales_internal');
+        $package = $this->package($user->tenant_id);
+
+        $this->actingAs($user);
+
+        Livewire::test(RegisterCustomer::class)
+            ->set('name', 'Pelanggan Lampau')
+            ->set('address', 'Jl. Lampau No. 1')
+            ->set('phone_number', '081200000012')
+            ->set('ppp_package_id', $package->id)
+            ->set('scheduledVisitAt', now()->subDay()->format('Y-m-d\TH:i'))
+            ->call('register')
+            ->assertHasErrors(['scheduledVisitAt']);
+
+        $this->assertDatabaseMissing('customers', ['name' => 'Pelanggan Lampau']);
+    }
+
+    public function test_a_failure_creating_the_work_order_rolls_back_the_whole_registration(): void
+    {
+        $user = $this->userWithRole('sales_internal');
+        $package = $this->package($user->tenant_id);
+
+        $this->mock(WorkOrderService::class, function ($mock) {
+            $mock->shouldReceive('createFromSubscription')->andThrow(new \RuntimeException('simulated failure'));
+        });
+
+        $this->actingAs($user);
+
+        try {
+            Livewire::test(RegisterCustomer::class)
+                ->set('name', 'Pelanggan Gagal')
+                ->set('address', 'Jl. Gagal No. 1')
+                ->set('phone_number', '081200000013')
+                ->set('ppp_package_id', $package->id)
+                ->call('register');
+
+            $this->fail('Expected the simulated WorkOrderService failure to propagate.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('simulated failure', $e->getMessage());
+        }
+
+        // Rollback penuh — Customer, commission_ledger (kalau ada), dan
+        // Subscription TIDAK ADA sama sekali, bukan tersisa setengah jadi.
+        $this->assertDatabaseCount('customers', 0);
+        $this->assertDatabaseCount('subscriptions', 0);
     }
 }

@@ -40,8 +40,22 @@ class RegisterCustomer extends Component
      * v0.9.4 — dulu input teks bebas `package`; sekarang dropdown PppPackage
      * aktif, disimpan ke customers.ppp_package_id. Kolom `customers.package`
      * lama dibiarkan NULL, tidak dipakai lagi.
+     *
+     * v0.26.2c — WAJIB sekarang (dulu opsional/dead — tidak pernah memicu
+     * apa pun). Registrasi jadi satu pintu: paket ini yang dipakai
+     * RegistrationService::register() untuk langsung membuat Subscription +
+     * WorkOrder dalam transaksi yang sama, lihat register() di bawah.
      */
     public ?int $ppp_package_id = null;
+
+    /**
+     * v0.26.2c — "Janji Kunjungan" (opsional), dipindah dari form Buat
+     * Langganan (v0.26.2b, TIDAK dihapus di sana — tetap dipakai untuk
+     * pelanggan existing yang nambah langganan baru). Kosong = WO dispatch
+     * segera (hook v0.26.2 di createFromSubscription()); diisi = menunggu
+     * DispatchWorkOrders command sesuai window offset.
+     */
+    public ?string $scheduledVisitAt = '';
 
     public ?int $selectedReferrerId = null;
 
@@ -111,12 +125,18 @@ class RegisterCustomer extends Component
 
         $this->validate([
             'ppp_package_id' => [
-                'nullable', 'integer',
+                'required', 'integer',
                 Rule::exists('ppp_packages', 'id')
                     ->where('tenant_id', auth()->user()->tenant_id)
                     ->whereNull('deleted_at'),
             ],
         ]);
+
+        // v0.26.2c — string kosong TIDAK dianggap null oleh rule 'nullable'
+        // Laravel (cuma NULL genuine yang di-skip) — dinormalisasi eksplisit
+        // SEBELUM validate(), sama disiplin SubscriptionIndex::createSubscription().
+        $this->scheduledVisitAt = $this->scheduledVisitAt !== '' ? $this->scheduledVisitAt : null;
+        $this->validate(['scheduledVisitAt' => ['nullable', 'date', 'after:now']]);
 
         if ($this->linkedReferrer) {
             $this->validate(['selectedReferrerId' => 'required']);
@@ -138,7 +158,10 @@ class RegisterCustomer extends Component
             'latitude' => $this->latitude,
             'longitude' => $this->longitude,
             'ppp_package_id' => $this->ppp_package_id,
-        ], $referrer, $scheme);
+        ], $referrer, $scheme, [
+            'ppp_package_id' => $this->ppp_package_id,
+            'scheduled_visit_at' => $this->scheduledVisitAt,
+        ]);
 
         session()->flash('status', "Pelanggan {$customer->name} berhasil diregistrasi.");
 

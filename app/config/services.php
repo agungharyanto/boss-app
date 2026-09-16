@@ -60,6 +60,20 @@ return [
     'whatsapp_gateway' => [
         'url' => env('WHATSAPP_GATEWAY_URL'),
         'hmac_secret' => env('WHATSAPP_GATEWAY_HMAC_SECRET'),
+        // Hotfix 2026-09-16 (branch hotfix/disable-unrecognized-fallback) —
+        // toggle darurat untuk WhatsappEventType::UnrecognizedMessageFallback
+        // (auto-reply "pesan Anda tidak dikenali" ke SIAPA PUN yang kirim
+        // pesan tanpa match state percakapan aktif/teknisi terautorisasi —
+        // lihat WhatsappIncomingMessageService::routeToConversationOrFallback()).
+        // Default TRUE (perilaku existing TIDAK berubah untuk siapa pun yang
+        // belum tahu toggle ini ada) — set WHATSAPP_UNRECOGNIZED_FALLBACK_ENABLED=false
+        // di root .env (BUKAN .env.example) untuk mematikan SEMENTARA, lalu
+        // recreate boss-app (bukan restart — env baru tidak terbaca kalau
+        // cuma restart, gotcha yang sudah berulang kali dicatat CLAUDE.md).
+        // JANGAN hapus fitur/logic-nya — lihat docs/ROADMAP.md catatan
+        // v0.13.4 untuk kronologi kenapa toggle ini dibuat & cara menyalakan
+        // lagi.
+        'unrecognized_fallback_enabled' => env('WHATSAPP_UNRECOGNIZED_FALLBACK_ENABLED', true),
     ],
 
     // v0.6.2 OpenVPN provisioning — these paths are the boss-app side of

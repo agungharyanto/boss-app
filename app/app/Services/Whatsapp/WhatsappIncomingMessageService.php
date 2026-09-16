@@ -171,6 +171,19 @@ class WhatsappIncomingMessageService
             return;
         }
 
+        // Hotfix 2026-09-16 (branch hotfix/disable-unrecognized-fallback) —
+        // toggle darurat, default TRUE (lihat config/services.php's own
+        // docblock). Dimatikan SEMENTARA lewat WHATSAPP_UNRECOGNIZED_FALLBACK_ENABLED=false
+        // di root .env server ini kalau perlu (mis. sedang pairing/testing
+        // sesi WA dan auto-reply ini mengganggu) — TIDAK menghapus logic-nya,
+        // cuma skip pengiriman. Poin 2 (TechnicianFeaturePending) di atas
+        // TIDAK terpengaruh toggle ini — cuma fallback generik yang dimatikan.
+        if (! config('services.whatsapp_gateway.unrecognized_fallback_enabled')) {
+            Log::info("WhatsappIncomingMessageService: fallback generik dilewati untuk phone={$phone} — WHATSAPP_UNRECOGNIZED_FALLBACK_ENABLED=false.");
+
+            return;
+        }
+
         $tenantId = $this->resolveTenantIdForFallback($resellerId);
 
         if ($tenantId === null) {

@@ -14,6 +14,7 @@ use App\Models\User;
 use App\Models\WorkOrder;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -25,6 +26,13 @@ class StaffIndexLivewireTest extends TestCase
     {
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
+
+        // v0.22.4 — lihat komentar sama di StaffServiceTest::setUp() —
+        // tanpa Bus::fake() ini, createStaff() lewat Livewire akan
+        // benar-benar menjalankan SendWhatsappMessageJob secara sinkron
+        // (QUEUE_CONNECTION test = 'sync'), sleep 5-10 detik x2 per
+        // panggilan.
+        Bus::fake();
     }
 
     private function admin(Tenant $tenant): User

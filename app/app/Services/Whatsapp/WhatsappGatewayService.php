@@ -137,6 +137,46 @@ class WhatsappGatewayService
     }
 
     /**
+     * v0.22.4 — kembaran `buildAndQueueForRecipient()`, TAPI SENGAJA
+     * MELEWATI `WhatsappTemplateService::resolve()`/`render()` sepenuhnya —
+     * `$rawContent` dipakai APA ADANYA sebagai `rendered_content`,
+     * `template_id` selalu `null`. Satu-satunya pemakai saat ini: pesan
+     * password polos `StaffService::create()`
+     * (`WhatsappEventType::StaffInitialPasswordValue`) — isi pesan itu
+     * WAJIB persis string password tanpa karakter/format lain menempel,
+     * jadi tidak boleh melalui template yang bisa diedit admin (lihat
+     * docblock event type-nya). Tidak pernah `null` (beda dari
+     * `buildAndQueueForRecipient()` yang bisa `null` kalau template belum
+     * di-seed) — tidak ada template untuk gagal di-resolve di sini.
+     */
+    public function queueRawForRecipient(
+        WhatsappEventType $eventType,
+        int $tenantId,
+        string $phone,
+        string $rawContent,
+        ?int $resellerId = null,
+    ): WhatsappMessageLog {
+        $log = WhatsappMessageLog::create([
+            'tenant_id' => $tenantId,
+            'reseller_id' => $resellerId,
+            'customer_id' => null,
+            'invoice_id' => null,
+            'phone_number' => WhatsappPhone::normalize($phone),
+            'event_type' => $eventType,
+            'template_id' => null,
+            'rendered_content' => $rawContent,
+            'status' => WhatsappMessageStatus::Queued,
+            'queued_at' => now(),
+        ]);
+
+        $sessionKey = WhatsappSession::sessionKeyFor($resellerId);
+
+        SendWhatsappMessageJob::dispatch($log->id)->onQueue('whatsapp-'.$sessionKey);
+
+        return $log;
+    }
+
+    /**
      * v0.9.6 — jalur untuk pesan yang penerimanya REFERRER, bukan
      * pelanggan (satu-satunya pemakai: WhatsappEventType::ReferrerActionOtp
      * lewat ReferrerActionOtpService). Sejak v0.12.1 ini thin wrapper di

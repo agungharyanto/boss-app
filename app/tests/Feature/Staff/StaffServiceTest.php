@@ -3,6 +3,7 @@
 namespace Tests\Feature\Staff;
 
 use App\Enums\ReferrerType;
+use App\Enums\WhatsappEventType;
 use App\Enums\WorkOrderStatus;
 use App\Models\CpeActionLog;
 use App\Models\Referrer;
@@ -11,11 +12,14 @@ use App\Models\ResellerUser;
 use App\Models\Technician;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Models\WhatsappMessageLog;
+use App\Models\WhatsappMessageTemplate;
 use App\Models\WorkOrder;
 use App\Services\StaffService;
 use App\Support\WhatsappPhone;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Hash;
 use RuntimeException;
 use Tests\TestCase;
@@ -33,6 +37,20 @@ class StaffServiceTest extends TestCase
     {
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
+
+        // v0.22.4 — StaffService::create() sekarang selalu mengantre 2
+        // pesan WA (password awal). QUEUE_CONNECTION test = 'sync' (lihat
+        // phpunit.xml) — TANPA Bus::fake() ini, SendWhatsappMessageJob
+        // benar-benar dieksekusi sinkron per panggilan create(), termasuk
+        // applyRateLimitDelay()'s sleep(5-10 detik) x2 pesan — akan
+        // membuat SELURUH file test ini (puluhan panggilan create())
+        // sangat lambat tanpa guna (ditemukan nyata: satu jalan test suite
+        // scoped v0.22.4 sempat menggantung >120s persis karena ini).
+        // Test yang BENAR-BENAR ingin memverifikasi WA tetap bisa
+        // Bus::assertDispatched(SendWhatsappMessageJob::class) — baris
+        // WhatsappMessageLog sendiri tetap tercipta sebelum dispatch,
+        // assertDatabaseHas() tetap valid dengan fake ini.
+        Bus::fake();
     }
 
     public static function allRoles(): array
@@ -496,5 +514,107 @@ class StaffServiceTest extends TestCase
 
         $this->assertSame($linked['referrer']->id, $service->linkedReferrer($linked['user'])->id);
         $this->assertNull($service->linkedReferrer($notLinked['user']));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // v0.22.4 — auto-kirim password awal (2 pesan WA terpisah)
+    // ═══════════════════════════════════════════════════════════════
+
+    public function test_create_queues_two_separate_whatsapp_messages_for_the_initial_password(): void
+    {
+        $tenant = Tenant::factory()->create();
+        WhatsappMessageTemplate::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'event_type' => WhatsappEventType::StaffInitialPasswordNotice,
+            'content' => 'Halo {recipient_name}, password login dikirim di pesan berikutnya — {company_name}.',
+            'is_active' => true,
+        ]);
+
+        $result = (new StaffService)->create([
+            'name' => 'Staff Password Test',
+            'phone' => '081234800000',
+            'role' => 'noc',
+            'tenant_id' => $tenant->id,
+        ]);
+
+        $normalizedPhone = WhatsappPhone::normalize('081234800000');
+
+        // Pesan 1 — teks pengantar, lewat template.
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => $normalizedPhone,
+            'event_type' => WhatsappEventType::StaffInitialPasswordNotice->value,
+        ]);
+
+        // Pesan 2 — password POLOS, template_id null, rendered_content
+        // PERSIS sama dengan password yang di-generate (tidak ada
+        // karakter/format lain menempel).
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => $normalizedPhone,
+            'event_type' => WhatsappEventType::StaffInitialPasswordValue->value,
+            'template_id' => null,
+            'rendered_content' => $result['generated_password'],
+        ]);
+
+        $this->assertSame(2, WhatsappMessageLog::where('phone_number', $normalizedPhone)->count());
+    }
+
+    /**
+     * Template `StaffInitialPasswordNotice` BELUM di-seed (skenario nyata
+     * kalau `WhatsappMessageTemplateSeeder` belum sempat dijalankan ulang
+     * untuk tenant ini) — pesan 1 gagal ter-queue (buildAndQueueForRecipient()
+     * return null, cuma log warning), TAPI staff TETAP berhasil dibuat DAN
+     * pesan 2 (password polos, tidak butuh template sama sekali) TETAP
+     * ter-queue seperti biasa. Non-fatal sepenuhnya — tidak ada exception
+     * yang bocor ke caller.
+     */
+    public function test_create_still_succeeds_and_queues_the_password_message_when_the_notice_template_is_missing(): void
+    {
+        $tenant = Tenant::factory()->create();
+        // SENGAJA tidak seed template StaffInitialPasswordNotice.
+
+        $result = (new StaffService)->create([
+            'name' => 'Staff Tanpa Template Notice',
+            'phone' => '081234811111',
+            'role' => 'noc',
+            'tenant_id' => $tenant->id,
+        ]);
+
+        $this->assertDatabaseHas('users', ['id' => $result['user']->id]);
+        $this->assertNotEmpty($result['generated_password']);
+
+        $this->assertDatabaseMissing('whatsapp_message_logs', [
+            'event_type' => WhatsappEventType::StaffInitialPasswordNotice->value,
+        ]);
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => WhatsappPhone::normalize('081234811111'),
+            'event_type' => WhatsappEventType::StaffInitialPasswordValue->value,
+            'rendered_content' => $result['generated_password'],
+        ]);
+    }
+
+    /**
+     * `StaffInitialPasswordValue` TIDAK PERNAH melalui
+     * `WhatsappTemplateService::resolve()` — dibuktikan langsung dengan
+     * menghapus SEMUA WhatsappMessageTemplate (termasuk yang mungkin
+     * sudah ada untuk event lain), pesan password tetap ter-queue persis.
+     */
+    public function test_the_password_value_message_never_goes_through_the_template_system(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->assertSame(0, WhatsappMessageTemplate::withoutGlobalScopes()->count());
+
+        $result = (new StaffService)->create([
+            'name' => 'Staff Nol Template',
+            'phone' => '081234822222',
+            'role' => 'noc',
+            'tenant_id' => $tenant->id,
+        ]);
+
+        $log = WhatsappMessageLog::where('event_type', WhatsappEventType::StaffInitialPasswordValue->value)->first();
+
+        $this->assertNotNull($log);
+        $this->assertNull($log->template_id);
+        $this->assertSame($result['generated_password'], $log->rendered_content);
     }
 }

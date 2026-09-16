@@ -27,6 +27,10 @@ class WhatsappMessageTemplateSeeder extends Seeder
             WhatsappEventType::DuplicateSessionAttempt->value => 'Nomor WhatsApp Anda baru saja dicoba dipasang ulang di BOSS App pada akun {reseller_name} ({attempted_at}). Kalau ini bukan Anda, harap segera hubungi admin ISP Anda — {company_name}.',
             WhatsappEventType::TechnicianFeaturePending->value => 'Halo {technician_name}, terima kasih sudah menghubungi kami. Fitur untuk membantu proses pekerjaan Anda lewat WhatsApp masih dalam pengembangan — mohon lanjutkan lewat aplikasi/prosedur yang biasa dipakai untuk saat ini — {company_name}.',
             WhatsappEventType::UnrecognizedMessageFallback->value => 'Maaf, pesan Anda tidak dapat kami proses secara otomatis. Silakan hubungi Customer Service kami untuk bantuan lebih lanjut — {company_name}.',
+            // v0.22.4 — StaffInitialPasswordValue SENGAJA TIDAK di-seed di
+            // sini (dan tidak akan pernah) — pesan itu tidak pernah melalui
+            // WhatsappTemplateService sama sekali, lihat docblock enum-nya.
+            WhatsappEventType::StaffInitialPasswordNotice->value => 'Halo {recipient_name}, akun staff BOSS App Anda sudah dibuat. Password login akan dikirim di pesan berikutnya — {company_name}.',
         ];
 
         Tenant::all()->each(function (Tenant $tenant) use ($defaults) {

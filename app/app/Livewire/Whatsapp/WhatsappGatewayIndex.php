@@ -341,29 +341,38 @@ class WhatsappGatewayIndex extends Component
 
         $resellerIdForTemplates = $this->resellerId;
 
-        $templates = collect(WhatsappEventType::cases())->map(function (WhatsappEventType $eventType) use ($resellerIdForTemplates) {
-            $own = WhatsappMessageTemplate::withoutGlobalScopes()
-                ->where('tenant_id', auth()->user()->tenant_id)
-                ->where('reseller_id', $resellerIdForTemplates)
-                ->where('event_type', $eventType->value)
-                ->first();
-
-            $default = $resellerIdForTemplates !== null
-                ? WhatsappMessageTemplate::withoutGlobalScopes()
+        // v0.22.4 — StaffInitialPasswordValue SENGAJA dikeluarkan dari daftar
+        // ini: event type itu tidak pernah melalui WhatsappTemplateService
+        // sama sekali (rendered_content = password mentah, hardcode di
+        // StaffService — lihat docblock WhatsappEventType::
+        // StaffInitialPasswordValue) — menampilkannya di sini akan
+        // membiarkan admin mengedit "template" yang faktanya tidak pernah
+        // dibaca kode, membingungkan tanpa guna.
+        $templates = collect(WhatsappEventType::cases())
+            ->reject(fn (WhatsappEventType $eventType) => $eventType === WhatsappEventType::StaffInitialPasswordValue)
+            ->map(function (WhatsappEventType $eventType) use ($resellerIdForTemplates) {
+                $own = WhatsappMessageTemplate::withoutGlobalScopes()
                     ->where('tenant_id', auth()->user()->tenant_id)
-                    ->whereNull('reseller_id')
+                    ->where('reseller_id', $resellerIdForTemplates)
                     ->where('event_type', $eventType->value)
-                    ->first()
-                : null;
+                    ->first();
 
-            return (object) [
-                'event_type' => $eventType,
-                'own' => $own,
-                'default' => $default,
-                'effective_content' => $own?->content ?? $default?->content ?? '—',
-                'is_override' => $own !== null,
-            ];
-        });
+                $default = $resellerIdForTemplates !== null
+                    ? WhatsappMessageTemplate::withoutGlobalScopes()
+                        ->where('tenant_id', auth()->user()->tenant_id)
+                        ->whereNull('reseller_id')
+                        ->where('event_type', $eventType->value)
+                        ->first()
+                    : null;
+
+                return (object) [
+                    'event_type' => $eventType,
+                    'own' => $own,
+                    'default' => $default,
+                    'effective_content' => $own?->content ?? $default?->content ?? '—',
+                    'is_override' => $own !== null,
+                ];
+            });
 
         $logs = WhatsappMessageLog::query()
             ->knownEventType()

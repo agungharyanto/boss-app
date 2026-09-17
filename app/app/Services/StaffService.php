@@ -92,6 +92,11 @@ class StaffService
                 // Cuma masuk akal diberi tanggal verifikasi kalau memang
                 // punya email untuk diverifikasi.
                 'email_verified_at' => $email !== null ? now() : null,
+                // v0.22.6 — password di sini SELALU random-generated
+                // (Str::password(16) di atas), jadi WAJIB dipaksa ganti
+                // saat login pertama. Lihat App\Http\Middleware\
+                // EnsurePasswordChanged.
+                'must_change_password' => true,
             ]);
 
             $user->assignRole($data['role']);

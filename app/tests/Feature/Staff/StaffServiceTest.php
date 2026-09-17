@@ -97,6 +97,25 @@ class StaffServiceTest extends TestCase
     }
 
     /**
+     * v0.22.6 — password di sini SELALU random-generated, jadi WAJIB
+     * dipaksa ganti saat login pertama (App\Http\Middleware\
+     * EnsurePasswordChanged).
+     */
+    public function test_create_sets_must_change_password_to_true(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $result = (new StaffService)->create([
+            'name' => 'Staff Baru',
+            'phone' => '081234567891',
+            'role' => 'noc',
+            'tenant_id' => $tenant->id,
+        ]);
+
+        $this->assertTrue($result['user']->must_change_password);
+    }
+
+    /**
      * v0.22.2 — email jadi opsional (dulu wajib), phone jadi wajib (dulu
      * opsional) — kebalikan dari kondisi lama yang diuji test ini sebelum
      * direvisi (dulu bernama test_create_allows_a_null_phone).

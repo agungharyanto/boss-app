@@ -11,6 +11,7 @@ use App\Http\Controllers\CommissionPaymentProofController;
 use App\Http\Controllers\FiberNodePhotoController;
 use App\Http\Controllers\VpnScriptDownloadController;
 use App\Http\Middleware\EnsureAdminPanelAccess;
+use App\Livewire\Auth\ChangePassword;
 use App\Livewire\Auth\ReferrerForgotPassword;
 use App\Livewire\Auth\StaffForgotPassword;
 use App\Livewire\Billing\InvoiceIndex;
@@ -149,7 +150,16 @@ Route::middleware(['auth', 'customers.list', 'reseller.context'])->name('web.')-
     Route::get('/customers', CustomerIndex::class)->name('customers.index');
 });
 
-Route::middleware(['auth', 'admin.panel'])->name('web.')->group(function () {
+// v0.22.6 — 'password.changed' WAJIB satu grup dengan 'admin.panel' (dan
+// TIDAK PERNAH di grup customers.list/referrer.portal, lihat docblock
+// App\Http\Middleware\EnsurePasswordChanged) supaya staff yang
+// must_change_password langsung diarahkan ke /change-password sebelum
+// bisa membuka halaman admin lain mana pun. Route /change-password
+// sendiri didaftarkan DI DALAM grup ini juga — middleware men-skip
+// redirect khusus untuk route ini (by name), bukan dikecualikan dari
+// grupnya.
+Route::middleware(['auth', 'admin.panel', 'password.changed'])->name('web.')->group(function () {
+    Route::get('/change-password', ChangePassword::class)->name('password.change');
     Route::get('/dashboard', Dashboard::class)->name('dashboard');
 
     // reseller.context: see routes/api.php's identical group for why —

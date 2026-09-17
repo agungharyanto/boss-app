@@ -176,7 +176,13 @@ class StaffForgotPassword extends Component
             return;
         }
 
-        $staff->forceFill(['password' => Hash::make($this->password)])->save();
+        // v0.22.6 — user sudah PILIH SENDIRI password barunya lewat alur
+        // OTP ini, tidak perlu dipaksa ganti lagi begitu login (beda dari
+        // password random yang StaffService::create() generate).
+        $staff->forceFill([
+            'password' => Hash::make($this->password),
+            'must_change_password' => false,
+        ])->save();
 
         session()->forget([self::SESSION_ID, self::SESSION_VERIFIED_AT]);
 

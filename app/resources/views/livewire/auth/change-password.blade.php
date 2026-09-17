@@ -6,14 +6,8 @@
 
     <form wire:submit="submit" class="space-y-4">
         <div>
-            <label class="block text-sm font-medium text-gray-700">{{ __('Password Saat Ini') }}</label>
-            <input type="password" wire:model="currentPassword" required autofocus
-                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
-            @error('currentPassword') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
-        </div>
-        <div>
             <label class="block text-sm font-medium text-gray-700">{{ __('Password Baru') }}</label>
-            <input type="password" wire:model="password" required
+            <input type="password" wire:model="password" required autofocus
                 class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
             @error('password') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
         </div>

@@ -19,17 +19,18 @@ use Livewire\Component;
  * pun akan kena middleware ini lagi — tapi layout minimal ini lebih jelas
  * secara UX daripada menampilkan sidebar yang percuma diklik).
  *
- * BEDA dari StaffForgotPassword (yang jalur GUEST, verifikasi identitas
- * lewat OTP WhatsApp karena user belum login sama sekali): di sini user
- * SUDAH login (auth()->user() sudah pasti ada — halaman ini hanya
- * reachable lewat middleware `admin.panel`+`password.changed`), jadi
- * verifikasi identitasnya cukup "current password" biasa, tidak perlu OTP.
+ * TIDAK meminta "Password Saat Ini" — dikonfirmasi eksplisit Agung: ini
+ * alur WAJIB di LOGIN PERTAMA, bukan ganti password sukarela dari halaman
+ * profil. User sudah lolos autentikasi normal (login dengan password
+ * lama berhasil dulu, baru di-redirect ke sini oleh middleware
+ * `EnsurePasswordChanged`) — minta re-input password lama di titik ini
+ * cuma nambah friksi tanpa nilai keamanan tambahan (beda dari
+ * StaffForgotPassword, yang jalur GUEST dan verifikasi identitasnya lewat
+ * OTP WhatsApp karena user belum login sama sekali).
  */
 #[Layout('layouts.staff-guest', ['title' => 'Ganti Password'])]
 class ChangePassword extends Component
 {
-    public string $currentPassword = '';
-
     public string $password = '';
 
     public string $password_confirmation = '';
@@ -37,19 +38,10 @@ class ChangePassword extends Component
     public function submit(): void
     {
         $this->validate([
-            'currentPassword' => ['required', 'string'],
             'password' => ['required', 'string', 'confirmed', Password::defaults()],
         ]);
 
-        $user = Auth::user();
-
-        if (! Hash::check($this->currentPassword, $user->password)) {
-            $this->addError('currentPassword', __('Password saat ini salah.'));
-
-            return;
-        }
-
-        $user->forceFill([
+        Auth::user()->forceFill([
             'password' => Hash::make($this->password),
             'must_change_password' => false,
         ])->save();

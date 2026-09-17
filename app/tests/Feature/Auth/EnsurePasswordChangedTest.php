@@ -75,13 +75,19 @@ class EnsurePasswordChangedTest extends TestCase
         $this->actingAs($staff)->get('/dashboard')->assertOk();
     }
 
-    public function test_submitting_the_correct_current_password_clears_the_flag_and_redirects_to_dashboard(): void
+    /**
+     * v0.22.6 — TIDAK ADA field "Password Saat Ini" (dikonfirmasi eksplisit
+     * Agung: ini alur wajib di LOGIN PERTAMA, bukan ganti password sukarela
+     * dari halaman profil — user sudah lolos autentikasi normal, re-input
+     * password lama di titik ini cuma nambah friksi tanpa nilai keamanan
+     * tambahan). Submit password baru saja sudah cukup.
+     */
+    public function test_submitting_a_new_password_clears_the_flag_and_redirects_to_dashboard(): void
     {
         $staff = $this->staffWithFlag(true, 'oldpassword123');
 
         Livewire::actingAs($staff)
             ->test(ChangePassword::class)
-            ->set('currentPassword', 'oldpassword123')
             ->set('password', 'BrandNewPass12345')
             ->set('password_confirmation', 'BrandNewPass12345')
             ->call('submit')
@@ -97,17 +103,16 @@ class EnsurePasswordChangedTest extends TestCase
         $this->actingAs($staff)->get('/dashboard')->assertOk();
     }
 
-    public function test_wrong_current_password_is_rejected_and_flag_stays_true(): void
+    public function test_mismatched_confirmation_is_rejected_and_flag_stays_true(): void
     {
-        $staff = $this->staffWithFlag(true, 'oldpassword123');
+        $staff = $this->staffWithFlag(true);
 
         Livewire::actingAs($staff)
             ->test(ChangePassword::class)
-            ->set('currentPassword', 'password-yang-salah')
             ->set('password', 'BrandNewPass12345')
-            ->set('password_confirmation', 'BrandNewPass12345')
+            ->set('password_confirmation', 'TidakCocok999')
             ->call('submit')
-            ->assertHasErrors(['currentPassword']);
+            ->assertHasErrors(['password']);
 
         $this->assertTrue($staff->fresh()->must_change_password);
     }

@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\EnsureAdminPanelAccess;
 use App\Http\Middleware\EnsureCustomerListAccess;
+use App\Http\Middleware\EnsurePasswordChanged;
 use App\Http\Middleware\EnsureReferrerPortalAccess;
 use App\Http\Middleware\ResolveResellerContext;
 use App\Http\Middleware\SetLocale;
@@ -24,6 +25,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin.panel' => EnsureAdminPanelAccess::class,
             'customers.list' => EnsureCustomerListAccess::class,
             'referrer.portal' => EnsureReferrerPortalAccess::class,
+            'password.changed' => EnsurePasswordChanged::class,
         ]);
 
         // Must run before SubstituteBindings — implicit route-model binding

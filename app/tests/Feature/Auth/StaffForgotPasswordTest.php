@@ -109,6 +109,34 @@ class StaffForgotPasswordTest extends TestCase
         $this->assertAuthenticatedAs($staff);
     }
 
+    /**
+     * v0.22.6 — staff yang reset password lewat OTP sudah MEMILIH SENDIRI
+     * password barunya (beda dari password random StaffService::create())
+     * — tidak perlu dipaksa ganti lagi begitu login. Reproduksi kasus nyata:
+     * staff baru (must_change_password=true) yang lupa password sementara-
+     * nya SEBELUM sempat login sama sekali, lalu reset lewat jalur ini.
+     */
+    public function test_reset_via_otp_sets_must_change_password_to_false(): void
+    {
+        $staff = $this->staffWithLogin('081277778888');
+        $staff->forceFill(['must_change_password' => true])->save();
+
+        Livewire::test(StaffForgotPassword::class)
+            ->set('phone', '081277778888')
+            ->call('submitPhone')
+            ->assertSet('stage', 'otp')
+            ->set('otp', $this->otpCode($staff->id, "staff_password_reset:{$staff->id}"))
+            ->call('submitOtp')
+            ->assertSet('stage', 'password')
+            ->set('password', 'ResetSendiri12345')
+            ->set('password_confirmation', 'ResetSendiri12345')
+            ->call('submitPassword')
+            ->assertSet('stage', 'done')
+            ->assertHasNoErrors();
+
+        $this->assertFalse($staff->fresh()->must_change_password);
+    }
+
     public function test_unknown_phone_shows_the_same_generic_notice_and_leaks_nothing(): void
     {
         Livewire::test(StaffForgotPassword::class)

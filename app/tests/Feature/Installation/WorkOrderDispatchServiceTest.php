@@ -373,4 +373,88 @@ class WorkOrderDispatchServiceTest extends TestCase
             'phone_number' => WhatsappPhone::normalize($other->phone),
         ]);
     }
+
+    // ── v0.26.4 — kirim JUGA ke grup WA, kondisional (wa_group_jid) ────
+
+    public function test_dispatch_immediately_also_sends_to_the_group_when_configured(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplate($tenant);
+        WorkOrderDispatchSettings::forTenant($tenant->id)->update(['wa_group_jid' => '1203group@g.us']);
+        $technician = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'dispatched_at' => null]);
+
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        // 1 japri individu + 1 broadcast grup = 2 baris total.
+        $this->assertSame(2, WhatsappMessageLog::withoutGlobalScopes()->where('event_type', WhatsappEventType::WorkOrderDispatched->value)->count());
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => WhatsappPhone::normalize($technician->phone),
+            'event_type' => WhatsappEventType::WorkOrderDispatched->value,
+        ]);
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            // JID grup disimpan APA ADANYA — tidak pernah lewat normalize().
+            'phone_number' => '1203group@g.us',
+            'event_type' => WhatsappEventType::WorkOrderDispatched->value,
+        ]);
+    }
+
+    public function test_dispatch_without_a_configured_group_does_not_create_a_group_log(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplate($tenant);
+        // wa_group_jid TIDAK diisi — default null dari forTenant().
+        $technician = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'dispatched_at' => null]);
+
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        // Cuma japri individu — TIDAK error, TIDAK ada baris grup sama sekali.
+        $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()->where('event_type', WhatsappEventType::WorkOrderDispatched->value)->count());
+        $this->assertNotNull($workOrder->fresh()->dispatched_at);
+    }
+
+    public function test_run_dispatch_cycle_also_sends_to_the_group_when_configured(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplate($tenant);
+        $settings = WorkOrderDispatchSettings::forTenant($tenant->id);
+        $settings->update(['wa_group_jid' => '1203group@g.us']);
+        Technician::factory()->create(['tenant_id' => $tenant->id]);
+        WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'scheduled_at' => null, 'dispatched_at' => null]);
+
+        app(WorkOrderDispatchService::class)->runDispatchCycle($tenant->id, $settings->fresh());
+
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'phone_number' => '1203group@g.us',
+            'event_type' => WhatsappEventType::WorkOrderDispatched->value,
+        ]);
+    }
+
+    public function test_reminder_cycle_also_sends_to_the_group_when_configured(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplate($tenant);
+        $settings = WorkOrderDispatchSettings::forTenant($tenant->id);
+        $settings->update([
+            'reminder_time' => now()->format('H:i'),
+            'command_interval_minutes' => 15,
+            'wa_group_jid' => '1203group@g.us',
+        ]);
+        Technician::factory()->create(['tenant_id' => $tenant->id]);
+        WorkOrder::factory()->create([
+            'tenant_id' => $tenant->id,
+            'technician_id' => null,
+            'dispatched_at' => now()->subDay(),
+            'last_reminder_sent_at' => null,
+        ]);
+
+        app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
+
+        $log = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderDispatched->value)
+            ->where('phone_number', '1203group@g.us')
+            ->firstOrFail();
+        $this->assertStringContainsString('REMINDER', $log->rendered_content);
+    }
 }

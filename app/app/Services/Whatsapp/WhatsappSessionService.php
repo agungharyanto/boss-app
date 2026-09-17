@@ -179,6 +179,46 @@ class WhatsappSessionService
     }
 
     /**
+     * v0.26.4 — daftar SEMUA grup WhatsApp yang nomor session ini sudah
+     * jadi anggota, APA ADANYA (keputusan eksplisit Agung — tidak difilter
+     * nama/kata kunci apa pun). Dipakai dropdown "Pilih Grup WhatsApp" di
+     * halaman Settings ("Komunikasi → Konfig WA Gateway") — lihat
+     * `WorkOrderDispatchSettings` (Livewire). Gagal (sesi belum connected,
+     * gateway unreachable, dll) → log warning, return [] — sama disiplin
+     * graceful-degrade seperti refreshQrCode()/requestPairingCode(), TIDAK
+     * throw ke caller.
+     *
+     * @return array<int, array{jid: string, name: string}>
+     */
+    public function listGroups(WhatsappSession $session): array
+    {
+        $baseUrl = config('services.whatsapp_gateway.url');
+
+        if (! $baseUrl) {
+            Log::warning('WhatsappSessionService: services.whatsapp_gateway.url not configured, cannot list groups.');
+
+            return [];
+        }
+
+        $sessionKey = $session->sessionKey();
+        $timestamp = time();
+        $signature = $this->hmac->sign('', $timestamp);
+
+        $response = Http::withHeaders([
+            'X-Whatsapp-Timestamp' => (string) $timestamp,
+            'X-Whatsapp-Signature' => $signature,
+        ])->get(rtrim($baseUrl, '/')."/sessions/{$sessionKey}/groups");
+
+        if (! $response->successful()) {
+            Log::error("WhatsappSessionService: failed to list groups for session_key={$sessionKey}, HTTP {$response->status()}: {$response->json('message')}");
+
+            return [];
+        }
+
+        return (array) $response->json('groups', []);
+    }
+
+    /**
      * whatsapp:check-session-health's hourly reconciliation — actively
      * pulls GET /sessions rather than only relying on connection.update
      * webhooks, in case a webhook delivery was missed.

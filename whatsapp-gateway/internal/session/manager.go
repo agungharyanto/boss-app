@@ -483,12 +483,16 @@ func (m *Manager) RequestPairingCode(key, phoneNumber string) (string, error) {
 	return code, nil
 }
 
-// SendMessage — padanan sendMessage() Node. Normalisasi nomor (fix v0.9.6)
-// dan timeout keras (fix robustness v0.9.6/v0.9.9) DIPERTAHANKAN PERSIS.
-func (m *Manager) SendMessage(key, phoneNumber, message string) error {
+// resolveSendableEntry — v0.26.4, diekstrak dari SendMessage() lama supaya
+// SendMessage() (individu) dan SendGroupMessage() (grup) berbagi PERSIS
+// validasi yang sama (sesi ada, status Connected, identitas sudah
+// ter-pair) — tidak ada alasan bisnis bagi keduanya berbeda perlakuan di
+// titik ini, dan drift antara dua jalur adalah kelas bug yang mudah
+// terjadi kalau logic ini diduplikasi mentah.
+func (m *Manager) resolveSendableEntry(key string) (*entry, error) {
 	v, exists := m.sessions.Load(key)
 	if !exists {
-		return errors.New("session not found")
+		return nil, errors.New("session not found")
 	}
 
 	e := v.(*entry)
@@ -499,12 +503,19 @@ func (m *Manager) SendMessage(key, phoneNumber, message string) error {
 	e.mu.Unlock()
 
 	if status != StatusConnected || !hasIdentity {
-		return errors.New("session not connected")
+		return nil, errors.New("session not connected")
 	}
 
-	normalized := jidnorm.NormalizeIndonesian(phoneNumber)
-	jid := jidnorm.BuildJID(normalized)
+	return e, nil
+}
 
+// sendToJID — v0.26.4, diekstrak dari SendMessage() lama. Inti kirim yang
+// GENUINELY generic (client.SendMessage() whatsmeow menerima types.JID
+// apa pun, individu maupun grup) — satu-satunya titik yang benar-benar
+// memanggil whatsmeow untuk mengirim pesan teks, dipakai SendMessage() DAN
+// SendGroupMessage() supaya timeout/error-handling tidak pernah drift
+// antara dua jalur.
+func (m *Manager) sendToJID(e *entry, jid types.JID, message string) error {
 	ctx, cancel := context.WithTimeout(m.ctx, sendTimeout)
 	defer cancel()
 
@@ -520,6 +531,115 @@ func (m *Manager) SendMessage(key, phoneNumber, message string) error {
 	}
 
 	return nil
+}
+
+// SendMessage — padanan sendMessage() Node. Normalisasi nomor (fix v0.9.6)
+// dan timeout keras (fix robustness v0.9.6/v0.9.9) DIPERTAHANKAN PERSIS.
+func (m *Manager) SendMessage(key, phoneNumber, message string) error {
+	e, err := m.resolveSendableEntry(key)
+	if err != nil {
+		return err
+	}
+
+	normalized := jidnorm.NormalizeIndonesian(phoneNumber)
+	jid := jidnorm.BuildJID(normalized)
+
+	return m.sendToJID(e, jid, message)
+}
+
+// SendGroupMessage — v0.26.4. BEDA TOTAL dari SendMessage(): groupJIDString
+// di sini SUDAH berupa JID grup LENGKAP (hasil ListGroups()/GetJoinedGroups(),
+// bentuk "xxxxxxxxxx-xxxxxxxxxx@g.us") — TIDAK BOLEH lewat
+// jidnorm.NormalizeIndonesian()/BuildJID() sama sekali. Kedua fungsi itu
+// khusus nomor telepon individu (strip semua karakter non-digit lalu bangun
+// JID dengan Server=DefaultUserServer) — memaksakannya ke string JID grup
+// akan MERUSAK totalnya (karakter "-"/"@"/"g"/"."/"u"/"s" ikut ter-strip).
+// Parse lewat types.ParseJID() resmi whatsmeow, lalu guard EKSPLISIT
+// Server harus "g.us" — defense-in-depth di sisi Go, jangan cuma percaya
+// request dari Laravel sudah genuinely JID grup.
+func (m *Manager) SendGroupMessage(key, groupJIDString, message string) error {
+	e, err := m.resolveSendableEntry(key)
+	if err != nil {
+		return err
+	}
+
+	jid, err := parseGroupJID(groupJIDString)
+	if err != nil {
+		return err
+	}
+
+	return m.sendToJID(e, jid, message)
+}
+
+// parseGroupJID — diekstrak dari SendGroupMessage() SENGAJA sebagai fungsi
+// murni (tidak butuh *Manager/*entry/koneksi whatsmeow sungguhan apa pun)
+// supaya guard "ini genuinely JID grup, bukan individu" bisa dites
+// independen dari state koneksi sesi — lihat manager_group_test.go.
+func parseGroupJID(groupJIDString string) (types.JID, error) {
+	jid, err := types.ParseJID(groupJIDString)
+	if err != nil {
+		return types.JID{}, fmt.Errorf("invalid group JID: %w", err)
+	}
+
+	if jid.Server != types.GroupServer {
+		return types.JID{}, fmt.Errorf("JID %q is not a group JID (server=%q, expected %q)", groupJIDString, jid.Server, types.GroupServer)
+	}
+
+	return jid, nil
+}
+
+// IsPermanentGroupSendError — v0.26.4. True kalau err menandakan kegagalan
+// PERMANEN saat kirim ke grup (bot sudah bukan/tidak-lagi anggota grup itu)
+// — dikonfirmasi lewat pembacaan LANGSUNG source whatsmeow (send.go): saat
+// tujuan kirim adalah JID grup, client.SendMessage() SELALU memanggil
+// getCachedGroupData() DULU untuk resolve daftar anggota — kalau device kita
+// bukan anggota, itu gagal dengan whatsmeow.ErrNotInGroup, dibungkus lewat
+// `fmt.Errorf("failed to get group members: %w", err)` (wrapping "%w"
+// mempertahankan rantai errors.Is). Dipakai handleSendGroup() supaya
+// Laravel bisa membedakan kegagalan PERMANEN ini (retry berulang sia-sia,
+// grup itu tidak akan "kembali" sendiri) dari kegagalan TRANSIEN (timeout/
+// koneksi, layak dicoba ulang) — TANPA perlu string-matching rapuh atas
+// pesan error yang sudah di-render jadi teks di sisi Laravel.
+func IsPermanentGroupSendError(err error) bool {
+	return errors.Is(err, whatsmeow.ErrNotInGroup)
+}
+
+// GroupSummary — bentuk ringkas grup yang diekspos ke Laravel lewat
+// endpoint HTTP `GET /sessions/{key}/groups`. SENGAJA bukan types.GroupInfo
+// mentah — struct itu punya banyak field internal (Participants/OwnerJID/
+// GroupCreated/dll) yang tidak relevan buat dropdown pemilihan grup dan
+// berpotensi membocorkan metadata yang tidak perlu (siapa saja anggotanya,
+// dst) lewat respons HTTP yang toh cuma butuh "JID mana + nama apa".
+type GroupSummary struct {
+	JID  string `json:"jid"`
+	Name string `json:"name"`
+}
+
+// ListGroups — v0.26.4. Daftar SEMUA grup yang nomor bot session ini sudah
+// jadi anggota, APA ADANYA — keputusan eksplisit Agung (bukan diputuskan
+// sepihak di sini): kalau bot anggota 10 grup, kembalikan semua 10 tanpa
+// filter nama/kata kunci apa pun. Admin yang memilih grup mana yang
+// relevan lewat dropdown di sisi Laravel, gateway ini tidak menebak.
+func (m *Manager) ListGroups(key string) ([]GroupSummary, error) {
+	e, err := m.resolveSendableEntry(key)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(m.ctx, sendTimeout)
+	defer cancel()
+
+	groups, err := e.client.GetJoinedGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	summaries := make([]GroupSummary, 0, len(groups))
+	for _, g := range groups {
+		summaries = append(summaries, GroupSummary{JID: g.JID.String(), Name: g.Name})
+	}
+
+	return summaries, nil
 }
 
 func (m *Manager) persistMapping(key string, jid types.JID) {

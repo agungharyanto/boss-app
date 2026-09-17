@@ -35,6 +35,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /sessions/{sessionKey}/pair", s.withHMAC(s.handlePair))
 	mux.HandleFunc("POST /sessions/{sessionKey}/logout", s.withHMAC(s.handleLogout))
 	mux.HandleFunc("POST /sessions/{sessionKey}/send", s.withHMAC(s.handleSend))
+	mux.HandleFunc("GET /sessions/{sessionKey}/groups", s.withHMAC(s.handleListGroups))
+	mux.HandleFunc("POST /sessions/{sessionKey}/send-group", s.withHMAC(s.handleSendGroup))
 
 	return mux
 }
@@ -187,6 +189,68 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		// index.js Node (bedakan "gateway itu sendiri error" vs "pesan
 		// spesifik ini gagal dikirim").
 		writeEnvelope(w, http.StatusBadGateway, false, err.Error(), nil)
+
+		return
+	}
+
+	writeEnvelope(w, http.StatusOK, true, "Sent", nil)
+}
+
+// handleListGroups — v0.26.4. Daftar SEMUA grup yang bot session ini sudah
+// jadi anggota, apa adanya (lihat docblock Manager.ListGroups()). Field
+// "groups" di level teratas, sibling dari "data" — pola sama persis
+// "sessions"/"qr_code_data"/"pairing_code" di endpoint lain.
+func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("sessionKey")
+
+	groups, err := s.manager.ListGroups(key)
+	if err != nil {
+		slog.Error("failed to list groups", "sessionKey", key, "err", err)
+		writeEnvelope(w, http.StatusInternalServerError, false, err.Error(), nil)
+
+		return
+	}
+
+	writeEnvelope(w, http.StatusOK, true, "OK", map[string]interface{}{"groups": groups})
+}
+
+type sendGroupRequest struct {
+	GroupJID string `json:"group_jid"`
+	Message  string `json:"message"`
+}
+
+// handleSendGroup — v0.26.4. Endpoint TERPISAH dari handleSend (bukan
+// field opsional tambahan di sendRequest) — "1 endpoint = 1 tanggung
+// jawab jelas", konsisten gaya endpoint lain di file ini. Validasi
+// bentuk JID grup (types.ParseJID + guard Server="g.us") terjadi DI
+// Manager.SendGroupMessage(), bukan di sini — handler HTTP ini murni
+// decode+dispatch, sama pembagian tanggung jawab dengan handleSend.
+func (s *Server) handleSendGroup(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("sessionKey")
+
+	var req sendGroupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.GroupJID == "" || req.Message == "" {
+		writeEnvelope(w, http.StatusUnprocessableEntity, false, "group_jid and message are required", nil)
+
+		return
+	}
+
+	if err := s.manager.SendGroupMessage(key, req.GroupJID, req.Message); err != nil {
+		slog.Error("failed to send group message", "sessionKey", key, "groupJid", req.GroupJID, "err", err)
+
+		// "permanent": true — hasil pembacaan langsung source whatsmeow
+		// (lihat docblock session.IsPermanentGroupSendError()), BUKAN
+		// ditebak dari pesan error. Dipakai Laravel untuk memutuskan
+		// retry berulang atau langsung menyerah (bot bukan anggota grup
+		// itu lagi — mengulang tidak akan pernah berhasil sendiri).
+		extra := map[string]interface{}{}
+		if session.IsPermanentGroupSendError(err) {
+			extra["permanent"] = true
+		}
+
+		// 502, BUKAN 500 — sama alasan persis handleSend: bedakan "gateway
+		// itu sendiri error" vs "pesan spesifik ini gagal dikirim".
+		writeEnvelope(w, http.StatusBadGateway, false, err.Error(), extra)
 
 		return
 	}

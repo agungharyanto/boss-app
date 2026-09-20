@@ -282,11 +282,26 @@ class WorkOrderDispatchService
             ? 'REMINDER — Work Order ini belum selesai, mohon segera ditindaklanjuti.'
             : 'Work Order baru tersedia untuk direspons.';
 
+        // v0.26.0.1 — link Google Maps "directions" (rute langsung), sama
+        // format persis yang sudah dipakai OdpEdit/FiberNodeDetail/
+        // FiberNodeIndex (konsistensi lintas modul) — bukan format ?q=
+        // yang lain. "-" kalau lat/long kosong (dikonfirmasi lewat
+        // investigasi: SEMUA customer saat ini belum punya koordinat
+        // terisi — bukan kasus langka, ini kondisi normal sampai admin
+        // mengisi koordinat manual per-customer).
+        $customer = $workOrder->customer;
+        $hasCoordinates = $customer?->latitude !== null && $customer?->longitude !== null;
+        $coordinates = $hasCoordinates
+            ? "https://www.google.com/maps/dir/?api=1&destination={$customer->latitude},{$customer->longitude}"
+            : '-';
+
         return [
             'technician_name' => $technicianName,
             'work_order_id' => $workOrder->id,
-            'customer_name' => $workOrder->customer?->name,
-            'customer_address' => $workOrder->customer?->address,
+            'customer_name' => $customer?->name,
+            'customer_cid' => $customer?->cid,
+            'customer_address' => $customer?->address,
+            'customer_coordinates' => $coordinates,
             'service_type' => $workOrder->subscription?->name,
             'scheduled_at' => $workOrder->scheduled_at?->translatedFormat('d M Y H:i') ?? 'Tidak ada janji spesifik — segera',
             'status_notice' => $statusNotice,

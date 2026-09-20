@@ -2933,35 +2933,38 @@ butuh layanan speech-to-text terpisah (misal Whisper API/Google STT) — belum a
 mana, akurasi Bahasa Indonesia, biaya per menit audio, apakah transkripsi real-time atau on-demand (baru
 ditranskripsi kalau staf klik "lihat teks").
 
-## Backlog — Bug Auto-Refresh QR Code di Overview Sesi WhatsApp Gateway
+## ✅ DITUTUP (2026-09-21) — Bug Auto-Refresh QR Code di Overview Sesi WhatsApp Gateway
 
-**Status: Backlog.** Ditemukan Agung saat verifikasi manual v0.22.4 (2026-09-16) — sama sekali TIDAK
-terkait fitur v0.22.4 sendiri (auto-kirim password/lupa password staff), murni ditemukan kebetulan saat
-buka halaman `/whatsapp-gateway` di sesi yang sama. **TIDAK terkait v0.22.0** — dicatat di sini (v0.13.x,
-modul WhatsApp Gateway) karena ini genuinely masalah di halaman Overview Sesi, bukan cluster Manajemen
-User.
+**Status: SELESAI** — diperbaiki 2 tahap di sesi terpisah dari laporan asli ini (2026-09-16): tahap 1
+(overlay reload manual + counter `wire:poll` 3s×5x — closure item Backlog "UX Tombol 'Reload'..." di
+bawah), tahap 2 (redesign total, lihat "Perbaikan Pasca-Rilis v0.13.1" di atas — "Redesign trigger overlay
+reload QR (2026-09-21)"): akar masalah GENUINE ditemukan lewat pembacaan langsung source whatsmeow —
+`drainQRChannel()`'s event `"timeout"` NON-PERTAMA (QR channel genuinely habis) sebelumnya nol-efek (cuma
+`slog.Warn()`, nol webhook ke Laravel) — sesi nyangkut QR basi tanpa sinyal apa pun, PERSIS gejala yang
+dilaporkan di sini. Sekarang webhook `qr_expired: true` + kolom `whatsapp_sessions.qr_expired_at` menutup
+gap itu sepenuhnya, dibuktikan empiris (durasi genuinely timeout 160 detik, webhook match persis di detik
+yang sama, terhadap sesi test terpisah).
 
-Halaman `/whatsapp-gateway` (tab Overview Sesi) menampilkan teks "Halaman ini otomatis update setiap 3
-detik" — tapi nyatanya QR code yang ditampilkan TIDAK PERNAH berganti sama sekali, walau sudah lama
-kedaluwarsa. Belum diinvestigasi — dua kemungkinan akar masalah yang perlu dicek: (a) polling frontend
-(`wire:poll.3s` atau mekanisme serupa) tidak genuinely jalan, atau (b) polling jalan tapi backend tidak
-benar-benar men-generate QR baru tiap siklus (`refreshQrCode()`/endpoint terkait mengembalikan QR yang
-sama/basi). Perlu investigasi read-only dulu sebelum ada fix — jangan asumsikan akar masalahnya salah satu
-dari dua itu tanpa dicek langsung.
+**Catatan asli (di bawah) dipertahankan sebagai jejak.** Ditemukan Agung saat verifikasi manual v0.22.4
+(2026-09-16) — sama sekali TIDAK terkait fitur v0.22.4 sendiri (auto-kirim password/lupa password staff),
+murni ditemukan kebetulan saat buka halaman `/whatsapp-gateway` di sesi yang sama. Halaman
+`/whatsapp-gateway` (tab Overview Sesi) menampilkan teks "Halaman ini otomatis update setiap 3 detik" —
+tapi nyatanya QR code yang ditampilkan TIDAK PERNAH berganti sama sekali, walau sudah lama kedaluwarsa.
 
-## Backlog — UX Tombol "Reload" Menutupi QR Setelah 5x Gagal Scan
+## ✅ DITUTUP (2026-09-21) — UX Tombol "Reload" Menutupi QR Setelah 5x Gagal Scan
 
-**Status: Backlog.** Ide dari Agung bersamaan dengan laporan bug di atas (2026-09-16) — terkait tapi
-BUKAN fix untuk bug itu, ini permintaan UX baru terpisah, berlaku setelah bug auto-refresh di atas
-(genuinely) diperbaiki.
+**Status: SELESAI, lalu DIGANTI lagi** — tahap 1 (overlay counter `wire:poll` 3s×5x) dibangun persis sesuai
+permintaan ini, lalu diperbaiki lagi visibility-nya (ikon terlalu kecil, overlay terlalu transparan,
+dikonfirmasi screenshot Agung). **Tahap 2 (redesign total, "Perbaikan Pasca-Rilis v0.13.1" di atas)**
+mengganti TRIGGER-nya dari hitungan "5x gagal" (tebakan waktu) menjadi sinyal GENUINE dari whatsmeow
+(`qr_expired_at`) — menjawab pertanyaan terbuka di catatan asli di bawah ("hitungan 5x gagal ini dihitung
+dari apa persisnya") dengan jawaban akhir: BUKAN dari hitungan sama sekali, dari event backend asli. Style
+overlay (menutupi area QR, gelap, ikon putih besar) tetap sesuai permintaan asli ini.
 
-Setelah QR gagal di-scan sebanyak 5 kali siklus refresh (5x3 detik = ~15 detik tanpa hasil), tampilkan
-tombol "Reload" yang **MENUTUPI area QR itu sendiri** (bukan ditaruh di pinggir/terpisah sebagai elemen
-tambahan) — user harus klik tombol itu dulu secara sadar sebelum QR baru ditampilkan lagi, daripada sistem
-terus auto-refresh diam-diam di belakang layar tanpa user sadar QR lama sudah kedaluwarsa. Belum ada
-decision-gate: hitungan "5x gagal" ini dihitung dari apa persisnya (jumlah siklus poll yang lewat tanpa
-status berubah jadi `connected`? Ada sinyal lain dari backend?), dan styling/interaksi tombol overlay-nya
-seperti apa.
+**Catatan asli (di bawah) dipertahankan sebagai jejak.** Ide dari Agung bersamaan dengan laporan bug di
+atas (2026-09-16). Setelah QR gagal di-scan sebanyak 5 kali siklus refresh (5x3 detik = ~15 detik tanpa
+hasil), tampilkan tombol "Reload" yang MENUTUPI area QR itu sendiri (bukan ditaruh di pinggir/terpisah
+sebagai elemen tambahan).
 
 ## ✅ DITUTUP (2026-09-21) — Gap Arsitektur: Tabel `technicians` Tidak Tersinkron dengan `users` + Role Teknisi
 
@@ -3034,3 +3037,15 @@ sejenisnya), atau (b) evaluasi ulang apakah tabel `technicians` yang terpisah ma
 (c) opsi lain yang belum terpikirkan sesi ini. Jangan asumsikan salah satu opsi ini benar tanpa konfirmasi
 eksplisit — investigasi lengkap (skema, model, semua caller, cross-check 3 staff) ada di riwayat chat
 2026-09-17, belum dituliskan ulang di sini secara detail.
+
+## Backlog (v0.22.x) — Portal Self-Service Teknisi (scope akses penuh)
+
+**Status: Backlog, domain v0.22.x (BUKAN v0.13.x). Belum ada decision-gate sama sekali.**
+
+Dicatat dari planning chat v0.13.0, 2026-09-21, saat decision-gate v0.13.4 (klaim WO via signed-link WA)
+muncul pertanyaan lebih besar dari Agung: apakah teknisi butuh akses self-service lebih luas ke BOSS App
+(bukan cuma klik link klaim/aktivasi WO dari WA), misal lihat riwayat WO sendiri, profil, dsb.
+
+**INI SENGAJA DIPISAH dari v0.13.4** — v0.13.4 cukup pakai signed-URL tanpa login (lihat entry v0.13.4
+untuk detail alur klaim/aktivasi/close WO). Kalau nanti mau dikembangkan, ini kelanjutan alami dari v0.22.0
+(Manajemen Staff + role teknisi) — bukan bagian WhatsApp Gateway.

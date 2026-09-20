@@ -99,6 +99,19 @@ class StaffIndex extends Component
 
     public bool $referrerLinkFailed = false;
 
+    /**
+     * v0.22.8 (revisi) — modal konfirmasi hapus ketik-nama (menggantikan
+     * `wire:confirm` native browser). `deletingUserId` non-null = modal
+     * terbuka.
+     */
+    public ?int $deletingUserId = null;
+
+    public string $deletingUserName = '';
+
+    public bool $deletingUserHasActiveReferrer = false;
+
+    public string $deleteConfirmationInput = '';
+
     public ?int $editingUserId = null;
 
     #[Validate('required|string|max:255')]
@@ -253,15 +266,62 @@ class StaffIndex extends Component
     }
 
     /**
+     * v0.22.8 (revisi) — dipanggil dari tombol "Hapus" per baris, membuka
+     * modal ketik-nama (menggantikan `wire:confirm` native browser).
+     * Berlaku SAMA untuk semua staff, tanpa pengecualian. `linkedReferrer()`
+     * dicek di sini (bukan di view) supaya modal bisa menampilkan pesan
+     * yang sesuai kalau staff ini juga Referrer aktif — sama info yang
+     * dulu ada di 2 varian pesan `wire:confirm`.
+     */
+    public function confirmDeleteStaff(int $userId, StaffService $service): void
+    {
+        $user = User::where('tenant_id', auth()->user()->tenant_id)->findOrFail($userId);
+        $this->authorize('delete', $user);
+
+        $referrer = $service->linkedReferrer($user);
+
+        $this->deletingUserId = $user->id;
+        $this->deletingUserName = $user->name;
+        $this->deletingUserHasActiveReferrer = $referrer !== null && $referrer->is_active;
+        $this->deleteConfirmationInput = '';
+        $this->resetErrorBag('deleteConfirmationInput');
+    }
+
+    public function cancelDeleteStaff(): void
+    {
+        $this->reset(['deletingUserId', 'deletingUserName', 'deletingUserHasActiveReferrer', 'deleteConfirmationInput']);
+        $this->resetErrorBag('deleteConfirmationInput');
+    }
+
+    /**
      * Delete permanen (hard delete, `users` tidak pakai SoftDeletes) —
      * StaffService::delete() sendiri yang menolak dengan pesan spesifik
      * kalau masih ada relasi yang nyantol (reseller_users/technicians/
      * cpe_action_logs, lihat docblock method itu). Error ditangkap di sini
      * dan ditampilkan ke admin lewat addError() — TIDAK pernah silent fail.
+     *
+     * v0.22.8 (revisi) — tombol "Hapus Permanen" di modal sudah `disabled`
+     * di client selama `deleteConfirmationInput` belum PERSIS cocok dengan
+     * `deletingUserName`, tapi dicek ULANG di sini sebagai defense-in-depth
+     * (payload Livewire bisa dimanipulasi) — kalau tidak cocok, modal TETAP
+     * TERBUKA dengan pesan error (bukan silent no-op), supaya admin tahu
+     * kenapa gagal. Kalau backend menolak (guard relasi StaffService::
+     * delete()), modal DITUTUP dan pesannya tampil sebagai banner merah
+     * biasa (dikunci di kickoff revisi ini).
      */
-    public function deleteStaff(int $userId, StaffService $service): void
+    public function deleteStaff(StaffService $service): void
     {
-        $user = User::where('tenant_id', auth()->user()->tenant_id)->findOrFail($userId);
+        if ($this->deletingUserId === null) {
+            return;
+        }
+
+        if ($this->deleteConfirmationInput !== $this->deletingUserName) {
+            $this->addError('deleteConfirmationInput', __('Nama yang diketik tidak cocok.'));
+
+            return;
+        }
+
+        $user = User::where('tenant_id', auth()->user()->tenant_id)->findOrFail($this->deletingUserId);
         $this->authorize('delete', $user);
 
         try {
@@ -269,6 +329,8 @@ class StaffIndex extends Component
         } catch (RuntimeException $e) {
             $this->addError('deleteStaff', $e->getMessage());
         }
+
+        $this->reset(['deletingUserId', 'deletingUserName', 'deletingUserHasActiveReferrer', 'deleteConfirmationInput']);
     }
 
     public function dismissGeneratedPassword(): void

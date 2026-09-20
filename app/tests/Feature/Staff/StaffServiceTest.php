@@ -5,6 +5,7 @@ namespace Tests\Feature\Staff;
 use App\Enums\ReferrerType;
 use App\Enums\WhatsappEventType;
 use App\Enums\WorkOrderStatus;
+use App\Models\CommissionLedger;
 use App\Models\CpeActionLog;
 use App\Models\Customer;
 use App\Models\Referrer;
@@ -397,17 +398,24 @@ class StaffServiceTest extends TestCase
      * createAndLinkToStaff()` — dikunci Agung: staff TETAP berhasil dibuat
      * meski link Referrer-nya gagal, pesan errornya jelas (bukan
      * QueryException mentah).
+     *
+     * v0.22.8 (REVISI) — Referrer lama di sini ORPHAN DAN genuinely kosong
+     * (0 data nyantol) — dihapus PERMANEN, staff dapat Referrer BARU yang
+     * fresh (id BEDA dari yang lama). TIDAK ADA lagi tombol "link ke
+     * Referrer lama" — lihat 2 test lain untuk kasus orphan-BERISI-data
+     * dan taken (keduanya hard block).
      */
-    public function test_create_with_referrer_data_still_creates_the_staff_when_the_referrer_link_fails_on_a_phone_collision(): void
+    public function test_create_with_referrer_data_replaces_an_empty_orphan_referrer_with_a_fresh_one(): void
     {
         $tenant = Tenant::factory()->create();
         // Referrer lain YANG SUDAH ADA di tenant yang sama dengan nomor HP
         // yang PERSIS SAMA (setelah dinormalisasi) dengan yang akan dipakai
-        // staff baru — belum tentu ter-link ke user manapun.
-        Referrer::factory()->create([
+        // staff baru — ORPHAN, genuinely 0 data nyantol.
+        $oldReferrer = Referrer::factory()->create([
             'tenant_id' => $tenant->id,
             'phone' => WhatsappPhone::normalize('081234533333'),
             'user_id' => null,
+            'name' => 'Referrer Orphan Kosong',
         ]);
 
         $result = (new StaffService)->create([
@@ -421,13 +429,84 @@ class StaffServiceTest extends TestCase
         $this->assertDatabaseHas('users', ['id' => $result['user']->id]);
         $this->assertNotEmpty($result['generated_password']);
 
-        // Link Referrer-nya gagal dengan pesan jelas.
+        // Link Referrer-nya BERHASIL — tapi ke Referrer BARU, bukan yang
+        // lama (id berbeda, row lama sudah dihapus permanen).
+        $this->assertNotNull($result['referrer']);
+        $this->assertNull($result['referrer_link_error']);
+        $this->assertNotSame($oldReferrer->id, $result['referrer']->id);
+        $this->assertSame($result['user']->id, $result['referrer']->user_id);
+        $this->assertSame('Staff Bentrok', $result['referrer']->name);
+
+        $this->assertDatabaseMissing('referrers', ['id' => $oldReferrer->id]);
+        // Cuma 1 baris Referrer di seluruh DB (yang baru) — bukan 2.
+        $this->assertSame(1, Referrer::withoutGlobalScopes()->count());
+    }
+
+    /**
+     * v0.22.8 (REVISI) — Referrer lama ORPHAN TAPI punya data nyantol
+     * (commission_ledger) — TIDAK di-auto-hapus (data itu penting), hard
+     * block seperti kasus taken.
+     */
+    public function test_create_with_referrer_data_hard_blocks_when_the_orphan_referrer_still_has_linked_commission_ledger(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $oldReferrer = Referrer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'phone' => WhatsappPhone::normalize('081234534444'),
+            'user_id' => null,
+        ]);
+        CommissionLedger::factory()->create([
+            'tenant_id' => $tenant->id,
+            'referrer_id' => $oldReferrer->id,
+        ]);
+
+        $result = (new StaffService)->create([
+            'name' => 'Staff Bentrok Ada Ledger',
+            'phone' => '081234534444',
+            'role' => 'sales_internal',
+            'tenant_id' => $tenant->id,
+        ], ['type' => ReferrerType::Sales->value]);
+
+        $this->assertDatabaseHas('users', ['id' => $result['user']->id]);
         $this->assertNull($result['referrer']);
         $this->assertNotNull($result['referrer_link_error']);
-        $this->assertStringContainsString('sudah ada Referrer lain', $result['referrer_link_error']);
+        $this->assertStringContainsString('sudah pernah dipakai', $result['referrer_link_error']);
 
-        // Cuma 1 baris Referrer (yang lama) — tidak ada baris baru yang
-        // gagal setengah jalan tertinggal.
+        // Row lama TIDAK terhapus — data nyantolnya penting.
+        $this->assertDatabaseHas('referrers', ['id' => $oldReferrer->id]);
+        $this->assertSame(1, Referrer::withoutGlobalScopes()->count());
+    }
+
+    /**
+     * v0.22.8 — Referrer yang collision SUDAH terhubung ke user lain
+     * (taken) — hard block, tanpa pengecualian (staff baru harus genuinely
+     * fresh, tidak boleh ambil alih identitas Referrer yang aktif dipakai
+     * orang lain).
+     */
+    public function test_create_with_referrer_data_hard_blocks_when_the_colliding_referrer_is_already_taken(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $otherStaff = User::factory()->create(['tenant_id' => $tenant->id]);
+        $takenReferrer = Referrer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'phone' => WhatsappPhone::normalize('081234544444'),
+            'user_id' => $otherStaff->id,
+        ]);
+
+        $result = (new StaffService)->create([
+            'name' => 'Staff Bentrok Taken',
+            'phone' => '081234544444',
+            'role' => 'sales_internal',
+            'tenant_id' => $tenant->id,
+        ], ['type' => ReferrerType::Sales->value]);
+
+        $this->assertDatabaseHas('users', ['id' => $result['user']->id]);
+        $this->assertNull($result['referrer']);
+        $this->assertNotNull($result['referrer_link_error']);
+        $this->assertStringContainsString('sudah pernah dipakai', $result['referrer_link_error']);
+
+        // Row lama (taken) TIDAK terhapus/berubah.
+        $this->assertDatabaseHas('referrers', ['id' => $takenReferrer->id, 'user_id' => $otherStaff->id]);
         $this->assertSame(1, Referrer::withoutGlobalScopes()->count());
     }
 

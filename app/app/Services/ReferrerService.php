@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\CommissionLedger;
+use App\Models\Customer;
 use App\Models\Referrer;
 use App\Models\User;
 use App\Support\WhatsappPhone;
@@ -80,23 +82,59 @@ class ReferrerService
      * `referrers.phone` cuma unik PER TENANT (beda dari `users.phone` yang
      * global sejak v0.22.2), jadi kalau di tenant yang sama SUDAH ADA
      * Referrer lain dengan nomor HP yang sama (belum tentu ter-link ke user
-     * manapun), insert baru akan tabrakan — dicek dulu di sini supaya
-     * kegagalannya berupa pesan jelas (dikonfirmasi Agung: staff TETAP
-     * berhasil dibuat, cuma link Referrer-nya yang gagal — lihat caller),
-     * bukan `QueryException` mentah dari constraint DB.
+     * manapun), insert baru akan tabrakan.
+     *
+     * v0.22.8 (REVISI — supersedes ReferrerOrphanCollisionException dari
+     * kickoff v0.22.8 sebelumnya, dihapus total): staff baru TIDAK PERNAH
+     * mewarisi identitas/histori Referrer lama — tidak ada lagi tombol
+     * "link ke Referrer lama" di UI. 3 kasus collision:
+     *  a. Referrer yang bentrok ORPHAN (`user_id` null) DAN genuinely 0
+     *     data nyantol (0 `commission_ledger`, 0 `customers` ter-link) —
+     *     row lama DIHAPUS PERMANEN (hard delete, `Referrer` tidak pakai
+     *     SoftDeletes) di sini, lalu lanjut ke `Referrer::create()` di
+     *     bawah seperti tidak ada collision sama sekali — staff dapat
+     *     Referrer BARU yang genuinely fresh (id berbeda dari yang lama).
+     *  b. Referrer yang bentrok ORPHAN TAPI punya data nyantol — TIDAK
+     *     di-auto-hapus (data itu penting, mis. histori komisi/pelanggan
+     *     lama) — hard block.
+     *  c. Referrer yang bentrok SUDAH terhubung ke user LAIN (taken) —
+     *     hard block, tanpa pengecualian.
+     * Kasus b dan c SENGAJA berbagi pesan error yang SAMA persis (dikunci
+     * di kickoff revisi ini) — staff (User) itu sendiri TETAP berhasil
+     * dibuat di semua 3 kasus (dikunci Agung: staff TETAP berhasil dibuat,
+     * cuma link Referrer-nya yang gagal — lihat caller), bukan
+     * `QueryException` mentah dari constraint DB.
+     *
+     * `commission_ledger.referrer_id` adalah `cascadeOnDelete()` (bukan
+     * RESTRICT) — kalau kasus (a) di atas SALAH mengecek (ada baris
+     * commission_ledger nyantol tapi lolos), hard-delete Referrer di sini
+     * akan DIAM-DIAM ikut menghapus baris itu, bukan gagal dengan error.
+     * Pengecekan "0 data nyantol" di kode ini karena itu adalah
+     * SATU-SATUNYA proteksi nyata untuk `commission_ledger` — bukan
+     * sekadar optimisasi, genuinely wajib benar.
      *
      * @param  array{name: string, phone: string, type: string, tenant_id: int}  $data
      */
     public function createAndLinkToStaff(array $data, User $staffUser): Referrer
     {
         return DB::transaction(function () use ($data, $staffUser) {
-            $exists = Referrer::withoutGlobalScopes()
+            $collision = Referrer::withoutGlobalScopes()
                 ->where('tenant_id', $data['tenant_id'])
                 ->where('phone', $data['phone'])
-                ->exists();
+                ->first();
 
-            if ($exists) {
-                throw new InvalidArgumentException('Tidak bisa dijadikan Referrer — sudah ada Referrer lain dengan nomor HP yang sama di tenant ini. Hubungi admin untuk urus link secara manual.');
+            if ($collision !== null) {
+                $hasLinkedData = $collision->user_id !== null
+                    || CommissionLedger::withoutGlobalScopes()->where('referrer_id', $collision->id)->exists()
+                    || Customer::withoutGlobalScopes()->where('referred_by_referrer_id', $collision->id)->exists();
+
+                if ($hasLinkedData) {
+                    throw new InvalidArgumentException('Tidak bisa dijadikan Referrer — nomor HP ini sudah pernah dipakai dan masih ada data terkait / masih aktif dipakai user lain. Hubungi admin.');
+                }
+
+                // Kasus (a) — orphan DAN genuinely kosong: hapus permanen,
+                // lanjut buat Referrer baru yang fresh di bawah.
+                $collision->delete();
             }
 
             $referrer = Referrer::create([

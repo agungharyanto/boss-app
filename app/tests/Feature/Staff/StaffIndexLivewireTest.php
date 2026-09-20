@@ -5,6 +5,7 @@ namespace Tests\Feature\Staff;
 use App\Enums\ReferrerType;
 use App\Enums\WorkOrderStatus;
 use App\Livewire\Staff\StaffIndex;
+use App\Models\Customer;
 use App\Models\Referrer;
 use App\Models\Reseller;
 use App\Models\ResellerUser;
@@ -222,7 +223,9 @@ class StaffIndexLivewireTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(StaffIndex::class)
-            ->call('deleteStaff', $staff->id)
+            ->call('confirmDeleteStaff', $staff->id)
+            ->set('deleteConfirmationInput', $staff->name)
+            ->call('deleteStaff')
             ->assertHasNoErrors();
 
         $this->assertDatabaseMissing('users', ['id' => $staff->id]);
@@ -244,7 +247,9 @@ class StaffIndexLivewireTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(StaffIndex::class)
-            ->call('deleteStaff', $staff->id)
+            ->call('confirmDeleteStaff', $staff->id)
+            ->set('deleteConfirmationInput', $staff->name)
+            ->call('deleteStaff')
             ->assertHasErrors(['deleteStaff']);
 
         $this->assertDatabaseHas('users', ['id' => $staff->id]);
@@ -284,7 +289,9 @@ class StaffIndexLivewireTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(StaffIndex::class)
-            ->call('deleteStaff', $staff->id)
+            ->call('confirmDeleteStaff', $staff->id)
+            ->set('deleteConfirmationInput', $staff->name)
+            ->call('deleteStaff')
             ->assertHasErrors(['deleteStaff']);
 
         $this->assertDatabaseHas('users', ['id' => $staff->id]);
@@ -480,7 +487,9 @@ class StaffIndexLivewireTest extends TestCase
 
         Livewire::actingAs($admin)
             ->test(StaffIndex::class)
-            ->call('deleteStaff', $staff->id)
+            ->call('confirmDeleteStaff', $staff->id)
+            ->set('deleteConfirmationInput', $staff->name)
+            ->call('deleteStaff')
             ->assertHasNoErrors();
 
         $this->assertDatabaseMissing('users', ['id' => $staff->id]);
@@ -488,16 +497,16 @@ class StaffIndexLivewireTest extends TestCase
     }
 
     /**
-     * v0.22.8 — collision ke Referrer ORPHAN (user_id null): banner muncul
-     * DENGAN tombol "Link ke Referrer lama ini", lengkap konteksnya. Staff
-     * baru tetap berhasil dibuat (perilaku lama tidak berubah). Klik tombol
-     * -> link berhasil, badge "Referrer?" jadi Ya, aktif.
+     * v0.22.8 (REVISI) — collision ke Referrer ORPHAN DAN genuinely kosong:
+     * row lama dihapus permanen di background (ReferrerService), staff
+     * dapat Referrer BARU yang fresh — tanpa tombol/aksi manual apa pun.
+     * Badge "Referrer?" langsung "Ya, aktif" begitu createStaff() selesai.
      */
-    public function test_creating_a_staff_with_a_phone_collision_to_an_orphan_referrer_shows_a_link_button_and_linking_it_succeeds(): void
+    public function test_creating_a_staff_with_a_phone_collision_to_an_empty_orphan_referrer_auto_replaces_it(): void
     {
         $tenant = Tenant::factory()->create();
         $normalizedPhone = WhatsappPhone::normalize('081234655555');
-        $orphanReferrer = Referrer::factory()->create([
+        $oldReferrer = Referrer::factory()->create([
             'tenant_id' => $tenant->id,
             'phone' => $normalizedPhone,
             'user_id' => null,
@@ -511,36 +520,59 @@ class StaffIndexLivewireTest extends TestCase
             ->set('role', 'sales_internal')
             ->set('wantsReferrer', true)
             ->call('createStaff')
-            ->assertHasNoErrors();
-
-        // Staff-nya SENDIRI tetap berhasil dibuat.
-        $staff = User::where('name', 'Staff Collision Orphan')->firstOrFail();
-
-        $component->assertSet('referrerLinkFailed', true)
-            ->assertSet('orphanCollision.referrer_id', $orphanReferrer->id)
-            ->assertSet('orphanCollision.referrer_name', 'Referrer Orphan Lama')
-            ->assertSee('Referrer Orphan Lama')
-            ->assertSee('Link ke Referrer lama ini');
-
-        // Referrer lama belum ter-link ke siapa pun.
-        $this->assertDatabaseHas('referrers', ['id' => $orphanReferrer->id, 'user_id' => null]);
-
-        $component->call('linkToOrphanReferrer')
             ->assertHasNoErrors()
             ->assertSet('referrerLinkFailed', false)
-            ->assertSet('orphanCollision', null);
+            ->assertDontSee('Link ke Referrer lama ini');
 
-        $this->assertDatabaseHas('referrers', ['id' => $orphanReferrer->id, 'user_id' => $staff->id]);
+        $staff = User::where('name', 'Staff Collision Orphan')->firstOrFail();
 
-        // Badge "Referrer?" di list sekarang "Ya, aktif" untuk staff ini.
+        // Row lama benar-benar hilang; staff ter-link ke Referrer BARU.
+        $this->assertDatabaseMissing('referrers', ['id' => $oldReferrer->id]);
+        $this->assertDatabaseHas('referrers', ['user_id' => $staff->id, 'name' => 'Staff Collision Orphan']);
+
+        // Badge "Referrer?" langsung "Ya, aktif" — tidak perlu aksi manual.
         $component->assertSee('Ya, aktif');
     }
 
     /**
-     * v0.22.8 — collision ke Referrer yang SUDAH terhubung ke user lain
-     * (masih aktif): hard block seperti sebelumnya, TANPA tombol otomatis.
+     * v0.22.8 (REVISI) — collision ke Referrer ORPHAN TAPI berisi data
+     * nyantol: hard block, pesan generik, row lama TIDAK terhapus.
      */
-    public function test_creating_a_staff_with_a_phone_collision_to_a_referrer_already_linked_to_another_user_hard_blocks_without_a_button(): void
+    public function test_creating_a_staff_with_a_phone_collision_to_an_orphan_referrer_with_linked_data_hard_blocks(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $normalizedPhone = WhatsappPhone::normalize('081234677777');
+        $oldReferrer = Referrer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'phone' => $normalizedPhone,
+            'user_id' => null,
+        ]);
+        Customer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'referred_by_referrer_id' => $oldReferrer->id,
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('name', 'Staff Collision Orphan Berisi Data')
+            ->set('phone', '081234677777')
+            ->set('role', 'sales_internal')
+            ->set('wantsReferrer', true)
+            ->call('createStaff')
+            ->assertHasNoErrors()
+            ->assertSet('referrerLinkFailed', true)
+            ->assertSee('sudah pernah dipakai')
+            ->assertDontSee('Link ke Referrer lama ini');
+
+        $this->assertDatabaseHas('users', ['name' => 'Staff Collision Orphan Berisi Data']);
+        $this->assertDatabaseHas('referrers', ['id' => $oldReferrer->id]);
+    }
+
+    /**
+     * v0.22.8 — collision ke Referrer yang SUDAH terhubung ke user lain
+     * (masih aktif): hard block seperti sebelumnya, tanpa pengecualian.
+     */
+    public function test_creating_a_staff_with_a_phone_collision_to_a_referrer_already_linked_to_another_user_hard_blocks(): void
     {
         $tenant = Tenant::factory()->create();
         $normalizedPhone = WhatsappPhone::normalize('081234666666');
@@ -560,8 +592,7 @@ class StaffIndexLivewireTest extends TestCase
             ->call('createStaff')
             ->assertHasNoErrors()
             ->assertSet('referrerLinkFailed', true)
-            ->assertSet('orphanCollision', null)
-            ->assertSee('sudah terhubung ke akun login lain')
+            ->assertSee('sudah pernah dipakai')
             ->assertDontSee('Link ke Referrer lama ini');
 
         // Staff-nya SENDIRI tetap berhasil dibuat.
@@ -569,5 +600,102 @@ class StaffIndexLivewireTest extends TestCase
 
         // Referrer yang taken TIDAK berubah sama sekali.
         $this->assertDatabaseHas('referrers', ['id' => $takenReferrer->id, 'user_id' => $otherStaff->id]);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // v0.22.8 (revisi Bagian B) — modal konfirmasi hapus ketik-nama
+    // ═══════════════════════════════════════════════════════════════
+
+    public function test_delete_confirmation_modal_appears_when_clicking_hapus(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $staff = User::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Staff Akan Dihapus']);
+        $staff->assignRole('billing');
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->call('confirmDeleteStaff', $staff->id)
+            ->assertSet('deletingUserId', $staff->id)
+            ->assertSet('deletingUserName', 'Staff Akan Dihapus')
+            ->assertSee('Staff Akan Dihapus')
+            ->assertSee('Hapus Staff Permanen');
+
+        // Belum ada yang terhapus hanya karena modal terbuka.
+        $this->assertDatabaseHas('users', ['id' => $staff->id]);
+    }
+
+    public function test_delete_button_stays_disabled_and_nothing_is_deleted_when_the_typed_name_does_not_match(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $staff = User::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Staff Akan Dihapus']);
+        $staff->assignRole('billing');
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->call('confirmDeleteStaff', $staff->id)
+            ->set('deleteConfirmationInput', 'nama salah ketik')
+            ->call('deleteStaff')
+            ->assertHasErrors(['deleteConfirmationInput'])
+            // Modal TETAP terbuka — bukan silent no-op.
+            ->assertSet('deletingUserId', $staff->id);
+
+        $this->assertDatabaseHas('users', ['id' => $staff->id]);
+    }
+
+    public function test_delete_button_enabled_and_deleting_succeeds_when_the_typed_name_matches_exactly(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $staff = User::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Staff Akan Dihapus']);
+        $staff->assignRole('billing');
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->call('confirmDeleteStaff', $staff->id)
+            ->set('deleteConfirmationInput', 'Staff Akan Dihapus')
+            ->call('deleteStaff')
+            ->assertHasNoErrors()
+            ->assertSet('deletingUserId', null);
+
+        $this->assertDatabaseMissing('users', ['id' => $staff->id]);
+    }
+
+    public function test_canceling_the_delete_modal_deletes_nothing(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $staff = User::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Staff Akan Dihapus']);
+        $staff->assignRole('billing');
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->call('confirmDeleteStaff', $staff->id)
+            ->set('deleteConfirmationInput', 'Staff Akan Dihapus')
+            ->call('cancelDeleteStaff')
+            ->assertSet('deletingUserId', null)
+            ->assertSet('deleteConfirmationInput', '');
+
+        $this->assertDatabaseHas('users', ['id' => $staff->id]);
+    }
+
+    /**
+     * Modal berlaku SAMA untuk semua staff — termasuk yang juga Referrer
+     * aktif — dengan info tambahan (bukan pengecualian mekanisme).
+     */
+    public function test_delete_confirmation_modal_shows_the_active_referrer_notice_when_relevant(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = $this->admin($tenant);
+        $staff = User::factory()->create(['tenant_id' => $tenant->id, 'name' => 'Staff Ber-Referrer']);
+        $staff->assignRole('sales_freelance');
+        Referrer::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $staff->id, 'is_active' => true]);
+
+        Livewire::actingAs($admin)
+            ->test(StaffIndex::class)
+            ->call('confirmDeleteStaff', $staff->id)
+            ->assertSet('deletingUserHasActiveReferrer', true)
+            ->assertSee('Staff ini juga Referrer aktif');
     }
 }

@@ -69,21 +69,6 @@
     @if ($referrerLinkResultMessage)
         <div class="mb-6 p-4 rounded-md border {{ $referrerLinkFailed ? 'border-red-300 bg-red-50' : 'border-green-300 bg-green-50' }}">
             <p class="text-sm {{ $referrerLinkFailed ? 'text-red-700' : 'text-green-700' }}">{{ $referrerLinkResultMessage }}</p>
-
-            {{-- v0.22.8 — collision ke Referrer ORPHAN: tawarkan link manual,
-                 dengan konteks lengkap supaya admin sadar apa yang dia klik. --}}
-            @if ($orphanCollision)
-                <div class="mt-3 pt-3 border-t border-red-200 text-sm text-gray-700 space-y-1">
-                    <p><span class="font-medium">{{ __('Referrer lama') }}:</span> {{ $orphanCollision['referrer_name'] }} ({{ ucfirst($orphanCollision['referrer_type']) }})</p>
-                    <p><span class="font-medium">{{ __('Dibuat') }}:</span> {{ $orphanCollision['referrer_created_at'] }}</p>
-                    <p><span class="font-medium">{{ __('Data nyantol') }}:</span> {{ __(':ledger baris komisi, :customer pelanggan ter-link', ['ledger' => $orphanCollision['commission_ledger_count'], 'customer' => $orphanCollision['customer_count']]) }}</p>
-                </div>
-                <button type="button" wire:click="linkToOrphanReferrer"
-                    wire:confirm="{{ __('Link akun staff yang baru dibuat ini ke Referrer lama (:name)? Riwayat data nyantol (kalau ada) akan ikut aktif kembali di bawah akun ini.', ['name' => $orphanCollision['referrer_name']]) }}"
-                    class="mt-3 px-3 py-1.5 text-sm bg-amber-600 text-white rounded-md hover:bg-amber-700">
-                    {{ __('Link ke Referrer lama ini') }}
-                </button>
-            @endif
         </div>
     @endif
 
@@ -234,15 +219,11 @@
                                         </button>
                                     @endif
 
-                                    @if ($member->referrer && $member->referrer->is_active)
-                                        <button wire:click="deleteStaff({{ $member->id }})" wire:confirm="{{ __('Staff ini juga Referrer aktif — data referral tetap ada tapi kehilangan akses login. Yakin hapus akun staff ini secara PERMANEN?') }}" class="text-red-600 hover:underline">
-                                            {{ __('Hapus') }}
-                                        </button>
-                                    @else
-                                        <button wire:click="deleteStaff({{ $member->id }})" wire:confirm="{{ __('Hapus akun staff ini secara PERMANEN? Tidak bisa dibatalkan.') }}" class="text-red-600 hover:underline">
-                                            {{ __('Hapus') }}
-                                        </button>
-                                    @endif
+                                    {{-- v0.22.8 (revisi) — modal ketik-nama menggantikan wire:confirm
+                                         native browser, berlaku sama untuk semua staff. --}}
+                                    <button wire:click="confirmDeleteStaff({{ $member->id }})" class="text-red-600 hover:underline">
+                                        {{ __('Hapus') }}
+                                    </button>
                                 @endif
                             </td>
                         @endif
@@ -261,4 +242,44 @@
     <div class="mt-4">
         {{ $staff->links() }}
     </div>
+
+    {{-- v0.22.8 (revisi) — modal konfirmasi hapus ketik-nama, menggantikan
+         wire:confirm native browser. Berlaku SAMA untuk semua staff. --}}
+    @if ($deletingUserId)
+        <div class="fixed inset-0 bg-black/40 z-[1100] flex items-center justify-center p-4" wire:click.self="cancelDeleteStaff">
+            <div class="bg-white rounded-md shadow-lg max-w-md w-full p-6 space-y-4">
+                <h2 class="text-lg font-semibold text-gray-800">{{ __('Hapus Staff Permanen') }}</h2>
+
+                <p class="text-sm text-gray-700">
+                    {{ __('Anda akan menghapus staff :name. Aksi ini permanen.', ['name' => $deletingUserName]) }}
+                </p>
+
+                @if ($deletingUserHasActiveReferrer)
+                    <p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                        {{ __('Staff ini juga Referrer aktif — data referral tetap ada tapi kehilangan akses login.') }}
+                    </p>
+                @endif
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">
+                        {{ __("Ketik ':name' untuk konfirmasi", ['name' => $deletingUserName]) }}
+                    </label>
+                    <input type="text" wire:model.live="deleteConfirmationInput" autofocus
+                        class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                    @error('deleteConfirmationInput') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                </div>
+
+                <div class="flex gap-2">
+                    <button type="button" wire:click="deleteStaff"
+                        @disabled($deleteConfirmationInput !== $deletingUserName)
+                        class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                        {{ __('Hapus Permanen') }}
+                    </button>
+                    <button type="button" wire:click="cancelDeleteStaff" class="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50">
+                        {{ __('Batal') }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    @endif
 </div>

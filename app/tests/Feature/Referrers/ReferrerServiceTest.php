@@ -3,10 +3,10 @@
 namespace Tests\Feature\Referrers;
 
 use App\Enums\ReferrerType;
+use App\Models\CommissionLedger;
 use App\Models\Referrer;
 use App\Models\Tenant;
 use App\Models\User;
-use App\Services\ReferrerOrphanCollisionException;
 use App\Services\ReferrerService;
 use App\Support\WhatsappPhone;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -91,54 +91,89 @@ class ReferrerServiceTest extends TestCase
     }
 
     /**
-     * v0.22.8 — Referrer yang collision di sini ORPHAN (`user_id: null`),
-     * jadi sekarang melempar `ReferrerOrphanCollisionException` (subclass
-     * `InvalidArgumentException`, bukan lagi hard-block generik) — bawa
-     * data terstruktur untuk tombol "Link ke Referrer lama ini" di
-     * StaffIndex. Lihat
-     * `test_create_and_link_to_staff_hard_blocks_a_phone_collision_with_a_referrer_already_taken`
-     * untuk kasus sebaliknya (Referrer sudah terhubung ke user lain).
+     * v0.22.8 (REVISI) — Referrer yang collision ORPHAN (`user_id: null`)
+     * DAN genuinely kosong (0 data nyantol): row lama DIHAPUS PERMANEN,
+     * lanjut buat Referrer BARU yang fresh untuk staff ini (id BEDA dari
+     * yang lama) — TIDAK ADA lagi ReferrerOrphanCollisionException/tombol
+     * link manual. Lihat 2 test lain untuk kasus orphan-berisi-data dan
+     * taken (keduanya hard block, row lama tidak disentuh).
      */
-    public function test_create_and_link_to_staff_throws_an_orphan_collision_exception_for_a_phone_collision_within_the_same_tenant(): void
+    public function test_create_and_link_to_staff_replaces_an_empty_orphan_referrer_with_a_fresh_one(): void
     {
         $tenant = Tenant::factory()->create();
-        $orphanReferrer = Referrer::factory()->create([
+        $oldReferrer = Referrer::factory()->create([
             'tenant_id' => $tenant->id,
             'phone' => WhatsappPhone::normalize('081234722222'),
             'user_id' => null,
-            'name' => 'Referrer Orphan',
+            'name' => 'Referrer Orphan Kosong',
         ]);
         $staffUser = User::factory()->create(['tenant_id' => $tenant->id]);
+
+        $newReferrer = (new ReferrerService)->createAndLinkToStaff([
+            'tenant_id' => $tenant->id,
+            'name' => 'Staff Bentrok',
+            'phone' => WhatsappPhone::normalize('081234722222'),
+            'type' => ReferrerType::Sales->value,
+        ], $staffUser);
+
+        $this->assertNotSame($oldReferrer->id, $newReferrer->id);
+        $this->assertSame($staffUser->id, $newReferrer->user_id);
+        $this->assertSame('Staff Bentrok', $newReferrer->name);
+        $this->assertDatabaseMissing('referrers', ['id' => $oldReferrer->id]);
+        $this->assertSame(1, Referrer::withoutGlobalScopes()->count());
+    }
+
+    /**
+     * v0.22.8 (REVISI) — Referrer yang collision ORPHAN TAPI punya data
+     * nyantol (commission_ledger) — TIDAK di-auto-hapus, hard block.
+     */
+    public function test_create_and_link_to_staff_hard_blocks_when_the_orphan_referrer_still_has_linked_data(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $oldReferrer = Referrer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'phone' => WhatsappPhone::normalize('081234722223'),
+            'user_id' => null,
+        ]);
+        CommissionLedger::factory()->create([
+            'tenant_id' => $tenant->id,
+            'referrer_id' => $oldReferrer->id,
+        ]);
+        $staffUser = User::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('sudah pernah dipakai');
 
         try {
             (new ReferrerService)->createAndLinkToStaff([
                 'tenant_id' => $tenant->id,
-                'name' => 'Staff Bentrok',
-                'phone' => WhatsappPhone::normalize('081234722222'),
+                'name' => 'Staff Bentrok Ada Ledger',
+                'phone' => WhatsappPhone::normalize('081234722223'),
                 'type' => ReferrerType::Sales->value,
             ], $staffUser);
-            $this->fail('Expected ReferrerOrphanCollisionException was not thrown.');
-        } catch (ReferrerOrphanCollisionException $e) {
-            $this->assertSame($orphanReferrer->id, $e->referrerId);
-            $this->assertSame('Referrer Orphan', $e->referrerName);
+        } finally {
+            $this->assertDatabaseHas('referrers', ['id' => $oldReferrer->id]);
         }
     }
 
     /**
      * v0.22.8 — kebalikan test di atas: Referrer yang collision SUDAH
-     * terhubung ke user lain — hard block generik seperti perilaku lama,
-     * TIDAK melempar ReferrerOrphanCollisionException.
+     * terhubung ke user lain — hard block generik, row lama tidak
+     * disentuh sama sekali.
      */
     public function test_create_and_link_to_staff_hard_blocks_a_phone_collision_with_a_referrer_already_taken(): void
     {
         $tenant = Tenant::factory()->create();
         $otherUser = User::factory()->create(['tenant_id' => $tenant->id]);
-        Referrer::factory()->create([
+        $takenReferrer = Referrer::factory()->create([
             'tenant_id' => $tenant->id,
             'phone' => WhatsappPhone::normalize('081234733333'),
             'user_id' => $otherUser->id,
         ]);
         $staffUser = User::factory()->create(['tenant_id' => $tenant->id]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('sudah pernah dipakai');
 
         try {
             (new ReferrerService)->createAndLinkToStaff([
@@ -147,11 +182,8 @@ class ReferrerServiceTest extends TestCase
                 'phone' => WhatsappPhone::normalize('081234733333'),
                 'type' => ReferrerType::Sales->value,
             ], $staffUser);
-            $this->fail('Expected InvalidArgumentException was not thrown.');
-        } catch (ReferrerOrphanCollisionException $e) {
-            $this->fail('Expected a plain InvalidArgumentException (hard block), got ReferrerOrphanCollisionException instead.');
-        } catch (InvalidArgumentException $e) {
-            $this->assertStringContainsString('sudah terhubung ke akun login lain', $e->getMessage());
+        } finally {
+            $this->assertDatabaseHas('referrers', ['id' => $takenReferrer->id, 'user_id' => $otherUser->id]);
         }
     }
 

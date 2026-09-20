@@ -6,6 +6,7 @@ use App\Enums\ReferrerType;
 use App\Models\Referrer;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\ReferrerOrphanCollisionException;
 use App\Services\ReferrerService;
 use App\Support\WhatsappPhone;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -89,25 +90,69 @@ class ReferrerServiceTest extends TestCase
         $this->assertFalse($referrer->is_active);
     }
 
-    public function test_create_and_link_to_staff_rejects_a_phone_collision_within_the_same_tenant(): void
+    /**
+     * v0.22.8 — Referrer yang collision di sini ORPHAN (`user_id: null`),
+     * jadi sekarang melempar `ReferrerOrphanCollisionException` (subclass
+     * `InvalidArgumentException`, bukan lagi hard-block generik) — bawa
+     * data terstruktur untuk tombol "Link ke Referrer lama ini" di
+     * StaffIndex. Lihat
+     * `test_create_and_link_to_staff_hard_blocks_a_phone_collision_with_a_referrer_already_taken`
+     * untuk kasus sebaliknya (Referrer sudah terhubung ke user lain).
+     */
+    public function test_create_and_link_to_staff_throws_an_orphan_collision_exception_for_a_phone_collision_within_the_same_tenant(): void
     {
         $tenant = Tenant::factory()->create();
-        Referrer::factory()->create([
+        $orphanReferrer = Referrer::factory()->create([
             'tenant_id' => $tenant->id,
             'phone' => WhatsappPhone::normalize('081234722222'),
             'user_id' => null,
+            'name' => 'Referrer Orphan',
         ]);
         $staffUser = User::factory()->create(['tenant_id' => $tenant->id]);
 
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('sudah ada Referrer lain');
+        try {
+            (new ReferrerService)->createAndLinkToStaff([
+                'tenant_id' => $tenant->id,
+                'name' => 'Staff Bentrok',
+                'phone' => WhatsappPhone::normalize('081234722222'),
+                'type' => ReferrerType::Sales->value,
+            ], $staffUser);
+            $this->fail('Expected ReferrerOrphanCollisionException was not thrown.');
+        } catch (ReferrerOrphanCollisionException $e) {
+            $this->assertSame($orphanReferrer->id, $e->referrerId);
+            $this->assertSame('Referrer Orphan', $e->referrerName);
+        }
+    }
 
-        (new ReferrerService)->createAndLinkToStaff([
+    /**
+     * v0.22.8 — kebalikan test di atas: Referrer yang collision SUDAH
+     * terhubung ke user lain — hard block generik seperti perilaku lama,
+     * TIDAK melempar ReferrerOrphanCollisionException.
+     */
+    public function test_create_and_link_to_staff_hard_blocks_a_phone_collision_with_a_referrer_already_taken(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $otherUser = User::factory()->create(['tenant_id' => $tenant->id]);
+        Referrer::factory()->create([
             'tenant_id' => $tenant->id,
-            'name' => 'Staff Bentrok',
-            'phone' => WhatsappPhone::normalize('081234722222'),
-            'type' => ReferrerType::Sales->value,
-        ], $staffUser);
+            'phone' => WhatsappPhone::normalize('081234733333'),
+            'user_id' => $otherUser->id,
+        ]);
+        $staffUser = User::factory()->create(['tenant_id' => $tenant->id]);
+
+        try {
+            (new ReferrerService)->createAndLinkToStaff([
+                'tenant_id' => $tenant->id,
+                'name' => 'Staff Bentrok Taken',
+                'phone' => WhatsappPhone::normalize('081234733333'),
+                'type' => ReferrerType::Sales->value,
+            ], $staffUser);
+            $this->fail('Expected InvalidArgumentException was not thrown.');
+        } catch (ReferrerOrphanCollisionException $e) {
+            $this->fail('Expected a plain InvalidArgumentException (hard block), got ReferrerOrphanCollisionException instead.');
+        } catch (InvalidArgumentException $e) {
+            $this->assertStringContainsString('sudah terhubung ke akun login lain', $e->getMessage());
+        }
     }
 
     /**

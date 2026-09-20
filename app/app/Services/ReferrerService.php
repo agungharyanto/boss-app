@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\CommissionLedger;
+use App\Models\Customer;
 use App\Models\Referrer;
 use App\Models\User;
 use App\Support\WhatsappPhone;
@@ -90,13 +92,31 @@ class ReferrerService
     public function createAndLinkToStaff(array $data, User $staffUser): Referrer
     {
         return DB::transaction(function () use ($data, $staffUser) {
-            $exists = Referrer::withoutGlobalScopes()
+            // v0.22.8 — bedakan 2 kasus collision: Referrer yang bentrok
+            // ORPHAN (belum ada akun login siapa pun — bisa di-link ulang
+            // lewat aksi eksplisit admin, lihat ReferrerOrphanCollisionException)
+            // vs SUDAH terhubung ke user lain (hard block, tidak ada tombol
+            // otomatis — genuinely butuh keputusan manual, lihat kickoff
+            // v0.22.8). Ambil row-nya (bukan cuma exists()) untuk bisa
+            // membedakan.
+            $collision = Referrer::withoutGlobalScopes()
                 ->where('tenant_id', $data['tenant_id'])
                 ->where('phone', $data['phone'])
-                ->exists();
+                ->first();
 
-            if ($exists) {
-                throw new InvalidArgumentException('Tidak bisa dijadikan Referrer — sudah ada Referrer lain dengan nomor HP yang sama di tenant ini. Hubungi admin untuk urus link secara manual.');
+            if ($collision !== null && $collision->user_id !== null) {
+                throw new InvalidArgumentException('Tidak bisa dijadikan Referrer — sudah ada Referrer lain dengan nomor HP yang sama di tenant ini, dan sudah terhubung ke akun login lain. Hubungi admin untuk urus link secara manual.');
+            }
+
+            if ($collision !== null) {
+                throw new ReferrerOrphanCollisionException(
+                    referrerId: $collision->id,
+                    referrerName: $collision->name,
+                    referrerType: $collision->type->value,
+                    referrerCreatedAt: $collision->created_at->toDateTimeString(),
+                    commissionLedgerCount: CommissionLedger::withoutGlobalScopes()->where('referrer_id', $collision->id)->count(),
+                    customerCount: Customer::withoutGlobalScopes()->where('referred_by_referrer_id', $collision->id)->count(),
+                );
             }
 
             $referrer = Referrer::create([

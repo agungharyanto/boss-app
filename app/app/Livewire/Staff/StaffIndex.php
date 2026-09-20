@@ -3,11 +3,14 @@
 namespace App\Livewire\Staff;
 
 use App\Enums\ReferrerType;
+use App\Models\Referrer;
 use App\Models\User;
+use App\Services\ReferrerService;
 use App\Services\StaffService;
 use App\Support\WhatsappPhone;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Validation\Rule;
+use InvalidArgumentException;
 use Livewire\Attributes\Validate;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -99,6 +102,24 @@ class StaffIndex extends Component
 
     public bool $referrerLinkFailed = false;
 
+    /**
+     * v0.22.8 — diisi kalau collision terjadi ke Referrer ORPHAN (belum ada
+     * akun login siapa pun) — beda dari collision ke Referrer yang sudah
+     * taken (hard block biasa, tanpa data ini). Dipakai untuk menampilkan
+     * tombol "Link ke Referrer lama ini" berdampingan dengan banner error,
+     * lengkap dengan konteks (nama/tipe/tanggal dibuat/jumlah data nyantol)
+     * supaya admin sadar apa yang dia klik.
+     *
+     * @var array{referrer_id: int, referrer_name: string, referrer_type: string, referrer_created_at: string, commission_ledger_count: int, customer_count: int}|null
+     */
+    public ?array $orphanCollision = null;
+
+    /**
+     * User (staff) yang BARU SAJA berhasil dibuat pada percobaan createStaff()
+     * yang mengalami orphan collision — target link kalau tombol di-klik.
+     */
+    public ?int $orphanCollisionStaffUserId = null;
+
     public ?int $editingUserId = null;
 
     #[Validate('required|string|max:255')]
@@ -186,6 +207,8 @@ class StaffIndex extends Component
 
         $this->referrerLinkResultMessage = null;
         $this->referrerLinkFailed = false;
+        $this->orphanCollision = null;
+        $this->orphanCollisionStaffUserId = null;
 
         if ($wantsReferrer) {
             if ($result['referrer'] !== null) {
@@ -193,6 +216,14 @@ class StaffIndex extends Component
             } else {
                 $this->referrerLinkFailed = true;
                 $this->referrerLinkResultMessage = __('Staff berhasil dibuat, TAPI gagal dijadikan Referrer: :error', ['error' => $result['referrer_link_error']]);
+
+                // v0.22.8 — collision ke Referrer ORPHAN: simpan konteksnya
+                // + id staff yang baru dibuat, supaya banner bisa
+                // menawarkan tombol "Link ke Referrer lama ini".
+                if ($result['referrer_orphan_collision'] !== null) {
+                    $this->orphanCollision = $result['referrer_orphan_collision'];
+                    $this->orphanCollisionStaffUserId = $result['user']->id;
+                }
             }
         }
 
@@ -200,6 +231,42 @@ class StaffIndex extends Component
         $this->generatedPasswordForName = $result['user']->name;
 
         $this->reset(['name', 'email', 'phone', 'role', 'showCreateForm', 'wantsReferrer', 'referrerType']);
+    }
+
+    /**
+     * v0.22.8 — dipanggil dari tombol "Link ke Referrer lama ini" pada
+     * banner collision-orphan (lihat createStaff()). Staff-nya SUDAH
+     * berhasil dibuat sebelumnya — ini murni menyambungkan akun login-nya
+     * ke Referrer orphan yang sudah ada, BUKAN membuat Referrer baru.
+     * `wire:confirm` di view yang jadi lapis "admin tetap sadar apa yang
+     * di-klik" — method ini sendiri tidak menampilkan konfirmasi lagi.
+     */
+    public function linkToOrphanReferrer(ReferrerService $service): void
+    {
+        $this->authorize('create', User::class);
+
+        if ($this->orphanCollision === null || $this->orphanCollisionStaffUserId === null) {
+            return;
+        }
+
+        $staffUser = User::where('tenant_id', auth()->user()->tenant_id)
+            ->findOrFail($this->orphanCollisionStaffUserId);
+        $referrer = Referrer::withoutGlobalScopes()->findOrFail($this->orphanCollision['referrer_id']);
+
+        try {
+            $service->linkExistingUser($referrer, $staffUser);
+
+            $this->referrerLinkFailed = false;
+            $this->referrerLinkResultMessage = __('Berhasil di-link ke Referrer lama (:name).', ['name' => $referrer->name]);
+        } catch (InvalidArgumentException $e) {
+            // mis. race condition — Referrer itu sudah keburu ter-link ke
+            // user lain di antara banner muncul dan tombol diklik.
+            $this->referrerLinkFailed = true;
+            $this->referrerLinkResultMessage = __('Gagal link: :error', ['error' => $e->getMessage()]);
+        }
+
+        $this->orphanCollision = null;
+        $this->orphanCollisionStaffUserId = null;
     }
 
     public function edit(int $userId): void

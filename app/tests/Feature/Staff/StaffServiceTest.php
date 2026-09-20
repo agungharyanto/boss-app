@@ -396,17 +396,24 @@ class StaffServiceTest extends TestCase
      * createAndLinkToStaff()` — dikunci Agung: staff TETAP berhasil dibuat
      * meski link Referrer-nya gagal, pesan errornya jelas (bukan
      * QueryException mentah).
+     *
+     * v0.22.8 — Referrer lama di sini ORPHAN (`user_id: null`), jadi
+     * sekarang mengembalikan `ReferrerOrphanCollisionException` (pesan +
+     * `referrer_orphan_collision` terisi), BUKAN lagi hard-block generik —
+     * lihat `test_create_with_referrer_data_hard_blocks_with_no_orphan_collision_data_when_the_colliding_referrer_is_already_taken`
+     * untuk kasus SEBALIKNYA (Referrer sudah terhubung ke user lain).
      */
-    public function test_create_with_referrer_data_still_creates_the_staff_when_the_referrer_link_fails_on_a_phone_collision(): void
+    public function test_create_with_referrer_data_still_creates_the_staff_when_the_referrer_link_collides_with_an_orphan_referrer(): void
     {
         $tenant = Tenant::factory()->create();
         // Referrer lain YANG SUDAH ADA di tenant yang sama dengan nomor HP
         // yang PERSIS SAMA (setelah dinormalisasi) dengan yang akan dipakai
-        // staff baru — belum tentu ter-link ke user manapun.
-        Referrer::factory()->create([
+        // staff baru — ORPHAN, belum ter-link ke user manapun.
+        $orphanReferrer = Referrer::factory()->create([
             'tenant_id' => $tenant->id,
             'phone' => WhatsappPhone::normalize('081234533333'),
             'user_id' => null,
+            'name' => 'Referrer Orphan',
         ]);
 
         $result = (new StaffService)->create([
@@ -420,13 +427,51 @@ class StaffServiceTest extends TestCase
         $this->assertDatabaseHas('users', ['id' => $result['user']->id]);
         $this->assertNotEmpty($result['generated_password']);
 
-        // Link Referrer-nya gagal dengan pesan jelas.
+        // Link Referrer-nya gagal dengan pesan jelas + data terstruktur
+        // untuk tombol "Link ke Referrer lama ini" (v0.22.8).
         $this->assertNull($result['referrer']);
         $this->assertNotNull($result['referrer_link_error']);
-        $this->assertStringContainsString('sudah ada Referrer lain', $result['referrer_link_error']);
+        $this->assertStringContainsString('Referrer orphan', $result['referrer_link_error']);
+        $this->assertNotNull($result['referrer_orphan_collision']);
+        $this->assertSame($orphanReferrer->id, $result['referrer_orphan_collision']['referrer_id']);
+        $this->assertSame('Referrer Orphan', $result['referrer_orphan_collision']['referrer_name']);
+        $this->assertSame(0, $result['referrer_orphan_collision']['commission_ledger_count']);
+        $this->assertSame(0, $result['referrer_orphan_collision']['customer_count']);
 
         // Cuma 1 baris Referrer (yang lama) — tidak ada baris baru yang
         // gagal setengah jalan tertinggal.
+        $this->assertSame(1, Referrer::withoutGlobalScopes()->count());
+    }
+
+    /**
+     * v0.22.8 — kebalikan test di atas: Referrer yang collision SUDAH
+     * terhubung ke user lain (masih aktif) — hard block seperti perilaku
+     * lama, TANPA data orphan collision (tidak ada tombol link otomatis).
+     */
+    public function test_create_with_referrer_data_hard_blocks_with_no_orphan_collision_data_when_the_colliding_referrer_is_already_taken(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $otherStaff = User::factory()->create(['tenant_id' => $tenant->id]);
+        Referrer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'phone' => WhatsappPhone::normalize('081234544444'),
+            'user_id' => $otherStaff->id,
+        ]);
+
+        $result = (new StaffService)->create([
+            'name' => 'Staff Bentrok Taken',
+            'phone' => '081234544444',
+            'role' => 'sales_internal',
+            'tenant_id' => $tenant->id,
+        ], ['type' => ReferrerType::Sales->value]);
+
+        $this->assertDatabaseHas('users', ['id' => $result['user']->id]);
+        $this->assertNull($result['referrer']);
+        $this->assertNotNull($result['referrer_link_error']);
+        $this->assertStringContainsString('sudah terhubung ke akun login lain', $result['referrer_link_error']);
+        $this->assertNull($result['referrer_orphan_collision']);
+
+        // Cuma 1 baris Referrer (yang lama, taken) — tidak berubah.
         $this->assertSame(1, Referrer::withoutGlobalScopes()->count());
     }
 

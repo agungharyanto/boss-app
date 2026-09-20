@@ -75,7 +75,7 @@ class StaffService
      *
      * @param  array{name: string, email?: ?string, phone: string, role: string, tenant_id: int}  $data
      * @param  array{type: string}|null  $referrerData  null = staff biasa, tidak dijadikan Referrer
-     * @return array{user: User, generated_password: string, referrer: ?Referrer, referrer_link_error: ?string}
+     * @return array{user: User, generated_password: string, referrer: ?Referrer, referrer_link_error: ?string, referrer_orphan_collision: ?array{referrer_id: int, referrer_name: string, referrer_type: string, referrer_created_at: string, commission_ledger_count: int, customer_count: int}}
      */
     public function create(array $data, ?array $referrerData = null): array
     {
@@ -106,6 +106,7 @@ class StaffService
 
         $referrer = null;
         $referrerLinkError = null;
+        $referrerOrphanCollision = null;
 
         if ($referrerData !== null) {
             try {
@@ -121,6 +122,20 @@ class StaffService
                     'phone' => $result['user']->phone,
                     'type' => $referrerData['type'],
                 ], $result['user']);
+            } catch (ReferrerOrphanCollisionException $e) {
+                // v0.22.8 — DITANGKAP TERPISAH dari Throwable generik di
+                // bawah: bawa data terstruktur ke caller (StaffIndex) supaya
+                // tombol "Link ke Referrer lama ini" bisa ditampilkan dengan
+                // konteks lengkap, bukan cuma pesan string.
+                $referrerLinkError = $e->getMessage();
+                $referrerOrphanCollision = [
+                    'referrer_id' => $e->referrerId,
+                    'referrer_name' => $e->referrerName,
+                    'referrer_type' => $e->referrerType,
+                    'referrer_created_at' => $e->referrerCreatedAt,
+                    'commission_ledger_count' => $e->commissionLedgerCount,
+                    'customer_count' => $e->customerCount,
+                ];
             } catch (Throwable $e) {
                 $referrerLinkError = $e->getMessage();
             }
@@ -141,6 +156,7 @@ class StaffService
             'generated_password' => $result['generated_password'],
             'referrer' => $referrer,
             'referrer_link_error' => $referrerLinkError,
+            'referrer_orphan_collision' => $referrerOrphanCollision,
         ];
     }
 

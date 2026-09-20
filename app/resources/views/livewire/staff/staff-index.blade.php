@@ -69,6 +69,21 @@
     @if ($referrerLinkResultMessage)
         <div class="mb-6 p-4 rounded-md border {{ $referrerLinkFailed ? 'border-red-300 bg-red-50' : 'border-green-300 bg-green-50' }}">
             <p class="text-sm {{ $referrerLinkFailed ? 'text-red-700' : 'text-green-700' }}">{{ $referrerLinkResultMessage }}</p>
+
+            {{-- v0.22.8 — collision ke Referrer ORPHAN: tawarkan link manual,
+                 dengan konteks lengkap supaya admin sadar apa yang dia klik. --}}
+            @if ($orphanCollision)
+                <div class="mt-3 pt-3 border-t border-red-200 text-sm text-gray-700 space-y-1">
+                    <p><span class="font-medium">{{ __('Referrer lama') }}:</span> {{ $orphanCollision['referrer_name'] }} ({{ ucfirst($orphanCollision['referrer_type']) }})</p>
+                    <p><span class="font-medium">{{ __('Dibuat') }}:</span> {{ $orphanCollision['referrer_created_at'] }}</p>
+                    <p><span class="font-medium">{{ __('Data nyantol') }}:</span> {{ __(':ledger baris komisi, :customer pelanggan ter-link', ['ledger' => $orphanCollision['commission_ledger_count'], 'customer' => $orphanCollision['customer_count']]) }}</p>
+                </div>
+                <button type="button" wire:click="linkToOrphanReferrer"
+                    wire:confirm="{{ __('Link akun staff yang baru dibuat ini ke Referrer lama (:name)? Riwayat data nyantol (kalau ada) akan ikut aktif kembali di bawah akun ini.', ['name' => $orphanCollision['referrer_name']]) }}"
+                    class="mt-3 px-3 py-1.5 text-sm bg-amber-600 text-white rounded-md hover:bg-amber-700">
+                    {{ __('Link ke Referrer lama ini') }}
+                </button>
+            @endif
         </div>
     @endif
 

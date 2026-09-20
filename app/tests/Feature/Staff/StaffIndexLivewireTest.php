@@ -12,6 +12,7 @@ use App\Models\Technician;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Models\WorkOrder;
+use App\Support\WhatsappPhone;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
@@ -484,5 +485,89 @@ class StaffIndexLivewireTest extends TestCase
 
         $this->assertDatabaseMissing('users', ['id' => $staff->id]);
         $this->assertDatabaseHas('referrers', ['id' => $referrer->id, 'user_id' => null]);
+    }
+
+    /**
+     * v0.22.8 — collision ke Referrer ORPHAN (user_id null): banner muncul
+     * DENGAN tombol "Link ke Referrer lama ini", lengkap konteksnya. Staff
+     * baru tetap berhasil dibuat (perilaku lama tidak berubah). Klik tombol
+     * -> link berhasil, badge "Referrer?" jadi Ya, aktif.
+     */
+    public function test_creating_a_staff_with_a_phone_collision_to_an_orphan_referrer_shows_a_link_button_and_linking_it_succeeds(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $normalizedPhone = WhatsappPhone::normalize('081234655555');
+        $orphanReferrer = Referrer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'phone' => $normalizedPhone,
+            'user_id' => null,
+            'name' => 'Referrer Orphan Lama',
+        ]);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('name', 'Staff Collision Orphan')
+            ->set('phone', '081234655555')
+            ->set('role', 'sales_internal')
+            ->set('wantsReferrer', true)
+            ->call('createStaff')
+            ->assertHasNoErrors();
+
+        // Staff-nya SENDIRI tetap berhasil dibuat.
+        $staff = User::where('name', 'Staff Collision Orphan')->firstOrFail();
+
+        $component->assertSet('referrerLinkFailed', true)
+            ->assertSet('orphanCollision.referrer_id', $orphanReferrer->id)
+            ->assertSet('orphanCollision.referrer_name', 'Referrer Orphan Lama')
+            ->assertSee('Referrer Orphan Lama')
+            ->assertSee('Link ke Referrer lama ini');
+
+        // Referrer lama belum ter-link ke siapa pun.
+        $this->assertDatabaseHas('referrers', ['id' => $orphanReferrer->id, 'user_id' => null]);
+
+        $component->call('linkToOrphanReferrer')
+            ->assertHasNoErrors()
+            ->assertSet('referrerLinkFailed', false)
+            ->assertSet('orphanCollision', null);
+
+        $this->assertDatabaseHas('referrers', ['id' => $orphanReferrer->id, 'user_id' => $staff->id]);
+
+        // Badge "Referrer?" di list sekarang "Ya, aktif" untuk staff ini.
+        $component->assertSee('Ya, aktif');
+    }
+
+    /**
+     * v0.22.8 — collision ke Referrer yang SUDAH terhubung ke user lain
+     * (masih aktif): hard block seperti sebelumnya, TANPA tombol otomatis.
+     */
+    public function test_creating_a_staff_with_a_phone_collision_to_a_referrer_already_linked_to_another_user_hard_blocks_without_a_button(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $normalizedPhone = WhatsappPhone::normalize('081234666666');
+        $otherStaff = User::factory()->create(['tenant_id' => $tenant->id]);
+        $takenReferrer = Referrer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'phone' => $normalizedPhone,
+            'user_id' => $otherStaff->id,
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(StaffIndex::class)
+            ->set('name', 'Staff Collision Taken')
+            ->set('phone', '081234666666')
+            ->set('role', 'sales_internal')
+            ->set('wantsReferrer', true)
+            ->call('createStaff')
+            ->assertHasNoErrors()
+            ->assertSet('referrerLinkFailed', true)
+            ->assertSet('orphanCollision', null)
+            ->assertSee('sudah terhubung ke akun login lain')
+            ->assertDontSee('Link ke Referrer lama ini');
+
+        // Staff-nya SENDIRI tetap berhasil dibuat.
+        $this->assertDatabaseHas('users', ['name' => 'Staff Collision Taken']);
+
+        // Referrer yang taken TIDAK berubah sama sekali.
+        $this->assertDatabaseHas('referrers', ['id' => $takenReferrer->id, 'user_id' => $otherStaff->id]);
     }
 }

@@ -172,7 +172,14 @@ class CustomerShow extends Component
         // koreksi, itu jalur admin tersendiri, belum dibangun. Sejalan
         // dengan prinsip "append-only, koreksi lewat entri baru" (CLAUDE.md
         // v0.9.2 portal referrer).
-        return $this->customer->referred_by_referrer_id !== null;
+        //
+        // v0.22.7 — JUGA terkunci kalau referral_locked (staff-Referrer
+        // yang mereferensikan pelanggan ini sudah dihapus, lihat
+        // StaffService::lockCustomerReferralsForDeletedStaff()) — walau
+        // referred_by_referrer_id sendiri sudah NULL lagi di titik itu,
+        // referral tetap tidak boleh dipindahtangankan ke referrer lain.
+        return $this->customer->referred_by_referrer_id !== null
+            || $this->customer->referral_locked;
     }
 
     /**
@@ -189,6 +196,23 @@ class CustomerShow extends Component
         $this->authorize('update', $this->customer);
 
         $tenantId = auth()->user()->tenant_id;
+
+        // v0.22.7 — field Referrer SECARA VISUAL sudah disabled (lihat
+        // referrerLocked(), yang sekarang juga memeriksa referral_locked),
+        // tapi payload Livewire bisa dimanipulasi langsung — tolak eksplisit
+        // dengan pesan jelas di sini, BUKAN diam-diam diabaikan seperti
+        // kasus referred_by_referrer_id sudah terisi biasa (append-only
+        // v0.9.2), supaya siapa pun yang mencoba tetap tahu KENAPA gagal.
+        if ($this->customer->referral_locked && $this->editReferrerId !== null) {
+            $this->addError(
+                'editReferrerId',
+                __('Pelanggan ini pernah menjadi referral :name yang sudah resign — referral tidak bisa dipindahtangankan.', [
+                    'name' => $this->customer->locked_former_referrer_name,
+                ]),
+            );
+
+            return;
+        }
 
         $hadReferrer = $this->customer->referred_by_referrer_id !== null;
 

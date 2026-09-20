@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\TechnicianStatus;
 use App\Enums\WhatsappEventType;
 use App\Enums\WorkOrderStatus;
 use App\Models\CpeActionLog;
@@ -37,6 +38,18 @@ use Throwable;
  */
 class StaffService
 {
+    /**
+     * Nama role Spatie yang jadi SUMBER KEBENARAN untuk sinkronisasi baris
+     * `technicians` (lihat `syncTechnicianStatus()` di bawah) — satu tempat
+     * literal 'teknisi' didefinisikan, dipakai method sinkronisasi DAN
+     * command backfill (`technicians:sync-from-staff-roles`), bukan string
+     * literal terpisah yang bisa drift dari `StaffIndex::
+     * REFERRER_ELIGIBLE_ROLES`/dropdown role di UI (yang literal 'teknisi'
+     * juga, tapi konsep berbeda — daftar role ITU untuk fitur Referrer,
+     * bukan Technician).
+     */
+    public const TECHNICIAN_ROLE = 'teknisi';
+
     /**
      * `ReferrerService`/`WhatsappGatewayService` opsional dengan default
      * instantiate baru — supaya `new StaffService()` (dipakai luas di
@@ -101,6 +114,15 @@ class StaffService
             ]);
 
             $user->assignRole($data['role']);
+
+            // Auto-sync `technicians` — lihat docblock syncTechnicianStatus().
+            // Dijalankan DI DALAM transaksi yang sama (bukan setelah commit
+            // seperti bagian Referrer/WA di bawah) karena ini murni derivasi
+            // dari role yang baru saja di-assign, tidak melibatkan panggilan
+            // eksternal (WA/gateway) yang bisa gagal — kalau transaksi User
+            // ini rollback, baris Technician yang baru dibuat ikut rollback,
+            // tidak ada baris yatim tertinggal.
+            $this->syncTechnicianStatus($user);
 
             return ['user' => $user->fresh(), 'generated_password' => $generatedPassword];
         });
@@ -204,6 +226,11 @@ class StaffService
 
         $user->syncRoles([$data['role']]);
 
+        // Auto-sync `technicians` — role BISA berubah masuk/keluar
+        // 'teknisi' lewat form edit ini, lihat docblock
+        // syncTechnicianStatus().
+        $this->syncTechnicianStatus($user);
+
         return $user->fresh();
     }
 
@@ -230,6 +257,17 @@ class StaffService
             $this->referrerService->deactivate($referrer);
         }
 
+        // Technician ter-link ikut nonaktif — staff yang tidak bisa login
+        // tidak boleh terus menerima broadcast japri WO (v0.26.0) atau
+        // lolos otorisasi WhatsappTechnicianAuthService (v0.13.3). TIDAK
+        // bergantung pada role saat ini (beda dari enable() di bawah) —
+        // staff yang di-disable ya di-disable, terlepas dari role apa pun.
+        $technician = $this->findTechnicianFor($user);
+
+        if ($technician !== null && $technician->status === TechnicianStatus::Active) {
+            $technician->update(['status' => TechnicianStatus::Inactive]);
+        }
+
         return $user->fresh();
     }
 
@@ -247,6 +285,20 @@ class StaffService
             $this->referrerService->activate($referrer);
         }
 
+        // Technician ter-link ikut aktif lagi — TAPI HANYA kalau role
+        // 'teknisi' MASIH melekat ke staff ini saat ini. Staff yang
+        // role-nya sudah dipindah ke non-teknisi SAAT MASIH disabled tidak
+        // boleh diam-diam kembali jadi teknisi aktif cuma karena di-enable
+        // ulang — enable() ini murni membalik disable(), tidak pernah
+        // mengubah keputusan role yang sudah terjadi lewat update().
+        if ($user->hasRole(self::TECHNICIAN_ROLE)) {
+            $technician = $this->findTechnicianFor($user);
+
+            if ($technician !== null && $technician->status === TechnicianStatus::Inactive) {
+                $technician->update(['status' => TechnicianStatus::Active]);
+            }
+        }
+
         return $user->fresh();
     }
 
@@ -261,6 +313,76 @@ class StaffService
     public function linkedReferrer(User $user): ?Referrer
     {
         return Referrer::withoutGlobalScopes()->where('user_id', $user->id)->first();
+    }
+
+    /**
+     * Baris `technicians` ter-link ke akun staff ini lewat `technicians.
+     * user_id` — `null` kalau belum/tidak pernah ada (staff biasa, atau
+     * belum pernah punya role 'teknisi'). `withoutGlobalScopes()` sama
+     * posture `linkedReferrer()` di atas — dipanggil dari method yang bisa
+     * berjalan di luar konteks request Livewire/Auth.
+     */
+    public function findTechnicianFor(User $user): ?Technician
+    {
+        return Technician::withoutGlobalScopes()->where('user_id', $user->id)->first();
+    }
+
+    /**
+     * Sinkronisasi 1 ARAH: role Spatie 'teknisi' (lihat const
+     * TECHNICIAN_ROLE) adalah SUMBER KEBENARAN, baris `technicians`
+     * MENGIKUTI — menutup gap arsitektur yang didokumentasikan di
+     * docs/ROADMAP.md ("Backlog — Gap Arsitektur: Tabel technicians Tidak
+     * Tersinkron dengan users + Role Teknisi", ditemukan 2026-09-17).
+     * Dipanggil dari `create()`/`update()` (SETELAH assignRole()/
+     * syncRoles() — `$user->hasRole()` di sini WAJIB melihat role yang
+     * baru saja di-assign, Spatie meng-update relasi in-memory instance
+     * yang sama begitu assignRole()/syncRoles() dipanggil, jadi tidak
+     * perlu `$user->fresh()` dulu) dan dipakai ulang PERSIS oleh command
+     * backfill (`technicians:sync-from-staff-roles`) — satu implementasi,
+     * bukan logic yang diduplikasi dan bisa drift.
+     *
+     * Match SATU-SATUNYA by `user_id` (bukan name/phone — keduanya bisa
+     * berubah kapan saja lewat `update()` staff, `user_id` yang stabil).
+     * Baris existing TIDAK PERNAH dihapus di sini, cuma status
+     * Active<->Inactive — StaffService::delete() (baris ~321, TIDAK
+     * diubah oleh method ini) memblokir hapus staff yang MASIH punya baris
+     * Technician APA PUN (status apa pun), dan histori Work Order/
+     * `work_order_technicians` harus tetap utuh. Konsekuensi yang
+     * DISADARI, bukan bug: begitu seorang staff PERNAH diberi role
+     * 'teknisi' sekali saja, baris Technician-nya (Inactive) permanen ada
+     * — staff itu tidak akan pernah bisa dihapus lagi lewat
+     * StaffService::delete() selama baris itu masih ada, konsisten dengan
+     * guard yang sudah ada (bukan perilaku baru dari method ini).
+     *
+     * `reseller_id` diturunkan dari keanggotaan `reseller_users` staff ini
+     * (null = ISP direct, pola sama seluruh modul ini) — bukan parameter,
+     * supaya method ini bisa dipanggil ulang kapan saja dari mana saja
+     * (termasuk command backfill) hanya dengan `$user` itu sendiri.
+     */
+    public function syncTechnicianStatus(User $user): void
+    {
+        $technician = $this->findTechnicianFor($user);
+
+        if (! $user->hasRole(self::TECHNICIAN_ROLE)) {
+            if ($technician !== null && $technician->status !== TechnicianStatus::Inactive) {
+                $technician->update(['status' => TechnicianStatus::Inactive]);
+            }
+
+            return;
+        }
+
+        $resellerId = ResellerUser::where('user_id', $user->id)->value('reseller_id');
+
+        Technician::withoutGlobalScopes()->updateOrCreate(
+            ['user_id' => $user->id],
+            [
+                'tenant_id' => $user->tenant_id,
+                'reseller_id' => $resellerId,
+                'name' => $user->name,
+                'phone' => WhatsappPhone::normalize($user->phone),
+                'status' => TechnicianStatus::Active,
+            ],
+        );
     }
 
     /**

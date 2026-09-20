@@ -60,6 +60,7 @@ class WhatsappSessionService
                 WhatsappSessionStatus::from($status),
                 $payload['phone_number'] ?? null,
                 $payload['qr_code_data'] ?? null,
+                (bool) ($payload['qr_expired'] ?? false),
             );
         } catch (ValueError) {
             Log::warning("WhatsappSessionService: unknown status '{$status}' for session_key={$sessionKey}.");
@@ -368,7 +369,7 @@ class WhatsappSessionService
      * cuma di salah satu pemanggil, supaya KEDUA jalur tertutup —
      * dikonfirmasi lewat investigasi 2026-09-15 sebelum menulis kode ini.
      */
-    private function applyStatus(WhatsappSession $session, WhatsappSessionStatus $status, ?string $phoneNumber, ?string $qrCodeData): void
+    private function applyStatus(WhatsappSession $session, WhatsappSessionStatus $status, ?string $phoneNumber, ?string $qrCodeData, bool $qrExpired = false): void
     {
         if ($status === WhatsappSessionStatus::Connected && $phoneNumber !== null) {
             $activeDuplicate = $this->findActiveDuplicateSession($session, $phoneNumber);
@@ -388,6 +389,19 @@ class WhatsappSessionService
 
         if ($qrCodeData !== null) {
             $updates['qr_code_data'] = $qrCodeData;
+            // Kode QR genuinely baru — apa pun yang sebelumnya ditandai
+            // kedaluwarsa sudah tidak relevan lagi.
+            $updates['qr_expired_at'] = null;
+        }
+
+        if ($qrExpired) {
+            // Sinyal GENUINE dari whatsmeow (drainQRChannel()'s "timeout"
+            // non-pertama, lihat whatsapp-gateway/internal/session/manager.go)
+            // — channel QR sudah benar-benar habis, bukan tebakan waktu.
+            // qr_code_data SENGAJA tidak disentuh di sini (tetap tersimpan
+            // sebagai "QR terakhir, sudah basi" — overlay reload di UI
+            // menutupinya, bukan menggantikannya dengan placeholder).
+            $updates['qr_expired_at'] = now();
         }
 
         if ($status === WhatsappSessionStatus::Connected) {

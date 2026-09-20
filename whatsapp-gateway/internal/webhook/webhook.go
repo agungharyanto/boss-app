@@ -43,6 +43,16 @@ type StatusPayload struct {
 	Status      string  `json:"status"`
 	PhoneNumber *string `json:"phone_number,omitempty"`
 	QRCodeData  *string `json:"qr_code_data,omitempty"`
+	// QrExpired — HANYA dikirim `true` (never `false`) saat QR channel
+	// whatsmeow genuinely habis TANPA di-scan (drainQRChannel()'s "timeout"
+	// case, bukan yang pertama — lihat internal/session/manager.go). Status
+	// yang dikirim bersamaan TETAP "qr_pending" (TIDAK berubah jadi
+	// "disconnected" — status itu sudah dipakai untuk skenario transient-
+	// reconnect yang semantiknya beda total, lihat disconnectAndScheduleReconnect()).
+	// Laravel me-reset qr_expired_at ke null sendiri begitu QRCodeData
+	// terisi lagi (kode baru genuinely muncul) — sisi Go tidak perlu
+	// mengirim "false" eksplisit untuk itu.
+	QrExpired *bool `json:"qr_expired,omitempty"`
 }
 
 // NotifySessionStatus mengirim event status sesi ke Laravel. Dipanggil dari
@@ -87,6 +97,10 @@ func (n *Notifier) NotifySessionStatus(payload StatusPayload) {
 // json harus *string, bukan string kosong, supaya "phone_number": null
 // (bukan "") saat memang tidak ada nilainya.
 func StrPtr(s string) *string { return &s }
+
+// BoolPtr — padanan StrPtr untuk QrExpired (*bool, omitempty — cuma
+// dikirim saat genuinely true).
+func BoolPtr(b bool) *bool { return &b }
 
 // IncomingMessagePayload — v0.13.1, listener pesan masuk. session_key sama
 // dengan yang dipakai StatusPayload (reseller_id atau literal "direct").

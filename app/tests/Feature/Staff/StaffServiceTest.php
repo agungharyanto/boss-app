@@ -3,6 +3,7 @@
 namespace Tests\Feature\Staff;
 
 use App\Enums\ReferrerType;
+use App\Enums\TechnicianStatus;
 use App\Enums\WhatsappEventType;
 use App\Enums\WorkOrderStatus;
 use App\Models\CommissionLedger;
@@ -264,7 +265,13 @@ class StaffServiceTest extends TestCase
             'tenant_id' => $tenant->id,
         ]);
         $user = $result['user'];
-        $technician = Technician::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $user->id]);
+        // v0.22.9 — role 'teknisi' saat create() SEKARANG otomatis membuat
+        // baris Technician (StaffService::syncTechnicianStatus()) — fetch
+        // baris itu, JANGAN buat baru via factory (baris kedua untuk
+        // user_id yang sama akan membuat delete()'s guard `->first()`
+        // menemukan baris yang salah, technician->id di sini harus PERSIS
+        // baris yang dipakai guard).
+        $technician = Technician::withoutGlobalScopes()->where('user_id', $user->id)->firstOrFail();
         WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'technician_id' => $technician->id, 'status' => WorkOrderStatus::Assigned]);
         WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'technician_id' => $technician->id, 'status' => WorkOrderStatus::InProgress]);
         // WO selesai — tidak boleh ikut dihitung sebagai "aktif".
@@ -292,7 +299,9 @@ class StaffServiceTest extends TestCase
             'tenant_id' => $tenant->id,
         ]);
         $user = $result['user'];
-        $technician = Technician::factory()->create(['tenant_id' => $tenant->id, 'user_id' => $user->id]);
+        // v0.22.9 — sama alasan seperti test di atas: fetch baris
+        // auto-tercipta, jangan buat baris kedua via factory.
+        $technician = Technician::withoutGlobalScopes()->where('user_id', $user->id)->firstOrFail();
         WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'technician_id' => $technician->id, 'status' => WorkOrderStatus::Completed]);
 
         try {
@@ -635,6 +644,15 @@ class StaffServiceTest extends TestCase
     /**
      * v0.22.7 — kasus tanpa customer ter-link (mis. Sahrul) — tidak ada
      * efek apa pun ke tabel customers, tidak ada exception.
+     *
+     * v0.22.9 — role SENGAJA 'sales_internal' (bukan lagi 'teknisi' seperti
+     * versi test ini sebelumnya) — role 'teknisi' sekarang otomatis
+     * membuat baris Technician (syncTechnicianStatus()), yang akan
+     * memblokir delete() sama sekali lewat guard existing di
+     * StaffService::delete() (baris ~321, tidak diubah oleh fitur ini) —
+     * bukan yang ingin diuji test ini (test ini murni soal referral lock,
+     * bukan guard Technician, sudah dites terpisah di
+     * StaffServiceTest::test_delete_is_blocked_even_without_active_work_orders_when_a_technician_row_still_exists()).
      */
     public function test_delete_of_a_staff_referrer_with_no_customers_linked_has_no_effect_on_customers(): void
     {
@@ -642,9 +660,9 @@ class StaffServiceTest extends TestCase
         $result = (new StaffService)->create([
             'name' => 'Staff Referrer Tanpa Customer',
             'phone' => '081234566662',
-            'role' => 'teknisi',
+            'role' => 'sales_internal',
             'tenant_id' => $tenant->id,
-        ], ['type' => ReferrerType::Teknisi->value]);
+        ], ['type' => ReferrerType::Sales->value]);
 
         $unrelatedCustomer = Customer::factory()->create([
             'tenant_id' => $tenant->id,
@@ -780,5 +798,251 @@ class StaffServiceTest extends TestCase
         $this->assertNotNull($log);
         $this->assertNull($log->template_id);
         $this->assertSame($result['generated_password'], $log->rendered_content);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Auto-sync technicians dari role Spatie 'teknisi' — menutup gap
+    // arsitektur "Backlog — Gap Arsitektur: Tabel technicians Tidak
+    // Tersinkron dengan users + Role Teknisi" (docs/ROADMAP.md).
+    // ═══════════════════════════════════════════════════════════════
+
+    public function test_create_with_technician_role_automatically_creates_an_active_technician_row(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $result = (new StaffService)->create([
+            'name' => 'Teknisi Baru',
+            'phone' => '081233000001',
+            'role' => 'teknisi',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+
+        $this->assertDatabaseHas('technicians', [
+            'user_id' => $user->id,
+            'tenant_id' => $tenant->id,
+            'name' => 'Teknisi Baru',
+            'phone' => WhatsappPhone::normalize('081233000001'),
+            'status' => TechnicianStatus::Active->value,
+        ]);
+        $this->assertSame(1, Technician::withoutGlobalScopes()->where('user_id', $user->id)->count());
+    }
+
+    /**
+     * Role LAIN (bukan teknisi) tidak boleh diam-diam membuat baris
+     * Technician — auto-sync hanya bereaksi terhadap role 'teknisi'.
+     */
+    public function test_create_with_a_non_technician_role_creates_no_technician_row(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        $result = (new StaffService)->create([
+            'name' => 'Bukan Teknisi',
+            'phone' => '081233000002',
+            'role' => 'customer_service',
+            'tenant_id' => $tenant->id,
+        ]);
+
+        $this->assertSame(0, Technician::withoutGlobalScopes()->where('user_id', $result['user']->id)->count());
+    }
+
+    public function test_update_changing_role_to_teknisi_creates_the_technician_row(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Awalnya NOC',
+            'phone' => '081233000003',
+            'role' => 'noc',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+        $this->assertSame(0, Technician::withoutGlobalScopes()->where('user_id', $user->id)->count());
+
+        (new StaffService)->update($user, [
+            'name' => 'Sekarang Teknisi',
+            'phone' => '081233000003',
+            'role' => 'teknisi',
+        ]);
+
+        $this->assertDatabaseHas('technicians', [
+            'user_id' => $user->id,
+            'name' => 'Sekarang Teknisi',
+            'status' => TechnicianStatus::Active->value,
+        ]);
+    }
+
+    /**
+     * Role dicabut (diubah dari teknisi ke role lain) → baris Technician
+     * di-set Inactive, TIDAK dihapus — histori WO + guard StaffService::
+     * delete() (tidak diubah oleh fitur ini) bergantung pada baris ini
+     * tetap ada.
+     */
+    public function test_update_changing_role_away_from_teknisi_deactivates_the_technician_row_without_deleting_it(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Teknisi Dipindah',
+            'phone' => '081233000004',
+            'role' => 'teknisi',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+        $technicianId = Technician::withoutGlobalScopes()->where('user_id', $user->id)->value('id');
+
+        (new StaffService)->update($user, [
+            'name' => 'Teknisi Dipindah',
+            'phone' => '081233000004',
+            'role' => 'billing',
+        ]);
+
+        $this->assertDatabaseHas('technicians', [
+            'id' => $technicianId,
+            'status' => TechnicianStatus::Inactive->value,
+        ]);
+    }
+
+    /**
+     * Role dicabut lalu dikasih lagi — baris Technician yang SAMA
+     * di-reactivate (id tidak berubah), bukan baris baru/duplikat.
+     */
+    public function test_role_removed_then_reassigned_reactivates_the_same_technician_row_not_a_duplicate(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Teknisi Bolak Balik',
+            'phone' => '081233000005',
+            'role' => 'teknisi',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+        $originalTechnicianId = Technician::withoutGlobalScopes()->where('user_id', $user->id)->value('id');
+
+        $service = new StaffService;
+        $service->update($user, ['name' => 'Teknisi Bolak Balik', 'phone' => '081233000005', 'role' => 'finance']);
+        $service->update($user->fresh(), ['name' => 'Teknisi Bolak Balik', 'phone' => '081233000005', 'role' => 'teknisi']);
+
+        $this->assertSame(1, Technician::withoutGlobalScopes()->where('user_id', $user->id)->count());
+        $this->assertDatabaseHas('technicians', [
+            'id' => $originalTechnicianId,
+            'status' => TechnicianStatus::Active->value,
+        ]);
+    }
+
+    public function test_disable_deactivates_the_linked_technician_row(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Teknisi Disable',
+            'phone' => '081233000006',
+            'role' => 'teknisi',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+
+        (new StaffService)->disable($user);
+
+        $this->assertDatabaseHas('technicians', [
+            'user_id' => $user->id,
+            'status' => TechnicianStatus::Inactive->value,
+        ]);
+    }
+
+    public function test_enable_reactivates_the_linked_technician_row_when_the_role_is_still_teknisi(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Teknisi Enable',
+            'phone' => '081233000007',
+            'role' => 'teknisi',
+            'tenant_id' => $tenant->id,
+        ]);
+        $service = new StaffService;
+        $service->disable($result['user']);
+
+        $service->enable($result['user']->fresh());
+
+        $this->assertDatabaseHas('technicians', [
+            'user_id' => $result['user']->id,
+            'status' => TechnicianStatus::Active->value,
+        ]);
+    }
+
+    /**
+     * Kasus tepi: role diganti KE non-teknisi SAAT staff masih disabled
+     * (Technician sudah Inactive lewat disable()), lalu di-enable lagi —
+     * enable() TIDAK BOLEH diam-diam mengaktifkan kembali baris Technician
+     * untuk staff yang role-nya sudah bukan teknisi.
+     */
+    public function test_enable_does_not_reactivate_the_technician_row_if_the_role_changed_away_while_disabled(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Teknisi Lalu Dipindah',
+            'phone' => '081233000008',
+            'role' => 'teknisi',
+            'tenant_id' => $tenant->id,
+        ]);
+        $user = $result['user'];
+        $technicianId = Technician::withoutGlobalScopes()->where('user_id', $user->id)->value('id');
+        $service = new StaffService;
+
+        $service->disable($user);
+        $service->update($user->fresh(), ['name' => 'Teknisi Lalu Dipindah', 'phone' => '081233000008', 'role' => 'sales_internal']);
+        $service->enable($user->fresh());
+
+        $this->assertDatabaseHas('technicians', [
+            'id' => $technicianId,
+            'status' => TechnicianStatus::Inactive->value,
+        ]);
+    }
+
+    /**
+     * `reseller_id` Technician mengikuti keanggotaan `reseller_users`
+     * staff ini (null = ISP direct) — bukan parameter eksplisit.
+     */
+    public function test_technician_row_inherits_reseller_id_from_staffs_reseller_membership(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $result = (new StaffService)->create([
+            'name' => 'Teknisi Reseller',
+            'phone' => '081233000009',
+            'role' => 'teknisi',
+            'tenant_id' => $tenant->id,
+        ]);
+        ResellerUser::create([
+            'reseller_id' => $reseller->id,
+            'user_id' => $result['user']->id,
+            'role' => 'staff',
+            'status' => 'active',
+        ]);
+
+        // Panggil ulang lewat update() (tanpa ganti role) supaya
+        // syncTechnicianStatus() jalan lagi SETELAH keanggotaan reseller
+        // ada — membuktikan reseller_id di-resolve LIVE, bukan snapshot
+        // dari saat create() pertama kali (saat itu belum ada membership).
+        (new StaffService)->update($result['user'], [
+            'name' => 'Teknisi Reseller',
+            'phone' => '081233000009',
+            'role' => 'teknisi',
+        ]);
+
+        $this->assertDatabaseHas('technicians', [
+            'user_id' => $result['user']->id,
+            'reseller_id' => $reseller->id,
+        ]);
+    }
+
+    public function test_find_technician_for_returns_null_when_there_is_none(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Bukan Teknisi Sama Sekali',
+            'phone' => '081233000010',
+            'role' => 'finance',
+            'tenant_id' => $tenant->id,
+        ]);
+
+        $this->assertNull((new StaffService)->findTechnicianFor($result['user']));
     }
 }

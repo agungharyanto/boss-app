@@ -2948,9 +2948,42 @@ decision-gate: hitungan "5x gagal" ini dihitung dari apa persisnya (jumlah siklu
 status berubah jadi `connected`? Ada sinyal lain dari backend?), dan styling/interaksi tombol overlay-nya
 seperti apa.
 
-## Backlog — Gap Arsitektur: Tabel `technicians` Tidak Tersinkron dengan `users` + Role Teknisi
+## ✅ DITUTUP (2026-09-21) — Gap Arsitektur: Tabel `technicians` Tidak Tersinkron dengan `users` + Role Teknisi
 
-**Status: Backlog, belum ada nomor versi.** DITEMUKAN 2026-09-17 saat verifikasi manual v0.26.4 (Lapis 2 —
+**Status: SELESAI — opsi (a) di bawah dipilih dan diimplementasikan** (branch
+`auto-sync-technicians-dan-qr-refresh-limit`, patch pasca-rilis atas `StaffService` v0.22.0, tidak ada tag
+baru — maintenance fix, bukan sub-versi baru). `StaffService::syncTechnicianStatus(User $user)` sekarang
+dipanggil dari `create()`/`update()` (setelah `assignRole()`/`syncRoles()`) DAN `disable()`/`enable()` —
+role Spatie 'teknisi' adalah SUMBER KEBENARAN, baris `technicians` MENGIKUTI: punya role → `updateOrCreate`
+by `user_id` (name/phone/tenant_id/reseller_id — `reseller_id` diturunkan live dari `reseller_users`,
+status Active); tidak/tidak lagi punya role → baris existing (kalau ada) di-set **Inactive, TIDAK PERNAH
+dihapus** (histori WO + guard `delete()` di bawah tetap utuh). Staff dinonaktifkan (`disable()`) → technician
+ikut Inactive; `enable()` HANYA reaktivasi kalau role SAAT INI masih 'teknisi' (staff yang role-nya sudah
+dipindah sementara disabled tidak diam-diam kembali jadi teknisi aktif).
+
+**Konsekuensi DISADARI dan DITERIMA (bukan bug)**: guard `StaffService::delete()` (baris ~321, TIDAK
+diubah oleh patch ini) menolak hapus staff selama baris `Technician` APA PUN masih ada — karena auto-sync
+sekarang SELALU membuat baris itu untuk siapa pun yang pernah diberi role 'teknisi' dan TIDAK PERNAH
+menghapusnya, **staff yang PERNAH sesaat diberi role 'teknisi' (bahkan cuma sekali, lalu dicabut) tidak
+akan bisa dihapus lagi lewat `/staff` selamanya** — konsisten dengan guard existing (preservasi histori WO),
+bukan perilaku baru, tapi dampaknya sekarang lebih luas karena baris `technicians` jadi otomatis dibuat.
+
+**Backfill**: command baru `technicians:sync-from-staff-roles` (dry-run BY DEFAULT, `--apply` untuk
+benar-benar menulis) — dijalankan terhadap DB dev real. **Hasil: 3 baris manual existing (firman/Yusuf/
+Sahrul, dibuat 2026-09-20 sebagai tambal sementara) SUDAH SINKRON SEMPURNA dengan role 'teknisi' 3 user
+terkait** (user_id/name/phone/status semua cocok persis) — `--apply` genuinely nol perubahan nilai, murni
+menegaskan mulai sekarang mekanisme otomatis yang menjaga. Jalur manual `POST /technicians` (REST API
+v0.5.0) tetap ada sebagai fallback edge-case, `/staff` jadi sumber utama.
+
+**Opsi (b) (evaluasi hapus tabel `technicians` terpisah) TIDAK dipilih** — opsi (a) sudah menutup gap
+operasional yang mendesak (WA japri WO dispatch v0.26.0, otorisasi v0.13.3) tanpa perubahan skema
+struktural yang lebih besar.
+
+---
+
+**Catatan investigasi asli (di bawah ini) dipertahankan sebagai jejak, tidak diedit ulang.**
+
+DITEMUKAN 2026-09-17 saat verifikasi manual v0.26.4 (Lapis 2 —
 simulasi broadcast japri WA ke teknisi asli, cluster v0.26.0) — bukan bug kode v0.26.x itu sendiri,
 melainkan gap data/proses yang sudah ada sejak jauh sebelumnya, baru kelihatan sekarang karena v0.26.3/
 v0.26.4 adalah fitur PERTAMA yang benar-benar butuh daftar teknisi aktif yang representatif.

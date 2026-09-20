@@ -4,6 +4,8 @@ namespace Tests\Feature\Installation;
 
 use App\Enums\WhatsappEventType;
 use App\Enums\WorkOrderStatus;
+use App\Models\Customer;
+use App\Models\Subscription;
 use App\Models\Technician;
 use App\Models\Tenant;
 use App\Models\WhatsappMessageLog;
@@ -456,5 +458,92 @@ class WorkOrderDispatchServiceTest extends TestCase
             ->where('phone_number', '1203group@g.us')
             ->firstOrFail();
         $this->assertStringContainsString('REMINDER', $log->rendered_content);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // v0.26.0.1 — variabel customer_cid + customer_coordinates
+    // ═══════════════════════════════════════════════════════════════
+
+    private function seedTemplateWithLocationFields(Tenant $tenant): void
+    {
+        WhatsappMessageTemplate::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'event_type' => WhatsappEventType::WorkOrderDispatched,
+            'content' => 'CID:{customer_cid} LOKASI:{customer_coordinates}',
+            'is_active' => true,
+        ]);
+    }
+
+    private function workOrderForCustomer(Tenant $tenant, Customer $customer): WorkOrder
+    {
+        $subscription = Subscription::factory()->create([
+            'tenant_id' => $tenant->id,
+            'customer_id' => $customer->id,
+        ]);
+
+        return WorkOrder::factory()->forSubscription($subscription)->create([
+            'dispatched_at' => null,
+        ]);
+    }
+
+    public function test_message_includes_customer_cid_and_a_maps_link_when_coordinates_are_set(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplateWithLocationFields($tenant);
+        Technician::factory()->create(['tenant_id' => $tenant->id]);
+        // cid TIDAK fillable — selalu auto-generate oleh CustomerObserver
+        // (lihat docblock assignCid()), jadi diambil balik dari yang
+        // genuinely tersimpan, bukan di-override manual di sini.
+        $customer = Customer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'latitude' => -6.966667,
+            'longitude' => 110.416664,
+        ])->fresh();
+        $this->assertNotNull($customer->cid);
+        $workOrder = $this->workOrderForCustomer($tenant, $customer);
+
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        $log = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderDispatched->value)
+            ->firstOrFail();
+        $this->assertStringContainsString("CID:{$customer->cid}", $log->rendered_content);
+        // latitude/longitude di-cast 'decimal:7' (App\Models\Customer) —
+        // nilai genuinely tersimpan/terbaca dengan trailing zero
+        // (-6.9666670, bukan -6.966667 persis seperti yang di-input),
+        // tetap valid untuk parsing Google Maps.
+        $this->assertStringContainsString(
+            "LOKASI:https://www.google.com/maps/dir/?api=1&destination={$customer->latitude},{$customer->longitude}",
+            $log->rendered_content,
+        );
+    }
+
+    /**
+     * v0.16.0 Langkah 12 — belum ada customer yang genuinely punya
+     * latitude/longitude terisi di database saat ini (dikonfirmasi lewat
+     * investigasi kickoff v0.26.0.1). Ini kasus NORMAL, bukan langka —
+     * template TIDAK BOLEH pecah/kosong untuk itu.
+     */
+    public function test_message_shows_a_dash_for_coordinates_when_the_customer_has_none(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplateWithLocationFields($tenant);
+        Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'latitude' => null,
+            'longitude' => null,
+        ])->fresh();
+        $this->assertNotNull($customer->cid);
+        $workOrder = $this->workOrderForCustomer($tenant, $customer);
+
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        $log = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderDispatched->value)
+            ->firstOrFail();
+        $this->assertStringContainsString("CID:{$customer->cid}", $log->rendered_content);
+        $this->assertStringContainsString('LOKASI:-', $log->rendered_content);
     }
 }

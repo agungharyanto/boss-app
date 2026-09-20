@@ -107,4 +107,80 @@ class WhatsappSessionWebhookTest extends TestCase
         $response->assertJsonPath('data.result', 'rejected');
         $this->assertSame('qr_pending', $session->fresh()->status->value);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Redesign trigger overlay QR — qr_expired_at, sinyal GENUINE dari
+    // whatsmeow (drainQRChannel()'s "timeout" non-pertama), bukan lagi
+    // tebakan waktu (counter 3s×5x sisi Livewire, dihapus total).
+    // ═══════════════════════════════════════════════════════════════
+
+    public function test_qr_expired_flag_sets_qr_expired_at_without_changing_status(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $session = WhatsappSession::factory()->forReseller($reseller)->create();
+        $this->assertNull($session->qr_expired_at);
+
+        $response = $this->postSigned([
+            'session_key' => (string) $reseller->id,
+            'status' => 'qr_pending',
+            'qr_expired' => true,
+        ]);
+
+        $response->assertJsonPath('data.result', 'applied');
+        $fresh = $session->fresh();
+        // Status TETAP qr_pending — TIDAK "disconnected" (sudah dipakai
+        // skenario transient-reconnect yang beda semantik total, lihat
+        // WhatsappSessionService::applyStatus()'s own docblock).
+        $this->assertSame('qr_pending', $fresh->status->value);
+        $this->assertNotNull($fresh->qr_expired_at);
+    }
+
+    /**
+     * Kode QR BARU genuinely masuk (qr_code_data terisi) SETELAH
+     * qr_expired_at pernah terisi — reset otomatis ke null, tanpa perlu
+     * gateway mengirim sinyal "false" eksplisit.
+     */
+    public function test_a_new_qr_code_resets_a_previously_expired_flag(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $session = WhatsappSession::factory()->forReseller($reseller)->create([
+            'qr_expired_at' => now()->subMinute(),
+        ]);
+
+        $response = $this->postSigned([
+            'session_key' => (string) $reseller->id,
+            'status' => 'qr_pending',
+            'qr_code_data' => 'data:image/png;base64,BARU',
+        ]);
+
+        $response->assertJsonPath('data.result', 'applied');
+        $fresh = $session->fresh();
+        $this->assertNull($fresh->qr_expired_at);
+        $this->assertSame('data:image/png;base64,BARU', $fresh->qr_code_data);
+    }
+
+    /**
+     * Webhook TANPA field qr_expired sama sekali (kasus normal —
+     * "connected", "disconnected", dst — mayoritas webhook di seluruh
+     * gateway) tidak boleh menyentuh qr_expired_at sama sekali — nilai
+     * lamanya (di sini: masih null, kondisi default) tetap seperti apa
+     * adanya, bukan diam-diam di-set/di-reset sebagai efek samping.
+     */
+    public function test_webhook_without_qr_expired_field_leaves_the_column_untouched(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        $session = WhatsappSession::factory()->forReseller($reseller)->create();
+
+        $response = $this->postSigned([
+            'session_key' => (string) $reseller->id,
+            'status' => 'connected',
+            'phone_number' => '628123456789',
+        ]);
+
+        $response->assertJsonPath('data.result', 'applied');
+        $this->assertNull($session->fresh()->qr_expired_at);
+    }
 }

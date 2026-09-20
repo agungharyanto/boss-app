@@ -5,9 +5,43 @@
     sekali). Dipakai identik untuk sesi reseller (mySession) maupun sesi
     direct/ISP (directSession) — parameter `$session` + `$labelPrefix`.
 --}}
+@php
+    // Redesign — overlay dipicu sinyal GENUINE dari whatsmeow
+    // (whatsapp_sessions.qr_expired_at, diisi webhook saat
+    // drainQRChannel()'s "timeout" non-pertama, lihat
+    // whatsapp-gateway/internal/session/manager.go), BUKAN LAGI tebakan
+    // waktu (counter 3s×5x — dihapus total). Di-reset null otomatis di
+    // sisi Laravel begitu qr_code_data BARU genuinely diterima
+    // (WhatsappSessionService::applyStatus()).
+    $qrExpired = $session->qr_expired_at !== null;
+@endphp
 @if ($session->qr_code_data && $pairingModeSessionId !== $session->id)
-    <img src="{{ $session->qr_code_data }}" alt="QR WhatsApp" class="w-48 h-48">
-    <p class="text-xs text-gray-400">Scan QR ini pakai WhatsApp di HP {{ $labelPrefix }}. Halaman ini otomatis update setiap 3 detik.</p>
+    <div class="relative w-48 h-48">
+        <img src="{{ $session->qr_code_data }}" alt="QR WhatsApp" class="w-48 h-48">
+        @if ($qrExpired)
+            {{-- Overlay GELAP — QR itu sendiri pola hitam-putih padat, overlay
+                 terang/samar menyatu dengan pola itu (dikonfirmasi screenshot
+                 Agung di iterasi sebelumnya). Ikon PUTIH di atas overlay gelap
+                 = kontras maksimal terhadap overlay MAUPUN QR di baliknya. --}}
+            <button
+                type="button"
+                wire:click="refreshQr({{ $session->id }})"
+                title="QR sudah kedaluwarsa — klik untuk muat ulang"
+                class="absolute inset-0 w-48 h-48 flex items-center justify-center bg-gray-900/70 hover:bg-gray-900/80 rounded-md"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+            </button>
+        @endif
+    </div>
+    <p class="text-xs text-gray-400">
+        @if ($qrExpired)
+            QR ini sudah kedaluwarsa (tidak lagi bisa discan) — klik ikon di atas QR (atau tombol di bawah) untuk muat ulang.
+        @else
+            Scan QR ini pakai WhatsApp di HP {{ $labelPrefix }}. Halaman ini otomatis update setiap 3 detik.
+        @endif
+    </p>
 @elseif ($pairingModeSessionId !== $session->id)
     <p class="text-sm text-gray-400">Menunggu QR code dari server...</p>
 @endif

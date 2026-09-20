@@ -35,7 +35,7 @@
     @if (! $isAdmin && $tab === 'konfigurasi')
         <div
             class="p-4 rounded-md border border-gray-200 space-y-4"
-            @if ($mySession !== null && $mySession->status->value !== 'connected') wire:poll.3s @endif
+            @if ($mySession !== null && $mySession->status->value === 'qr_pending') wire:poll.3s @endif
         >
             @if ($mySession === null)
                 <p class="text-sm text-gray-500">Anda belum punya sesi WhatsApp — hubungkan nomor untuk mulai mengirim notifikasi.</p>
@@ -78,7 +78,7 @@
     @if ($isAdmin && $tab === 'overview')
         <div
             class="p-4 rounded-md border border-gray-200 space-y-4 mb-6"
-            @if ($directSession !== null && $directSession->status->value !== 'connected') wire:poll.3s @endif
+            @if ($directSession !== null && $directSession->status->value === 'qr_pending') wire:poll.3s @endif
         >
             <h3 class="font-medium text-gray-800">Sesi Direct (ISP A)</h3>
 

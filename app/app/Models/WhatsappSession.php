@@ -22,6 +22,7 @@ class WhatsappSession extends Model
         'status',
         'status_reason',
         'qr_code_data',
+        'qr_expired_at',
         'last_connected_at',
         'last_disconnected_at',
     ];
@@ -30,6 +31,7 @@ class WhatsappSession extends Model
     {
         return [
             'status' => WhatsappSessionStatus::class,
+            'qr_expired_at' => 'datetime',
             'last_connected_at' => 'datetime',
             'last_disconnected_at' => 'datetime',
         ];

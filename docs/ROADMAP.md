@@ -145,6 +145,21 @@ WhatsApp), bukan fitur baru. Detail lengkap ada di histori commit (`fix(whatsapp
 - **Tombol Logout di tab Konfigurasi reseller** — sebelumnya cuma ada di tab admin (Overview), reseller
   tidak punya cara logout sesinya sendiri dari UI. Method `logout()` sudah scope-exact, murni menambah
   tombol yang sama ke tab reseller.
+- **Redesign trigger overlay reload QR (2026-09-21)** — panel QR (`/whatsapp-gateway`) sempat dibangun
+  dengan overlay reload manual berbasis TEBAKAN WAKTU (counter `wire:poll` 3 detik × 5 kali, dihapus total
+  di patch ini) — diganti sinyal GENUINE dari whatsmeow: `whatsapp-gateway/internal/session/manager.go`'s
+  `drainQRChannel()` sekarang menangani event `"timeout"` NON-PERTAMA (QR channel benar-benar habis
+  setelah kode sempat tampil, whatsmeow sendiri sudah memanggil `client.Disconnect()` di titik itu — baca
+  langsung `go.mau.fi/whatsmeow qrchan.go`, bukan asumsi) dengan mengirim webhook `qr_expired: true` ke
+  Laravel (kolom baru `whatsapp_sessions.qr_expired_at`, `status` TETAP `qr_pending` — TIDAK direuse jadi
+  `disconnected`, string itu sudah dipakai skenario transient-reconnect yang beda semantik total). Overlay
+  di blade sekarang murni dari `qr_expired_at !== null`; `wire:poll.3s` disederhanakan kembali ke bentuk
+  polos, aktif hanya selama `status === 'qr_pending'`. **Diukur empiris terhadap sesi test terpisah (bukan
+  sesi produksi)**: total durasi genuinely timeout **160 detik** (60s untuk kode QR pertama — server
+  WhatsApp mengirim tepat 6 kode per siklus untuk akun ini, whatsmeow beri 60s khusus saat 6 kode tersisa
+  — lalu 5×20s untuk kode berikutnya), webhook `qr_expired_at` tercatat di DB pada detik yang PERSIS SAMA
+  dengan log Go. Sebelumnya, sesi qr_pending yang genuinely habis nyangkut basi tanpa sinyal apa pun ke
+  Laravel (root cause insiden sesi WA Agung sempat stuck ~9 menit, 2026-09-20).
 
 ## ✅ Cluster Commission v0.9.x (v0.9.0–v0.9.13) — TUNTAS PENUH
 

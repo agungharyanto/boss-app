@@ -388,6 +388,27 @@ func (m *Manager) drainQRChannel(cancel context.CancelFunc, e *entry, qrChan <-c
 			if first {
 				firstErrCh <- errors.New("QR channel timed out waiting for scan")
 				first = false
+			} else {
+				// Kode QR SUDAH pernah tampil (bukan kegagalan di percobaan
+				// pertama) — channel whatsmeow GENUINELY habis (array kode
+				// dari server sudah dikeluarkan semua, whatsmeow SENDIRI
+				// sudah memanggil cli.Disconnect() di titik ini, lihat
+				// go.mau.fi/whatsmeow qrchan.go's emitQRs()). SEBELUM fix
+				// ini, cabang ini nol-efek — Laravel tidak pernah tahu QR
+				// yang masih ditampilkan sudah basi. Status yang dikirim
+				// TETAP "qr_pending" (TIDAK "disconnected" — string itu
+				// sudah dipakai skenario transient-reconnect yang beda
+				// semantik total, lihat disconnectAndScheduleReconnect())
+				// — cuma QrExpired=true sebagai sinyal TERPISAH.
+				e.mu.Lock()
+				e.status = StatusQRPending
+				e.mu.Unlock()
+
+				m.notifier.NotifySessionStatus(webhook.StatusPayload{
+					SessionKey: e.key,
+					Status:     string(StatusQRPending),
+					QrExpired:  webhook.BoolPtr(true),
+				})
 			}
 		default:
 			slog.Info("qr channel event", "sessionKey", e.key, "event", item.Event)

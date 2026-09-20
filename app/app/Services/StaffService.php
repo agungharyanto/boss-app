@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Enums\WhatsappEventType;
 use App\Enums\WorkOrderStatus;
 use App\Models\CpeActionLog;
+use App\Models\Customer;
 use App\Models\Referrer;
 use App\Models\ResellerUser;
 use App\Models\Technician;
@@ -338,6 +339,44 @@ class StaffService
             throw new RuntimeException("Tidak bisa dihapus — staff ini tercatat pernah melakukan {$actionLogCount} aksi perangkat CPE (riwayat audit tidak boleh kehilangan aktornya).");
         }
 
-        $staff->delete();
+        DB::transaction(function () use ($staff) {
+            $this->lockCustomerReferralsForDeletedStaff($staff);
+
+            $staff->delete();
+        });
+    }
+
+    /**
+     * v0.22.7 — kalau staff yang dihapus JUGA Referrer ter-link (checkbox
+     * "Jadikan juga Referrer", v0.22.3), setiap `Customer` yang mengarah ke
+     * Referrer itu (`referred_by_referrer_id`) TIDAK dibiarkan nyantol ke
+     * Referrer yang login-nya sudah hilang — genuinely dikosongkan, dengan
+     * jejak namanya disimpan supaya tidak hilang sama sekali dari tampilan
+     * (`referral_locked`+`locked_former_referrer_name`, lihat migration
+     * `add_referral_lock_to_customers_table`). Dipanggil SEBELUM
+     * `$staff->delete()`, di transaksi yang sama — Referrer itu sendiri
+     * TIDAK disentuh di sini (tetap ada, `user_id`-nya jadi null via
+     * `nullOnDelete()` seperti sebelumnya, TIDAK berubah dari v0.22.3).
+     *
+     * TIDAK ada migration data retroaktif untuk kasus LAMA (Kamisem,
+     * insiden v0.22.1) — dikonfirmasi Agung, kasus itu sudah dibereskan
+     * manual sebelum kolom ini ada, dan datanya sendiri sudah bersih
+     * (0 customer nyantol) saat diverifikasi ulang di kickoff v0.22.7.
+     */
+    private function lockCustomerReferralsForDeletedStaff(User $staff): void
+    {
+        $referrer = $this->linkedReferrer($staff);
+
+        if ($referrer === null) {
+            return;
+        }
+
+        Customer::withoutGlobalScopes()
+            ->where('referred_by_referrer_id', $referrer->id)
+            ->update([
+                'referral_locked' => true,
+                'locked_former_referrer_name' => $referrer->name,
+                'referred_by_referrer_id' => null,
+            ]);
     }
 }

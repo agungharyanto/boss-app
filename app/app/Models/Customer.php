@@ -56,6 +56,7 @@ class Customer extends Model
             'longitude' => 'decimal:7',
             'nik' => 'encrypted',
             'tax_billable' => 'boolean',
+            'referral_locked' => 'boolean',
         ];
     }
 

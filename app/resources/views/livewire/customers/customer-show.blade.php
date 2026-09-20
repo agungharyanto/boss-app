@@ -83,10 +83,22 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700">Referrer</label>
                     @if ($referrerLocked)
-                        <input type="text" disabled
-                            value="{{ $currentReferrer ? $currentReferrer->name.' ('.$currentReferrer->type->label().')' : '—' }}"
-                            class="mt-1 block w-full rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm">
-                        <p class="text-xs text-gray-500 mt-1">Referrer terkunci setelah diisi — tidak bisa diganti/dihapus dari sini. Hanya paket yang bisa diubah.</p>
+                        @if ($customer->referral_locked && ! $currentReferrer)
+                            {{-- v0.22.7 — staff-Referrer yang mereferensikan pelanggan
+                                 ini sudah dihapus (StaffService::delete()) —
+                                 referral genuinely dikosongkan, jejak namanya
+                                 disimpan, tidak bisa dipindahtangankan ke referrer
+                                 lain sama sekali. --}}
+                            <input type="text" disabled
+                                value="(kosong) — sebelumnya oleh {{ $customer->locked_former_referrer_name }}"
+                                class="mt-1 block w-full rounded-md border-gray-300 bg-gray-100 text-gray-400 italic shadow-sm">
+                            <p class="text-xs text-gray-500 mt-1">Referral terkunci karena staff resign — tidak bisa dipindahtangankan.</p>
+                        @else
+                            <input type="text" disabled
+                                value="{{ $currentReferrer ? $currentReferrer->name.' ('.$currentReferrer->type->label().')' : '—' }}"
+                                class="mt-1 block w-full rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm">
+                            <p class="text-xs text-gray-500 mt-1">Referrer terkunci setelah diisi — tidak bisa diganti/dihapus dari sini. Hanya paket yang bisa diubah.</p>
+                        @endif
                     @else
                         <select wire:model.live="editReferrerId" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
                             <option value="">Tidak ada referral</option>
@@ -121,7 +133,13 @@
                 <dt class="text-gray-500">Paket</dt>
                 <dd class="text-gray-800">{{ $currentPppPackage?->name ?? '—' }}</dd>
                 <dt class="text-gray-500">Referrer</dt>
-                <dd class="text-gray-800">{{ $currentReferrer ? $currentReferrer->name.' ('.$currentReferrer->type->label().')' : 'Tidak ada referral' }}</dd>
+                <dd class="text-gray-800">
+                    @if ($customer->referral_locked && ! $currentReferrer)
+                        <span class="text-gray-400 italic">Referral: (kosong) — sebelumnya oleh {{ $customer->locked_former_referrer_name }}, terkunci karena staff resign, tidak bisa dipindahtangankan</span>
+                    @else
+                        {{ $currentReferrer ? $currentReferrer->name.' ('.$currentReferrer->type->label().')' : 'Tidak ada referral' }}
+                    @endif
+                </dd>
             </dl>
 
             @if ($canManage)

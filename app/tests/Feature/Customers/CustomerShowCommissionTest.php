@@ -167,4 +167,90 @@ class CustomerShowCommissionTest extends TestCase
         $this->assertSame($package->id, $fresh->ppp_package_id);            // paket berubah
         $this->assertSame(0, CommissionLedger::where('customer_id', $customer->id)->count());
     }
+
+    /**
+     * v0.22.7 — referrerLocked() JUGA true kalau referral_locked, walau
+     * referred_by_referrer_id sendiri sudah NULL (lihat StaffService::
+     * lockCustomerReferralsForDeletedStaff()) — bukan cuma kondisi lama
+     * "referred_by_referrer_id terisi".
+     */
+    public function test_referrer_locked_is_true_for_a_referral_locked_customer_even_with_no_referrer_id(): void
+    {
+        $user = $this->admin();
+        $customer = Customer::factory()->create([
+            'tenant_id' => $user->tenant_id,
+            'referred_by_referrer_id' => null,
+            'referral_locked' => true,
+            'locked_former_referrer_name' => 'Mantan Referrer',
+        ]);
+
+        $this->actingAs($user);
+
+        $component = Livewire::test(CustomerShow::class, ['customer' => $customer]);
+
+        $this->assertTrue($component->instance()->referrerLocked());
+    }
+
+    /**
+     * v0.22.7 — updateCommissionAttribution() menolak eksplisit (addError,
+     * bukan diam-diam diabaikan) kalau referral_locked, meski payload
+     * client memaksa editReferrerId terisi. Paket tetap boleh diubah.
+     */
+    public function test_update_commission_attribution_rejects_setting_a_referrer_for_a_referral_locked_customer(): void
+    {
+        $user = $this->admin();
+        $package = $this->package($user->tenant_id);
+        $newReferrer = Referrer::factory()->create(['tenant_id' => $user->tenant_id]);
+        $customer = Customer::factory()->create([
+            'tenant_id' => $user->tenant_id,
+            'referred_by_referrer_id' => null,
+            'referral_locked' => true,
+            'locked_former_referrer_name' => 'Mantan Referrer',
+        ]);
+
+        $this->actingAs($user);
+
+        Livewire::test(CustomerShow::class, ['customer' => $customer])
+            ->call('startEditingCommission')
+            ->set('editReferrerId', $newReferrer->id)
+            ->set('editPppPackageId', $package->id)
+            ->call('updateCommissionAttribution')
+            ->assertHasErrors(['editReferrerId']);
+
+        $fresh = $customer->fresh();
+        $this->assertNull($fresh->referred_by_referrer_id);
+        // Paket TIDAK berubah — method return awal (sebelum bagian yang
+        // memproses editPppPackageId) begitu guard referral_locked kena.
+        $this->assertNull($fresh->ppp_package_id);
+        $this->assertSame(0, CommissionLedger::where('customer_id', $customer->id)->count());
+    }
+
+    /**
+     * v0.22.7 — tampilan panel "Paket & Referral" (mode readonly DAN mode
+     * edit) menunjukkan pesan locked yang benar untuk customer
+     * referral_locked.
+     */
+    public function test_customer_show_page_renders_the_locked_referral_message(): void
+    {
+        $user = $this->admin();
+        $customer = Customer::factory()->create([
+            'tenant_id' => $user->tenant_id,
+            'referred_by_referrer_id' => null,
+            'referral_locked' => true,
+            'locked_former_referrer_name' => 'Kamisem',
+        ]);
+
+        $this->actingAs($user);
+
+        // Mode readonly (default).
+        Livewire::test(CustomerShow::class, ['customer' => $customer])
+            ->assertSee('sebelumnya oleh Kamisem')
+            ->assertSee('terkunci karena staff resign');
+
+        // Mode edit — field disabled, pesan yang sama tampil.
+        Livewire::test(CustomerShow::class, ['customer' => $customer])
+            ->call('startEditingCommission')
+            ->assertSee('(kosong) — sebelumnya oleh Kamisem')
+            ->assertSee('Referral terkunci karena staff resign');
+    }
 }

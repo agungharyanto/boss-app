@@ -6,6 +6,7 @@ use App\Enums\ReferrerType;
 use App\Enums\WhatsappEventType;
 use App\Enums\WorkOrderStatus;
 use App\Models\CpeActionLog;
+use App\Models\Customer;
 use App\Models\Referrer;
 use App\Models\Reseller;
 use App\Models\ResellerUser;
@@ -511,6 +512,71 @@ class StaffServiceTest extends TestCase
         $this->assertDatabaseMissing('users', ['id' => $result['user']->id]);
         $this->assertDatabaseHas('referrers', ['id' => $referrerId, 'user_id' => null]);
         $this->assertTrue(Referrer::withoutGlobalScopes()->find($referrerId)->is_active);
+    }
+
+    /**
+     * v0.22.7 — kalau staff yang dihapus JUGA Referrer ter-link, setiap
+     * Customer yang mengarah ke Referrer itu genuinely dikosongkan (bukan
+     * nyantol ke Referrer yang login-nya sudah hilang) — referral_locked +
+     * jejak namanya disimpan.
+     */
+    public function test_delete_locks_customer_referrals_pointing_to_the_linked_referrer(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Staff Referrer Punya Customer',
+            'phone' => '081234566661',
+            'role' => 'sales_freelance',
+            'tenant_id' => $tenant->id,
+        ], ['type' => ReferrerType::Freelance->value]);
+        $referrer = $result['referrer'];
+
+        $customerA = Customer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'referred_by_referrer_id' => $referrer->id,
+        ]);
+        $customerB = Customer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'referred_by_referrer_id' => $referrer->id,
+        ]);
+
+        (new StaffService)->delete($result['user']);
+
+        foreach ([$customerA, $customerB] as $customer) {
+            $customer->refresh();
+            $this->assertTrue($customer->referral_locked);
+            $this->assertSame('Staff Referrer Punya Customer', $customer->locked_former_referrer_name);
+            $this->assertNull($customer->referred_by_referrer_id);
+        }
+
+        // Referrer sendiri TIDAK disentuh (perilaku v0.22.3 tidak berubah).
+        $this->assertDatabaseHas('referrers', ['id' => $referrer->id, 'user_id' => null]);
+    }
+
+    /**
+     * v0.22.7 — kasus tanpa customer ter-link (mis. Sahrul) — tidak ada
+     * efek apa pun ke tabel customers, tidak ada exception.
+     */
+    public function test_delete_of_a_staff_referrer_with_no_customers_linked_has_no_effect_on_customers(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $result = (new StaffService)->create([
+            'name' => 'Staff Referrer Tanpa Customer',
+            'phone' => '081234566662',
+            'role' => 'teknisi',
+            'tenant_id' => $tenant->id,
+        ], ['type' => ReferrerType::Teknisi->value]);
+
+        $unrelatedCustomer = Customer::factory()->create([
+            'tenant_id' => $tenant->id,
+            'referred_by_referrer_id' => null,
+        ]);
+
+        (new StaffService)->delete($result['user']);
+
+        $unrelatedCustomer->refresh();
+        $this->assertFalse($unrelatedCustomer->referral_locked);
+        $this->assertNull($unrelatedCustomer->locked_former_referrer_name);
     }
 
     public function test_linked_referrer_returns_the_correct_referrer_for_a_linked_staff_and_null_otherwise(): void

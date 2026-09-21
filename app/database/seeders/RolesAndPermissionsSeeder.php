@@ -280,13 +280,18 @@ class RolesAndPermissionsSeeder extends Seeder
             'work_orders.view',
             'work_orders.manage',
             'work_orders.technician',
+            // v0.13.4.1 — master data ToolType (CRUD admin sederhana, lihat
+            // App\Livewire\Installation\ToolTypeIndex). Tenant-wide, tier-
+            // admin-only, sama posture technicians.*.
+            'tool_types.view',
+            'tool_types.manage',
         ];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
         }
 
-        $this->giveToAdminTier(['odps.view', 'odps.manage', 'technicians.view', 'technicians.manage', 'work_orders.view', 'work_orders.manage']);
+        $this->giveToAdminTier(['odps.view', 'odps.manage', 'technicians.view', 'technicians.manage', 'work_orders.view', 'work_orders.manage', 'tool_types.view', 'tool_types.manage']);
 
         Role::findByName('teknisi', 'web')->givePermissionTo('work_orders.technician');
     }

@@ -10,6 +10,7 @@ use App\Models\WorkOrderDispatchSettings;
 use App\Services\Whatsapp\WhatsappGatewayService;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
 
 /**
  * v0.26.2 — business logic dispatch/reminder Work Order, dipanggil dari 2
@@ -150,7 +151,7 @@ class WorkOrderDispatchService
         $reminded = 0;
 
         $candidates = WorkOrder::withoutGlobalScopes()
-            ->with(['customer', 'subscription'])
+            ->with(['customer', 'subscription', 'claimedByTechnician'])
             ->where('tenant_id', $tenantId)
             ->whereNotNull('dispatched_at')
             ->whereNotIn('status', [WorkOrderStatus::Completed->value, WorkOrderStatus::Cancelled->value])
@@ -162,6 +163,22 @@ class WorkOrderDispatchService
 
         foreach ($candidates as $workOrder) {
             $workOrder->update(['last_reminder_sent_at' => $today]);
+
+            // v0.13.4.1 amendment — WO SUDAH diklaim via signed-link
+            // (claimed_at terisi): TETAP kirim reminder (bukan skip),
+            // TAPI lewat event type BARU (WorkOrderClaimedReminder, tanpa
+            // claim_link) dan HANYA ke teknisi yang genuinely klaim —
+            // broadcast ke semua teknisi aktif / ke technician_id (field
+            // assignment admin yang terpisah) sudah tidak relevan lagi di
+            // sini, WO ini bukan "up for grabs".
+            if ($workOrder->claimed_at !== null) {
+                $this->notifyClaimedReminder($workOrder, $settings->wa_group_jid);
+
+                Log::info("WorkOrderDispatchService: reminder (sudah diklaim) untuk WO #{$workOrder->id} — klaimer teknisi #{$workOrder->claimed_by_technician_id}.");
+                $reminded++;
+
+                continue;
+            }
 
             if ($workOrder->technician_id !== null) {
                 $this->notifyAssignedTechnician($workOrder);
@@ -230,16 +247,78 @@ class WorkOrderDispatchService
     }
 
     /**
+     * v0.13.4.1 amendment — reminder untuk WO yang SUDAH diklaim via
+     * signed-link. Event type TERPISAH (WorkOrderClaimedReminder, lihat
+     * docblock enum-nya) — bukan variabel `{status_notice}` di dalam
+     * WorkOrderDispatched seperti dispatch-vs-reminder biasa, supaya
+     * admin/reseller bisa mengedit teksnya sendiri lewat UI Template WA
+     * secara independen. Dikirim CUMA ke teknisi yang genuinely klaim
+     * (`claimed_by_technician_id`) — kalau baris itu somehow tidak
+     * ditemukan lagi (mis. teknisi dihapus setelah klaim), dicatat
+     * sebagai warning dan TIDAK ada fallback broadcast (beda dari
+     * notifyAssignedTechnician() — WO yang sudah diklaim bukan "up for
+     * grabs" lagi, broadcast ke semua teknisi aktif tidak masuk akal di
+     * sini). Grup WA (kalau dikonfigurasi) tetap ikut diberi tahu, sama
+     * pola notifyGroupIfConfigured().
+     */
+    private function notifyClaimedReminder(WorkOrder $workOrder, ?string $groupJid): void
+    {
+        $claimer = $workOrder->claimedByTechnician;
+
+        if ($claimer === null) {
+            Log::warning("WorkOrderDispatchService: WO #{$workOrder->id} — claimed_by_technician_id #{$workOrder->claimed_by_technician_id} tidak ditemukan, reminder (sudah diklaim) dilewati untuk japri (grup tetap diberi tahu kalau dikonfigurasi).");
+        } else {
+            $this->whatsapp->buildAndQueueForRecipient(
+                WhatsappEventType::WorkOrderClaimedReminder,
+                $workOrder->tenant_id,
+                $claimer->phone,
+                $this->messageVariablesForClaimedReminder($workOrder, $claimer->name),
+                $workOrder->customer,
+                $workOrder->reseller_id,
+            );
+        }
+
+        if ($groupJid === null || $groupJid === '') {
+            return;
+        }
+
+        $this->whatsapp->buildAndQueueForGroup(
+            WhatsappEventType::WorkOrderClaimedReminder,
+            $workOrder->tenant_id,
+            $groupJid,
+            $this->messageVariablesForClaimedReminder($workOrder, 'Tim Teknisi'),
+            $workOrder->reseller_id,
+        );
+    }
+
+    /**
+     * v0.13.4.1 — signed-link klaim (`web.work-orders.claim.show`, TANPA
+     * login, `signature` itu sendiri = otorisasi) di-generate PER TEKNISI
+     * di sini (bukan di messageVariablesFor(), yang tidak tahu
+     * $technician->id-nya) — link UNIK per penerima, bukan link identik
+     * untuk semua broadcast recipient (dikunci eksplisit di kickoff).
+     * Kedaluwarsa 2 hari — link BARU digenerate tiap kali pesan WA dikirim
+     * (dispatch awal maupun tiap siklus reminder harian), jadi link lama
+     * otomatis tergantikan link baru di reminder berikutnya kalau belum
+     * sempat diklaim; 2 hari memberi margin wajar untuk WO yang
+     * di-dispatch pagi tapi baru dikerjakan besoknya.
+     *
      * @param  Collection<int, Technician>  $technicians
      */
     private function sendTo(WorkOrder $workOrder, Collection $technicians, bool $isReminder): void
     {
         foreach ($technicians as $technician) {
+            $claimLink = URL::temporarySignedRoute(
+                'work-orders.claim.show',
+                now()->addDays(2),
+                ['work_order' => $workOrder->id, 'technician' => $technician->id],
+            );
+
             $this->whatsapp->buildAndQueueForRecipient(
                 WhatsappEventType::WorkOrderDispatched,
                 $workOrder->tenant_id,
                 $technician->phone,
-                $this->messageVariablesFor($workOrder, $technician->name, $isReminder),
+                $this->messageVariablesFor($workOrder, $technician->name, $isReminder, $claimLink),
                 $workOrder->customer,
                 $workOrder->reseller_id,
             );
@@ -276,7 +355,7 @@ class WorkOrderDispatchService
      *
      * @return array<string, string|int|null>
      */
-    private function messageVariablesFor(WorkOrder $workOrder, string $technicianName, bool $isReminder): array
+    private function messageVariablesFor(WorkOrder $workOrder, string $technicianName, bool $isReminder, ?string $claimLink = null): array
     {
         $statusNotice = $isReminder
             ? 'REMINDER — Work Order ini belum selesai, mohon segera ditindaklanjuti.'
@@ -305,6 +384,43 @@ class WorkOrderDispatchService
             'service_type' => $workOrder->subscription?->name,
             'scheduled_at' => $workOrder->scheduled_at?->translatedFormat('d M Y H:i') ?? 'Tidak ada janji spesifik — segera',
             'status_notice' => $statusNotice,
+            // v0.13.4.1 — null untuk pesan GRUP (notifyGroupIfConfigured()
+            // tidak pernah meneruskan ini — grup tidak identifikasi 1
+            // teknisi spesifik, link per-teknisi tidak masuk akal di
+            // sana). Template WA produksi saat ini belum menyebut
+            // {claim_link} sama sekali (admin bisa tambahkan sendiri lewat
+            // UI Template WA kalau mau memakainya) — konsisten pola
+            // customer_coordinates/customer_cid (v0.26.0.1), variabel baru
+            // selalu tersedia di array, template lama yang belum
+            // menyebutnya tetap valid apa adanya.
+            'claim_link' => $claimLink,
+        ];
+    }
+
+    /**
+     * v0.13.4.1 amendment — variabel template
+     * `WhatsappEventType::WorkOrderClaimedReminder`, dipakai BERSAMA oleh
+     * notifyClaimedReminder() untuk japri (ke klaimer) DAN grup. SENGAJA
+     * TIDAK ADA key `claim_link` sama sekali di array ini (bukan cuma
+     * null) — beda dari messageVariablesFor() di atas, supaya jelas
+     * secara desain bahwa variabel itu genuinely tidak relevan di varian
+     * ini, bukan cuma kebetulan kosong.
+     *
+     * @return array<string, string|int|null>
+     */
+    private function messageVariablesForClaimedReminder(WorkOrder $workOrder, string $technicianName): array
+    {
+        $customer = $workOrder->customer;
+
+        return [
+            'technician_name' => $technicianName,
+            'work_order_id' => $workOrder->id,
+            'customer_name' => $customer?->name,
+            'customer_cid' => $customer?->cid,
+            'customer_address' => $customer?->address,
+            'service_type' => $workOrder->subscription?->name,
+            'claimed_by_name' => $workOrder->claimedByTechnician?->name ?? '-',
+            'claimed_at' => $workOrder->claimed_at?->translatedFormat('d M Y H:i') ?? '-',
         ];
     }
 

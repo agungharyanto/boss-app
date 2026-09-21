@@ -113,6 +113,26 @@ enum WhatsappEventType: string
      */
     case WorkOrderDispatched = 'work_order_dispatched';
 
+    /**
+     * v0.13.4.1 amendment — reminder H+ untuk WO yang SUDAH diklaim via
+     * signed-link (`work_orders.claimed_at` terisi) tapi belum selesai.
+     * GENUINELY event type TERPISAH dari WorkOrderDispatched di atas —
+     * bukan variabel `{status_notice}` beda seperti dispatch-vs-reminder
+     * biasa — supaya admin/reseller bisa mengedit teks varian ini secara
+     * independen lewat UI Template WA (keputusan Agung eksplisit saat
+     * kickoff sub-versi ini, lihat WorkOrderDispatchService's own
+     * docblock). Penerima: teknisi yang GENUINELY klaim WO ini
+     * (`claimed_by_technician_id`), bukan broadcast ke semua teknisi
+     * aktif — WO ini sudah bukan "up for grabs" lagi.
+     *
+     * TIDAK PERNAH membawa `{claim_link}` — link klaim sudah tidak
+     * relevan begitu WO diklaim, dan link LANJUT AKTIVASI belum ada
+     * (nyusul v0.13.4.2). TODO(v0.13.4.2): begitu link aktivasi ada,
+     * tambahkan variabelnya ke sini supaya reminder ini kembali membawa
+     * aksi konkret, bukan cuma info status.
+     */
+    case WorkOrderClaimedReminder = 'work_order_claimed_reminder';
+
     public function label(): string
     {
         return match ($this) {
@@ -127,6 +147,7 @@ enum WhatsappEventType: string
             self::StaffInitialPasswordNotice => 'Password Awal Staff — Pengantar',
             self::StaffInitialPasswordValue => 'Password Awal Staff — Nilai Password',
             self::WorkOrderDispatched => 'Work Order Dispatch/Reminder Teknisi',
+            self::WorkOrderClaimedReminder => 'Work Order Reminder (Sudah Diklaim)',
         };
     }
 }

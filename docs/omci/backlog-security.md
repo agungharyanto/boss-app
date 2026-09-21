@@ -45,19 +45,23 @@ v0.23.2 mulai menyentuh OLT secara live:
   v0.23.2 — pola yang sama seperti akun `boss-app-api-*` dedicated yang sudah dipakai untuk Mikrotik NAS
   (lihat CLAUDE.md, v0.6.5 "Root confusion identified and fixed").
 
-## 4. Kredensial otomasi ZTE C300 (belum dikerjakan sama sekali)
+## 4. Kredensial otomasi ZTE C300
 
-OLT ketiga di registry BOSS App (ZTE C300, akses Telnet — lihat `olt_devices` id=1) **belum disentuh
-sama sekali** oleh riset v0.23.1 ini (scope v0.23.1 murni HSGQ E04ID & G02ID via SSH). Sebelum ZTE C300
-ikut masuk cakupan otomasi OMCI (v0.23.2 atau sub-versi setelahnya):
-- Perlu keputusan kredensial otomasi khusus untuk ZTE C300 juga (sama semangat poin 3 di atas —
-  bukan akun admin penuh yang sudah ada).
+**Update (v0.23.2, 2026-09-21)**: riset CLI read-only untuk ZTE C300 (`olt_devices` id=1, Telnet) sudah
+dimulai — lihat `docs/omci/zte-c300-cli-reference.md`. Masih berlaku, belum dikerjakan:
+- **Device ini SENDIRI menampilkan peringatan saat login**: *"The password is not strong, please change
+  the password."* — konfirmasi langsung dari firmware (bukan dugaan kami) bahwa kredensial telnet
+  `olt_devices` id=1 perlu diganti. **Sama urgensinya dengan poin 1 (password root G02ID) di atas.**
+- Perlu keputusan kredensial otomasi khusus untuk ZTE C300 juga (sama semangat poin 3 di atas — bukan
+  akun admin penuh yang sudah ada). Login saat ini langsung mendarat di mode privileged (`#`) tanpa
+  `enable` terpisah — akun otomasi terbatas (kalau nanti dibuat) perlu dipastikan TIDAK otomatis
+  privileged penuh seperti akun riset ini.
 - Telnet (bukan SSH) — perlu pertimbangan keamanan tambahan (Telnet tidak terenkripsi) untuk desain
-  sidecar WireGuard v0.23.2, khususnya soal SEJAUH MANA traffic Telnet ini aman melintasi tunnel
+  sidecar WireGuard v0.23.3, khususnya soal SEJAUH MANA traffic Telnet ini aman melintasi tunnel
   internal vs risiko kalau ada titik intersepsi di jalur itu.
-- Belum ada riset CLI read-only sama sekali untuk perangkat ini — kalau v0.23.2/setelahnya butuh
-  provisioning ZTE C300, riset CLI serupa (dengan disiplin allowlist yang sama seperti v0.23.1) perlu
-  dilakukan lebih dulu.
+- Riset CLI read-only MASIH BERLANJUT (belum tuntas) — sintaks lengkap alur aktivasi (profil TR-069/
+  WAN/VLAN per-ONU) belum sepenuhnya terverifikasi, jadi kredensial otomasi produksi belum bisa
+  diputuskan/dibuat sebelum riset ini selesai.
 
 ---
 

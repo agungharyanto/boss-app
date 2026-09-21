@@ -546,4 +546,182 @@ class WorkOrderDispatchServiceTest extends TestCase
         $this->assertStringContainsString("CID:{$customer->cid}", $log->rendered_content);
         $this->assertStringContainsString('LOKASI:-', $log->rendered_content);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // v0.13.4.1 — variabel claim_link (signed URL unik per teknisi)
+    // ═══════════════════════════════════════════════════════════════
+
+    public function test_message_includes_a_unique_signed_claim_link_per_technician(): void
+    {
+        $tenant = Tenant::factory()->create();
+        WhatsappMessageTemplate::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'event_type' => WhatsappEventType::WorkOrderDispatched,
+            'content' => 'LINK:{claim_link}',
+            'is_active' => true,
+        ]);
+        $technicianA = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $technicianB = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $customer = Customer::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = $this->workOrderForCustomer($tenant, $customer);
+
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        $logA = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderDispatched->value)
+            ->where('phone_number', WhatsappPhone::normalize($technicianA->phone))
+            ->firstOrFail();
+        $logB = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderDispatched->value)
+            ->where('phone_number', WhatsappPhone::normalize($technicianB->phone))
+            ->firstOrFail();
+
+        // Link genuinely mengarah ke route klaim, mengandung work_order
+        // milik dispatch ini, DAN technician_id masing-masing penerima
+        // sebagai segmen PATH (bukan query string) — bukan satu link
+        // identik untuk semua penerima broadcast.
+        $this->assertStringContainsString("/work-orders/claim/{$workOrder->id}/{$technicianA->id}", $logA->rendered_content);
+        $this->assertStringContainsString("/work-orders/claim/{$workOrder->id}/{$technicianB->id}", $logB->rendered_content);
+        $this->assertStringNotContainsString("/work-orders/claim/{$workOrder->id}/{$technicianB->id}", $logA->rendered_content);
+
+        // Link yang benar-benar dipancarkan harus lolos signature check
+        // sungguhan (bukan cuma "kelihatan seperti URL") — buktikan dengan
+        // request GET nyata terhadap route klaim.
+        preg_match('/LINK:(\S+)/', $logA->rendered_content, $matches);
+        $this->get($matches[1])->assertOk();
+    }
+
+    public function test_group_message_never_gets_a_claim_link(): void
+    {
+        $tenant = Tenant::factory()->create();
+        WhatsappMessageTemplate::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'event_type' => WhatsappEventType::WorkOrderDispatched,
+            'content' => 'LINK:[{claim_link}]',
+            'is_active' => true,
+        ]);
+        WorkOrderDispatchSettings::forTenant($tenant->id)->update(['wa_group_jid' => '628123456789-group@g.us']);
+        Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $customer = Customer::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = $this->workOrderForCustomer($tenant, $customer);
+
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        $groupLog = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderDispatched->value)
+            ->where('phone_number', '628123456789-group@g.us')
+            ->firstOrFail();
+
+        // Sesuai desain: pesan grup TIDAK PERNAH dapat claim_link (null),
+        // karena notifyGroupIfConfigured() tidak meneruskannya sama sekali.
+        $this->assertStringContainsString('LINK:[]', $groupLog->rendered_content);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // v0.13.4.1 amendment — reminder untuk WO yang sudah diklaim
+    // ═══════════════════════════════════════════════════════════════
+
+    private function seedClaimedReminderTemplate(Tenant $tenant): void
+    {
+        WhatsappMessageTemplate::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'event_type' => WhatsappEventType::WorkOrderClaimedReminder,
+            'content' => 'Halo {technician_name}, WO #{work_order_id} diklaim oleh {claimed_by_name} sejak {claimed_at} — {customer_name}.',
+            'is_active' => true,
+        ]);
+    }
+
+    public function test_a_claimed_work_order_still_gets_a_reminder_via_a_separate_event_type_without_a_claim_link(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $settings = WorkOrderDispatchSettings::forTenant($tenant->id);
+        $settings->update(['reminder_time' => now()->format('H:i'), 'command_interval_minutes' => 15]);
+        $this->seedClaimedReminderTemplate($tenant);
+        $claimer = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->assigned()->create([
+            'tenant_id' => $tenant->id,
+            'dispatched_at' => now()->subDay(),
+            'last_reminder_sent_at' => null,
+            'claimed_at' => now()->subHours(2),
+            'claimed_by_technician_id' => $claimer->id,
+        ]);
+
+        $count = app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
+
+        // Reminder TETAP terkirim (bukan skip) — $reminded ikut bertambah.
+        $this->assertSame(1, $count);
+        $this->assertTrue($workOrder->fresh()->last_reminder_sent_at->isToday());
+
+        $log = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderClaimedReminder->value)
+            ->where('phone_number', WhatsappPhone::normalize($claimer->phone))
+            ->firstOrFail();
+
+        $this->assertStringContainsString($claimer->name, $log->rendered_content);
+        // Genuinely TIDAK ADA link klaim di pesan varian ini.
+        $this->assertStringNotContainsString('/work-orders/claim/', $log->rendered_content);
+
+        // Event type WorkOrderDispatched (varian dengan link) TIDAK dipakai
+        // sama sekali untuk WO yang sudah diklaim.
+        $this->assertSame(0, WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderDispatched->value)
+            ->count());
+    }
+
+    public function test_claimed_reminder_goes_only_to_the_claiming_technician_not_a_broadcast(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $settings = WorkOrderDispatchSettings::forTenant($tenant->id);
+        $settings->update(['reminder_time' => now()->format('H:i'), 'command_interval_minutes' => 15]);
+        $this->seedClaimedReminderTemplate($tenant);
+        $claimer = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        // Teknisi aktif LAIN di tenant yang sama — TIDAK boleh ikut dapat
+        // reminder (beda dari broadcast dispatch awal/reminder-belum-diklaim).
+        Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->assigned()->create([
+            'tenant_id' => $tenant->id,
+            'dispatched_at' => now()->subDay(),
+            'last_reminder_sent_at' => null,
+            'claimed_at' => now()->subHours(2),
+            'claimed_by_technician_id' => $claimer->id,
+        ]);
+
+        app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
+
+        $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderClaimedReminder->value)
+            ->count());
+    }
+
+    public function test_claimed_reminder_also_notifies_the_group_when_configured(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $settings = WorkOrderDispatchSettings::forTenant($tenant->id);
+        $settings->update([
+            'reminder_time' => now()->format('H:i'),
+            'command_interval_minutes' => 15,
+            'wa_group_jid' => '628111-group@g.us',
+        ]);
+        $this->seedClaimedReminderTemplate($tenant);
+        $claimer = Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->assigned()->create([
+            'tenant_id' => $tenant->id,
+            'dispatched_at' => now()->subDay(),
+            'last_reminder_sent_at' => null,
+            'claimed_at' => now()->subHours(2),
+            'claimed_by_technician_id' => $claimer->id,
+        ]);
+
+        app(WorkOrderDispatchService::class)->runReminderCycle($tenant->id, $settings->fresh());
+
+        $groupLog = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::WorkOrderClaimedReminder->value)
+            ->where('phone_number', '628111-group@g.us')
+            ->firstOrFail();
+
+        $this->assertStringContainsString('Tim Teknisi', $groupLog->rendered_content);
+    }
 }

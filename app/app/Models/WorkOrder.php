@@ -32,6 +32,11 @@ class WorkOrder extends Model
         'technician_confirmed_at',
         'dispatched_at',
         'last_reminder_sent_at',
+        // v0.13.4.1 amendment — murni metadata (kapan/siapa klaim via
+        // signed-link), TIDAK menyentuh WorkOrderStatus. Lihat migration's
+        // own docblock.
+        'claimed_at',
+        'claimed_by_technician_id',
         'notes',
     ];
 
@@ -45,6 +50,7 @@ class WorkOrder extends Model
             'technician_confirmed_at' => 'datetime',
             'dispatched_at' => 'datetime',
             'last_reminder_sent_at' => 'date',
+            'claimed_at' => 'datetime',
         ];
     }
 
@@ -66,6 +72,16 @@ class WorkOrder extends Model
     public function technician(): BelongsTo
     {
         return $this->belongsTo(Technician::class);
+    }
+
+    /**
+     * v0.13.4.1 amendment — teknisi UTAMA yang klaim WO ini via signed-link
+     * (`claimed_by_technician_id`). GENUINELY terpisah dari technician()
+     * (assignment resmi admin) dan claimPartners() (partner kerja).
+     */
+    public function claimedByTechnician(): BelongsTo
+    {
+        return $this->belongsTo(Technician::class, 'claimed_by_technician_id');
     }
 
     public function odp(): BelongsTo
@@ -99,5 +115,26 @@ class WorkOrder extends Model
         return $this->belongsToMany(Technician::class, 'work_order_technicians')
             ->withPivot('claimed_at')
             ->withTimestamps();
+    }
+
+    /**
+     * v0.13.4.1 — partner kerja dipilih teknisi utama saat klaim via
+     * signed-link. GENUINELY terpisah dari claimedByTechnicians() di atas
+     * — lihat WorkOrderClaimPartner's own docblock.
+     */
+    public function claimPartners(): BelongsToMany
+    {
+        return $this->belongsToMany(Technician::class, 'work_order_claim_partners')
+            ->withTimestamps();
+    }
+
+    public function toolUsages(): HasMany
+    {
+        return $this->hasMany(WorkOrderToolUsage::class);
+    }
+
+    public function modemUnits(): HasMany
+    {
+        return $this->hasMany(WorkOrderModemUnit::class);
     }
 }

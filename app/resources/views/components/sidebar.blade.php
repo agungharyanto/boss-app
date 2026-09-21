@@ -3,7 +3,7 @@
         [
             'id' => 'pelanggan',
             'label' => __('Pelanggan'),
-            'active' => request()->routeIs('web.customers.*') || request()->routeIs('web.work-orders.*'),
+            'active' => request()->routeIs('web.customers.*') || request()->routeIs('web.work-orders.*') || request()->routeIs('web.tool-types.*'),
             'links' => array_filter([
                 ['route' => 'web.customers.index', 'label' => __('Daftar Pelanggan')],
                 auth()->user()->can('register-customer')
@@ -25,6 +25,11 @@
                 // dirinya (WorkOrderPolicy::scopeForTechnician).
                 auth()->user()->can('viewAny', \App\Models\WorkOrder::class)
                     ? ['route' => 'web.work-orders.index', 'label' => __('Work Order')]
+                    : null,
+                // v0.13.4.1 — master data ToolType dipakai form klaim WO
+                // signed-link (partner + alat + modem, tanpa login).
+                auth()->user()->can('tool_types.view')
+                    ? ['route' => 'web.tool-types.index', 'label' => __('Tipe Alat')]
                     : null,
             ]),
         ],

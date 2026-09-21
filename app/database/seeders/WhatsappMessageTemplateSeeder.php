@@ -36,6 +36,11 @@ class WhatsappMessageTemplateSeeder extends Seeder
             // dan WorkOrderDispatchService::notifyTechnicians()), bukan 2
             // template terpisah — resolve() cuma per event_type.
             WhatsappEventType::WorkOrderDispatched->value => 'Halo {technician_name}, {status_notice}'.PHP_EOL.'WO #{work_order_id} — {customer_name}'.PHP_EOL.'Alamat: {customer_address}'.PHP_EOL.'Layanan: {service_type}'.PHP_EOL.'Janji Kunjungan: {scheduled_at}'.PHP_EOL.'— {company_name}.',
+            // v0.13.4.1 amendment — event type TERPISAH dari
+            // WorkOrderDispatched, lihat docblock enum-nya. Sengaja tidak
+            // menyebut {claim_link} sama sekali — link klaim sudah tidak
+            // relevan untuk WO yang sudah diklaim.
+            WhatsappEventType::WorkOrderClaimedReminder->value => 'Halo {technician_name}, REMINDER — WO #{work_order_id} yang sudah Anda klaim ({claimed_by_name}) untuk {customer_name} belum selesai, mohon segera ditindaklanjuti.'.PHP_EOL.'Alamat: {customer_address}'.PHP_EOL.'Layanan: {service_type}'.PHP_EOL.'Diklaim sejak: {claimed_at}'.PHP_EOL.'— {company_name}.',
         ];
 
         Tenant::all()->each(function (Tenant $tenant) use ($defaults) {

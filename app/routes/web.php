@@ -10,6 +10,7 @@ use App\Http\Controllers\Billing\InvoicePrintController;
 use App\Http\Controllers\CommissionPaymentProofController;
 use App\Http\Controllers\FiberNodePhotoController;
 use App\Http\Controllers\VpnScriptDownloadController;
+use App\Http\Controllers\WorkOrderClaimController;
 use App\Http\Middleware\EnsureAdminPanelAccess;
 use App\Livewire\Auth\ChangePassword;
 use App\Livewire\Auth\ReferrerForgotPassword;
@@ -27,6 +28,7 @@ use App\Livewire\Customers\CustomerShow;
 use App\Livewire\Customers\RegisterCustomer;
 use App\Livewire\Dashboard;
 use App\Livewire\Installation\OdpEdit;
+use App\Livewire\Installation\ToolTypeIndex;
 use App\Livewire\Installation\WorkOrderIndex;
 use App\Livewire\Installation\WorkOrderShow;
 use App\Livewire\Network\BandwidthProfileIndex;
@@ -92,6 +94,22 @@ Route::get('/', function () {
 Route::get('/vpn-script-generator/download/{token}.rsc', [VpnScriptDownloadController::class, 'show'])
     ->middleware('throttle:30,1')
     ->name('vpn-script-generator.download');
+
+// v0.13.4.1 — Deliberately unauthenticated (no auth:sanctum/admin.panel) —
+// teknisi membuka link ini dari pesan WhatsApp TANPA login sama sekali.
+// Middleware 'signed' (bukan session/token) adalah satu-satunya penjaga:
+// tanpa signature valid, Laravel menolak sebelum controller pernah
+// dipanggil. GET (tampilkan form) dan POST (submit) SENGAJA di path yang
+// SAMA PERSIS — hasCorrectSignature() Laravel hanya memeriksa
+// URL+query-string, bukan HTTP method, jadi form di halaman GET yang sudah
+// tervalidasi bisa POST ke url()->full()-nya sendiri dan tetap membawa
+// signature yang sama valid. Lihat WorkOrderClaimController's own docblock.
+Route::middleware(['signed', 'throttle:20,1'])->group(function () {
+    Route::get('/work-orders/claim/{work_order}/{technician}', [WorkOrderClaimController::class, 'show'])
+        ->name('work-orders.claim.show');
+    Route::post('/work-orders/claim/{work_order}/{technician}', [WorkOrderClaimController::class, 'submit'])
+        ->name('work-orders.claim.submit');
+});
 
 // Public — guests can switch language too, not just logged-in users.
 Route::get('/lang/{locale}', function (string $locale, LocaleService $service) {
@@ -225,6 +243,9 @@ Route::middleware(['auth', 'admin.panel', 'password.changed'])->name('web.')->gr
         // v0.26.2b — list saja (bukan CRUD), lihat docblock WorkOrderIndex.
         Route::get('/work-orders', WorkOrderIndex::class)->name('work-orders.index');
         Route::get('/work-orders/{work_order}', WorkOrderShow::class)->name('work-orders.show');
+        // v0.13.4.1 — CRUD sederhana master data ToolType (lihat docblock
+        // ToolTypeIndex), dipakai form klaim WO signed-link.
+        Route::get('/tool-types', ToolTypeIndex::class)->name('tool-types.index');
     });
 
     Route::get('/resellers', ResellerIndex::class)->name('resellers.index');

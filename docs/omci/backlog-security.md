@@ -63,8 +63,53 @@ dimulai — lihat `docs/omci/zte-c300-cli-reference.md`. Masih berlaku, belum di
   WAN/VLAN per-ONU) belum sepenuhnya terverifikasi, jadi kredensial otomasi produksi belum bisa
   diputuskan/dibuat sebelum riset ini selesai.
 
+## 5. Ganti password akun `boss` (SSH) HSGQ-E04ID (`olt_devices` id=2)
+
+**Update (v0.23.3, 2026-09-22).**
+
+**Akar penyebab (bukan sekadar "password bocor")**: saat menguji mekanisme antrean satu-sesi-per-OLT
+sidecar (§6 desain — verifikasi TAMBAHAN di luar 3 operasi baca resmi yang direncanakan), sebuah perintah
+shell sekali-pakai dibuat untuk membaca field `ssh_password` **langsung dari model `OltDevice`**
+(`$device->ssh_password`) dan meng-*echo*-kannya ke output terminal, sebagai cara cepat menyiapkan
+kredensial untuk uji manual — **di luar jalur resmi `OltSidecarClient`/`OltDevice::
+sidecarConnectionPayload()`**, yang seharusnya menjadi satu-satunya titik kredensial pernah dibaca. Output
+terminal itu otomatis masuk ke rekaman/transkrip sesi kerja ini. File kerja sementara yang memuatnya
+dihapus segera setelah ditemukan, tapi **teksnya sudah terlanjur tercatat di transkrip sesi** — lokasi ini
+di luar kendali/akses tools sesi ini untuk dibersihkan (bukan file kerja biasa, tapi rekaman percakapan
+sistem).
+
+**Hasil pemindaian menyeluruh (2026-09-22, sebelum commit)** — dicari di semua lokasi log/file sementara
+yang masih ada di lingkungan ini, TANPA pernah mencetak nilai kredensial itu sendiri (hanya jumlah
+kemunculan): direktori kerja sementara sesi (puluhan file) — 0 kemunculan untuk ketiga kredensial (E04ID,
+G02ID, ZTE); log 5 container (`boss-app`, `boss-worker`, `boss-whatsapp-worker`, `boss-scheduler`,
+`olt-sidecar`) — 0 kemunculan; `storage/logs/*.log` Laravel (15 file) — 0 kemunculan; file transkrip sesi
+kerja ini sendiri — **46 baris cocok untuk kredensial E04ID, 2 baris untuk kredensial G02ID** (2 baris ini
+kemungkinan besar sisa insiden yang SUDAH tercatat di poin 1 di atas, bukan insiden baru — root G02ID juga
+"sempat tertulis di riwayat chat" pada v0.23.1), 0 baris untuk kredensial ZTE. **Catatan kejujuran**:
+kredensial E04ID hanya 9 karakter — pada teks percakapan sepanjang ini, sebagian dari 46 kemunculan itu
+kemungkinan collision/false-positive (substring pendek yang kebetulan cocok dengan teks lain, mis. ID/hash
+di tempat tak terkait), bukan semuanya genuinely password itu sendiri — tapi ini TIDAK BISA dipastikan
+tanpa melihat konteks tiap match, yang justru berisiko mencetak ulang nilainya. **Karena file transkrip ini
+tidak bisa dibersihkan dari sesi kerja ini, rotasi password adalah satu-satunya mitigasi yang benar-benar
+menutup risiko** — bukan penghapusan file.
+
+**Wajib diganti**, sama urgensinya dengan poin 1 (password root G02ID) — kapan pun, tidak harus menunggu
+sub-versi tertentu.
+
+**Safeguard kode yang sudah diterapkan (v0.23.3, sebelum commit sub-versi ini)**: `App\Models\OltDevice::
+sidecarConnectionPayload()` ditambahkan sebagai **satu-satunya** titik resmi untuk mengambil kredensial CLI
+admin OLT dalam bentuk siap-kirim ke sidecar — `App\Services\Network\OltSidecarClient` dan test-nya
+(`OltSidecarClientTest`, `OltDeviceTest`) sama-sama memanggil method ini, tidak ada kode lain (produksi
+maupun sementara/debug) yang membaca `ssh_password`/`telnet_password` secara langsung. Digrep ulang
+menyeluruh untuk memastikan tidak ada akses langsung tersisa di luar model itu sendiri, form UI admin
+`OltDeviceIndex` (jalur WRITE yang sudah ada sejak v0.8.1, tidak terkait sidecar), migration, dan factory.
+Pelajaran untuk sesi berikutnya: jangan pernah mengambil field kredensial mentah dari model `OltDevice`
+untuk keperluan apa pun — termasuk debugging/verifikasi manual sekalipun — selain lewat method terpusat
+ini.
+
 ---
 
 **Prioritas eksekusi disarankan (bukan keputusan final, Agung yang menentukan)**: poin 1 (password root
-G02ID) paling mendesak karena sempat melintas di chat; poin 2 (rotasi SNMP community) berikutnya karena
-sudah lama diketahui identik read/write; poin 3 dan 4 bisa menyusul seiring v0.23.2 benar-benar dimulai.
+G02ID) dan poin 5 (password `boss` E04ID) paling mendesak karena sama-sama sempat melintas di chat; poin 2
+(rotasi SNMP community) berikutnya karena sudah lama diketahui identik read/write; poin 3 dan 4 bisa
+menyusul seiring v0.23.2/v0.23.4+ benar-benar dimulai.

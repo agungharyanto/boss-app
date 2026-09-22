@@ -34,30 +34,29 @@ use RuntimeException;
  */
 class OltSidecarClient
 {
-    /**
-     * Mapping (manufacturer name, model name) -> vendor key yang dikenal
-     * sidecar. Dijaga eksplisit (bukan derivasi otomatis dari string) agar
-     * sebuah OLT yang belum genuinely didukung sidecar GAGAL JELAS
-     * ("OLT ini belum didukung sidecar"), bukan diam-diam mengirim vendor
-     * key yang salah.
-     */
-    private const VENDOR_MAP = [
-        'HSGQ|HSGQ-E04ID' => 'hsgq_e04id',
-        'HSGQ|HSGQ-G02ID' => 'hsgq_g02id',
-        'ZTE|C300' => 'zte_c300',
-    ];
-
     public function __construct(private readonly OltSidecarHmac $hmac) {}
 
     /**
      * @param  array<string, mixed>  $args
+     * @param  bool  $maskSensitive  Default true (perilaku v0.23.3, tidak berubah untuk pemanggil mana
+     *                               pun yang sudah ada) — sidecar mem-mask SN/MAC/nama sebelum respons
+     *                               dikirim. HANYA App\Services\Network\OnuRegistryService (v0.23.4)
+     *                               yang mengirim false, karena konsumennya kode PHP yang memang perlu
+     *                               menyimpan SN/MAC lengkap untuk matching work_order_modem_units —
+     *                               lihat docs/omci/sidecar-design.md §4 dan
+     *                               docs/omci/onu-registry-design.md §3 untuk alasan lengkap.
      * @return array<string, mixed> Body respons terstruktur dari sidecar (lihat docs/omci/sidecar-design.md §4).
      *
      * @throws RuntimeException Kalau OLT tidak dikenal sidecar, atau request ke sidecar gagal di level HTTP.
      */
-    public function read(OltDevice $oltDevice, string $operation, array $args = [], ?int $requestedBy = null): array
-    {
-        $vendor = $this->resolveVendorKey($oltDevice);
+    public function read(
+        OltDevice $oltDevice,
+        string $operation,
+        array $args = [],
+        ?int $requestedBy = null,
+        bool $maskSensitive = true,
+    ): array {
+        $vendor = $oltDevice->sidecarVendorKey();
         // Kredensial HANYA pernah diambil lewat method terpusat ini —
         // JANGAN akses ssh_password/telnet_password langsung di sini atau
         // di tempat lain mana pun (lihat docblock OltDevice::
@@ -71,6 +70,7 @@ class OltSidecarClient
             'connection' => $connection,
             'args' => $args,
             'requested_by' => $requestedBy,
+            'mask_sensitive' => $maskSensitive,
         ], JSON_THROW_ON_ERROR);
 
         $timestamp = time();
@@ -100,15 +100,5 @@ class OltSidecarClient
             'success' => false,
             'error' => "Respons sidecar tidak valid (HTTP {$response->status()})",
         ];
-    }
-
-    private function resolveVendorKey(OltDevice $oltDevice): string
-    {
-        $manufacturer = strtoupper(trim($oltDevice->oltModel?->manufacturer?->name ?? ''));
-        $model = strtoupper(trim($oltDevice->oltModel?->name ?? ''));
-        $key = "{$manufacturer}|{$model}";
-
-        return self::VENDOR_MAP[$key]
-            ?? throw new RuntimeException("OltDevice #{$oltDevice->id} ({$manufacturer} {$model}) belum didukung sidecar OLT.");
     }
 }

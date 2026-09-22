@@ -21,12 +21,22 @@ from .base import (
     PROMPT_RE,
     lines_from_capture,
     mask_sensitive_tokens,
+    parse_field_value_block,
     run_command_and_capture,
 )
 
+# Value = command TEMPLATE — operasi yang butuh argumen memakai '{onu}'
+# sebagai placeholder, diisi dari args['onu'] saat execute() (lihat
+# REQUIRES_ONU_ARG di bawah). onu_uncfg_list tidak butuh argumen apa pun.
 OPERATIONS = {
     'onu_uncfg_list': 'show gpon onu uncfg',
+    # v0.23.4 — registry ONU. `show gpon onu detail-info <onu>` TERUJI
+    # eksekusi nyata (Sesi 6-7 v0.23.2, thd ONU_UJI_1/2) — lihat
+    # docs/omci/onu-registry-design.md §7.
+    'onu_detail_info': 'show gpon onu detail-info {onu}',
 }
+
+REQUIRES_ONU_ARG = {'onu_detail_info'}
 
 USERNAME_PROMPT_RE = r'(?i)(username|login)\s*:\s*'
 INITIAL_PASSWORD_RE = r'(?i)password:'
@@ -35,16 +45,41 @@ LOGOUT_EXACT_CONFIRM_RE = r'(?i)confirm to logout without saving\? \[yes/no\]'
 LOGOUT_GENERIC_CONFIRM_RE = r'\[yes/no\]|\(y/n\)|\[y/n\]|\(yes/no\)'
 
 
-def execute(connection: dict, operation: str, args: dict):
-    command = OPERATIONS.get(operation)
-    if command is None:
+def execute(connection: dict, operation: str, args: dict, mask_sensitive: bool = True):
+    template = OPERATIONS.get(operation)
+    if template is None:
         raise OltSessionError(f"Operasi '{operation}' belum didukung untuk zte_c300", 'operation')
 
+    if operation in REQUIRES_ONU_ARG:
+        onu = (args or {}).get('onu')
+        if not onu:
+            raise OltSessionError(f"Operasi '{operation}' butuh argumen 'onu'", 'operation')
+        command = template.format(onu=onu)
+    else:
+        command = template
+
     raw = _run_zte_telnet_command(connection, command)
-    lines = [mask_sensitive_tokens(line) for line in lines_from_capture(raw, command)]
+
+    if operation == 'onu_detail_info':
+        fields = parse_field_value_block(raw, command)
+        if mask_sensitive:
+            fields = {key: mask_sensitive_tokens(value) for key, value in fields.items()}
+        if not fields:
+            excerpt = raw
+            if mask_sensitive:
+                excerpt = mask_sensitive_tokens(excerpt)
+            return None, excerpt[:2000]
+        return fields, None
+
+    lines = lines_from_capture(raw, command)
+    if mask_sensitive:
+        lines = [mask_sensitive_tokens(line) for line in lines]
 
     if not lines:
-        return None, mask_sensitive_tokens(raw)[:2000]
+        excerpt = raw
+        if mask_sensitive:
+            excerpt = mask_sensitive_tokens(excerpt)
+        return None, excerpt[:2000]
 
     return {'lines': lines}, None
 

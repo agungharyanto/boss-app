@@ -82,18 +82,24 @@ class ContainerStatsService
         'VPN' => ['openvpn', 'openvpn-node2', 'openvpn-node3', 'wireguard', 'wireguard-node2', 'wireguard-node3', 'l2tp'],
         'LibreNMS' => ['librenms', 'librenms-db', 'librenms-dispatcher', 'librenms-redis'],
         'BOSS App Core' => ['boss-app', 'boss-worker', 'boss-nginx', 'boss-postgresql', 'boss-redis', 'boss-scheduler', 'boss-whatsapp-worker'],
+        // v0.23.3 — governance note permanen "Audit Docker vs Monitoring"
+        // (CLAUDE.md, 2026-09-02): setiap container Docker baru WAJIB
+        // dikelompokkan eksplisit di sprint yang sama, bukan dibiarkan
+        // jatuh ke 'Lainnya' begitu saja.
+        'OLT Sidecar' => ['olt-sidecar'],
     ];
 
     public const string FALLBACK_GROUP = 'Lainnya';
 
     /**
      * The fixed display order for the /monitoring page's grouped sections —
-     * VPN/LibreNMS/BOSS App Core in the order they were introduced across
-     * this sprint cluster, "Lainnya" always last since it's the catch-all.
+     * VPN/LibreNMS/BOSS App Core/OLT Sidecar in the order they were
+     * introduced across this sprint cluster, "Lainnya" always last since
+     * it's the catch-all.
      *
      * @var list<string>
      */
-    public const array GROUP_ORDER = ['VPN', 'LibreNMS', 'BOSS App Core', 'Lainnya'];
+    public const array GROUP_ORDER = ['VPN', 'LibreNMS', 'BOSS App Core', 'OLT Sidecar', 'Lainnya'];
 
     public static function groupFor(string $containerName): string
     {

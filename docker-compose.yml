@@ -1270,6 +1270,39 @@ services:
   #   depends_on:
   #     - librenms-dispatcher
 
+  olt-sidecar:
+    build:
+      context: ./olt-sidecar
+    container_name: olt-sidecar
+    restart: unless-stopped
+    # ip route replace (fragment+reconcile loop, entrypoint.sh) — sama
+    # pola librenms-dispatcher/genieacs-cwmp/genieacs-nbi di atas.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      TZ: Asia/Jakarta
+      OLT_SIDECAR_HMAC_SECRET: ${OLT_SIDECAR_HMAC_SECRET}
+    volumes:
+      # v0.23.3 fragment+reconcile — consumer ke-6, read-only, sama
+      # mekanisme CLAUDE.md "Fragment+Reconcile Routing" (v0.8.1). Lihat
+      # docs/omci/sidecar-design.md §3 Opsi A.
+      - vpn_wg_data:/vpn-wg-data:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    networks:
+      boss-network:
+        # Static IP (v0.23.3) — inside INFRA_TUNNEL_BLOCK_CIDR (.env),
+        # slot kosong berikutnya setelah RSYSLOG_INTERNAL_IP (.230).
+        # AllowedIPs/firewall NAS sudah mempercayai seluruh blok ini
+        # sejak redesign v0.8.1 — tidak ada sentuhan tambahan sisi NAS.
+        ipv4_address: ${OLT_SIDECAR_INTERNAL_IP}
+    # NO host port published (BOSS-010) — internal-only, hanya dijangkau
+    # boss-app lewat boss-network. v0.23.3: sidecar OLT BACA-SAJA (tidak
+    # ada command tulis ke OLT mana pun di sub-versi ini) — lihat
+    # docs/omci/sidecar-design.md.
+
   boss-postgresql:
     image: postgres:16-alpine
     container_name: boss-postgresql

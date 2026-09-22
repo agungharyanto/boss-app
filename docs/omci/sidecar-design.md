@@ -150,7 +150,8 @@ Sidecar tidak punya akses database — `vendor` (menentukan modul CLI mana yang 
     "username": "...",
     "password": "..."
   },
-  "args": {}
+  "args": {},
+  "mask_sensitive": true
 }
 ```
 
@@ -159,6 +160,19 @@ Sidecar tidak punya akses database — `vendor` (menentukan modul CLI mana yang 
 (opsi legacy SSH untuk HSGQ vs `telnet` polos untuk ZTE, persis parameter yang sudah terbukti di skrip
 riset v0.23.1/v0.23.2). `args` kosong untuk 3 operasi verifikasi awal — diisi kalau operasi butuh
 parameter tambahan (mis. nomor interface PON) di sub-versi berikutnya.
+
+**`mask_sensitive` (boolean, opsional, REVISI v0.23.4, disetujui Agung 2026-09-22) — default `true`**
+kalau field ini tidak dikirim sama sekali, sehingga perilaku SEMUA pemanggil sebelum v0.23.4 TIDAK
+berubah. Ditambahkan karena `App\Services\Network\OnuRegistryService` (v0.23.4, registry ONU) adalah
+konsumen respons yang genuinely BEDA dari verifikasi manual v0.23.3 — ia adalah KODE PHP yang perlu
+menyimpan SN/MAC LENGKAP ke database BOSS App untuk mencocokkan `work_order_modem_units`, bukan manusia
+membaca output. Kalau masking tetap dipaksa aktif, registry tidak akan pernah bisa menyimpan SN yang bisa
+dipakai matching — fitur intinya rusak sejak desain. `OnuRegistryService` adalah **satu-satunya**
+pemanggil yang mengirim `mask_sensitive: false` secara eksplisit, tidak pernah lewat endpoint
+user-facing/tinker manual mana pun — lihat `docs/omci/onu-registry-design.md` §3 untuk alasan lengkap.
+Kredensial OLT sendiri TETAP tidak pernah tersimpan di sidecar (§8 TIDAK berubah) — yang berubah murni SN/
+MAC device boleh disimpan di database BOSS App sendiri (tempat resminya, sama seperti
+`work_order_modem_units.serial_number`/`mac_address` yang sudah plain tanpa enkripsi di tabel itu).
 
 **Respons terstruktur** (bukan teks mentah CLI):
 ```json
@@ -175,7 +189,8 @@ parameter tambahan (mis. nomor interface PON) di sub-versi berikutnya.
 struktur yang diharapkan — LEBIH BAIK mengembalikan potongan mentah yang jelas gagal-parse daripada
 diam-diam mengembalikan struktur kosong/salah. **Field yang wajib di-mask sebelum kembali ke Laravel**
 (SN penuh/nama pelanggan/community/password) — masking terjadi DI SIDECAR sebelum respons dikirim, bukan
-diasumsikan Laravel yang membersihkan (defense-in-depth, sidecar adalah titik terdekat ke data mentah).
+diasumsikan Laravel yang membersihkan (defense-in-depth, sidecar adalah titik terdekat ke data mentah),
+**KECUALI pemanggil eksplisit mengirim `mask_sensitive: false`** (lihat di atas).
 
 ## 5. Sidecar TIDAK punya logika bisnis — pemisahan tanggung jawab
 

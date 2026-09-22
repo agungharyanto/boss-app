@@ -76,6 +76,14 @@ def read_olt(olt_device_id: int):
     connection = payload.get('connection') or {}
     args = payload.get('args') or {}
     requested_by = payload.get('requested_by')
+    # v0.23.4 — default True (perilaku v0.23.3, TIDAK berubah untuk
+    # pemanggil mana pun yang sudah ada). Hanya App\Services\Network\
+    # OnuRegistryService (Laravel) yang mengirim false secara eksplisit —
+    # lihat docs/omci/sidecar-design.md §4 dan
+    # docs/omci/onu-registry-design.md §3 untuk alasan lengkap.
+    mask_sensitive = payload.get('mask_sensitive', True)
+    if not isinstance(mask_sensitive, bool):
+        mask_sensitive = True
 
     module = VENDOR_MODULES.get(vendor)
     if module is None:
@@ -88,7 +96,7 @@ def read_olt(olt_device_id: int):
 
     try:
         with OltSessionGuard(olt_device_id):
-            data, raw_excerpt = module.execute(connection, operation, args)
+            data, raw_excerpt = module.execute(connection, operation, args, mask_sensitive)
         result_status = 'success'
         response = {
             'success': True,

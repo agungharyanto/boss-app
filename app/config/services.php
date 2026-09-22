@@ -76,6 +76,19 @@ return [
         'unrecognized_fallback_enabled' => env('WHATSAPP_UNRECOGNIZED_FALLBACK_ENABLED', true),
     ],
 
+    // v0.23.3 OLT Sidecar — internal HTTP API ke container Python
+    // olt-sidecar (never exposed publicly, BOSS-010). Pola SAMA PERSIS
+    // dengan whatsapp_gateway di atas: hmac_secret infra-level (APP_KEY-
+    // class), harus identik dengan copy olt-sidecar sendiri (env
+    // OLT_SIDECAR_HMAC_SECRET di docker-compose.yml) — lihat
+    // App\Support\OltSidecarHmac dan docs/omci/sidecar-design.md §4/§8.
+    // Sidecar HANYA membaca (BATAS KERAS v0.23.3) — lihat
+    // App\Services\Network\OltSidecarClient.
+    'olt_sidecar' => [
+        'url' => env('OLT_SIDECAR_URL'),
+        'hmac_secret' => env('OLT_SIDECAR_HMAC_SECRET'),
+    ],
+
     // v0.6.2 OpenVPN provisioning — these paths are the boss-app side of
     // the vpn_pki/vpn_ccd named volumes shared with the openvpn container
     // (docker-compose.yml), NOT the openvpn container's own /etc/openvpn/*

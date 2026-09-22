@@ -75,4 +75,36 @@ class OltDevice extends Model
     {
         return $this->belongsTo(Reseller::class);
     }
+
+    /**
+     * SATU-SATUNYA cara resmi mengambil kredensial CLI admin device ini
+     * dalam bentuk siap-kirim ke sidecar OLT (v0.23.3) — dipakai oleh
+     * App\Services\Network\OltSidecarClient DAN test-nya, supaya TIDAK
+     * ADA kode lain (produksi maupun sementara/debug) yang membaca
+     * `ssh_password`/`telnet_password` langsung dari model. Insiden nyata
+     * (2026-09-22, lihat docs/omci/backlog-security.md poin 5): password
+     * SSH sempat tercetak di sesi debugging justru karena field diakses
+     * langsung di luar jalur ini.
+     *
+     * @return array{protocol: string, host: string, port: int, username: string, password: string}
+     */
+    public function sidecarConnectionPayload(): array
+    {
+        return match ($this->access_protocol) {
+            OltAccessProtocol::Ssh => [
+                'protocol' => 'ssh',
+                'host' => $this->ip_address,
+                'port' => $this->ssh_port ?? 22,
+                'username' => (string) $this->ssh_username,
+                'password' => (string) $this->ssh_password,
+            ],
+            OltAccessProtocol::Telnet => [
+                'protocol' => 'telnet',
+                'host' => $this->ip_address,
+                'port' => $this->telnet_port ?? 23,
+                'username' => (string) $this->telnet_username,
+                'password' => (string) $this->telnet_password,
+            ],
+        };
+    }
 }

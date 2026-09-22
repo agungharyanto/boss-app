@@ -10,11 +10,29 @@ use Database\Factories\OltDeviceFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use RuntimeException;
 
 class OltDevice extends Model
 {
     /** @use HasFactory<OltDeviceFactory> */
     use BelongsToResellerScope, BelongsToTenant, HasFactory;
+
+    /**
+     * Mapping (manufacturer name, model name) -> vendor key yang dikenal
+     * sidecar OLT (v0.23.3). Dipindahkan dari App\Services\Network\
+     * OltSidecarClient (semula private const di sana) ke sini v0.23.4,
+     * supaya App\Services\Network\OnuRegistryService bisa memakai
+     * resolusi vendor yang SAMA tanpa duplikasi — satu sumber kebenaran,
+     * pola sama seperti sidecarConnectionPayload() di bawah. Dijaga
+     * eksplisit (bukan derivasi otomatis dari string) agar sebuah OLT
+     * yang belum genuinely didukung sidecar GAGAL JELAS, bukan diam-diam
+     * mengirim vendor key yang salah.
+     */
+    private const VENDOR_MAP = [
+        'HSGQ|HSGQ-E04ID' => 'hsgq_e04id',
+        'HSGQ|HSGQ-G02ID' => 'hsgq_g02id',
+        'ZTE|C300' => 'zte_c300',
+    ];
 
     protected $fillable = [
         'tenant_id',
@@ -106,5 +124,24 @@ class OltDevice extends Model
                 'password' => (string) $this->telnet_password,
             ],
         };
+    }
+
+    /**
+     * Vendor key yang dikenal sidecar OLT (v0.23.3), diturunkan dari
+     * nama manufacturer+model OLT ini. Satu-satunya titik resmi resolusi
+     * vendor — dipakai App\Services\Network\OltSidecarClient DAN
+     * App\Services\Network\OnuRegistryService, supaya keduanya tidak
+     * duplikasi logika ini (v0.23.4).
+     *
+     * @throws RuntimeException Kalau OLT ini belum dikenal/didukung sidecar.
+     */
+    public function sidecarVendorKey(): string
+    {
+        $manufacturer = strtoupper(trim($this->oltModel?->manufacturer?->name ?? ''));
+        $model = strtoupper(trim($this->oltModel?->name ?? ''));
+        $key = "{$manufacturer}|{$model}";
+
+        return self::VENDOR_MAP[$key]
+            ?? throw new RuntimeException("OltDevice #{$this->id} ({$manufacturer} {$model}) belum didukung sidecar OLT.");
     }
 }

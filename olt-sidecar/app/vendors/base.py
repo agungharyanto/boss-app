@@ -153,3 +153,28 @@ def lines_from_capture(raw: str, command: str) -> list[str]:
             continue
         cleaned.append(stripped)
     return cleaned
+
+
+def parse_field_value_block(raw: str, command: str) -> dict[str, str]:
+    """Ubah blok output 'Label            : Value' (satu field per baris —
+    pola umum CLI OLT untuk perintah detail-info/setting, dikonfirmasi
+    lewat output nyata `show gpon onu detail-info` v0.23.2) jadi dict.
+
+    Dipanggil di ATAS `lines_from_capture()` (bukan split baris mentah
+    langsung) supaya echo command device sendiri sudah dibuang duluan —
+    penting karena identifier ONU ZTE sendiri mengandung ':' (mis.
+    'gpon-onu_1/3/12:2'), yang kalau tidak dibuang dulu akan salah
+    ter-parse seolah jadi sebuah field. Baris tanpa ':' (header/separator)
+    diabaikan; baris dengan label kosong sebelum ':' juga diabaikan
+    (defense-in-depth, bukan pola yang teramati nyata)."""
+    fields: dict[str, str] = {}
+    for line in lines_from_capture(raw, command):
+        if ':' not in line:
+            continue
+        label, _, value = line.partition(':')
+        label = label.strip()
+        value = value.strip()
+        if not label:
+            continue
+        fields[label] = value
+    return fields

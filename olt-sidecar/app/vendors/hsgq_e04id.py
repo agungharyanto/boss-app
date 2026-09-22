@@ -14,15 +14,20 @@ OPERATIONS = {
 }
 
 
-def execute(connection: dict, operation: str, args: dict):
+def execute(connection: dict, operation: str, args: dict, mask_sensitive: bool = True):
     command = OPERATIONS.get(operation)
     if command is None:
         raise OltSessionError(f"Operasi '{operation}' belum didukung untuk hsgq_e04id", 'operation')
 
     raw = hsgq_common.run_hsgq_ssh_command(connection, command)
-    lines = [mask_sensitive_tokens(line) for line in lines_from_capture(raw, command)]
+    lines = lines_from_capture(raw, command)
+    if mask_sensitive:
+        lines = [mask_sensitive_tokens(line) for line in lines]
 
     if not lines:
-        return None, mask_sensitive_tokens(raw)[:2000]
+        excerpt = raw
+        if mask_sensitive:
+            excerpt = mask_sensitive_tokens(excerpt)
+        return None, excerpt[:2000]
 
     return {'lines': lines}, None

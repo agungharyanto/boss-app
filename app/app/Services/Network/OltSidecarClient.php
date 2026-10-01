@@ -31,6 +31,18 @@ use RuntimeException;
  * (lihat masing-masing modul vendor Python), tapi tidak ada satu pun
  * pemanggil produksi client ini yang boleh mengirim operasi tulis sampai
  * ada keputusan eksplisit baru (v0.23.5+).
+ *
+ * v0.23.5 — `activateOnu()`/`saveConfig()` menambah TULIS, dengan desain
+ * terkunci Agung (2026-09-22): method ini TIDAK PERNAH membangun/mengirim
+ * string command CLI — hanya `$params` (array terstruktur: onu_id, sn,
+ * onu_type, name, tcont_profile, traffic_profile, vlan_pppoe/mgmt/bridge,
+ * pon_interface). Sidecar sendiri yang merakit + memvalidasi urutan
+ * command dari template internal (`zte_c300.OPERATIONS_WRITE`) — Laravel
+ * tidak pernah tahu/mengirim bentuk command CLI-nya sama sekali.
+ * `activateOnu()` menjalankan konfigurasi sampai `end` TANPA `wr`
+ * (verifikasi online dilakukan pemanggil DI ANTARA `activateOnu()` dan
+ * `saveConfig()`, bukan di dalam client ini); `saveConfig()` adalah
+ * panggilan TERPISAH yang HANYA mengirim `wr`.
  */
 class OltSidecarClient
 {
@@ -93,6 +105,326 @@ class OltSidecarClient
         } finally {
             // Defense-in-depth — buang referensi array kredensial dari
             // scope method ini secepat mungkin setelah request selesai/gagal.
+            unset($connection);
+        }
+
+        return $response->json() ?? [
+            'success' => false,
+            'error' => "Respons sidecar tidak valid (HTTP {$response->status()})",
+        ];
+    }
+
+    /**
+     * v0.23.5 — jalankan konfigurasi ONU baru sampai `end`, TANPA `wr`.
+     * `$params` array TERSTRUKTUR saja (onu_id, sn, onu_type, name,
+     * tcont_profile, traffic_profile, vlan_pppoe/vlan_mgmt/vlan_bridge,
+     * pon_interface) — TIDAK PERNAH string command CLI, sidecar sendiri
+     * yang merakit + memvalidasi urutan command dari template internal.
+     *
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    public function activateOnu(OltDevice $oltDevice, array $params, ?int $requestedBy = null): array
+    {
+        return $this->apply($oltDevice, 'activate_onu', $params, $requestedBy);
+    }
+
+    /**
+     * v0.23.5 — koreksi VLAN PPPoE pada ONU yang SUDAH ter-apply, TANPA
+     * reapply seluruh blok dari nol (sidecar
+     * `zte_c300.OPERATIONS_WRITE['fix_onu_vlan']` hanya menyentuh 3 baris
+     * yang menyebut VLAN PPPoE — tidak pernah mengulang registrasi PON
+     * atau menyentuh VLAN mgmt/bridge). `$params`:
+     * `pon_interface`/`onu_id`/`new_vlan_pppoe`.
+     *
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    public function fixOnuVlan(OltDevice $oltDevice, array $params, ?int $requestedBy = null): array
+    {
+        return $this->apply($oltDevice, 'fix_onu_vlan', $params, $requestedBy);
+    }
+
+    /**
+     * v0.23.5 — hapus registrasi ONU di level PON (`no onu <id>`, sintaks
+     * ditemukan lewat bantuan CLI setelah fix_onu_vlan terbukti
+     * menghasilkan config campur aduk). `$params`: `pon_interface`/
+     * `onu_id`.
+     *
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    public function deleteOnu(OltDevice $oltDevice, array $params, ?int $requestedBy = null): array
+    {
+        return $this->apply($oltDevice, 'delete_onu', $params, $requestedBy);
+    }
+
+    /**
+     * v0.23.5 (Bagian B) — tambah baris `pppoe <host_id>` di
+     * `pon-onu-mng gpon-onu_{pon}:{onu_id}`. `$params`: `pon_interface`/
+     * `onu_id`/`host_id`/`username`/`password`/`nat_enabled` (opsional,
+     * default true). HANYA untuk host_id yang genuinely masih kosong —
+     * lihat docblock `_build_add_pppoe_commands()` (sidecar) untuk alasan.
+     *
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    public function addPppoe(OltDevice $oltDevice, array $params, ?int $requestedBy = null): array
+    {
+        return $this->apply($oltDevice, 'add_pppoe', $params, $requestedBy);
+    }
+
+    /**
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    private function apply(OltDevice $oltDevice, string $operation, array $params, ?int $requestedBy): array
+    {
+        $vendor = $oltDevice->sidecarVendorKey();
+        $connection = $oltDevice->sidecarConnectionPayload();
+
+        $body = json_encode([
+            'olt_device_id' => $oltDevice->id,
+            'vendor' => $vendor,
+            'operation' => $operation,
+            'connection' => $connection,
+            'params' => $params,
+            'requested_by' => $requestedBy,
+        ], JSON_THROW_ON_ERROR);
+
+        $timestamp = time();
+        $signature = $this->hmac->sign($body, $timestamp);
+        $baseUrl = rtrim((string) config('services.olt_sidecar.url'), '/');
+
+        try {
+            $response = Http::withBody($body, 'application/json')
+                ->withHeaders([
+                    'X-Olt-Timestamp' => (string) $timestamp,
+                    'X-Olt-Signature' => $signature,
+                ])
+                ->timeout(75)
+                ->post("{$baseUrl}/olt/{$oltDevice->id}/apply");
+        } finally {
+            unset($connection);
+        }
+
+        return $response->json() ?? [
+            'success' => false,
+            'error' => "Respons sidecar tidak valid (HTTP {$response->status()})",
+        ];
+    }
+
+    /**
+     * v0.23.5 — kirim HANYA `wr` (save config) di sesi terpisah dari
+     * activateOnu(). Dipanggil oleh pemanggil (bukan sidecar) HANYA
+     * setelah verifikasi online sukses — client ini tidak memaksakan
+     * urutan itu sendiri, murni transport.
+     *
+     * @return array<string, mixed>
+     */
+    public function saveConfig(OltDevice $oltDevice, ?int $requestedBy = null): array
+    {
+        $vendor = $oltDevice->sidecarVendorKey();
+        $connection = $oltDevice->sidecarConnectionPayload();
+
+        $body = json_encode([
+            'olt_device_id' => $oltDevice->id,
+            'vendor' => $vendor,
+            'connection' => $connection,
+            'requested_by' => $requestedBy,
+        ], JSON_THROW_ON_ERROR);
+
+        $timestamp = time();
+        $signature = $this->hmac->sign($body, $timestamp);
+        $baseUrl = rtrim((string) config('services.olt_sidecar.url'), '/');
+
+        try {
+            $response = Http::withBody($body, 'application/json')
+                ->withHeaders([
+                    'X-Olt-Timestamp' => (string) $timestamp,
+                    'X-Olt-Signature' => $signature,
+                ])
+                ->timeout(45)
+                ->post("{$baseUrl}/olt/{$oltDevice->id}/save");
+        } finally {
+            unset($connection);
+        }
+
+        return $response->json() ?? [
+            'success' => false,
+            'error' => "Respons sidecar tidak valid (HTTP {$response->status()})",
+        ];
+    }
+
+    /**
+     * v0.23.5 — HANYA untuk mencari command CLI yang benar lewat bantuan
+     * `?` (dipakai setelah `wr` ditolak device sebagai command save yang
+     * tidak dikenal). `$query` HARUS diakhiri `?` (divalidasi ketat lagi
+     * di sisi sidecar, _HELP_QUERY_RE) — TIDAK PERNAH bisa dipakai untuk
+     * mengeksekusi command config sungguhan.
+     *
+     * @return array<string, mixed>
+     */
+    public function probeConfigHelp(OltDevice $oltDevice, string $query, ?int $requestedBy = null): array
+    {
+        $vendor = $oltDevice->sidecarVendorKey();
+        $connection = $oltDevice->sidecarConnectionPayload();
+
+        $body = json_encode([
+            'olt_device_id' => $oltDevice->id,
+            'vendor' => $vendor,
+            'connection' => $connection,
+            'params' => ['query' => $query],
+            'requested_by' => $requestedBy,
+        ], JSON_THROW_ON_ERROR);
+
+        $timestamp = time();
+        $signature = $this->hmac->sign($body, $timestamp);
+        $baseUrl = rtrim((string) config('services.olt_sidecar.url'), '/');
+
+        try {
+            $response = Http::withBody($body, 'application/json')
+                ->withHeaders([
+                    'X-Olt-Timestamp' => (string) $timestamp,
+                    'X-Olt-Signature' => $signature,
+                ])
+                ->timeout(45)
+                ->post("{$baseUrl}/olt/{$oltDevice->id}/probe");
+        } finally {
+            unset($connection);
+        }
+
+        return $response->json() ?? [
+            'success' => false,
+            'error' => "Respons sidecar tidak valid (HTTP {$response->status()})",
+        ];
+    }
+
+    /**
+     * v0.23.5 — sama seperti probeConfigHelp(), TAPI masuk satu langkah
+     * navigasi lebih dalam (`interface gpon-olt_{$ponInterface}`) sebelum
+     * query bantuan — dipakai untuk mencari sintaks command yang hanya
+     * ada di context interface PON (mis. `no onu <id>`). `$query` HARUS
+     * diakhiri `?` (divalidasi ketat lagi di sisi sidecar).
+     *
+     * @return array<string, mixed>
+     */
+    public function probeOnuInterfaceHelp(OltDevice $oltDevice, string $ponInterface, string $query, ?int $requestedBy = null): array
+    {
+        $vendor = $oltDevice->sidecarVendorKey();
+        $connection = $oltDevice->sidecarConnectionPayload();
+
+        $body = json_encode([
+            'olt_device_id' => $oltDevice->id,
+            'vendor' => $vendor,
+            'operation' => 'onu_interface_help',
+            'connection' => $connection,
+            'params' => ['pon_interface' => $ponInterface, 'query' => $query],
+            'requested_by' => $requestedBy,
+        ], JSON_THROW_ON_ERROR);
+
+        $timestamp = time();
+        $signature = $this->hmac->sign($body, $timestamp);
+        $baseUrl = rtrim((string) config('services.olt_sidecar.url'), '/');
+
+        try {
+            $response = Http::withBody($body, 'application/json')
+                ->withHeaders([
+                    'X-Olt-Timestamp' => (string) $timestamp,
+                    'X-Olt-Signature' => $signature,
+                ])
+                ->timeout(45)
+                ->post("{$baseUrl}/olt/{$oltDevice->id}/probe");
+        } finally {
+            unset($connection);
+        }
+
+        return $response->json() ?? [
+            'success' => false,
+            'error' => "Respons sidecar tidak valid (HTTP {$response->status()})",
+        ];
+    }
+
+    /**
+     * v0.23.5 — sama seperti probeOnuInterfaceHelp(), TAPI masuk ke
+     * `interface gpon-onu_{$ponInterface}:{$onuId}` (level SERVICE
+     * per-ONU), bukan `interface gpon-olt_{$ponInterface}` (level
+     * registrasi PON). Dipakai investigasi parameter "WAN VLAN"
+     * tersembunyi yang mungkin ada di level ini.
+     *
+     * @return array<string, mixed>
+     */
+    public function probeOnuServiceHelp(OltDevice $oltDevice, string $ponInterface, int $onuId, string $query, ?int $requestedBy = null): array
+    {
+        $vendor = $oltDevice->sidecarVendorKey();
+        $connection = $oltDevice->sidecarConnectionPayload();
+
+        $body = json_encode([
+            'olt_device_id' => $oltDevice->id,
+            'vendor' => $vendor,
+            'operation' => 'onu_service_help',
+            'connection' => $connection,
+            'params' => ['pon_interface' => $ponInterface, 'onu_id' => $onuId, 'query' => $query],
+            'requested_by' => $requestedBy,
+        ], JSON_THROW_ON_ERROR);
+
+        $timestamp = time();
+        $signature = $this->hmac->sign($body, $timestamp);
+        $baseUrl = rtrim((string) config('services.olt_sidecar.url'), '/');
+
+        try {
+            $response = Http::withBody($body, 'application/json')
+                ->withHeaders([
+                    'X-Olt-Timestamp' => (string) $timestamp,
+                    'X-Olt-Signature' => $signature,
+                ])
+                ->timeout(45)
+                ->post("{$baseUrl}/olt/{$oltDevice->id}/probe");
+        } finally {
+            unset($connection);
+        }
+
+        return $response->json() ?? [
+            'success' => false,
+            'error' => "Respons sidecar tidak valid (HTTP {$response->status()})",
+        ];
+    }
+
+    /**
+     * v0.23.5 — sama seperti probeOnuServiceHelp(), TAPI masuk ke
+     * `pon-onu-mng gpon-onu_{$ponInterface}:{$onuId}` (node TERPISAH dari
+     * `interface gpon-onu_...`). Dipakai investigasi sintaks
+     * `pppoe <n> nat enable user ... password ...`.
+     *
+     * @return array<string, mixed>
+     */
+    public function probeOnuMngHelp(OltDevice $oltDevice, string $ponInterface, int $onuId, string $query, ?int $requestedBy = null): array
+    {
+        $vendor = $oltDevice->sidecarVendorKey();
+        $connection = $oltDevice->sidecarConnectionPayload();
+
+        $body = json_encode([
+            'olt_device_id' => $oltDevice->id,
+            'vendor' => $vendor,
+            'operation' => 'onu_mng_help',
+            'connection' => $connection,
+            'params' => ['pon_interface' => $ponInterface, 'onu_id' => $onuId, 'query' => $query],
+            'requested_by' => $requestedBy,
+        ], JSON_THROW_ON_ERROR);
+
+        $timestamp = time();
+        $signature = $this->hmac->sign($body, $timestamp);
+        $baseUrl = rtrim((string) config('services.olt_sidecar.url'), '/');
+
+        try {
+            $response = Http::withBody($body, 'application/json')
+                ->withHeaders([
+                    'X-Olt-Timestamp' => (string) $timestamp,
+                    'X-Olt-Signature' => $signature,
+                ])
+                ->timeout(45)
+                ->post("{$baseUrl}/olt/{$oltDevice->id}/probe");
+        } finally {
             unset($connection);
         }
 

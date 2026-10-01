@@ -118,4 +118,25 @@ class RadiusCredentialServiceTest extends TestCase
 
         $this->assertNull($result);
     }
+
+    /**
+     * v0.23.5 — skema baru (aktivasi OMCI): username RADIUS berbasis
+     * {cid}@ppp.bajastu.id, bukan phone_number/legacy_username polos.
+     * Regression guard untuk bug nyata yang ditemukan verifikasi manual
+     * v0.23.5 (badge "Belum di FreeRADIUS" salah untuk pelanggan yang
+     * genuinely sudah punya radcheck lewat skema ini).
+     */
+    public function test_falls_back_to_cid_based_username_when_phone_number_and_legacy_username_do_not_match(): void
+    {
+        $customer = Customer::factory()->create(['phone_number' => '0000000001', 'legacy_username' => null]);
+        $this->insertRadcheck("{$customer->cid}@ppp.bajastu.id", 'wifijadipasti');
+        $this->insertRadreply("{$customer->cid}@ppp.bajastu.id", 'Framed-Pool', 'HomeFixed-10Mbps (pool)');
+
+        $result = app(RadiusCredentialService::class)->lookupForCustomer($customer);
+
+        $this->assertNotNull($result);
+        $this->assertSame("{$customer->cid}@ppp.bajastu.id", $result['username']);
+        $this->assertSame('wifijadipasti', $result['password']);
+        $this->assertSame('HomeFixed-10Mbps (pool)', $result['framed_pool']);
+    }
 }

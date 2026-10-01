@@ -562,7 +562,7 @@ dikonfirmasi kali ini** (bukan dugaan konvensi umum seperti di E04ID). Belum die
 | `interface gpon-onu_R/S/P:<id>` + `name`/`description`/`tcont`/`gemport`/`service-port` | Konfigurasi service per ONU | **Write** | DARI REFERENSI PUBLIK, **TERKONFIRMASI SESUAI STRUKTUR** (nama sub-perintah cocok observasi `show running-config interface <onu>`) — TIDAK dieksekusi |
 | `pon-onu-mng <onu>` + `service`/`gemport`/`vlan` | Konfigurasi flow/vlan per ONU | **Write** | DARI REFERENSI PUBLIK, **SEBAGIAN cocok** (`flow`/`vlan-filter` ada, TIDAK ada `tr069-mgmt`) — TIDAK dieksekusi |
 | `tr069-mgmt 1 state unlock` / `acs <url>` / `tag pri 0 vlan <V>` | Konfigurasi TR-069 per ONU | **Write** | **TIDAK DITEMUKAN di firmware ini** — lihat koreksi Sesi 7, akses TR-069 nyatanya lewat `security-mgmt` generik |
-| `wr` | Simpan config | **Write** | **DILARANG, tidak dieksekusi** |
+| `wr` | Simpan config | **Write** | **KOREKSI v0.23.5: DIEKSEKUSI, DITOLAK device** — `%Error 20200: Invalid input detected at '^' marker.Invalid command`. `wr` BUKAN command save yang valid di firmware ini. Lihat bagian "v0.23.5 — Aktivasi Pertama" di bawah untuk discovery lanjutan (`auto-write`). |
 | `no onu <id>` | Hapus ONU | **Write** | DARI REFERENSI PUBLIK, **DILARANG, tidak dieksekusi** |
 
 ### Item 12 — command dari peta referensi yang TIDAK ada/tidak sesuai di firmware ini
@@ -574,3 +574,106 @@ dikonfirmasi kali ini** (bukan dugaan konvensi umum seperti di E04ID). Belum die
 - Selebihnya (`onu <id> type ... sn ...`, struktur `interface gpon-onu_x` dengan `name`/`description`/
   `tcont`/`gemport`/`service-port`) **SESUAI** referensi publik, dikonfirmasi lewat observasi config
   nyata (bukan dieksekusi).
+
+## v0.23.5 — Aktivasi Pertama (ONU_1, `gpon-onu_1/3/12:4`) — TULIS PERTAMA nyata ke OLT produksi
+
+**Status: apply SUKSES, save BELUM (device menolak `wr`, discovery command save sedang berjalan — lihat
+di bawah).** Ini eksekusi tulis PERTAMA di seluruh cluster v0.23.x — sebelum ini, `configure terminal`/
+`onu <id> type ... sn ...`/struktur `interface gpon-onu_x`/`pon-onu-mng`/`wr` semuanya berstatus
+"DILARANG, tidak dieksekusi" (murni riset baca).
+
+**`configure terminal` — TERUJI eksekusi nyata, SUKSES.** Device menerima tanpa masalah, masuk mode
+config `(config)#`.
+
+**Urutan aktivasi penuh (registrasi PON → config service ONU → pon-onu-mng) — TERUJI eksekusi nyata,
+SUKSES PENUH, 27 command.** Params: `pon_interface=1/3/12`, `onu_id=4` (ID kosong aman, ditentukan dari
+`show gpon onu state`/`baseinfo` live — BUKAN dari `show gpon onu uncfg` yang usulan ID-nya bentrok
+dengan ID terpakai, lihat "Temuan untuk desain v0.23.5" di atas), `onu_type=M12X5G_XPON` (asumsi dari
+kesamaan prefix SN dengan ONU_UJI existing — **TERBUKTI BENAR**, device menerima tanpa penolakan),
+`tcont_profile=HomeFixed-10Mbps`, `traffic_profile=PPPoE-Remote`, VLAN slot mengikuti pola PERSIS
+ONU_UJI_1/"Test-1" (service-port 1=VLAN PPPoE/10, service-port 11=VLAN mgmt-TR069/9, service-port
+12=VLAN bridge/172). Verifikasi online SETELAH apply (SEBELUM save, sesuai pengaman): `show gpon onu
+state gpon-olt_1/3/12` menunjukkan `1/3/12:4` → `Admin State: enable`, `OMCC State: enable`,
+**`Phase State: working`** — identik ONU_UJI existing. `show gpon onu baseinfo` mengonfirmasi
+`Type: M12X5G_XPON`, SN cocok, `State: ready`. `ONU Number` naik dari `2/3` ke `3/4`.
+
+**`wr` — TERUJI eksekusi nyata, DITOLAK device.**
+```
+wr
+                           ^
+%Error 20200: Invalid input detected at '^' marker.Invalid command
+```
+`wr` BUKAN command save yang valid di firmware ini — koreksi permanen terhadap referensi publik lama
+(yang mengasumsikan `wr` sebagai singkatan `write` gaya Cisco).
+
+**Discovery command save — bare `?` di level top (Exec mode) SUDAH terdokumentasi lengkap (lihat
+"Command mode `#` (bare `?`, TERUJI Sesi 2)" di atas, 38 command) — TIDAK ADA `write`/`save`/`copy`/
+`commit` di level itu.** Kandidat yang ADA di level top tapi belum dieksplorasi: `file`, `package`,
+`patch`, `restore`.
+
+**Bantuan `?` DI DALAM `configure terminal` — TERUJI eksekusi nyata (sesi terpisah dari apply, TANPA
+mengulang command ONU_1 apa pun — masuk config, `?`, langsung `end`).** ~11.885 karakter daftar command
+config-mode (chassis multi-service, ratusan entri, konsisten dengan `show ?` level top yang juga ~230
+entri). **Satu-satunya hit relevan untuk save/write/copy/commit/startup**: **`auto-write` — "auto write
+when configuration change"**.
+
+**`auto-write ?` — TERUJI eksekusi nyata (sesi terpisah, sama pola: masuk config, drill-down help,
+`end`).**
+```
+auto-write ?
+  <1-24>    configure change write delay time (hour)
+  disable   Disable
+  enable    Enable
+  hh:mm:ss  Auto write time
+```
+**KOREKSI PENTING**: `auto-write` BUKAN command "save sekarang" — ia TOGGLE terjadwal (delay 1-24 jam,
+atau waktu spesifik `hh:mm:ss`, atau `enable`/`disable` polos). Firmware ini kemungkinan **TIDAK PUNYA
+command "save instan" konvensional sama sekali** — mekanismenya auto-save BERKALA/TERJADWAL, bukan
+on-demand seperti `wr`/`write memory` gaya Cisco. **[TIDAK BISA DIVERIFIKASI]**: apakah ada command save
+instan lain di kategori `file`/`package`/`patch`/`restore` (level top, belum dieksplorasi), atau apakah
+`auto-write enable` (tanpa delay eksplisit) menyimpan segera vs menunggu siklus berikutnya — **belum
+dieksekusi, menunggu keputusan Agung** sebelum dicoba.
+
+**Config ONU_1 saat ini: teraplikasi di running-config (RAM), BELUM tersimpan ke NVRAM.** Sesuai desain
+pengaman (apply/save terpisah), ini aman ditinggalkan — hilang kalau device reboot, tidak ada dampak ke
+ONU lain/pelanggan lain.
+
+**Mekanisme sidecar baru (v0.23.5, lihat `App\Services\Network\OltSidecarClient`)**: `activateOnu()`
+(POST `/olt/<id>/apply`, params terstruktur → sidecar merakit command dari template internal,
+`zte_c300.OPERATIONS_WRITE['activate_onu']`), `saveConfig()` (POST `/olt/<id>/save`, hanya `wr`),
+`probeConfigHelp()` (POST `/olt/<id>/probe`, query WAJIB diakhiri `?` — divalidasi ketat sebelum
+menyentuh jaringan, tidak pernah bisa dipakai eksekusi config sungguhan). Deteksi kegagalan device
+(`_DEVICE_ERROR_RE`, pola `%Error <kode>`) ditambahkan SEBELUM eksekusi pertama — celah nyata ditemukan
+lewat review: `run_command_and_capture()` (base.py) sendiri TIDAK melempar exception untuk pesan error
+teks yang tetap kembali ke prompt normal, hanya untuk prompt konfirmasi/password tak dikenal/timeout/
+EOF.
+
+## KOREKSI PENTING — dua mekanisme aktivasi ONT berbeda total, jangan tertukar sebagai referensi
+
+**Ditemukan setelah kontradiksi nyata**: perbandingan awal Bagian B (baris `pppoe` di `pon-onu-mng`)
+memakai ONU_UJI_1/ONU_UJI_2 (`gpon-onu_1/3/12:2`/`:3`, "Test-1"/"Test-2") sebagai referensi "yang sudah
+bekerja" — keduanya **nol baris `pppoe`**, yang sempat mempertanyakan apakah baris itu genuinely
+dibutuhkan. **Ini perbandingan yang SALAH** — dikoreksi eksplisit oleh Agung:
+
+- **Test-1/Test-2** online lewat jalur **TR-069/GenieACS** (`RemoteWanConfig`, preset `boss-auto-wan`,
+  Auto-WAN Configurable v0.7.8) — WAN config (username/password PPPoE) didorong device **dari GenieACS**
+  setelah device Inform, **bukan** ditulis di level OMCI/OLT sama sekali. Wajar nol baris `pppoe` di
+  `pon-onu-mng` mereka — mekanisme ini genuinely tidak melibatkan baris itu.
+- **Pelanggan asli online via jalur OMCI murni** (mis. `gpon-onu_1/3/11:8`, PON `1/3/11` — bukan `1/3/12`)
+  **genuinely punya baris `pppoe 1 nat enable user <username> password <password>`** di
+  `pon-onu-mng`-nya, dikonfirmasi live (data pelanggan tidak dikutip di sini). Struktur selebihnya
+  (`flow`/`switchport-bind`/`vlan-filter`/`security-mgmt`) identik pola Test-1/ONU_1 — VLAN PPPoE-nya
+  juga `111`, VLAN mgmt `9`, VLAN bridge `172`, sama seperti skema ro-hotspot yang dipakai ONU_1.
+
+**Kesimpulan permanen untuk referensi ke depan**: ONT `M12X5G_XPON` (dan kemungkinan tipe serupa) bisa
+online lewat **dua jalur independen** yang keduanya valid, dipilih oleh CARA aktivasinya, bukan oleh tipe
+device:
+1. **Jalur OMCI** (yang dipakai cluster v0.23.x ini, aktivasi via OLT langsung) — WAJIB baris `pppoe <n>
+   nat enable user <username> password <password>` di `pon-onu-mng`, karena tidak ada mekanisme lain bagi
+   ONT untuk tahu kredensial PPPoE-nya.
+2. **Jalur TR-069** (GenieACS Auto-WAN Configurable, v0.7.8) — kredensial PPPoE didorong via TR-069
+   setelah Inform, `pon-onu-mng` tidak pernah menyentuh `pppoe` sama sekali.
+
+**Jangan bandingkan ONU aktivasi-OMCI dengan ONU aktivasi-TR-069 sebagai validasi pola config** — keduanya
+genuinely berbeda mekanisme, bukan variasi dari template yang sama. Kalau butuh referensi config OMCI,
+cari ONU pelanggan asli yang online lewat OLT langsung (bukan lewat GenieACS), bukan Test-1/Test-2.

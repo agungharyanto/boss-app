@@ -17,6 +17,17 @@ use App\Models\Customer;
  * `phone_number` (batch itu mencocokkan kandidat lewat `phone_number` ATAU
  * `legacy_username`, jadi salah satunya bisa jadi username RADIUS asli
  * untuk mereka). Kedua kandidat dicoba, dedup — bukan menebak salah satu.
+ *
+ * v0.23.5 — `{$customer->cid}@ppp.bajastu.id` ditambahkan sebagai kandidat
+ * ketiga. Skema BARU (aktivasi OMCI, mulai dipakai pertama kali di
+ * v0.23.5) menulis username RADIUS berbasis CID + domain suffix, BUKAN
+ * phone_number/legacy_username polos seperti skema Track A lama — gap
+ * nyata ditemukan saat verifikasi manual: badge "Kredensial PPPoE" di
+ * Detail Pelanggan salah menampilkan "Belum di FreeRADIUS" untuk
+ * pelanggan yang genuinely sudah punya baris `radcheck`, karena resolver
+ * ini belum pernah tahu skema CID sama sekali. `cid` bisa null (belum
+ * di-generate) — `array_filter()` di bawah sudah membuang nilai
+ * falsy/null, jadi aman tanpa null-check eksplisit di sini.
  */
 class RadiusUsernameResolver
 {
@@ -28,6 +39,7 @@ class RadiusUsernameResolver
         return array_values(array_unique(array_filter([
             $customer->phone_number,
             $customer->legacy_username,
+            $customer->cid ? "{$customer->cid}@ppp.bajastu.id" : null,
         ])));
     }
 }

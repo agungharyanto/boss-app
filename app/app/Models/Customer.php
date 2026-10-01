@@ -44,6 +44,14 @@ class Customer extends Model
         // false (default) = PPN tidak ditagihkan, Invoice lewat "Perpanjang"
         // di-set tax_total=0 tapi cetakan tetap tampilkan baris "PPN (0%)".
         'tax_billable',
+        // v0.23.5 — flag customer dummy/QA (mis. aktivasi ONU ZTE C300 uji
+        // end-to-end), supaya bisa dikecualikan dari laporan/billing
+        // pelanggan asli. Default false, tidak mengubah data existing.
+        'is_test_fixture',
+        // v0.23.5 Bagian D — mapping ke ONU fisik (olt_device_id/
+        // pon_interface/onu_id/sn), HANYA relevan is_test_fixture=true.
+        // Lihat App\Services\Network\TestCredentialSyncService.
+        'test_onu_metadata',
     ];
 
     protected function casts(): array
@@ -57,6 +65,8 @@ class Customer extends Model
             'nik' => 'encrypted',
             'tax_billable' => 'boolean',
             'referral_locked' => 'boolean',
+            'is_test_fixture' => 'boolean',
+            'test_onu_metadata' => 'array',
         ];
     }
 
@@ -158,5 +168,14 @@ class Customer extends Model
     public function cpeDevices(): HasMany
     {
         return $this->hasMany(CpeDevice::class);
+    }
+
+    /**
+     * v0.23.5 (Opsi B) — konfigurasi WAN test, HANYA relevan
+     * is_test_fixture=true. Lihat App\Models\TestOnuWanConfig.
+     */
+    public function testOnuWanConfig(): HasOne
+    {
+        return $this->hasOne(TestOnuWanConfig::class);
     }
 }

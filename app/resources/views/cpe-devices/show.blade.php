@@ -239,6 +239,16 @@
         @livewire('network.cpe-signal-history-graph', ['cpeDeviceId' => $device->id], key('cpe-signal-history-graph-'.$device->id))
     </div>
 
+    {{-- v0.23.5 (revisi OPSI a) — panel Konfigurasi WAN ONU (Test),
+         dipindah dari halaman Detail Pelanggan ke sini. HANYA untuk
+         perangkat milik customer is_test_fixture. Paket/VLAN/username/
+         password derive LIVE dari customer (read-only). --}}
+    @if ($device->customer?->is_test_fixture)
+        <div class="mt-6">
+            @livewire('customers.test-onu-wan-config-panel', ['customer' => $device->customer], key('test-onu-wan-'.$device->customer->id))
+        </div>
+    @endif
+
     {{-- v0.12.6 Bagian 2 — "Grafik Pemakaian" (radacct, 30 hari terakhir),
          full-width, langsung di bawah RX Power per urutan layout Bagian 3.
          Component ini punya headernya sendiri di dalam view-nya (pola

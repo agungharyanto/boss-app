@@ -22,13 +22,24 @@ def test_hsgq_g02id_only_exposes_show_version_as_teruji_operation():
 
 def test_zte_c300_exposes_only_teruji_operations():
     # v0.23.4 — onu_detail_info ditambahkan (TERUJI eksekusi nyata Sesi
-    # 6-7 v0.23.2, lihat docs/omci/onu-registry-design.md §2/§7). Kedua
-    # operasi harus SAMA PERSIS ini, tidak lebih tidak kurang.
+    # 6-7 v0.23.2, lihat docs/omci/onu-registry-design.md §2/§7).
+    # v0.23.5 — onu_state/onu_baseinfo ditambahkan sebagai prasyarat
+    # write-activation (TERUJI eksekusi nyata Sesi 5 v0.23.2, args['onu']
+    # di sini adalah interface PON seperti "gpon-olt_1/3/12", bukan
+    # interface ONU individual). Daftar operasi harus SAMA PERSIS ini,
+    # tidak lebih tidak kurang.
     assert zte_c300.OPERATIONS == {
         'onu_uncfg_list': 'show gpon onu uncfg',
         'onu_detail_info': 'show gpon onu detail-info {onu}',
+        'onu_state': 'show gpon onu state {onu}',
+        'onu_baseinfo': 'show gpon onu baseinfo {onu}',
+        'onu_running_config': 'show running-config interface {onu}',
+        'onu_mng_running_config': 'show onu running config {onu}',
     }
-    assert zte_c300.REQUIRES_ONU_ARG == {'onu_detail_info'}
+    assert zte_c300.REQUIRES_ONU_ARG == {
+        'onu_detail_info', 'onu_state', 'onu_baseinfo',
+        'onu_running_config', 'onu_mng_running_config',
+    }
 
 
 def test_hsgq_e04id_rejects_an_unknown_operation_before_touching_the_network():
@@ -133,6 +144,20 @@ def test_zte_c300_onu_detail_info_requires_a_non_empty_onu_argument():
         zte_c300.execute({}, 'onu_detail_info', {'onu': ''})
 
 
+def test_zte_c300_onu_state_requires_the_onu_argument():
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300.execute({}, 'onu_state', {})
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_zte_c300_onu_baseinfo_requires_the_onu_argument():
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300.execute({}, 'onu_baseinfo', {})
+
+    assert exc_info.value.stage == 'operation'
+
+
 def test_parse_field_value_block_turns_label_colon_value_lines_into_a_dict():
     command = 'show gpon onu detail-info gpon-onu_1/3/12:2'
     raw = (
@@ -177,3 +202,435 @@ def test_zte_c300_onu_uncfg_list_skips_masking_when_mask_sensitive_is_false():
     # menyentuh jaringan, terlepas dari nilai mask_sensitive.
     with pytest.raises(OltSessionError):
         zte_c300.execute({}, 'operasi_tidak_dikenal', {}, mask_sensitive=False)
+
+
+# ============================================================================
+# v0.23.5 — WRITE (activate_onu/save_config), murni test builder+validasi
+# (tidak memanggil pexpect/OLT sungguhan — reuse pola file ini secara
+# keseluruhan). SN/nama di sini FIKTIF, bukan SN perangkat uji Agung yang
+# genuinely dipakai.
+# ============================================================================
+
+_VALID_ACTIVATE_PARAMS = {
+    'pon_interface': '1/3/12',
+    'onu_id': 4,
+    'sn': 'CMDCAABCDEF1',
+    'onu_type': 'M12X5G_XPON',
+    'name': 'TEST OMCI 1 - TEST-OMCI-1',
+    'tcont_profile': 'HomeFixed-10Mbps',
+    'traffic_profile': 'PPPoE-Remote',
+    'vlan_pppoe': 10,
+    'vlan_mgmt': 9,
+    'vlan_bridge': 172,
+}
+
+
+def test_build_activate_onu_commands_produces_the_expected_sequence_with_no_wr():
+    commands = zte_c300._build_activate_onu_commands(_VALID_ACTIVATE_PARAMS)
+
+    assert commands[0] == 'configure terminal'
+    assert commands[-1] == 'end'
+    assert 'wr' not in commands  # apply TIDAK PERNAH mengandung save — dipisah sengaja.
+    assert 'interface gpon-olt_1/3/12' in commands
+    assert 'onu 4 type M12X5G_XPON sn CMDCAABCDEF1' in commands
+    assert 'interface gpon-onu_1/3/12:4' in commands
+    assert 'name TEST OMCI 1 - TEST-OMCI-1' in commands
+    assert 'tcont 1 profile HomeFixed-10Mbps' in commands
+    assert 'gemport 1 traffic-limit downstream PPPoE-Remote' in commands
+    # Slot VLAN mengikuti pola Test-1: service-port 1=PPPoE(10), 11=mgmt(9), 12=bridge(172).
+    assert 'service-port 1  vport 1 user-vlan 10 vlan 10' in commands
+    assert 'service-port 11 vport 1 user-vlan 9 vlan 9' in commands
+    assert 'service-port 12 vport 1 user-vlan 172 vlan 172' in commands
+    assert 'pon-onu-mng gpon-onu_1/3/12:4' in commands
+
+
+@pytest.mark.parametrize('key,bad_value', [
+    ('onu_id', 0),
+    ('onu_id', 129),
+    ('onu_id', 'empat'),
+    ('sn', 'PENDEK'),
+    ('sn', 'TIGABELASKARAKTER'),
+    ('onu_type', ''),
+    ('onu_type', 'tipe dengan spasi'),
+    ('name', ''),
+    ('name', 'a' * 65),
+    ('tcont_profile', 'ProfilTidakDikenal'),
+    ('traffic_profile', 'ProfilTidakDikenal'),
+    ('vlan_pppoe', 999),
+    ('vlan_mgmt', 11),
+    ('vlan_bridge', 173),
+    ('pon_interface', '1-3-12'),
+])
+def test_build_activate_onu_commands_rejects_invalid_params(key, bad_value):
+    params = dict(_VALID_ACTIVATE_PARAMS)
+    params[key] = bad_value
+
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300._build_activate_onu_commands(params)
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_execute_apply_rejects_an_unknown_write_operation_before_touching_the_network():
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300.execute_apply({}, 'operasi_tulis_tidak_dikenal', _VALID_ACTIVATE_PARAMS)
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_execute_apply_rejects_invalid_params_before_touching_the_network():
+    params = dict(_VALID_ACTIVATE_PARAMS)
+    params['sn'] = 'PENDEK'
+
+    with pytest.raises(OltSessionError):
+        zte_c300.execute_apply({}, 'activate_onu', params)
+
+
+@pytest.mark.parametrize('sample', [
+    '%Error 20202: Invalid input detected at \'^\' marker. Invalid parameter',
+    '%Error 20203: Incomplete command',
+    '%Error 12345: alasan lain apa pun',
+])
+def test_device_error_pattern_matches_real_observed_error_shapes(sample):
+    # Kedua bentuk pesan ini genuinely teramati live di riset v0.23.2
+    # (Sesi 6, "show gpon onu next-available gpon-olt_1/3/12" DITOLAK;
+    # Sesi 8, "show gpon global" bare) — celah nyata ditemukan SEBELUM
+    # eksekusi tulis pertama: run_command_and_capture() (base.py) sendiri
+    # TIDAK melempar exception untuk teks error yang tetap kembali ke
+    # prompt normal, jadi deteksi ini WAJIB, bukan opsional.
+    assert zte_c300._DEVICE_ERROR_RE.search(sample) is not None
+
+
+@pytest.mark.parametrize('sample', [
+    'OnuIndex   Admin State  OMCC State  Phase State  Channel',
+    'ONU Number: 2/3',
+    'c300.kaliwungu.bajastu.id',
+    '',
+])
+def test_device_error_pattern_does_not_false_positive_on_normal_output(sample):
+    assert zte_c300._DEVICE_ERROR_RE.search(sample) is None
+
+
+# ============================================================================
+# v0.23.5 — probe_config_help (discovery command save setelah "wr" ditolak)
+# ============================================================================
+
+@pytest.mark.parametrize('valid_query', ['?', 'file ?', 'write ?', 'copy running-config ?', 'onu 4 ?'])
+def test_help_query_pattern_accepts_help_queries(valid_query):
+    assert zte_c300._HELP_QUERY_RE.match(valid_query) is not None
+
+
+@pytest.mark.parametrize('invalid_query', [
+    'onu 5 type M12X5G_XPON sn CMDCAABCDEF1',  # command config sungguhan tanpa '?' — HARUS ditolak.
+    'wr',
+    'write',
+    'configure terminal',
+    'onu 4 type',  # incomplete, TANPA '?' — bukan query bantuan.
+    '',
+    'pppoe 1 nat enable user 2026090744@ppp.bajastu.id password wifijadipasti',  # command config sungguhan tanpa '?'.
+])
+def test_help_query_pattern_rejects_anything_that_is_not_a_pure_help_query(invalid_query):
+    assert zte_c300._HELP_QUERY_RE.match(invalid_query) is None
+
+
+def test_help_query_pattern_accepts_any_number_of_tokens_before_the_mandatory_question_mark():
+    # v0.23.5 amendment 2 — generalisasi dari batas 2-kata: drill-down
+    # nyata butuh makin dalam ("pppoe 1 nat ?" = 3 token). Pengaman
+    # UTAMA (wajib diakhiri '?') tidak pernah melemah — ini murni
+    # membuktikan jumlah token TIDAK lagi dibatasi angka tertentu.
+    assert zte_c300._HELP_QUERY_RE.match('a b c ?') is not None
+    assert zte_c300._HELP_QUERY_RE.match('pppoe 1 nat ?') is not None
+    assert zte_c300._HELP_QUERY_RE.match('pppoe 1 user ?') is not None
+    # Spasi sebelum '?' opsional (bukan syarat keamanan) — yang wajib
+    # HANYA karakter '?' di posisi terakhir, tetap query bantuan valid
+    # tanpa/dengan spasi.
+    assert zte_c300._HELP_QUERY_RE.match('file save config?') is not None
+
+
+def test_execute_probe_config_help_rejects_a_non_help_query_before_touching_the_network():
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300.execute_probe_config_help({}, {'query': 'onu 5 type X sn Y'})
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_execute_probe_config_help_rejects_a_missing_query_before_touching_the_network():
+    with pytest.raises(OltSessionError):
+        zte_c300.execute_probe_config_help({}, {})
+
+
+def test_probe_operations_routes_to_the_correct_functions():
+    assert zte_c300.PROBE_OPERATIONS == {
+        'config_help': 'execute_probe_config_help',
+        'onu_interface_help': 'execute_probe_onu_interface_help',
+        'onu_service_help': 'execute_probe_onu_service_help',
+        'onu_mng_help': 'execute_probe_onu_mng_help',
+    }
+    for method_name in zte_c300.PROBE_OPERATIONS.values():
+        assert hasattr(zte_c300, method_name)
+
+
+def test_execute_probe_onu_mng_help_rejects_a_non_help_query_before_touching_the_network():
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300.execute_probe_onu_mng_help({}, {'pon_interface': '1/3/12', 'onu_id': 4, 'query': 'pppoe 1 nat enable'})
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_execute_probe_onu_mng_help_rejects_an_invalid_pon_interface_before_touching_the_network():
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300.execute_probe_onu_mng_help({}, {'pon_interface': 'invalid', 'onu_id': 4, 'query': '?'})
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_execute_probe_onu_service_help_rejects_a_non_help_query_before_touching_the_network():
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300.execute_probe_onu_service_help({}, {'pon_interface': '1/3/12', 'onu_id': 4, 'query': 'name foo'})
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_execute_probe_onu_service_help_rejects_an_invalid_onu_id_before_touching_the_network():
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300.execute_probe_onu_service_help({}, {'pon_interface': '1/3/12', 'onu_id': 0, 'query': '?'})
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_execute_probe_onu_interface_help_rejects_a_non_help_query_before_touching_the_network():
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300.execute_probe_onu_interface_help({}, {'pon_interface': '1/3/12', 'query': 'no onu 4'})
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_execute_probe_onu_interface_help_rejects_an_invalid_pon_interface_before_touching_the_network():
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300.execute_probe_onu_interface_help({}, {'pon_interface': 'bukan-pola-valid', 'query': 'no ?'})
+
+    assert exc_info.value.stage == 'operation'
+
+
+# ============================================================================
+# v0.23.5 — fix_onu_vlan (koreksi VLAN parsial, tanpa reapply penuh)
+# ============================================================================
+
+_VALID_FIX_VLAN_PARAMS = {
+    'pon_interface': '1/3/12',
+    'onu_id': 4,
+    'new_vlan_pppoe': 111,
+}
+
+
+def test_build_fix_onu_vlan_commands_only_touches_the_three_pppoe_vlan_lines():
+    commands = zte_c300._build_fix_onu_vlan_commands(_VALID_FIX_VLAN_PARAMS)
+
+    assert commands == [
+        'configure terminal',
+        'interface gpon-onu_1/3/12:4',
+        'service-port 1  vport 1 user-vlan 111 vlan 111',
+        'exit',
+        'pon-onu-mng gpon-onu_1/3/12:4',
+        'flow 1 pri 0 vlan 111',
+        'vlan-filter iphost 1 pri 0 vlan 111',
+        'end',
+    ]
+    # NUNGGA registrasi PON (onu ... type ... sn ...), NUNGGA VLAN
+    # mgmt(9)/bridge(172), NUNGGA tcont/gemport/security-mgmt.
+    joined = ' '.join(commands)
+    assert 'onu 4 type' not in joined
+    assert 'sn ' not in joined
+    assert 'tcont' not in joined
+    assert 'security-mgmt' not in joined
+    assert 'vlan 9' not in joined
+    assert 'vlan 172' not in joined
+
+
+@pytest.mark.parametrize('key,bad_value', [
+    ('onu_id', 0),
+    ('onu_id', 'empat'),
+    ('new_vlan_pppoe', 999),  # VLAN yang genuinely tidak dikenal — ditolak.
+    ('pon_interface', 'bukan-pola-valid'),
+])
+def test_build_fix_onu_vlan_commands_rejects_invalid_params(key, bad_value):
+    params = dict(_VALID_FIX_VLAN_PARAMS)
+    params[key] = bad_value
+
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300._build_fix_onu_vlan_commands(params)
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_execute_apply_accepts_fix_onu_vlan_as_a_known_write_operation():
+    # Cukup buktikan operasi ini genuinely terdaftar (tidak reject sebagai
+    # "operasi tidak dikenal") — eksekusi nyata butuh pexpect/OLT sungguhan,
+    # di luar cakupan unit test ini.
+    assert 'fix_onu_vlan' in zte_c300.OPERATIONS_WRITE
+
+
+# ============================================================================
+# v0.23.5 — delete_onu (hapus registrasi ONU di level PON, "no onu <id>")
+# ============================================================================
+
+def test_build_delete_onu_commands_produces_the_expected_minimal_sequence():
+    commands = zte_c300._build_delete_onu_commands({'pon_interface': '1/3/12', 'onu_id': 4})
+
+    assert commands == [
+        'configure terminal',
+        'interface gpon-olt_1/3/12',
+        'no onu 4',
+        'end',
+    ]
+
+
+@pytest.mark.parametrize('key,bad_value', [
+    ('onu_id', 0),
+    ('onu_id', 129),
+    ('onu_id', 'empat'),
+    ('pon_interface', 'bukan-pola-valid'),
+])
+def test_build_delete_onu_commands_rejects_invalid_params(key, bad_value):
+    params = {'pon_interface': '1/3/12', 'onu_id': 4}
+    params[key] = bad_value
+
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300._build_delete_onu_commands(params)
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_delete_onu_is_a_known_write_operation():
+    assert 'delete_onu' in zte_c300.OPERATIONS_WRITE
+
+
+# ============================================================================
+# v0.23.5 Bagian B — add_pppoe (tambah baris pppoe di pon-onu-mng)
+# ============================================================================
+
+_VALID_ADD_PPPOE_PARAMS = {
+    'pon_interface': '1/3/12',
+    'onu_id': 4,
+    'host_id': 1,
+    'username': '2026090744@ppp.bajastu.id',
+    'password': 'wifijadipasti',
+    'nat_enabled': True,
+}
+
+
+def test_build_add_pppoe_commands_produces_the_expected_minimal_sequence():
+    commands = zte_c300._build_add_pppoe_commands(_VALID_ADD_PPPOE_PARAMS)
+
+    assert commands == [
+        'configure terminal',
+        'pon-onu-mng gpon-onu_1/3/12:4',
+        'pppoe 1 nat enable user 2026090744@ppp.bajastu.id password wifijadipasti',
+        'end',
+    ]
+
+
+def test_build_add_pppoe_commands_respects_nat_disabled():
+    params = dict(_VALID_ADD_PPPOE_PARAMS)
+    params['nat_enabled'] = False
+    commands = zte_c300._build_add_pppoe_commands(params)
+
+    assert 'pppoe 1 nat disable user 2026090744@ppp.bajastu.id password wifijadipasti' in commands
+
+
+@pytest.mark.parametrize('key,bad_value', [
+    ('onu_id', 0),
+    ('host_id', 0),
+    ('host_id', 256),
+    ('username', ''),
+    ('username', 'user with space'),
+    ('username', 'user;rm -rf /'),
+    ('password', ''),
+    ('password', 'pass word'),
+    ('password', 'pass"word'),
+    ('password', "pass'word"),
+    ('password', 'pass\\word'),
+    ('password', 'pass;word'),
+    ('nat_enabled', 'yes'),
+])
+def test_build_add_pppoe_commands_rejects_invalid_or_dangerous_params(key, bad_value):
+    params = dict(_VALID_ADD_PPPOE_PARAMS)
+    params[key] = bad_value
+
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300._build_add_pppoe_commands(params)
+
+    assert exc_info.value.stage == 'operation'
+
+
+def test_add_pppoe_is_a_known_write_operation():
+    assert 'add_pppoe' in zte_c300.OPERATIONS_WRITE
+
+
+# ============================================================================
+# v0.23.5 (Opsi B) — add_wan_bridge DIHAPUS; "Attached VLANs" sekarang =
+# extra_flow_vlans di activate_onu (baris flow permission tambahan).
+# ============================================================================
+
+def test_add_wan_bridge_is_no_longer_a_write_operation():
+    assert 'add_wan_bridge' not in zte_c300.OPERATIONS_WRITE
+    assert not hasattr(zte_c300, '_build_add_wan_bridge_commands')
+
+
+_ACTIVATE_FLOW_PARAMS = {
+    'pon_interface': '1/3/12',
+    'onu_id': 4,
+    'sn': 'CMDCA45762D6',
+    'onu_type': 'M12X5G_XPON',
+    'name': 'TEST OMCI 1',
+    'tcont_profile': 'HomeFixed-10Mbps',
+    'traffic_profile': 'PPPoE-Remote',
+    'vlan_pppoe': 111,
+    'vlan_mgmt': 9,
+    'vlan_bridge': 172,
+}
+
+
+def test_activate_onu_without_extra_flow_vlans_is_identical_to_before():
+    commands = zte_c300._build_activate_onu_commands(_ACTIVATE_FLOW_PARAMS)
+    # Hanya 3 baris flow basis (mgmt/pppoe/bridge), tidak ada tambahan.
+    flow_lines = [c for c in commands if c.startswith('flow 1 pri 0 vlan')]
+    assert flow_lines == ['flow 1 pri 0 vlan 9', 'flow 1 pri 0 vlan 111', 'flow 1 pri 0 vlan 172']
+
+
+def test_activate_onu_appends_extra_flow_vlans_as_permission_lines():
+    params = dict(_ACTIVATE_FLOW_PARAMS)
+    # 10 & 131 tambahan; 9 (mgmt) & 172 (bridge) di list harus di-dedup
+    # (sudah jadi baris basis), bukan dobel.
+    params['extra_flow_vlans'] = [10, 131, 9, 172]
+    commands = zte_c300._build_activate_onu_commands(params)
+    flow_lines = [c for c in commands if c.startswith('flow 1 pri 0 vlan')]
+    assert flow_lines == [
+        'flow 1 pri 0 vlan 9',
+        'flow 1 pri 0 vlan 111',
+        'flow 1 pri 0 vlan 172',
+        'flow 1 pri 0 vlan 10',
+        'flow 1 pri 0 vlan 131',
+    ]
+    # extra_flow_vlans TIDAK menambah service-port (hanya flow permission).
+    sp_lines = [c for c in commands if c.startswith('service-port')]
+    assert len(sp_lines) == 3
+
+
+@pytest.mark.parametrize('bad', [
+    'notalist',
+    [9999],      # bukan VLAN dikenal
+    [True],      # bool bukan int VLAN
+    ['10'],      # string bukan int
+])
+def test_activate_onu_rejects_invalid_extra_flow_vlans(bad):
+    params = dict(_ACTIVATE_FLOW_PARAMS)
+    params['extra_flow_vlans'] = bad
+    with pytest.raises(OltSessionError) as exc_info:
+        zte_c300._build_activate_onu_commands(params)
+    assert exc_info.value.stage == 'operation'
+
+
+def test_expanded_known_vlans_includes_new_package_vlans():
+    for vlan in (101, 131, 150, 151):
+        assert vlan in zte_c300._KNOWN_VLANS

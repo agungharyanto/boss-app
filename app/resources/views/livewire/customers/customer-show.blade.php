@@ -394,6 +394,13 @@
     </div>
 
     {{-- Timeline --}}
+    {{-- v0.23.5 (Opsi B) — panel konfigurasi WAN ONU test, HANYA untuk
+         customer is_test_fixture. Komponen terpisah (TestOnuWanConfigPanel)
+         supaya CustomerShow tidak membengkak. --}}
+    @if ($customer->is_test_fixture)
+        @livewire('customers.test-onu-wan-config-panel', ['customer' => $customer], key('test-onu-wan-'.$customer->id))
+    @endif
+
     <div class="p-4 border border-gray-200 rounded-md">
         <h2 class="text-sm font-semibold text-gray-700 mb-3">Timeline</h2>
         <ul class="space-y-3">

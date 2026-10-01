@@ -7,39 +7,32 @@ use App\Enums\TestOnuMode;
 use App\Enums\TestOnuWanMode;
 use App\Models\Customer;
 use App\Models\NetworkProfileGroup;
-use App\Models\PppPackage;
 use App\Models\TestOnuWanConfig;
 use App\Services\Network\TestCredentialSyncService;
 use Livewire\Attributes\Computed;
 use Livewire\Component;
 
 /**
- * v0.23.5 (Opsi B) — panel "Update ONU Mode" + "Attached VLANs" gaya
- * SmartOLT, di-embed di halaman customer detail HANYA untuk customer
- * is_test_fixture=true. TEST-ONLY.
+ * v0.23.5 (revisi OPSI a) — panel "Konfigurasi WAN ONU (Test)", di-embed
+ * di halaman Detail Perangkat CPE (via $device->customer) HANYA untuk
+ * customer is_test_fixture=true. TEST-ONLY.
  *
- * Dua tombol TERPISAH, sengaja:
- * - "Simpan Konfigurasi" — persist test_onu_wan_configs + attached vlans
- *   SAJA, TIDAK menyentuh OLT.
- * - "Terapkan ke ONU" — panggil TestCredentialSyncService::applyWanConfig()
- *   yang BENAR-BENAR menulis ke OLT (delete+recreate). Dipisah supaya
- *   menyimpan konfigurasi tidak otomatis mengeksekusi perubahan live.
+ * Paket/VLAN, PPPoE Username, PPPoE Password = READ-ONLY, DIDERIVE LIVE
+ * dari customer (tidak disimpan di test_onu_wan_configs):
+ * - Paket/VLAN: customers.ppp_package_id (diubah dari Daftar Pelanggan).
+ * - Username: {cid}@ppp.bajastu.id. Password: konstanta sistem.
+ * Yang masih bisa diedit di panel ini: onu_mode / wan_mode / config_method
+ * / attached_vlans (tidak ada tempat lain untuk mengaturnya).
  */
 class TestOnuWanConfigPanel extends Component
 {
     public Customer $customer;
-
-    public ?int $packageId = null;
 
     public string $onuMode = 'routing';
 
     public string $wanMode = 'pppoe';
 
     public string $configMethod = 'omci';
-
-    public string $pppoeUsername = '';
-
-    public string $pppoePassword = '';
 
     /** @var array<int> */
     public array $selectedVlans = [];
@@ -54,53 +47,42 @@ class TestOnuWanConfigPanel extends Component
 
         $config = $customer->testOnuWanConfig()->with('attachedVlans')->first();
         if ($config) {
-            $this->packageId = $config->package_id;
             $this->onuMode = $config->onu_mode->value;
             $this->wanMode = $config->wan_mode->value;
             $this->configMethod = $config->config_method->value;
-            $this->pppoeUsername = $config->pppoe_username ?? '';
-            // Password sengaja TIDAK di-prefill (pola masked secret) — kosong
-            // berarti "pertahankan yang tersimpan" saat save.
             $this->selectedVlans = $config->attachedVlans->pluck('vlan_id')
                 ->map(fn ($v) => (int) $v)->all();
         }
 
-        // VLAN 9 (remote mgmt) selalu tercentang (terkunci di UI + enforce
-        // di service).
         if (! in_array(TestCredentialSyncService::MANDATORY_ATTACHED_VLAN, $this->selectedVlans, true)) {
             $this->selectedVlans[] = TestCredentialSyncService::MANDATORY_ATTACHED_VLAN;
         }
     }
 
     /**
-     * Dropdown paket → VLAN (dinamis, semua PppPackage aktif yang grup-nya
-     * punya VLAN di interface_name). Lihat docs/omci/onu-test-ui-design.md §1.
+     * Parameter WAN turunan LIVE (read-only display) — satu sumber sama
+     * dengan applyWanConfig(). Lihat TestCredentialSyncService::deriveLiveWanParams().
      *
-     * @return array<int, array{id:int,label:string,vlan:int}>
+     * @return array<string, mixed>
      */
     #[Computed]
-    public function packageOptions(): array
+    public function live(): array
     {
-        return PppPackage::withoutGlobalScopes()
-            ->where('is_active', true)
-            ->with('networkProfileGroup')
-            ->get()
-            ->map(function (PppPackage $p) {
-                $iface = $p->networkProfileGroup?->interface_name;
-                if (! $iface || ! preg_match('/^vlan(\d+)-/', $iface, $m)) {
-                    return null; // paket tanpa VLAN disembunyikan (OPEN-1)
-                }
+        return app(TestCredentialSyncService::class)->deriveLiveWanParams($this->customer);
+    }
 
-                return ['id' => $p->id, 'label' => "{$p->name} (VLAN {$m[1]})", 'vlan' => (int) $m[1]];
-            })
-            ->filter()
-            ->values()
-            ->all();
+    /**
+     * URL edit paket pelanggan (Daftar Pelanggan / Detail Pelanggan).
+     */
+    #[Computed]
+    public function editPackageUrl(): string
+    {
+        return route('web.customers.show', $this->customer);
     }
 
     /**
      * Daftar VLAN untuk multi-select Attached VLANs — semua
-     * NetworkProfileGroup ppp yang punya interface_name, + VLAN 9 (mgmt).
+     * NetworkProfileGroup ppp yang punya interface_name + VLAN 9 (mgmt).
      *
      * @return array<int, array{vlan:int,label:string,locked:bool}>
      */
@@ -113,11 +95,8 @@ class TestOnuWanConfigPanel extends Component
             'locked' => true,
         ]];
 
-        $groups = NetworkProfileGroup::withoutGlobalScopes()
-            ->whereNotNull('interface_name')
-            ->get();
         $seen = [TestCredentialSyncService::MANDATORY_ATTACHED_VLAN];
-        foreach ($groups as $g) {
+        foreach (NetworkProfileGroup::withoutGlobalScopes()->whereNotNull('interface_name')->get() as $g) {
             if (! preg_match('/^vlan(\d+)-/', (string) $g->interface_name, $m)) {
                 continue;
             }
@@ -138,41 +117,23 @@ class TestOnuWanConfigPanel extends Component
         $this->authorizeTestFixture();
 
         $this->validate([
-            'packageId' => 'nullable|integer|exists:ppp_packages,id',
             'onuMode' => 'required|in:routing,bridging',
             'wanMode' => 'required|in:pppoe,dhcp,static,webpage',
             'configMethod' => 'required|in:omci,tr069',
-            'pppoeUsername' => 'nullable|string|max:128',
-            'pppoePassword' => 'nullable|string|max:128',
             'selectedVlans' => 'array',
             'selectedVlans.*' => 'integer',
         ]);
 
-        $vlan = null;
-        if ($this->packageId) {
-            $pkg = PppPackage::withoutGlobalScopes()->with('networkProfileGroup')->find($this->packageId);
-            if ($pkg?->networkProfileGroup?->interface_name
-                && preg_match('/^vlan(\d+)-/', $pkg->networkProfileGroup->interface_name, $m)) {
-                $vlan = (int) $m[1];
-            }
-        }
-
         $config = TestOnuWanConfig::firstOrNew(['customer_id' => $this->customer->id]);
-        $config->package_id = $this->packageId;
-        $config->vlan_pppoe = $vlan;
         $config->onu_mode = TestOnuMode::from($this->onuMode);
         $config->wan_mode = TestOnuWanMode::from($this->wanMode);
         $config->config_method = TestOnuConfigMethod::from($this->configMethod);
-        $config->pppoe_username = $this->pppoeUsername ?: null;
-        // Kosong = pertahankan password tersimpan (masked secret convention).
-        if ($this->pppoePassword !== '') {
-            $config->pppoe_password = $this->pppoePassword;
-        }
         $config->save();
 
-        // Sync attached vlans — VLAN 9 selalu disertakan (enforce di service
-        // juga, ini lapisan UI/persist).
-        $vlans = collect($this->selectedVlans)->map(fn ($v) => (int) $v)->push(TestCredentialSyncService::MANDATORY_ATTACHED_VLAN)->unique()->values();
+        // Attached vlans — VLAN 9 selalu disertakan (enforce lapis UI/persist;
+        // service juga meng-enforce).
+        $vlans = collect($this->selectedVlans)->map(fn ($v) => (int) $v)
+            ->push(TestCredentialSyncService::MANDATORY_ATTACHED_VLAN)->unique()->values();
         $groupByVlan = NetworkProfileGroup::withoutGlobalScopes()->whereNotNull('interface_name')->get()
             ->mapWithKeys(function (NetworkProfileGroup $g) {
                 preg_match('/^vlan(\d+)-/', (string) $g->interface_name, $m);
@@ -187,7 +148,6 @@ class TestOnuWanConfigPanel extends Component
             ]);
         }
 
-        $this->pppoePassword = '';
         $this->statusMessage = 'Konfigurasi WAN test tersimpan (belum diterapkan ke ONU).';
     }
 

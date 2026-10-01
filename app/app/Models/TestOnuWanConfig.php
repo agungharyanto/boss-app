@@ -22,35 +22,23 @@ class TestOnuWanConfig extends Model
 {
     protected $fillable = [
         'customer_id',
-        'package_id',
-        'vlan_pppoe',
         'onu_mode',
         'wan_mode',
         'config_method',
-        'pppoe_username',
-        'pppoe_password',
     ];
 
     protected function casts(): array
     {
         return [
-            'vlan_pppoe' => 'integer',
             'onu_mode' => TestOnuMode::class,
             'wan_mode' => TestOnuWanMode::class,
             'config_method' => TestOnuConfigMethod::class,
-            // Pola enkripsi sama OltDevice.telnet_password/ssh_password.
-            'pppoe_password' => 'encrypted',
         ];
     }
 
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
-    }
-
-    public function package(): BelongsTo
-    {
-        return $this->belongsTo(PppPackage::class, 'package_id');
     }
 
     public function attachedVlans(): HasMany

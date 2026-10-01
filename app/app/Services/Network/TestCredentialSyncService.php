@@ -8,6 +8,7 @@ use App\Enums\TestOnuWanMode;
 use App\Models\Customer;
 use App\Models\NetworkProfileGroup;
 use App\Models\OltDevice;
+use App\Models\PppPackage;
 use App\Models\TestOnuWanConfig;
 use Illuminate\Support\Sleep;
 use RuntimeException;
@@ -83,6 +84,16 @@ class TestCredentialSyncService
      * docs/omci/onu-test-ui-design.md.
      */
     public const MANDATORY_ATTACHED_VLAN = 9;
+
+    /**
+     * Password PPPoE KONSTANTA SISTEM untuk fixture OMCI test — seragam
+     * untuk semua customer test (keputusan Agung OPSI a). TIDAK disimpan
+     * per-customer; baris `pppoe ... password <ini>` di OLT + radcheck
+     * sama-sama memakai nilai ini. (Catatan: konvensi password==username
+     * di RadcheckWriterService itu untuk pelanggan MIGRASI nyata v0.8.4,
+     * BUKAN alur OMCI-test ini.)
+     */
+    public const PPPOE_PASSWORD = 'wifijadipasti';
 
     public function __construct(
         private readonly OltSidecarClient $sidecar,
@@ -259,7 +270,7 @@ class TestCredentialSyncService
         $meta = $this->requireMetadata($customer);
 
         $config = TestOnuWanConfig::where('customer_id', $customer->id)
-            ->with(['attachedVlans', 'package.networkProfileGroup'])
+            ->with('attachedVlans')
             ->first();
         if ($config === null) {
             throw new RuntimeException("Customer #{$customer->id} belum punya konfigurasi WAN test (test_onu_wan_configs).");
@@ -277,23 +288,28 @@ class TestCredentialSyncService
         }
 
         // --- config_method = OMCI, wan_mode = PPPoE ---
-        $group = $config->package?->networkProfileGroup;
-        if ($group === null || $group->customerIpPool === null) {
-            throw new RuntimeException('Paket WAN test tidak punya Grup Profil / CustomerIpPool terkait.');
+        // Paket/VLAN/username/password DIDERIVE LIVE dari customer (OPSI a,
+        // keputusan Agung) — tidak ada lagi yang disimpan di
+        // test_onu_wan_configs. Satu sumber kebenaran: customers.ppp_package_id
+        // (diubah lewat Daftar Pelanggan), customers.cid, dan konstanta
+        // PPPOE_PASSWORD.
+        $live = $this->deriveLiveWanParams($customer);
+        if (! $live['has_vlan_package']) {
+            throw new RuntimeException($live['message']);
         }
-        $vlanPppoe = $this->extractVlanFromInterfaceName((string) $group->interface_name);
+        $vlanPppoe = $live['vlan_pppoe'];
+        $framedPool = $live['framed_pool'];
+        $username = $live['username'];
+        $password = $live['password'];
 
-        // Slot bridge (service-port 12) = VLAN bridge FISIK ONU dari
-        // metadata (172 untuk ONU_1) — bukan diturunkan dari urutan
-        // attached (yang non-deterministik). Konsisten dengan struktur
-        // test_onu_metadata yang sudah ada.
+        // Slot bridge (service-port 12) = VLAN bridge FISIK ONU dari metadata
+        // (172 untuk ONU_1/ONU_2) — deterministik, bukan dari urutan attached.
         $vlanMgmt = self::MANDATORY_ATTACHED_VLAN;
         $vlanBridge = (int) ($meta['vlan_bridge'] ?? 172);
 
         // Attached VLANs: pastikan VLAN 9 (mandatory) ikut. 3 slot basis
         // (mgmt/pppoe/bridge) sudah punya service-port+flow sendiri; attached
-        // di LUAR ketiganya jadi baris flow PERMISSION tambahan (izin lewat,
-        // tanpa service-port). Diurutkan supaya deterministik.
+        // di LUAR ketiganya jadi baris flow PERMISSION tambahan.
         $attached = $config->attachedVlans->pluck('vlan_id')->map(fn ($v) => (int) $v)->unique()->values()->all();
         if (! in_array(self::MANDATORY_ATTACHED_VLAN, $attached, true)) {
             $attached[] = self::MANDATORY_ATTACHED_VLAN; // enforce di service, bukan hanya UI
@@ -305,11 +321,8 @@ class TestCredentialSyncService
             fn ($v) => ! in_array($v, $baseSlots, true),
         ));
 
-        if (! ($config->pppoe_username) || ! ($config->pppoe_password)) {
-            throw new RuntimeException('WAN mode PPPoE butuh pppoe_username & pppoe_password di konfigurasi.');
-        }
-
-        $commands = $this->reactivateOnuWithPppoe($olt = OltDevice::withoutGlobalScopes()->findOrFail($meta['olt_device_id']), [
+        $olt = OltDevice::withoutGlobalScopes()->findOrFail($meta['olt_device_id']);
+        $commands = $this->reactivateOnuWithPppoe($olt, [
             'pon_interface' => $meta['pon_interface'],
             'onu_id' => (int) $meta['onu_id'],
             'sn' => $meta['sn'],
@@ -321,18 +334,16 @@ class TestCredentialSyncService
             'vlan_mgmt' => $vlanMgmt,
             'vlan_bridge' => $vlanBridge,
             'extra_flow_vlans' => $extraFlowVlans,
-            'username' => $config->pppoe_username,
-            'password' => $config->pppoe_password,
+            'username' => $username,
+            'password' => $password,
         ]);
 
-        $framedPool = $group->customerIpPool->routerOsPoolName();
-        $this->radcheck->write($config->pppoe_username, $config->pppoe_password, $framedPool);
+        $this->radcheck->write($username, $password, $framedPool);
 
-        $config->update(['vlan_pppoe' => $vlanPppoe]);
         $customer->update([
             'test_onu_metadata' => array_merge($meta, [
                 'current_vlan_pppoe' => $vlanPppoe,
-                'network_profile_group_id' => $group->id,
+                'network_profile_group_id' => $live['group_id'],
             ]),
         ]);
 
@@ -342,8 +353,64 @@ class TestCredentialSyncService
             'extra_flow_vlans' => $extraFlowVlans,
             'attached_vlans' => $attached,
             'framed_pool' => $framedPool,
-            'username' => $config->pppoe_username,
+            'username' => $username,
             'commands_applied' => $commands,
+        ];
+    }
+
+    /**
+     * Derive LIVE parameter WAN dari customer (OPSI a) — satu sumber
+     * kebenaran, tidak ada yang disimpan di test_onu_wan_configs:
+     * - Paket/VLAN/Framed-Pool: customers.ppp_package_id -> NetworkProfileGroup
+     *   (interface_name -> VLAN via extractVlanFromInterfaceName) +
+     *   customerIpPool.routerOsPoolName().
+     * - username: {customers.cid}@ppp.bajastu.id.
+     * - password: konstanta PPPOE_PASSWORD.
+     *
+     * Kalau customer belum punya paket ber-VLAN: has_vlan_package=false +
+     * pesan ramah (panel tampilkan, applyWanConfig throw). Dipakai BERSAMA
+     * oleh panel (display read-only) dan applyWanConfig (sumber apply) —
+     * dijamin konsisten.
+     *
+     * @return array<string, mixed>
+     */
+    public function deriveLiveWanParams(Customer $customer): array
+    {
+        $username = $customer->cid ? "{$customer->cid}@ppp.bajastu.id" : null;
+        $password = self::PPPOE_PASSWORD;
+
+        $package = $customer->ppp_package_id
+            ? PppPackage::withoutGlobalScopes()->with('networkProfileGroup.customerIpPool')->find($customer->ppp_package_id)
+            : null;
+        $group = $package?->networkProfileGroup;
+
+        $hasVlan = $group !== null
+            && $group->interface_name !== null
+            && preg_match('/^vlan(\d+)-/', $group->interface_name) === 1
+            && $group->customerIpPool !== null;
+
+        if (! $hasVlan) {
+            return [
+                'has_vlan_package' => false,
+                'message' => 'Pelanggan ini belum punya paket dengan VLAN, atur dulu di Daftar Pelanggan.',
+                'package_name' => $package?->name,
+                'vlan_pppoe' => null,
+                'framed_pool' => null,
+                'username' => $username,
+                'password' => $password,
+                'group_id' => null,
+            ];
+        }
+
+        return [
+            'has_vlan_package' => true,
+            'message' => null,
+            'package_name' => $package->name,
+            'vlan_pppoe' => $this->extractVlanFromInterfaceName($group->interface_name),
+            'framed_pool' => $group->customerIpPool->routerOsPoolName(),
+            'username' => $username,
+            'password' => $password,
+            'group_id' => $group->id,
         ];
     }
 

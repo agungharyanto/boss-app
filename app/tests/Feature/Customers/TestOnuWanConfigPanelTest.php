@@ -16,14 +16,16 @@ use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
- * v0.23.5 (Opsi B) — panel WAN config test. TIDAK memanggil OLT sungguhan
- * (TestCredentialSyncService di-mock untuk aksi apply).
+ * v0.23.5 (revisi OPSI a) — panel WAN config test. Paket/VLAN/username/
+ * password DIDERIVE LIVE dari customer (read-only di panel); hanya
+ * onu_mode/wan_mode/config_method/attached_vlans yang diedit. OLT di-mock
+ * (TestCredentialSyncService) untuk aksi apply — tidak pernah sentuh OLT.
  */
 class TestOnuWanConfigPanelTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function makePackageWithVlan(string $interfaceName): PppPackage
+    private function attachVlanPackage(Customer $customer, string $interfaceName): PppPackage
     {
         $nas = Nas::factory()->create();
         $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'PPPOE-REMOTE']);
@@ -33,11 +35,13 @@ class TestOnuWanConfigPanelTest extends TestCase
             'customer_ip_pool_id' => $pool->id,
             'interface_name' => $interfaceName,
         ]);
+        $package = PppPackage::factory()->create(['network_profile_group_id' => $group->id]);
+        $customer->forceFill(['ppp_package_id' => $package->id])->save();
 
-        return PppPackage::factory()->create(['network_profile_group_id' => $group->id]);
+        return $package;
     }
 
-    private function testCustomer(): Customer
+    private function makeTestCustomer(): Customer
     {
         return Customer::factory()->create([
             'is_test_fixture' => true,
@@ -56,56 +60,81 @@ class TestOnuWanConfigPanelTest extends TestCase
 
     public function test_vlan_9_is_always_preselected_on_mount(): void
     {
-        $customer = $this->testCustomer();
+        $customer = $this->makeTestCustomer();
 
         Livewire::test(TestOnuWanConfigPanel::class, ['customer' => $customer])
             ->assertSet('selectedVlans', fn ($v) => in_array(9, $v, true));
     }
 
-    public function test_save_persists_config_and_always_includes_vlan_9(): void
+    public function test_save_persists_only_mode_fields_and_forces_vlan_9(): void
     {
-        $customer = $this->testCustomer();
-        $package = $this->makePackageWithVlan('vlan111-PPPoE-10Mbps-Loyalis');
+        $customer = $this->makeTestCustomer();
 
         Livewire::test(TestOnuWanConfigPanel::class, ['customer' => $customer])
-            ->set('packageId', $package->id)
-            ->set('pppoeUsername', '2026090744@ppp.bajastu.id')
-            ->set('pppoePassword', 'wifijadipasti')
+            ->set('onuMode', 'routing')
+            ->set('wanMode', 'pppoe')
+            ->set('configMethod', 'omci')
             ->set('selectedVlans', [172]) // sengaja tanpa 9
             ->call('save')
             ->assertHasNoErrors();
 
         $config = TestOnuWanConfig::where('customer_id', $customer->id)->with('attachedVlans')->first();
         $this->assertNotNull($config);
-        $this->assertSame(111, $config->vlan_pppoe);
-        $this->assertSame('wifijadipasti', $config->pppoe_password);
+        $this->assertSame('omci', $config->config_method->value);
         $vlans = $config->attachedVlans->pluck('vlan_id')->all();
-        $this->assertContains(9, $vlans);   // dipaksa masuk
+        $this->assertContains(9, $vlans);   // dipaksa masuk (service/persist enforce)
         $this->assertContains(172, $vlans);
     }
 
-    public function test_empty_password_on_save_keeps_the_stored_one(): void
+    public function test_live_derive_shows_package_vlan_and_username(): void
     {
-        $customer = $this->testCustomer();
-        TestOnuWanConfig::create([
-            'customer_id' => $customer->id,
-            'onu_mode' => 'routing', 'wan_mode' => 'pppoe', 'config_method' => 'omci',
-            'pppoe_username' => 'u@ppp', 'pppoe_password' => 'keepme',
-        ]);
+        $customer = $this->makeTestCustomer();
+        $this->attachVlanPackage($customer, 'vlan111-PPPoE-10Mbps-Loyalis');
 
-        Livewire::test(TestOnuWanConfigPanel::class, ['customer' => $customer])
-            ->set('pppoePassword', '') // kosong
-            ->call('save')
-            ->assertHasNoErrors();
+        $component = Livewire::test(TestOnuWanConfigPanel::class, ['customer' => $customer->fresh()]);
+        $live = $component->instance()->live();
 
-        $this->assertSame('keepme', TestOnuWanConfig::where('customer_id', $customer->id)->first()->pppoe_password);
+        $this->assertTrue($live['has_vlan_package']);
+        $this->assertSame(111, $live['vlan_pppoe']);
+        $this->assertSame('PPPOE-REMOTE', $live['framed_pool']);
+        $this->assertSame("{$customer->cid}@ppp.bajastu.id", $live['username']);
+        $this->assertSame('wifijadipasti', $live['password']);
+        // Paket/VLAN & username muncul di HTML read-only + link ke Daftar Pelanggan.
+        $component->assertSee('VLAN 111')->assertSee("{$customer->cid}@ppp.bajastu.id")
+            ->assertSee('Ubah paket di Daftar Pelanggan');
+    }
+
+    public function test_no_vlan_package_shows_friendly_message_not_error(): void
+    {
+        $customer = $this->makeTestCustomer(); // tanpa ppp_package_id ber-VLAN
+
+        $component = Livewire::test(TestOnuWanConfigPanel::class, ['customer' => $customer]);
+
+        $this->assertFalse($component->instance()->live()['has_vlan_package']);
+        $component->assertSee('belum punya paket dengan VLAN');
+    }
+
+    public function test_changing_customer_package_reflects_live_without_manual_sync(): void
+    {
+        $customer = $this->makeTestCustomer();
+        $this->attachVlanPackage($customer, 'vlan111-PPPoE-10Mbps-Loyalis');
+        $this->assertSame(111, Livewire::test(TestOnuWanConfigPanel::class, ['customer' => $customer->fresh()])
+            ->instance()->live()['vlan_pppoe']);
+
+        // Ganti paket pelanggan (seperti dari Daftar Pelanggan) ke VLAN 10.
+        $this->attachVlanPackage($customer, 'vlan10-PPPoE');
+
+        // Reload panel → VLAN baru muncul tanpa langkah sinkronisasi manual.
+        $this->assertSame(10, Livewire::test(TestOnuWanConfigPanel::class, ['customer' => $customer->fresh()])
+            ->instance()->live()['vlan_pppoe']);
     }
 
     public function test_apply_delegates_to_service_and_shows_result(): void
     {
-        $customer = $this->testCustomer();
+        $customer = $this->makeTestCustomer();
 
         $mock = $this->createMock(TestCredentialSyncService::class);
+        $mock->method('deriveLiveWanParams')->willReturn(['has_vlan_package' => true, 'vlan_pppoe' => 111, 'framed_pool' => 'PPPOE-REMOTE', 'username' => 'x@ppp.bajastu.id', 'password' => 'wifijadipasti', 'package_name' => 'PPPoE-Remote', 'group_id' => 1, 'message' => null]);
         $mock->expects($this->once())->method('applyWanConfig')
             ->willReturn(['vlan_pppoe' => 111, 'framed_pool' => 'PPPOE-REMOTE', 'extra_flow_vlans' => []]);
         $this->app->instance(TestCredentialSyncService::class, $mock);
@@ -118,32 +147,15 @@ class TestOnuWanConfigPanelTest extends TestCase
 
     public function test_apply_surfaces_service_error_without_throwing(): void
     {
-        $customer = $this->testCustomer();
+        $customer = $this->makeTestCustomer();
 
         $mock = $this->createMock(TestCredentialSyncService::class);
+        $mock->method('deriveLiveWanParams')->willReturn(['has_vlan_package' => true, 'vlan_pppoe' => 111, 'framed_pool' => 'PPPOE-REMOTE', 'username' => 'x@ppp.bajastu.id', 'password' => 'wifijadipasti', 'package_name' => 'PPPoE-Remote', 'group_id' => 1, 'message' => null]);
         $mock->method('applyWanConfig')->willThrowException(new \RuntimeException('delete_onu gagal: boom'));
         $this->app->instance(TestCredentialSyncService::class, $mock);
 
         Livewire::test(TestOnuWanConfigPanel::class, ['customer' => $customer])
             ->call('apply')
             ->assertSet('errorMessage', fn ($m) => str_contains((string) $m, 'delete_onu gagal'));
-    }
-
-    public function test_package_options_hide_packages_without_a_vlan(): void
-    {
-        $customer = $this->testCustomer();
-        $withVlan = $this->makePackageWithVlan('vlan131-PPPoE-30Mbps-Loyalis');
-        // Paket tanpa interface_name VLAN -> harus disembunyikan.
-        $nas = Nas::factory()->create();
-        $groupNoVlan = NetworkProfileGroup::factory()->create([
-            'nas_id' => $nas->id, 'type' => NetworkProfileGroupType::Ppp, 'interface_name' => null,
-        ]);
-        $withoutVlan = PppPackage::factory()->create(['network_profile_group_id' => $groupNoVlan->id]);
-
-        $component = Livewire::test(TestOnuWanConfigPanel::class, ['customer' => $customer]);
-        $ids = collect($component->instance()->packageOptions())->pluck('id')->all();
-
-        $this->assertContains($withVlan->id, $ids);
-        $this->assertNotContains($withoutVlan->id, $ids);
     }
 }

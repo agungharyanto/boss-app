@@ -351,6 +351,10 @@ class TestCredentialSyncServiceTest extends TestCase
      */
     private function makeWanConfig(Customer $customer, array $attachedVlans, array $overrides = []): TestOnuWanConfig
     {
+        // v0.23.5 (OPSI a): Paket/VLAN/username/password DIDERIVE LIVE dari
+        // customer — paket di-set via customers.ppp_package_id (bukan lagi
+        // kolom di test_onu_wan_configs). TestOnuWanConfig hanya menyimpan
+        // onu_mode/wan_mode/config_method + attached vlans.
         $nas = Nas::factory()->create();
         $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'PPPOE-REMOTE']);
         $group = NetworkProfileGroup::factory()->create([
@@ -360,15 +364,13 @@ class TestCredentialSyncServiceTest extends TestCase
             'interface_name' => 'vlan111-PPPoE-10Mbps-Loyalis',
         ]);
         $package = PppPackage::factory()->create(['network_profile_group_id' => $group->id]);
+        $customer->forceFill(['ppp_package_id' => $package->id])->save();
 
         $config = TestOnuWanConfig::create(array_merge([
             'customer_id' => $customer->id,
-            'package_id' => $package->id,
             'onu_mode' => 'routing',
             'wan_mode' => 'pppoe',
             'config_method' => 'omci',
-            'pppoe_username' => '2026090744@ppp.bajastu.id',
-            'pppoe_password' => 'wifijadipasti',
         ], $overrides));
 
         foreach ($attachedVlans as $vlan) {
@@ -476,8 +478,10 @@ class TestCredentialSyncServiceTest extends TestCase
         $this->assertSame(172, $captured['vlan_bridge']);
         $this->assertSame([], $captured['extra_flow_vlans']);
 
+        // Username derive dari cid customer; password = konstanta sistem.
+        $this->assertSame("{$customer->cid}@ppp.bajastu.id", $result['username']);
         $check = DB::connection('radius')->table('radcheck')
-            ->where('username', '2026090744@ppp.bajastu.id')->first();
+            ->where('username', "{$customer->cid}@ppp.bajastu.id")->first();
         $this->assertSame('wifijadipasti', $check->value);
     }
 
@@ -514,5 +518,47 @@ class TestCredentialSyncServiceTest extends TestCase
         $this->assertSame(172, $result['vlan_bridge']);          // pertama non-(9/pppoe)
         $this->assertSame([131, 150], $result['extra_flow_vlans']); // sisanya -> flow permission
         $this->assertSame([131, 150], $captured['extra_flow_vlans']);
+    }
+
+    public function test_apply_wan_config_rejects_when_customer_has_no_vlan_package(): void
+    {
+        $customer = $this->makeTestCustomer();
+        // TestOnuWanConfig ada, TAPI customer.ppp_package_id tetap null
+        // (tidak lewat makeWanConfig yang men-set paket ber-VLAN).
+        TestOnuWanConfig::create([
+            'customer_id' => $customer->id, 'onu_mode' => 'routing',
+            'wan_mode' => 'pppoe', 'config_method' => 'omci',
+        ]);
+
+        $sidecar = $this->createMock(OltSidecarClient::class);
+        $sidecar->expects($this->never())->method('activateOnu');
+        $this->app->instance(OltSidecarClient::class, $sidecar);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('belum punya paket dengan VLAN');
+
+        app(TestCredentialSyncService::class)->applyWanConfig($customer);
+    }
+
+    public function test_derive_live_reflects_customer_package_change_without_stored_copy(): void
+    {
+        $customer = $this->makeTestCustomer();
+        $this->makeWanConfig($customer, [9, 172]); // set paket VLAN 111
+
+        $svc = app(TestCredentialSyncService::class);
+        $this->assertSame(111, $svc->deriveLiveWanParams($customer->fresh())['vlan_pppoe']);
+
+        // Ganti paket pelanggan ke grup VLAN 10 — derive live harus ikut,
+        // TANPA menyentuh test_onu_wan_configs (tidak ada salinan tersimpan).
+        $nas = Nas::factory()->create();
+        $pool = CustomerIpPool::factory()->create(['nas_id' => $nas->id, 'name' => 'PPPOE-REMOTE']);
+        $group = NetworkProfileGroup::factory()->create([
+            'nas_id' => $nas->id, 'type' => NetworkProfileGroupType::Ppp,
+            'customer_ip_pool_id' => $pool->id, 'interface_name' => 'vlan10-PPPoE',
+        ]);
+        $pkg = PppPackage::factory()->create(['network_profile_group_id' => $group->id]);
+        $customer->forceFill(['ppp_package_id' => $pkg->id])->save();
+
+        $this->assertSame(10, $svc->deriveLiveWanParams($customer->fresh())['vlan_pppoe']);
     }
 }

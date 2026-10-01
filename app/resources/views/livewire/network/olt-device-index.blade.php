@@ -400,6 +400,7 @@
                     {
                         data: 'id', orderable: false, className: 'text-right',
                         render: (id) => `
+                            <a href="{{ url('/olt-devices') }}/${id}" class="text-primary hover:underline mr-2">{{ __('View') }}</a>
                             <button onclick="Livewire.dispatch('editOltDevice', { oltDeviceId: ${id} })" class="text-primary hover:underline mr-2">{{ __('Edit') }}</button>
                             <button onclick="if(confirm('{{ __('Hapus OLT ini?') }}')) Livewire.dispatch('deleteOltDevice', { oltDeviceId: ${id} })" class="text-red-600 hover:underline">{{ __('Hapus') }}</button>
                         `,

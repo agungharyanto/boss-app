@@ -47,6 +47,7 @@ use App\Livewire\Network\MonitoringIndex;
 use App\Livewire\Network\NasIndex;
 use App\Livewire\Network\NetworkProfileGroupIndex;
 use App\Livewire\Network\OdpRouteCheck;
+use App\Livewire\Network\OltDeviceDetail;
 use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\PppPackageIndex;
 use App\Livewire\Network\RemoteConfigSettings;
@@ -201,6 +202,8 @@ Route::middleware(['auth', 'admin.panel', 'password.changed'])->name('web.')->gr
         Route::get('/vpn-script-generator', VpnScriptGenerator::class)->name('vpn-script-generator.index');
         Route::get('/olt-devices', OltDeviceIndex::class)->name('olt-devices.index');
         Route::get('api/internal/olt-devices/datatable', OltDeviceDatatableController::class)->name('olt-devices.internal.datatable');
+        // v0.23.5 Bagian 2 — detail OLT bertab (hanya tab Uplink aktif).
+        Route::get('/olt-devices/{oltDevice}', OltDeviceDetail::class)->name('olt-devices.show');
         Route::get('/cpe-devices', CpeDeviceIndex::class)->name('cpe-devices.index');
         Route::get('/cpe-devices/status-check', CpeDeviceStatusCheck::class)->name('cpe-devices.status-check');
 

@@ -153,4 +153,246 @@ class OltSidecarClientTest extends TestCase
 
         Http::assertNothingSent();
     }
+
+    public function test_activate_onu_signs_the_exact_raw_body_and_posts_structured_params_to_the_apply_endpoint(): void
+    {
+        Http::fake([
+            'olt-sidecar-test:8080/*' => Http::response([
+                'success' => true,
+                'operation' => 'activate_onu',
+                'olt_device_id' => 1,
+                'data' => ['onu_interface' => 'gpon-onu_1/3/12:4', 'commands_applied' => 26],
+                'raw_excerpt' => null,
+                'device_message' => null,
+            ], 200),
+        ]);
+
+        $device = $this->makeOltDevice('ZTE', 'C300', OltAccessProtocol::Telnet);
+        $params = [
+            'pon_interface' => '1/3/12',
+            'onu_id' => 4,
+            'sn' => 'CMDCAABCDEF1',
+            'onu_type' => 'M12X5G_XPON',
+            'name' => 'TEST OMCI 1 - TEST-OMCI-1',
+            'tcont_profile' => 'HomeFixed-10Mbps',
+            'traffic_profile' => 'PPPoE-Remote',
+            'vlan_pppoe' => 10,
+            'vlan_mgmt' => 9,
+            'vlan_bridge' => 172,
+        ];
+
+        $result = app(OltSidecarClient::class)->activateOnu($device, $params, requestedBy: 7);
+
+        $this->assertTrue($result['success']);
+
+        Http::assertSent(function ($request) use ($device, $params) {
+            $this->assertSame("http://olt-sidecar-test:8080/olt/{$device->id}/apply", $request->url());
+
+            $timestamp = (int) $request->header('X-Olt-Timestamp')[0];
+            $signature = $request->header('X-Olt-Signature')[0];
+            $hmac = new OltSidecarHmac('test-shared-secret');
+            $this->assertTrue($hmac->verify($request->body(), $signature, $timestamp));
+
+            $payload = json_decode($request->body(), true);
+            $this->assertSame('zte_c300', $payload['vendor']);
+            $this->assertSame('activate_onu', $payload['operation']);
+            $this->assertSame($params, $payload['params']);
+            $this->assertSame(7, $payload['requested_by']);
+            // Kontrak keras: TIDAK ADA field command/commands/cli apa pun
+            // di body — payload murni params terstruktur.
+            $this->assertArrayNotHasKey('command', $payload);
+            $this->assertArrayNotHasKey('commands', $payload);
+
+            return true;
+        });
+    }
+
+    public function test_save_config_posts_no_params_to_the_save_endpoint(): void
+    {
+        Http::fake([
+            'olt-sidecar-test:8080/*' => Http::response([
+                'success' => true,
+                'operation' => 'save_config',
+                'olt_device_id' => 1,
+                'data' => ['raw_excerpt' => 'wr done'],
+                'raw_excerpt' => null,
+                'device_message' => null,
+            ], 200),
+        ]);
+
+        $device = $this->makeOltDevice('ZTE', 'C300', OltAccessProtocol::Telnet);
+
+        $result = app(OltSidecarClient::class)->saveConfig($device, requestedBy: 7);
+
+        $this->assertTrue($result['success']);
+
+        Http::assertSent(function ($request) use ($device) {
+            $this->assertSame("http://olt-sidecar-test:8080/olt/{$device->id}/save", $request->url());
+
+            $payload = json_decode($request->body(), true);
+            $this->assertSame('zte_c300', $payload['vendor']);
+            $this->assertArrayNotHasKey('params', $payload);
+            $this->assertArrayNotHasKey('operation', $payload);
+
+            return true;
+        });
+    }
+
+    public function test_fix_onu_vlan_posts_structured_params_with_the_correct_operation_name(): void
+    {
+        Http::fake([
+            'olt-sidecar-test:8080/*' => Http::response([
+                'success' => true,
+                'operation' => 'fix_onu_vlan',
+                'olt_device_id' => 1,
+                'data' => ['onu_interface' => 'gpon-onu_1/3/12:4', 'commands_applied' => 7],
+                'raw_excerpt' => null,
+                'device_message' => null,
+            ], 200),
+        ]);
+
+        $device = $this->makeOltDevice('ZTE', 'C300', OltAccessProtocol::Telnet);
+        $params = ['pon_interface' => '1/3/12', 'onu_id' => 4, 'new_vlan_pppoe' => 111];
+
+        $result = app(OltSidecarClient::class)->fixOnuVlan($device, $params, requestedBy: 1);
+
+        $this->assertTrue($result['success']);
+
+        Http::assertSent(function ($request) use ($device, $params) {
+            $this->assertSame("http://olt-sidecar-test:8080/olt/{$device->id}/apply", $request->url());
+
+            $payload = json_decode($request->body(), true);
+            $this->assertSame('fix_onu_vlan', $payload['operation']);
+            $this->assertSame($params, $payload['params']);
+
+            return true;
+        });
+    }
+
+    public function test_delete_onu_posts_structured_params_with_the_correct_operation_name(): void
+    {
+        Http::fake([
+            'olt-sidecar-test:8080/*' => Http::response([
+                'success' => true,
+                'operation' => 'delete_onu',
+                'olt_device_id' => 1,
+                'data' => ['onu_interface' => 'gpon-onu_1/3/12:4', 'commands_applied' => 4],
+                'raw_excerpt' => null,
+                'device_message' => null,
+            ], 200),
+        ]);
+
+        $device = $this->makeOltDevice('ZTE', 'C300', OltAccessProtocol::Telnet);
+        $params = ['pon_interface' => '1/3/12', 'onu_id' => 4];
+
+        $result = app(OltSidecarClient::class)->deleteOnu($device, $params, requestedBy: 1);
+
+        $this->assertTrue($result['success']);
+
+        Http::assertSent(function ($request) use ($params) {
+            $payload = json_decode($request->body(), true);
+            $this->assertSame('delete_onu', $payload['operation']);
+            $this->assertSame($params, $payload['params']);
+
+            return true;
+        });
+    }
+
+    public function test_add_pppoe_posts_structured_params_with_the_correct_operation_name(): void
+    {
+        Http::fake([
+            'olt-sidecar-test:8080/*' => Http::response([
+                'success' => true,
+                'operation' => 'add_pppoe',
+                'olt_device_id' => 1,
+                'data' => ['onu_interface' => 'gpon-onu_1/3/12:4', 'commands_applied' => 4],
+                'raw_excerpt' => null,
+                'device_message' => null,
+            ], 200),
+        ]);
+
+        $device = $this->makeOltDevice('ZTE', 'C300', OltAccessProtocol::Telnet);
+        $params = [
+            'pon_interface' => '1/3/12',
+            'onu_id' => 4,
+            'host_id' => 1,
+            'username' => '2026090744@ppp.bajastu.id',
+            'password' => 'wifijadipasti',
+            'nat_enabled' => true,
+        ];
+
+        $result = app(OltSidecarClient::class)->addPppoe($device, $params, requestedBy: 1);
+
+        $this->assertTrue($result['success']);
+
+        Http::assertSent(function ($request) use ($params) {
+            $payload = json_decode($request->body(), true);
+            $this->assertSame('add_pppoe', $payload['operation']);
+            $this->assertSame($params, $payload['params']);
+
+            return true;
+        });
+    }
+
+    public function test_probe_config_help_posts_the_query_to_the_probe_endpoint(): void
+    {
+        Http::fake([
+            'olt-sidecar-test:8080/*' => Http::response([
+                'success' => true,
+                'operation' => 'probe_config_help',
+                'olt_device_id' => 1,
+                'data' => ['raw_excerpt' => 'write  Write config'],
+                'raw_excerpt' => null,
+                'device_message' => null,
+            ], 200),
+        ]);
+
+        $device = $this->makeOltDevice('ZTE', 'C300', OltAccessProtocol::Telnet);
+
+        $result = app(OltSidecarClient::class)->probeConfigHelp($device, '?', requestedBy: 7);
+
+        $this->assertTrue($result['success']);
+
+        Http::assertSent(function ($request) use ($device) {
+            $this->assertSame("http://olt-sidecar-test:8080/olt/{$device->id}/probe", $request->url());
+
+            $payload = json_decode($request->body(), true);
+            $this->assertSame('zte_c300', $payload['vendor']);
+            $this->assertSame('?', $payload['params']['query']);
+
+            return true;
+        });
+    }
+
+    public function test_probe_onu_interface_help_posts_the_pon_interface_and_query(): void
+    {
+        Http::fake([
+            'olt-sidecar-test:8080/*' => Http::response([
+                'success' => true,
+                'operation' => 'onu_interface_help',
+                'olt_device_id' => 1,
+                'data' => ['raw_excerpt' => 'no onu  Delete GPON ONU'],
+                'raw_excerpt' => null,
+                'device_message' => null,
+            ], 200),
+        ]);
+
+        $device = $this->makeOltDevice('ZTE', 'C300', OltAccessProtocol::Telnet);
+
+        $result = app(OltSidecarClient::class)->probeOnuInterfaceHelp($device, '1/3/12', 'no ?', requestedBy: 7);
+
+        $this->assertTrue($result['success']);
+
+        Http::assertSent(function ($request) use ($device) {
+            $this->assertSame("http://olt-sidecar-test:8080/olt/{$device->id}/probe", $request->url());
+
+            $payload = json_decode($request->body(), true);
+            $this->assertSame('zte_c300', $payload['vendor']);
+            $this->assertSame('onu_interface_help', $payload['operation']);
+            $this->assertSame('1/3/12', $payload['params']['pon_interface']);
+            $this->assertSame('no ?', $payload['params']['query']);
+
+            return true;
+        });
+    }
 }

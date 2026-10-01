@@ -365,6 +365,7 @@ def test_probe_operations_routes_to_the_correct_functions():
         'onu_interface_help': 'execute_probe_onu_interface_help',
         'onu_service_help': 'execute_probe_onu_service_help',
         'onu_mng_help': 'execute_probe_onu_mng_help',
+        'gei_interface_help': 'execute_probe_gei_interface_help',
     }
     for method_name in zte_c300.PROBE_OPERATIONS.values():
         assert hasattr(zte_c300, method_name)
@@ -634,3 +635,39 @@ def test_activate_onu_rejects_invalid_extra_flow_vlans(bad):
 def test_expanded_known_vlans_includes_new_package_vlans():
     for vlan in (101, 131, 150, 151):
         assert vlan in zte_c300._KNOWN_VLANS
+
+
+# ============================================================================
+# v0.23.5 Bagian 2 — get_uplink_ports (port uplink 3-segmen) + probe gei
+# ============================================================================
+
+def test_gei_port_re_accepts_3_and_2_segments():
+    assert zte_c300._GEI_PORT_RE.match('gei_1/19/4')
+    assert zte_c300._GEI_PORT_RE.match('xgei_1/19/1')
+    assert zte_c300._GEI_PORT_RE.match('gei_1/19')       # 2-seg (discovery)
+    assert not zte_c300._GEI_PORT_RE.match('gpon-onu_1/3/12')
+    assert not zte_c300._GEI_PORT_RE.match('gei_1/19/4; reboot')
+
+
+def test_port_status_first_line_re_matches_only_3_segment_status_line():
+    assert zte_c300._PORT_STATUS_FIRST_LINE_RE.match('gei_1/19/4 is up,  line protocol is up')
+    assert zte_c300._PORT_STATUS_FIRST_LINE_RE.match('xgei_1/19/1 is administratively down,')
+    assert not zte_c300._PORT_STATUS_FIRST_LINE_RE.match('%Error 20202: Invalid input')
+
+
+def test_get_uplink_ports_rejects_invalid_explicit_port():
+    with pytest.raises(OltSessionError) as exc:
+        zte_c300.execute_get_uplink_ports({}, {'ports': ['gei_1/19/4; rm -rf /']})
+    assert exc.value.stage == 'operation'
+
+
+def test_get_uplink_ports_empty_when_no_ports_and_none_discovered(monkeypatch):
+    # Discovery dipaksa kosong -> hasil ports kosong, tanpa menyentuh telnet detail.
+    monkeypatch.setattr(zte_c300, '_discover_uplink_ports', lambda conn: [])
+    result = zte_c300.execute_get_uplink_ports({}, {})
+    assert result == {'ports': []}
+
+
+def test_gei_interface_help_is_a_known_probe_operation():
+    assert zte_c300.PROBE_OPERATIONS.get('gei_interface_help') == 'execute_probe_gei_interface_help'
+    assert 'get_uplink_ports' not in zte_c300.OPERATIONS  # read op via execute() branch, bukan template

@@ -91,6 +91,9 @@ LOGOUT_GENERIC_CONFIRM_RE = r'\[yes/no\]|\(y/n\)|\[y/n\]|\(yes/no\)'
 
 
 def execute(connection: dict, operation: str, args: dict, mask_sensitive: bool = True):
+    if operation == 'get_uplink_ports':
+        return execute_get_uplink_ports(connection, args or {}), None
+
     template = OPERATIONS.get(operation)
     if template is None:
         raise OltSessionError(f"Operasi '{operation}' belum didukung untuk zte_c300", 'operation')
@@ -193,6 +196,116 @@ def _run_zte_telnet_command(connection: dict, command: str, overall_timeout: flo
 
         output = run_command_and_capture(child, command, deadline)
         return output
+    finally:
+        _logout_zte(child)
+
+
+# Slot uplink 2-segmen (rack/slot) dari `show interface port-status ?`.
+_UPLINK_SLOT_RE = re.compile(r'\b(x?gei_\d+/\d+)\b')
+# Baris pertama `show interface <port>` port valid: "<port> is up/down, ...".
+_PORT_STATUS_FIRST_LINE_RE = re.compile(r'^\s*x?gei_\d+/\d+/\d+\s+is\s+', re.IGNORECASE)
+# Maksimum sub-port fisik per slot yang di-enumerasi saat discovery.
+_MAX_SUBPORTS_PER_SLOT = 4
+
+
+def execute_get_uplink_ports(connection: dict, args: dict) -> dict:
+    """v0.23.5 Bagian 2 — BACA status port uplink 3-segmen (gei_/xgei_
+    R/S/P), READ-ONLY. Tiga command TERUJI per port: `show interface
+    <port>`, `show interface optical-module-info <port>`, `show vlan port
+    <port>`. Raw per port (parsing kolom di sisi PHP).
+
+    `args['ports']` (list 3-segmen) opsional — kalau diisi, query itu saja
+    (dipakai test/refresh terfokus). Kalau kosong: DISCOVERY otomatis —
+    `show interface port-status ?` memberi slot 2-segmen (gei_1/19 dst),
+    lalu enumerasi sub-port /1.._MAX per slot, `show interface <slot>/<n>`,
+    simpan hanya yang baris pertamanya "<port> is ..." (port fisik nyata),
+    buang yang `%Error`. Prefix gei_/xgei_ sama-sama dicoba karena satu
+    slot fisik bisa campur (mis. slot 1/19: xgei /1-2 + gei /3-4)."""
+    ports = args.get('ports')
+    if isinstance(ports, list) and ports:
+        for p in ports:
+            if not isinstance(p, str) or not _GEI_PORT_RE.match(p):
+                raise OltSessionError(f"Port tidak valid: {p!r}", 'operation')
+        valid_ports = [p for p in ports if p.count('/') == 2]  # hanya 3-segmen
+    else:
+        valid_ports = _discover_uplink_ports(connection)
+
+    if not valid_ports:
+        return {'ports': []}
+
+    per_port = 3  # show interface / optical-module-info / vlan port
+    commands: list[str] = []
+    for p in valid_ports:
+        commands.append(f'show interface {p}')
+        commands.append(f'show interface optical-module-info {p}')
+        commands.append(f'show vlan port {p}')
+
+    outputs = _run_zte_telnet_session(connection, commands, overall_timeout=240.0)
+    result = []
+    for idx, p in enumerate(valid_ports):
+        base = idx * per_port
+        status_raw = outputs[base] if base < len(outputs) else ''
+        optical_raw = outputs[base + 1] if base + 1 < len(outputs) else ''
+        vlan_raw = outputs[base + 2] if base + 2 < len(outputs) else ''
+        result.append({
+            'name': p,
+            'is_10g': p.startswith('xgei_'),
+            'port_status_lines': [mask_sensitive_tokens(x) for x in lines_from_capture(status_raw, f'show interface {p}')],
+            'optical_lines': [mask_sensitive_tokens(x) for x in lines_from_capture(optical_raw, f'show interface optical-module-info {p}')],
+            'vlan_lines': [mask_sensitive_tokens(x) for x in lines_from_capture(vlan_raw, f'show vlan port {p}')],
+        })
+    return {'ports': result}
+
+
+def _discover_uplink_ports(connection: dict) -> list[str]:
+    """Discovery port uplink 3-segmen. `show interface port-status ?`
+    memberi slot 2-segmen; untuk tiap slot enumerasi /1.._MAX dan cek mana
+    yang port fisik nyata (baris pertama `show interface <port>` = "<port>
+    is ..."). READ-ONLY (semua `show`; `?` di command discovery adalah
+    `show` read-only, error Incomplete-nya tak berbahaya)."""
+    disc = _run_zte_telnet_command(connection, 'show interface port-status ?')
+    slots: list[str] = []
+    for m in _UPLINK_SLOT_RE.findall(disc):
+        if m not in slots:
+            slots.append(m)
+
+    candidates = [f'{slot}/{n}' for slot in slots for n in range(1, _MAX_SUBPORTS_PER_SLOT + 1)]
+    if not candidates:
+        return []
+
+    outputs = _run_zte_telnet_session(
+        connection,
+        [f'show interface {c}' for c in candidates],
+        overall_timeout=240.0,
+    )
+    valid: list[str] = []
+    for cand, out in zip(candidates, outputs):
+        for line in out.splitlines():
+            if _PORT_STATUS_FIRST_LINE_RE.match(line):
+                valid.append(cand)
+                break
+    return valid
+
+
+def _run_zte_telnet_session(connection: dict, commands: list[str], overall_timeout: float = 120.0) -> list[str]:
+    """v0.23.5 Bagian 2 — login SEKALI, jalankan beberapa command BACA
+    berurutan (read-only, tab Uplink). Tidak untuk command yang mengubah
+    apa pun."""
+    host = connection['host']
+    port = connection.get('port') or 23
+    username = connection['username']
+    password = connection['password']
+
+    child = pexpect.spawn('telnet', [host, str(port)], timeout=15, encoding='utf-8', codec_errors='replace')
+    deadline = time.monotonic() + overall_timeout
+
+    outputs: list[str] = []
+    try:
+        _zte_login(child, username, password)
+        password = None  # noqa: F841 — defense-in-depth
+        for command in commands:
+            outputs.append(run_command_and_capture(child, command, deadline))
+        return outputs
     finally:
         _logout_zte(child)
 
@@ -905,6 +1018,64 @@ def execute_probe_onu_mng_help(connection: dict, params: dict) -> dict:
     return {'raw_excerpt': mask_sensitive_tokens(help_output)[:20000]}
 
 
+# Port fisik uplink ZTE C300: gei_ (GE) / xgei_ (10GE). Format R/S/P
+# (3 segmen, mis. gei_1/19/1) — segmen ketiga adalah port fisik; 2-segmen
+# (gei_1/19) hanya rack/slot (ditemukan v0.23.5 Bagian 2: token 2-segmen
+# ditolak command meski muncul di help). 2-segmen tetap diterima regex
+# untuk fleksibilitas discovery.
+_GEI_PORT_RE = re.compile(r'^x?gei_\d+/\d+(?:/\d+)?$')
+
+
+def execute_probe_gei_interface_help(connection: dict, params: dict) -> dict:
+    """v0.23.5 Bagian 2 — DISCOVERY sub-command yang tersedia di context
+    port fisik uplink (`interface gei_{port}`/`interface xgei_{port}`),
+    untuk menemukan command status/optical/VLAN-trunk port uplink yang
+    sintaksnya belum ketemu (`show interface <port>` ditolak di exec mode).
+
+    Masuk `configure terminal` -> `interface {port}` SEBELUM query bantuan.
+    `port` divalidasi _GEI_PORT_RE (gei_/xgei_ saja — TIDAK bisa dipakai
+    masuk context gpon-onu/gpon-olt). `query` WAJIB diakhiri `?`
+    (_HELP_QUERY_RE) — pengaman struktural identik probe lain, tidak pernah
+    bisa eksekusi config sungguhan. Navigasi masuk/keluar pakai
+    _run_command_or_raise() (STOP kalau `interface {port}` ditolak); query
+    bantuan sendiri boleh `%Error` (hasil berguna). HANYA untuk melihat
+    `show ?`/bantuan di context ini — pemanggil TIDAK boleh mengubah apa
+    pun (query `?`-only menjamin itu secara struktural)."""
+    port = params.get('port')
+    if not isinstance(port, str) or not _GEI_PORT_RE.match(port):
+        raise OltSessionError("Parameter 'port' tidak valid (format gei_R/S atau xgei_R/S)", 'operation')
+    query = params.get('query')
+    if not isinstance(query, str) or not _HELP_QUERY_RE.match(query):
+        raise OltSessionError(f"Parameter 'query' tidak valid (harus diakhiri '?'): {query!r}", 'operation')
+
+    host = connection['host']
+    tport = connection.get('port') or 23
+    username = connection['username']
+    password = connection['password']
+
+    child = pexpect.spawn('telnet', [host, str(tport)], timeout=15, encoding='utf-8', codec_errors='replace')
+    deadline = time.monotonic() + 30.0
+
+    try:
+        _zte_login(child, username, password)
+        password = None  # noqa: F841 — defense-in-depth
+
+        _run_command_or_raise(child, 'configure terminal', deadline)
+        _run_command_or_raise(child, f'interface {port}', deadline)
+        help_output = run_command_and_capture(child, query, deadline)
+        _run_command_or_raise(child, 'end', deadline)
+    except Exception:
+        try:
+            child.close(force=True)
+        except Exception:
+            pass
+        raise
+    else:
+        _logout_zte(child)
+
+    return {'raw_excerpt': mask_sensitive_tokens(help_output)[:20000]}
+
+
 # v0.23.5 — routing nama operation (payload dari Laravel) -> nama fungsi
 # Python di modul ini. Dipakai main.py's /probe endpoint supaya endpoint
 # itu tetap generic (tidak hardcode 1 fungsi) sambil TETAP TIDAK menerima
@@ -915,4 +1086,5 @@ PROBE_OPERATIONS = {
     'onu_interface_help': 'execute_probe_onu_interface_help',
     'onu_service_help': 'execute_probe_onu_service_help',
     'onu_mng_help': 'execute_probe_onu_mng_help',
+    'gei_interface_help': 'execute_probe_gei_interface_help',
 }

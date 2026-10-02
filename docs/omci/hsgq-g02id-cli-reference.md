@@ -742,3 +742,29 @@ selalu identik (uptime terus naik tak reset, Last-down tak berubah, State Active
 aktif tidak pernah drop** meski add dicoba berkali-kali. Catatan: WAN TR-069/bridge existing TIDAK terlihat
 di `show ont-wanconfig <id> all` OLT (dikelola sisi-ONT via TR-069, di luar view OMCI OLT) — keutuhannya
 hanya bisa dikonfirmasi via GenieACS, bukan OLT CLI.
+
+### ✅ KESIMPULAN ARSITEKTUR FINAL v0.23.6 (penutup investigasi, 2026-10-02)
+
+Setelah **5 percobaan `ont wanconfig add` di 4 ONT berbeda** (Kambari×2 — sebenarnya onu 69 Yusup &
+onu 0 Rachmat yang di-write-test; Kambari onu 35/55 ber-WAN-existing tapi tak di-write-test), **semua
+gagal konsisten** ("Create WAN profile fail" / "WAN data create fail", termasuk 3× berturut kredensial
+asli), **PLUS Dahlia (onu 28, CMDC H3-2S XPON, aktivasi hari ini ~1 jam) dikonfirmasi via GenieACS sudah
+punya WAN lengkap** (3 WANConnectionDevice: TR-069 mgmt + bridge VID172 + internet PPPoE VID10) dalam
+hitungan menit setelah Inform pertama:
+
+**`ont wanconfig add` TIDAK VIABLE di fleet G02ID BUMIREJA.** Penyebab: GenieACS/CT-COM auto-WAN
+(device-driven, template ISP standar di firmware CPE) **selalu lebih cepat** membentuk WAN existing pada
+setiap ONT baru — dan WAN existing itulah yang memblokir OMCI-direct (`ont wanconfig add` ditolak di level
+pembuatan WAN-data). Tidak ada window praktis di mana ONT fleet ini "tanpa WAN" untuk OMCI-direct.
+
+**KEPUTUSAN ARSITEKTUR G02ID (final):**
+- **WAN → TR-069** (reuse mekanisme RemoteWanConfig/GenieACS, pola sama ZTE Test-1/Test-2). WAN G02ID
+  terbentuk via jalur TR-069/CT-COM, **bukan** OMCI-direct.
+- **OMCI-direct HANYA untuk PENAMAAN** — `ont setting <id> name/desc` (format "Nama - CID"). Mekanisme ini
+  **TERUJI AMAN di produksi**: 5× operasi tulis/rollback metadata (Sesi 4 + saga ini) **nol gangguan** ke
+  sesi pelanggan aktif (fail atomik untuk wanconfig; desc write/rollback bersih).
+
+Pertanyaan "apakah `ont wanconfig add` berhasil di ONT genuinely-fresh/uncfg" ditutup sebagai **akademis /
+tidak relevan operasional** untuk fleet ini — karena ONT fresh praktis tidak pernah ada (auto-WAN
+device-driven terlalu cepat). Kalau suatu saat perlu, butuh unit uji yang sengaja diisolasi dari jalur
+TR-069/GenieACS — di luar kebutuhan v0.23.6.

@@ -661,3 +661,38 @@ FreeRADIUS BOSS (radcheck) — dikelola sistem lama; jadi skema `ppp_package_id`
   `^<pon>/(\d+)`). onu_id KOSONG G02ID saat sesi ini: **gpon1 = 28,94,123-127 (121 terpakai)**; **gpon2 =
   53-127 (53 terpakai)**. Slot aman untuk aktivasi fresh: id tinggi **123-127** (kosong di kedua PON).
 - `ont setting <id> name/desc` = tulis metadata **AMAN & non-disruptif** (TERUJI Sesi 4, tetap berlaku).
+
+### ⚠️ AMANDEMEN Sesi 5 (sesi lanjutan 2026-10-02) — hipotesis vendor-mismatch **TERBANTAHKAN**
+
+Dibaca `show ont-version`/`show ont-capability` dari 2 ONT (read-only) untuk menguji hipotesis
+vendor-mismatch di atas — hasilnya **membantahnya**:
+
+| ONT | Vendor-ID | Equipment-ID | `ont wanconfig add`? | `WAN Support` (ont-capability) |
+|---|---|---|---|---|
+| **Yusup** onu 69 | **HWTC** (Huawei) | **EG8141A5** | **GAGAL** "Create WAN profile fail" | **Support** |
+| **Rachmat** onu 0 | **ZICG** (ZTE) | **F663NV3a** | belum dicoba | **Not support** |
+
+**→ Vendor BUKAN penyebab.** ONT yang GAGAL (Huawei EG8141A5) justru melaporkan `WAN Support: Support` —
+jadi kegagalan `ont wanconfig add` **bukan** karena merek ONT maupun ketiadaan kapabilitas WAN. (Flag
+`WAN Support` dari `show ont-capability` berguna sebagai profiling read-only, TAPI tidak cocok dengan
+kegagalan yang teramati — "Support" tapi tetap gagal — jadi ia pun bukan penentu.) Hipotesis "OMCI-direct
+WAN hanya untuk ONT HSGQ-brand asli" dari catatan Sesi 5 di atas dengan ini **ditandai TERBANTAHKAN**.
+
+**Kandidat penyebab BARU "Create WAN profile fail" (urut dari paling mungkin, semua BELUM diuji):**
+- **(a) [LEADING] Konflik dengan WAN TR-069 yang SUDAH AKTIF** di ONT tersebut saat `ont wanconfig add`
+  dijalankan. **SEMUA ONT yang diuji sejauh ini (Kambari onu 35, Kambari onu 55, Yusup onu 69) sudah
+  online via TR-069 lebih dulu** — belum pernah sekali pun dicoba di ONT yang BENAR-BENAR tanpa WAN
+  existing. OMCI WAN mungkin ditolak karena ONT sudah punya WAN (TR-069-managed) yang berebut
+  slot/resource.
+- (b) Prasyarat WAN-profile template di sisi OLT yang belum terpenuhi (mis. profil WAN harus didefinisikan
+  dulu sebelum `add`).
+- (c) Parameter/charset username PPPoE (`@`/`.`) — paling tidak mungkin, "Create WAN profile fail" generik.
+
+**PERTANYAAN TERBUKA PALING PRIORITAS untuk sesi berikutnya** (menggantikan pertanyaan "perlu unit HSGQ"
+dari Sesi 5 — itu kini tidak relevan karena vendor bukan faktor): **apakah `ont wanconfig add` berhasil di
+ONT yang BELUM punya WAN apa pun?** Ini soal STATUS WAN KOSONG, bukan merek — butuh ONT **genuinely
+fresh** (`uncfg` / belum pernah `ont authorize`), bukan sekadar ONT aktif merek berbeda.
+
+**Referensi read-only ONT profiling** (dari sesi ini): `show ont-version <id>` → Vendor-ID / Equipment-ID /
+Ont Version / Main Software Version; `show ont-capability <id>` → `WAN Support` + jumlah port ETH/POTS/GEM/
+T-CONT. Keduanya aman (read-only), berguna untuk identifikasi merek/model ONT tanpa menebak dari SN.

@@ -696,3 +696,49 @@ fresh** (`uncfg` / belum pernah `ont authorize`), bukan sekadar ONT aktif merek 
 **Referensi read-only ONT profiling** (dari sesi ini): `show ont-version <id>` → Vendor-ID / Equipment-ID /
 Ont Version / Main Software Version; `show ont-capability <id>` → `WAN Support` + jumlah port ETH/POTS/GEM/
 T-CONT. Keduanya aman (read-only), berguna untuk identifikasi merek/model ONT tanpa menebak dari SN.
+
+### ⚠️ AMANDEMEN Sesi 5 #2 — uji WRITE nyata TAHAP 1+2 (2026-10-02): **WAN-existing memblokir `ont wanconfig add`**
+
+`ont wanconfig add <id> connection-type internet vlan tag 10 ipmode pppoe <user> <pass>` diuji nyata ke ONT
+yang SUDAH punya WAN existing. **Semua data pelanggan di-mask** — hanya onu-id + vendor/model yang ditulis
+(TIDAK ada nama pelanggan, SN penuh, atau kredensial asli di dokumen ini).
+
+**Tabel gabungan 4 ONT yang diinvestigasi (semua punya WAN existing TR-069/bridge):**
+
+| onu_id | Vendor/Model | `WAN Support` | WAN existing | `ont wanconfig add` diuji? | Hasil |
+|---|---|---|---|---|---|
+| 35 | ZTE (prefix ZICG) | (tak dicek) | TR-069 | Tidak — hanya rename `desc` (Sesi 4) | desc write **sukses**, non-disruptif |
+| 55 | Huawei EG8141A5 | (tak dicek) | TR-069 | Tidak (rencana dibatalkan) | — |
+| 69 | Huawei EG8141A5 | **Support** | TR-069 | Ya, 1× | **GAGAL** "Create WAN **profile** fail" |
+| 0 | ZTE F663NV3a | **Not support** | TR-069 + bridge VID172 | Ya, **4×** (1 dummy + 3 kredensial-asli) | **GAGAL** "WAN **data** create fail" (identik tiap kali) |
+
+Catatan akurasi: `ont wanconfig add` **hanya benar-benar dieksekusi di onu 69 & onu 0**; onu 35/55 tidak
+di-write-test (tapi sama-sama ber-WAN-existing). onu 0 diuji total 4× (TAHAP 1 dummy 1× + TAHAP 2
+kredensial-asli 3× berturut) — **semua "WAN data create fail" identik** → bukan transient.
+
+**Hipotesis yang TERSINGKIR (dibantah data):**
+1. **Charset username** — TERSINGKIR. Dummy `TEST-OMCI-G02ID-2` (tanpa `@`/`.`) tetap "WAN data create
+   fail" (sebelumnya sempat dicurigai karena username asli mengandung `@ppp.bajastu.id`).
+2. **Vendor / flag `WAN Support`** — TERSINGKIR sebagai penyebab TUNGGAL. Huawei onu 69 (`WAN Support:
+   Support`) DAN ZTE onu 0 (`WAN Support: Not support`) **sama-sama gagal** — dua vendor berbeda, dua nilai
+   flag berbeda, hasil sama. (Perbedaan teks pesan — "profile" vs "data" — mungkin berkorelasi flag, tapi
+   tak mengubah kesimpulan gagal.)
+3. **Kredensial asli vs dummy** — TIDAK berpengaruh. onu 0 gagal identik baik dengan dummy maupun
+   kredensial PPPoE asli → kegagalan ada di level **pembuatan WAN-data OMCI, SEBELUM autentikasi PPPoE**
+   pernah dicoba (creds-independent).
+
+**KESIMPULAN UTAMA (menggantikan semua hipotesis yang tersingkir):** `ont wanconfig add` kemungkinan besar
+**ditolak selama ONT sudah punya WAN config apa pun (TR-069/bridge) yang aktif**. KEEMPAT ONT uji punya
+WAN existing; dua yang di-write-test gagal konsisten. **BELUM PERNAH diuji di ONT genuinely-fresh (`uncfg`
+/ belum pernah `ont authorize`, nol WAN).**
+
+**→ PERTANYAAN PRIORITAS TERTINGGI sesi berikutnya** (satu-satunya hipotesis tersisa yang belum teruji):
+*Apakah `ont wanconfig add` BERHASIL di ONT yang BENAR-BENAR tanpa WAN (fresh/uncfg)?* Butuh unit uji
+genuinely-fresh — bukan ONT aktif mana pun.
+
+**Properti keamanan dikonfirmasi ulang:** kegagalan `ont wanconfig add` **atomik** di SEMUA percobaan
+(Huawei & ZTE, dummy & real, 1× & 4×) — OLT menolak sebelum menyentuh ONT; `show ont-info sn` PRE vs POST
+selalu identik (uptime terus naik tak reset, Last-down tak berubah, State Active/Online). **Sesi pelanggan
+aktif tidak pernah drop** meski add dicoba berkali-kali. Catatan: WAN TR-069/bridge existing TIDAK terlihat
+di `show ont-wanconfig <id> all` OLT (dikelola sisi-ONT via TR-069, di luar view OMCI OLT) — keutuhannya
+hanya bisa dikonfirmasi via GenieACS, bukan OLT CLI.

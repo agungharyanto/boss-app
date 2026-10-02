@@ -594,3 +594,70 @@ baris yang diprobe KEBETULAN sudah lengkap — di sini token selalu sengaja tida
   (`pppoe`/`dhcp`/`static`) → token `username`/`password` PPPoE. **`?`-help dulu, sebelum eksekusi.**
 - Eksekusi `ont wanconfig add` sungguhan = keputusan terpisah + persetujuan eksplisit Agung.
 - Rotasi kredensial `root` → akun BOSS non-root (utang keamanan v0.23.1).
+
+## Sesi 5 (G02ID) — v0.23.6 Uji OMCI-direct WAN: grammar LENGKAP + WRITE GAGAL (2026-10-02)
+
+**Grammar `ont wanconfig add` dituntaskan penuh (read-only `?`-help), lalu DICOBA EKSEKUSI NYATA sekali —
+GAGAL ditolak device.** Eksekusi tulis disetujui Agung di satu unit aktif (risiko terjadwal diterima);
+rollback penuh dilakukan setelahnya. Data pelanggan di-mask.
+
+### Grammar OMCI-direct WAN — LENGKAP (dari `?`-help, read-only)
+```
+ont wanconfig add <onu-id 0-127> connection-type <service> vlan {tag <vlan>|transparent|untag} ipmode <mode> [<USER> <PASS>] [opsional...]
+ont wanconfig delete <onu-id> ...
+show ont-wanconfig <onu-id> {<0-8>|all}        # baca WAN; butuh index/all (bare = "Command incomplete")
+show ont-info sn {<SN-16hex>|<HWTCxxxx vendor-ASCII>}   # KEDUA format SN diterima, resolve ke ONT sama
+```
+- `<service>` (8): `internet` / `internet_tr069` / `tr069` / `voice` / `voice_internet` /
+  `voice_internet_tr069` / `voice_tr069` / `other`.
+- `vlan`: `tag <vlan-id>` | `transparent` | `untag`.
+- `ipmode`: `bridge` | `dhcp` | `ipstatic` | **`pppoe`**.
+- `ipmode pppoe <USER> <PASS>` — **keduanya POSITIONAL, masing-masing max 32** (`USER PPPoE user, max 32`
+  lalu `PASS PPPoE password, max 32`, TERUJI dari help). Setelah user+pass → `<cr>` (sudah valid) +
+  opsional: `servicename`, `priority`, `mtu`, `dns`/`primarydns`/`secondarydns`, `lan_eth`/`lan_ssid`/
+  `lan_ssid5g` (binding LAN/WiFi), `portmapping`, `igmpproxy`, `multicastvlan`, `addressmode`/`ipprotocol`,
+  `name`. **Tidak ada keyword `nat`/`host`** (beda pola ZTE).
+
+### ⛔ HASIL EKSEKUSI NYATA — GAGAL (HIPOTESIS, BELUM TERKONFIRMASI)
+Dicoba SEKALI di **onu 69** (ONT Huawei **EG8141A5**, serial `4857…71a0` / `HWTC…`, aktif TR-069 VLAN
+pelanggan, `show ont-wanconfig 69 all` = "no wan interface" sebelumnya):
+```
+ont wanconfig add 69 connection-type internet vlan tag 10 ipmode pppoe <user>@ppp.bajastu.id <pass>
+  -> Error, Ont WanConfig Add fail, reason: Create WAN profile fail.
+```
+WAN **tidak terbentuk** (`show ont-wanconfig 69 all` POST tetap "no wan interface").
+
+**HIPOTESIS KUAT (BELUM FAKTA): vendor-mismatch.** OMCI-direct WAN (`ont wanconfig`) kemungkinan **hanya
+didukung ONT ber-merek HSGQ asli**, BUKAN ONT Huawei yang terpasang di OLT HSGQ lewat kompatibilitas GPON
+standar. **Bukti pendukung (tidak membuktikan):** SELURUH 171 ONT fleet existing G02ID (kemungkinan besar
+Huawei/non-HSGQ) ter-provision WAN via **TR-069**, **NOL** memakai `ont wanconfig` — mungkin justru karena
+OMCI-direct WAN tak jalan di ONT-ONT ini. **BELUM dikonfirmasi** karena `ont wanconfig add` belum pernah
+dicoba pada ONT ber-merek HSGQ asli.
+
+**PERTANYAAN TERBUKA untuk sesi berikutnya**: *Apakah `ont wanconfig add` berhasil di ONT HSGQ-brand asli?*
+Perlu **unit uji ber-merek HSGQ, bukan Huawei**. Kandidat alternatif penyebab (juga belum diuji): tr069-mode
+aktif di line-profile menolak WAN OMCI berdampingan; atau karakter `@`/`.` di username (walau 27<32 char).
+
+### ✅ Temuan keamanan operasional penting: `ont wanconfig add` GAGAL = ATOMIK, nol gangguan
+Device memvalidasi **sebelum** menyentuh ONT: `Create WAN profile fail` ditolak utuh tanpa efek samping.
+`show ont-info sn` PRE vs POST **identik** — `Ont uptime` tidak reset, `Last down Time` tidak berubah,
+State tetap Active/Online. **Sesi pelanggan aktif TIDAK drop** meski add dicoba di ONT-nya. (Berbeda dari
+kekhawatiran "tambah-WAN di unit aktif pasti drop" — untuk kasus add yang DITOLAK, nol dampak.)
+
+### Sisi BOSS App (dilakukan lalu di-rollback penuh)
+Untuk uji ini customer BOSS "Yusup" (CID `255324578770`) sempat: `is_test_fixture`=true, `ppp_package_id`=17
+(PPPoE-Remote/VLAN 10), + radcheck `255324578770@ppp.bajastu.id` (`RadcheckWriterService::write`, Framed-Pool
+PPPOE-REMOTE). **Semua di-ROLLBACK persis ke baseline** setelah OMCI gagal (`is_test_fixture`=false,
+`ppp_package_id`=null, radcheck/radreply dihapus via `RadcheckWriterService::remove`) — diverifikasi
+berdampingan field-per-field. Catatan arsitektur: ONT Huawei fleet G02ID auth PPPoE-nya **bukan** via
+FreeRADIUS BOSS (radcheck) — dikelola sistem lama; jadi skema `ppp_package_id`/`TestCredentialSyncService`
+(v0.23.5, dibangun untuk OMCI ZTE) **belum** cocok untuk ONT Huawei G02ID tanpa jalur WAN yang berfungsi.
+
+### Referensi cepat (read-only, dari sesi ini)
+- **Verifikasi SN bebas** (WAJIB sebelum aktivasi): `show ont-info sn <SN>` di gpon 1 DAN gpon 2, cek kedua
+  format (raw-16hex + vendor-ASCII). Baris `ONU ID :`+`State` = TERIKAT; `Error ... ONU is not exist` = bebas.
+- **`show ont-info all`** = tabel ringkas (kolom `PON/ONU  Type  Serial  State  Run  Config  Match  ...  ONT
+  Name`), diakhiri `Total: N  Online:x  Offline:y`. Parse onu_id dari kolom `<pon>/<id>` (regex
+  `^<pon>/(\d+)`). onu_id KOSONG G02ID saat sesi ini: **gpon1 = 28,94,123-127 (121 terpakai)**; **gpon2 =
+  53-127 (53 terpakai)**. Slot aman untuk aktivasi fresh: id tinggi **123-127** (kosong di kedua PON).
+- `ont setting <id> name/desc` = tulis metadata **AMAN & non-disruptif** (TERUJI Sesi 4, tetap berlaku).

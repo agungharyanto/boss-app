@@ -26,14 +26,16 @@ class OnuRegistryService
     /**
      * Vendor yang operasi per-ONU-nya SUDAH TERUJI eksekusi nyata
      * (docs/omci/onu-registry-design.md §2, Opsi A yang disetujui Agung
-     * 2026-09-22). HSGQ E04ID/G02ID SENGAJA TIDAK ada di sini — guard
-     * sementara, dibuka setelah sesi riset tambahan memverifikasi operasi
-     * per-ONU-nya (kemungkinan ditempelkan ke v0.23.6/v0.23.7).
+     * 2026-09-22). HSGQ E04ID masih SENGAJA di-guard (belum ada sesi riset
+     * operasi per-ONU-nya). HSGQ G02ID DIBUKA v0.23.6 → 'resolve_onu_by_sn'
+     * (cari onu_id + state dari SN) — operasi baca per-ONU G02ID yang sudah
+     * diverifikasi terhadap OLT nyata sepanjang saga v0.23.6.
      *
      * @var array<string, string> vendor key -> nama operation sidecar
      */
     private const SUPPORTED_VENDOR_OPERATIONS = [
         'zte_c300' => 'onu_detail_info',
+        'hsgq_g02id' => 'resolve_onu_by_sn',
     ];
 
     public function __construct(private readonly OltSidecarClient $sidecarClient) {}
@@ -61,10 +63,17 @@ class OnuRegistryService
             ->where('vendor_identifier', $vendorIdentifier)
             ->first();
 
+        // Nama arg berbeda per vendor: ZTE pakai identifier gpon-onu (`onu`),
+        // G02ID pakai Serial Number (`sn`) — lihat op sidecar masing-masing.
+        $readArgs = match ($vendorKey) {
+            'hsgq_g02id' => ['sn' => $vendorIdentifier],
+            default => ['onu' => $vendorIdentifier],
+        };
+
         $response = $this->sidecarClient->read(
             $oltDevice,
             $operation,
-            ['onu' => $vendorIdentifier],
+            $readArgs,
             requestedBy: null,
             maskSensitive: false,
         );
@@ -89,6 +98,7 @@ class OnuRegistryService
 
         $attributes = match ($vendorKey) {
             'zte_c300' => $this->mapZteFields($fields),
+            'hsgq_g02id' => $this->mapG02idFields($fields, $vendorIdentifier),
             default => [],
         };
 
@@ -204,5 +214,55 @@ class OnuRegistryService
         }
 
         return $value;
+    }
+
+    /**
+     * Map hasil `resolve_onu_by_sn` sidecar G02ID (dict terstruktur:
+     * {found, pon, onu_id, state, run_state}) ke kolom OnuRegistry. Berbeda
+     * dari mapZteFields (yang mem-parse blok label:value detail-info): resolve
+     * G02ID sengaja TIDAK mengembalikan ONU Name/PII — hanya status + onu_id/
+     * pon (tersimpan di raw_payload lewat updateOrCreate). serial_number =
+     * $vendorIdentifier (identifier G02ID memang SN itu sendiri).
+     *
+     * @param  array<string, mixed>  $fields
+     * @return array<string, mixed>
+     */
+    private function mapG02idFields(array $fields, string $vendorIdentifier): array
+    {
+        return [
+            'serial_number' => $vendorIdentifier,
+            'mac_address' => null,
+            'status' => $this->mapG02idStatus($fields),
+            // Nama tidak dibaca oleh resolve (minimisasi PII) — biarkan apa
+            // adanya di baris existing kalau ada, null untuk baris baru.
+            'name' => null,
+            'description' => null,
+        ];
+    }
+
+    /**
+     * `found=false` -> Offline (SN tidak ketemu di PON mana pun saat ini).
+     * `State`/`Run State` Active/Online -> Active. Selain itu -> Unknown
+     * (jangan mengarang Offline kalau state tak dikenal).
+     *
+     * @param  array<string, mixed>  $fields
+     */
+    private function mapG02idStatus(array $fields): OnuRegistryStatus
+    {
+        if (($fields['found'] ?? false) !== true) {
+            return OnuRegistryStatus::Offline;
+        }
+
+        $state = strtolower(trim((string) ($fields['state'] ?? '')));
+        $runState = strtolower(trim((string) ($fields['run_state'] ?? '')));
+
+        if ($state === 'active' && $runState === 'online') {
+            return OnuRegistryStatus::Active;
+        }
+        if ($state === 'active') {
+            return OnuRegistryStatus::Active;
+        }
+
+        return OnuRegistryStatus::Unknown;
     }
 }

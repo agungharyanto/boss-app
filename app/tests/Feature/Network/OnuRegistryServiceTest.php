@@ -184,20 +184,36 @@ class OnuRegistryServiceTest extends TestCase
         }
     }
 
-    public function test_sync_onu_rejects_hsgq_g02id_explicitly_without_calling_the_sidecar(): void
+    public function test_sync_onu_supports_hsgq_g02id_via_resolve_onu_by_sn(): void
     {
-        Http::fake();
+        // v0.23.6 — guard G02ID DIBUKA: syncOnu memanggil sidecar
+        // resolve_onu_by_sn (arg 'sn', bukan 'onu' seperti ZTE) dan membuat
+        // baris registry dari data terstruktur (found/pon/onu_id/state).
+        Http::fake([
+            '*' => Http::response([
+                'success' => true,
+                'data' => ['found' => true, 'pon' => 1, 'onu_id' => 28, 'state' => 'Active', 'run_state' => 'Online'],
+                'raw_excerpt' => null,
+                'device_message' => null,
+            ], 200),
+        ]);
 
         $olt = $this->makeOltDevice('HSGQ', 'HSGQ-G02ID', OltAccessProtocol::Ssh);
+        $registry = app(OnuRegistryService::class)->syncOnu($olt, 'CMDCA200BB76');
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('belum diverifikasi terhadap OLT nyata');
+        $this->assertSame('CMDCA200BB76', $registry->vendor_identifier);
+        $this->assertSame('CMDCA200BB76', $registry->serial_number);
+        $this->assertSame(OnuRegistryStatus::Active, $registry->status);
+        $this->assertSame(OnuSyncStatus::Synced, $registry->sync_status);
 
-        try {
-            app(OnuRegistryService::class)->syncOnu($olt, 'gpon1/5');
-        } finally {
-            Http::assertNothingSent();
-        }
+        Http::assertSent(function ($request) {
+            $payload = json_decode($request->body(), true);
+            $this->assertSame('resolve_onu_by_sn', $payload['operation']);
+            $this->assertSame(['sn' => 'CMDCA200BB76'], $payload['args']);
+            $this->assertFalse($payload['mask_sensitive']);
+
+            return true;
+        });
     }
 
     public function test_sync_onu_failure_marks_an_existing_row_stale_without_touching_its_other_fields(): void

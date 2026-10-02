@@ -505,3 +505,92 @@ dikonfirmasi ulang lewat rantai bantuan yang lebih dalam (`ont add 0 sn-auth <SN
   `ont-srvprofile-id` genuinely muncul di bantuan, dan urutan/format persisnya).
 - Apakah baris eksplisit `ont tr069-profile <id> profile-id 1` per-ONT genuinely wajib atau redundan
   terhadap warisan line-profile (belum berubah dari Sesi 2).
+
+## Sesi 4 (G02ID) — v0.23.6 UJI TULIS PERTAMA (2026-10-02)
+
+**Sesi pertama yang BENAR-BENAR MENULIS ke G02ID** (bukan lagi hanya bantuan `?`/read). Dilakukan
+terkontrol dengan Agung mengawasi, mulai dari operasi paling ringan. **Kredensial masih akun `root`
+sementara** (belum dirotasi — utang keamanan v0.23.1 masih berlaku); dipakai untuk read + 2 write
+`ont setting desc` (tulis + rollback) pada SATU ONT. **Semua data pelanggan di contoh di bawah di-mask.**
+
+### Target uji & izin
+ONT uji = milik keluarga Agung sendiri (izin eksplisit untuk diuji meski sedang online). Ternyata ONT ini
+**sudah terdaftar & aktif-online** di G02ID yang sama sebagai pelanggan produksi (`onu_id` di PON 1,
+`State=Active`/`Run State=Online`, uptime hari-an), ter-provision lewat TR-069 — **bukan** unit factory
+bebas. SN (`show ont-info sn <SN-DI-MASK>`) + `name`/`desc` pelanggan **di-mask**. Keputusan: uji tulis
+LANGSUNG ke binding existing (tanpa cabut fisik), mulai dari metadata (non-disruptif) dulu.
+
+### 1. `ont setting <id> name`/`desc` — **TERUJI EKSEKUSI NYATA** (bukan hanya bantuan)
+
+Tulis metadata **AMAN & NON-DISRUPTIF**, dibuktikan di ONT PRODUKSI AKTIF:
+```
+configure
+interface gpon 1
+  ont setting <id> desc "<desc-asli-DI-MASK> -TEST-v0.23.6"   # tulis (append suffix, pertahankan asli)
+  ont setting <id> desc "<desc-asli-DI-MASK>"                  # rollback ke nilai asli
+```
+- Verifikasi via `show ont-info sn <SN-DI-MASK>`: `Ont Description` berubah lalu kembali persis; `ONU
+  Name`, `Line Profile`, `Srv Profile`, `TR069 Profile`, `State/Run State` **semua tetap**.
+- **Bukti non-disruptif konkret**: `Last down Time` ONT **TIDAK berubah** (tidak ada event down baru) dan
+  `Ont uptime` **terus bertambah / tidak reset** sepanjang tulis + rollback → sesi GPON/PPPoE pelanggan
+  **tidak pernah putus**. Inilah operasi tulis paling ringan (label metadata murni — tidak menyentuh
+  VLAN/line-profile/srv-profile/auth).
+- Hanya mengubah **running-config** — **tidak ada `save`/`copy`** dijalankan (sesuai denylist); startup-config
+  asli tak tersentuh.
+- **Batas panjang `name`/`desc` — pertanyaan lama (Sesi 1-3 [TIDAK BISA DIVERIFIKASI]) kini TERJAWAB dari
+  bantuan nyata**: `ont setting <id> name ?`/`desc ?` → `"NAME"`/`"DESC"` string bebas dengan catatan
+  "If NAME/DESC contains spaces, use \"\" quotes it" — **firmware TIDAK mendeklarasikan batas numerik**.
+  Jadi tetap hanya observasi pasif (~38 char name / ~40 char desc), bukan batas resmi. Karakter `[` `]`
+  tidak dikonfirmasi diizinkan → uji ini pakai suffix bebas-kurung (`-TEST-v0.23.6`) yang **diterima**.
+
+### 2. `ont wanconfig add` — grammar SEBAGIAN TERUJI (read-only bantuan, NOL eksekusi)
+
+Jawaban pertanyaan "adakah push kredensial PPPoE via OMCI-direct di G02ID (seperti ZTE)?": **ADA.**
+```
+interface gpon <N>
+  ont wanconfig add <onu-id 0-127> connection-type <service> vlan {tag <vlan>|transparent|untag} ipmode <...>
+  ont wanconfig delete <onu-id> ...
+```
+- `<service>` (8 nilai TERUJI): `internet` / `internet_tr069` / `tr069` / `voice` / `voice_internet` /
+  `voice_internet_tr069` / `voice_tr069` / `other` — **kategori LAYANAN, bukan protokol**.
+- Setelah `connection-type internet` → wajib `vlan` → `{tag <vlan-id> | transparent | untag}`.
+- Setelah `vlan tag <vlan>` → token berikutnya **`ipmode`** (IP mode set).
+- **⚠️ BELUM DITUNTASKAN**: token di bawah **`ipmode`** (protokol `pppoe`/`dhcp`/`static`) dan — di bawah
+  `ipmode pppoe` — **`username`/`password` PPPoE**. **LANJUTKAN read-only (`?`-help) di sesi berikutnya,
+  SEBELUM eksekusi apa pun.** Baca-balik config WAN: `show ont-wanconfig <onu-id>` (**tidak dieksekusi**
+  sesi ini — hindari dump kredensial PPPoE pelanggan).
+- Kandidat lain yang dicek & gugur: `ont pppoe` → `% There is no matched command`; `ont wan` → sekadar
+  alias pendek ke `wanconfig`/`wan-remoteconfig`; `ont setting <id>` → hanya `name`/`desc`.
+- **⛔ `ont wanconfig add` BELUM PERNAH dieksekusi sungguhan** — menjalankannya ke ONT existing
+  (Kambari/onu produksi) berisiko membuat WAN config BARU yang bentrok/mengganggu jalur TR-069 yang sedang
+  dipakai. **Keputusan terpisah, butuh persetujuan eksplisit Agung dulu.**
+
+### 3. `ont wan-remoteconfig <id>` — temuan terpisah (BUKAN kredensial PPPoE)
+
+`ont wan-remoteconfig <0-127>` → `{clear | http | https | icmp | telnet}` = **kontrol akses MANAJEMEN
+REMOTE ke ONT** (protokol apa yang diizinkan mencapai ONT dari sisi WAN), bukan provisioning WAN /
+kredensial PPPoE. Jangan tertukar dengan `ont wanconfig`.
+
+### 4. Catatan arsitektur — TR-069 vs OMCI-direct (keputusan desain tertunda)
+
+Dump config Sesi 1 (171 ONT) **tidak memuat satu pun baris `ont wanconfig add`** — seluruh fleet existing
+(termasuk ONT uji ini) ter-provision WAN-nya lewat **TR-069** (line-profile `tr069-mode enable` +
+`ont tr069-profile <id> profile-id 1` per-ONT), BUKAN OMCI-direct. Jadi: **kapabilitas OMCI-direct
+`ont wanconfig` TERSEDIA tapi tidak dipakai fleet**. Kedua jalur valid — pilihan "OMCI-direct vs TR-069"
+untuk skema v0.23.x belum diputuskan (paralel dengan ZTE yang juga harus memilih `config_method` OMCI vs
+TR069).
+
+### 5. Mekanisme `?`-probe aman (dipakai sepanjang sesi ini)
+
+`?`-help dikirim **TANPA newline** lalu **Ctrl-C** untuk membuang baris input — sehingga baris tidak lengkap
+(`ont setting 35 name`, `ont wanconfig add 35 ...`) **tidak pernah ter-submit sebagai command**. Terbukti
+nol write lintas belasan probe. (Kontras insiden ZTE `wan 2 service internet ?` yang ter-commit karena
+baris yang diprobe KEBETULAN sudah lengkap — di sini token selalu sengaja tidak lengkap.) Event
+"`ONU ... dying gasp`" untuk ONT LAIN yang sesekali bocor ke sesi = log real-time pasif (gaya
+`terminal monitor`), **bukan** akibat aktivitas kami.
+
+### [BELUM DITUNTASKAN] — untuk sesi v0.23.6 berikutnya (read-only dulu)
+- Drill `ont wanconfig add <id> connection-type internet vlan tag <vlan> ipmode ?` → protokol
+  (`pppoe`/`dhcp`/`static`) → token `username`/`password` PPPoE. **`?`-help dulu, sebelum eksekusi.**
+- Eksekusi `ont wanconfig add` sungguhan = keputusan terpisah + persetujuan eksplisit Agung.
+- Rotasi kredensial `root` → akun BOSS non-root (utang keamanan v0.23.1).

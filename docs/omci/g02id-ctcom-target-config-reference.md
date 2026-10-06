@@ -178,3 +178,12 @@ disable 1/5 + DHCP=false harus di-apply **setelah** WAN1/WAN2 final, baru nempel
 yang HANYA Username — tanpa menyentuh binding/NAT — pada satu pengujian TIDAK me-reset WLAN; pemicu paling
 kuat adalah perubahan `X_CT-COM_LanInterface`/NAT. Tetap perlakukan semua perubahan WAN sebagai berpotensi
 me-reset WLAN+DHCP, dan verifikasi ulang sesudahnya.)
+
+**AMENDMENT (2026-10-06, terbukti di Dahlia):** perubahan **USERNAME PPPoE** TERNYATA JUGA memicu reset ini
+— `DHCPServerEnable` kembali `true` setelah push username (verifikasi awal keliru karena membaca state
+SEBELUM push). Jadi pernyataan "username-only tidak me-reset" di atas DIKOREKSI: **semua** perubahan WAN,
+TERMASUK kredensial/username, berpotensi me-reset DHCP (dan WLAN). **Aturan urutan zero-touch yang BENAR &
+FINAL:** selesaikan + stabilkan SEMUA perubahan WAN (VLAN, NAT, LanInterface, **username/password**) LEBIH
+DULU → BARU set DHCPServerEnable=false + apply WLAN sebagai langkah TERAKHIR → verifikasi fresh (dengan
+refreshObject, jangan andalkan tree yang mungkin basi) SETELAH semuanya. Jangan set DHCP/WLAN di tengah
+proses WAN — pasti tertimpa.

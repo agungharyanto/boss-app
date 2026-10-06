@@ -165,3 +165,16 @@ Proses AddObject meninggalkan instance perantara di Dahlia yang belum dibereskan
 - `instance 3` (2.4G), `instance 6` & `7` (5G) — SSID default kosong, disabled — harmless, bisa
   dinonaktifkan/dibiarkan.
 - `instance 1` & `5` (Susi salon asli) — TIDAK disentuh.
+
+### 8. GOTCHA URUTAN — perubahan WAN me-RESET WLAN **DAN** DHCP Server (2026-10-06)
+Terbukti di Dahlia: meng-`SetParameterValues` konfigurasi **WAN** (mis. WAN1 NAT/`X_CT-COM_LanInterface`,
+atau Username) memicu device **me-reset config WLAN ke default pabrik** — SSID4/8 custom (open) kembali
+`Enable=false` + `BeaconType` balik `WPA/WPA2`, dan SSID1/5 kembali ke default `"CMDC"` `Enable=true` —
+**TANPA reboot** (UpTime tetap ~3,7 hari). `LANHostConfigManagement.DHCPServerEnable` juga ikut ter-reset
+ke default pada kejadian serupa → **harus di-set ulang `false` setelah tiap perubahan WAN**.
+**ATURAN URUTAN WAJIB (zero-touch): WAN dulu → tunggu stabil (Connected) → BARU WLAN + DHCP.** Kalau WLAN
+di-apply lebih dulu lalu WAN diubah, WLAN (dan DHCP) akan terhapus. Pada rekonstruksi Dahlia, WLAN 4/8 +
+disable 1/5 + DHCP=false harus di-apply **setelah** WAN1/WAN2 final, baru nempel. (Catatan: perubahan WAN
+yang HANYA Username — tanpa menyentuh binding/NAT — pada satu pengujian TIDAK me-reset WLAN; pemicu paling
+kuat adalah perubahan `X_CT-COM_LanInterface`/NAT. Tetap perlakukan semua perubahan WAN sebagai berpotensi
+me-reset WLAN+DHCP, dan verifikasi ulang sesudahnya.)

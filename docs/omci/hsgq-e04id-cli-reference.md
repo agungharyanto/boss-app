@@ -327,3 +327,38 @@ sesi), `onu-reboot`, `onu-upgrade`, `onu-deregister`, `reject-onu`, `onu-wlan`/`
   perlu diputuskan mana yang jadi acuan penamaan skema OMCI baru, atau keduanya independen.
 - **Dua kolom nama per ONU** (`desc` di `bind-onu`, `name` di `interface onu`) — perlu keputusan mana yang
   dipakai/diisi untuk format "Nama - CID" yang direncanakan.
+
+## Aturan Aktivasi E04ID — v0.23.7 (PERMANEN, keputusan Agung — tidak diulang)
+
+Perbedaan arsitektur per-aktivasi membuktikan perlunya sistem konfigurasi dinamis (BAGIAN B Zero-Touch) —
+parameter di bawah BERBEDA-BEDA per aktivasi, bukan konstanta.
+
+1. **Deny-by-default**: setiap ONT baru colok OTOMATIS masuk Deny List. BOSS harus eksplisit
+   "Add to Allow List" via SSH sebelum ONT online — **BEDA dari G02ID (auto-authorize)**. Command persis
+   "add to allow list" **BELUM terverifikasi** — investigasi dulu, JANGAN asumsikan = `bind-onu`+`onu confirm`
+   dari dok lama tanpa konfirmasi ulang.
+2. **TR-069 VLAN** sudah di-pre-config manual di ONT sebelumnya → begitu Allow List, channel manajemen
+   TR-069 connect OTOMATIS, BOSS tidak push apa pun untuk itu.
+3. **WAN1 PPPoE test (VLAN 131)**: **NAT=ENABLED** (BEDA dari Dahlia yang false!), Port Binding ke
+   **SSID1+SSID5** (BEDA dari Dahlia yang ""), kredensial `261067914698@ppp.bajastu.id` / `wifijadipasti`.
+   **JANGAN tulis radcheck BOSS** — auth lewat **MixRadius/NAS x86 (sistem lama terpisah)**, BUKAN FreeRADIUS
+   BOSS. Cukup push kredensial ke CPE via TR-069, NOL langkah radcheck.
+4. **WAN2 Bridge (VLAN 172)**: port binding ke **SSID4+SSID8**, NAT=false (sama pola Dahlia).
+5. **SSID1(2.4G)+SSID5(5G)** — SUDAH ADA (tak perlu AddObject): SSID=`"TEST DONG"`, password **string
+   literal `"1sampai8"`** (huruf+angka apa adanya, BUKAN 12345678), **security WPA biasa (BUKAN open —
+   password beneran)**.
+6. **SSID4+SSID8** — PERLU AddObject (reuse teknik Dahlia: AddObject ke parent WLANConfiguration,
+   sequential per grup band; resep OPEN: `BeaconType=None, WEPEncryptionLevel=Disabled,
+   BasicEncryptionModes=None, KeyPassphrase=""`, JANGAN set BasicAuthenticationMode): SSID=`"TOKEN WIFI"`,
+   tanpa password.
+7. **LAN DHCP Server = ENABLED** (BEDA dari Dahlia yang disable!).
+8. **GOTCHA URUTAN (ONT ini juga CMDC-brand, kemungkinan berlaku)**: perubahan WAN bisa me-reset
+   WLAN+DHCP. **WAJIB: selesaikan SEMUA WAN dulu (WAN1+WAN2 stabil) → BARU set DHCP+SSID1/5+SSID4/8
+   TERAKHIR → verifikasi fresh (refreshObject) di akhir** (jangan percaya state sebelum langkah terakhir).
+9. **Penamaan OLT E04ID — FORMAT BEDA dari G02ID** (field Name E04ID terbatas panjang): **Name = Nama
+   SAJA** (camelCase kalau >1 kata, mis. `SitiZuhriyah`); **Description = "Nama - CID"** (mis.
+   `Siti Zuhriyah - 262236327434`). Unit uji: Name=`TestE04ID`, Description=`TestE04ID - 261067914698`.
+10. **SAVE E04ID** — command BELUM diverifikasi, JANGAN asumsikan = G02ID (`copy running-config
+    startup-config`) — cek via CLI help aman dulu sebelum eksekusi.
+11. **Catatan arsitektur**: parameter WAN/WLAN/DHCP berbeda-beda per aktivasi (VLAN, NAT on/off,
+    port-binding, SSID nama+password) — bukti nyata kebutuhan sistem konfigurasi dinamis (BAGIAN B).

@@ -362,3 +362,85 @@ parameter di bawah BERBEDA-BEDA per aktivasi, bukan konstanta.
     startup-config`) — cek via CLI help aman dulu sebelum eksekusi.
 11. **Catatan arsitektur**: parameter WAN/WLAN/DHCP berbeda-beda per aktivasi (VLAN, NAT on/off,
     port-binding, SSID nama+password) — bukti nyata kebutuhan sistem konfigurasi dinamis (BAGIAN B).
+
+## Hasil Aktivasi Unit Uji CMDCA21C01E7 (v0.23.7, 2026-10-06) — EKSEKUSI NYATA
+
+Aktivasi end-to-end pertama ke device E04ID produksi (ONT test Agung, MAC `ec:9b:2d:f2:f6:39`, CMDC
+H3-2S XPON, fw V1.1.20P1T4, GenieACS `_id` `EC9B2D-H3%2D2S%20XPON-CMDCA21C01E7`). Menutup beberapa item
+"BELUM terverifikasi" di section Aturan di atas + satu temuan gotcha BESAR (EPON vs GPON).
+
+### Allow-list & activate (rule #1 — TERVERIFIKASI)
+Mekanisme allow-list E04ID = **`bind-onu mac <MAC> [name ..] [desc ".."]` lalu `onu confirm onu-id <N>`**,
+dijalankan di node `configure → interface epon <PON>` (prompt `config-epon-<PON>`). Tidak ada command
+"add to allow list" lain — `bind-onu` ITULAH whitelist-nya (`onu-type` opsional, device H3-2S auto-deteksi
+`4ge`; `name`/`desc` bisa diisi inline).
+- `bind-onu` → ONU muncul `show onu-info all` Status **Initial** (Auth=FALSE), onu-id di-assign device
+  (JANGAN asumsi; `show onu-info all` menunjukkan 2/1 → onu-id **1**).
+- `onu confirm onu-id 1` → log device **"ONU 2/1 ... ONU authorization success"**, Status→**Online**,
+  Auth/Cfg→TRUE, `show blacklist onu-info all` KOSONG.
+- `desc` berspasi dibungkus `"..."` (sintaks CLI saja) — tersimpan apa adanya TANPA kutip (diverifikasi
+  via `show onu-info onu-id 1`).
+
+### TR-069 auto-connect (rule #2 — TERVERIFIKASI)
+Begitu Online, ONT dapat IP manajemen VLAN TR-069 via DHCP (CMDCA21C01E7 → `10.1.5.168`,
+`ConnectionRequestURL=http://10.1.5.168:58000`) dan Inform ke GenieACS **otomatis tanpa push BOSS apa pun**
+(siklus ~60s). Jalur ini sudah aktif untuk seluruh fleet CMDC EC9B2D di OLT ini.
+
+### ⚠️ GOTCHA BESAR — objek VLAN CT-COM BEDA di EPON vs GPON
+**Device CT-COM di OLT EPON (E04ID) menaruh VLAN per-WAN di `X_CT-COM_WANEponLinkConfig`, BUKAN
+`X_CT-COM_WANGponLinkConfig` (GPON, G02ID/Dahlia).** Field di dalamnya identik
+(`VLANIDMark`/`Mode`/`Enable`/`802-1pMark`), cuma nama objeknya beda per jenis PON.
+- **Gejala saat ditemukan**: preset Auto-WAN lama (`default-wan.js`, GPON-only) berhasil membuat STRUKTUR
+  WAN (PPPoE + bridge + binding SSID via param standar) TAPI **tidak pernah men-set VLAN** di EPON —
+  WAN1 nyangkut `VLANIDMark=0 Mode=1 (untagged)`, bridge `VLANIDMark=1`. Objek GPON yang di-tulis
+  genuinely TIDAK ADA di tree device EPON (write = no-op diam).
+- **Efek samping berbahaya**: guard WAN2 `bridgeWithTargetVlanExists` membaca VLAN lewat objek GPON →
+  selalu NULL di EPON → guard tak pernah "melihat" bridge VLAN172 yang sudah ada → **preset menambah
+  bridge baru tiap provision jalan** (teramati 3 bridge duplikat VLAN1 terakumulasi).
+- **`VLANIDMark` TIDAK di-volunteer saat Inform** — `refreshObject` pada `WANConnectionDevice` maupun
+  GPV ke path GPON sama-sama mengembalikan NULL; harus baca objek EPON yang benar untuk melihat VLAN.
+- **FIX (pluggable, bukan adapter penuh)**: `default-wan.js` cabang CT-COM kini punya helper terisolasi
+  `ctcVlanConfigObject()` yang auto-detect dari tree device (objek EPON ter-resolve → EPON; else GPON
+  default) → `const ctcVlanObj`. SEMUA titik tulis VLAN (WAN1/WAN2), guard bridge, dan discovery WCD
+  (`ctcWcdInstances`/`ctcFreeWcd`) pakai `${ctcVlanObj}`, bukan literal GPON. Mudah diangkat jadi adapter
+  penuh di BAGIAN B (ZTP). Test: `GenieAcsPresetServiceTest` dapat assertion pasangan EPON.
+- **Verifikasi NYATA**: setelah fix di-PUT + 3 bridge salah dihapus + WAN1 dikoreksi, fixed-preset membuat
+  **tepat SATU** bridge VLAN172 tagged (guard EPON mencegah proliferasi), WAN1 VLAN131 tagged — stabil
+  lintas Inform, 0 fault.
+
+### End-state WAN (TERVERIFIKASI via objek EPON)
+| WCD | Fungsi | VLAN | Mode | Type | NAT | Binding |
+|---|---|---|---|---|---|---|
+| 1 | WAN1 internet | **131** | 2 tagged | IP_Routed | **true** | SSID1,5 |
+| 2 | TR-069 mgmt | 9 | 2 tagged | IP_Routed | false | — |
+| 3 | WAN2 bridge | **172** | 2 tagged | PPPoE_Bridged | false | SSID4,8 |
+
+- WAN1 (rule #3): VLAN131, NAT=**true**, bind SSID1+SSID5, user `261067914698@ppp.bajastu.id`. **NOL
+  radcheck BOSS** (auth via MixRadius/NAS x86). NAT=true & binding SSID1/5 di-set LANGSUNG via TR-069
+  (`X_CT-COM_WANEponLinkConfig` untuk VLAN + `NATEnabled`/`X_CT-COM_LanInterface` di WANPPPConnection) —
+  preset meng-skip WAN1 yang sudah ber-username (guard idempoten), jadi koreksi langsung aman.
+- WAN2 (rule #4): bridge VLAN172, bind SSID4+SSID8, NAT=false — dibuat fixed-preset.
+
+### End-state WLAN + DHCP (rule #5/#6/#7 — TERVERIFIKASI, gotcha urutan #8 terbukti)
+Perubahan WAN **memang me-reset WLAN+DHCP ke default** (teramati: hanya WLAN1/5 tersisa = `CMCC-kjkx`
+WPA/WPA2, instance 2/3/4/6/7/8 hilang, DHCP balik default enabled). Jadi WLAN/DHCP di-set **TERAKHIR**
+setelah WAN stabil (urutan rule #8 terbukti wajib):
+- **SSID4+SSID8 butuh AddObject sekuensial** ke parent `WLANConfiguration` — device mengisi grup 2.4G
+  (1→2→3→4) lalu 5G (5→6→7→8). Dari `[1,5]` perlu 6× AddObject → `[1..8]`.
+- WLAN1(2.4G)/WLAN5(5G) = `TEST DONG`, WPA/WPA2, password literal `1sampai8` (KeyPassphrase +
+  PreSharedKey.1.PreSharedKey — tak bisa dibaca-balik, keterbatasan TR-069).
+- WLAN4(2.4G)/WLAN8(5G) = `TOKEN WIFI`, **open** (BeaconType=None, WEP=Disabled, BasicEncryptionModes=None,
+  KeyPassphrase=""; JANGAN set BasicAuthenticationMode — "None" ditolak device cwmp.9007, hanya "Both"
+  diterima & inert di bawah BeaconType=None).
+- WLAN2/3/6/7 = disabled. DHCPServerEnable=true (192.168.1.2-254). **0 fault**.
+
+### SAVE E04ID (rule #10 — TERVERIFIKASI)
+Command save E04ID **= SAMA dengan G02ID**: **`copy running-config startup-config`** (di mode privileged
+`#`, di luar config mode) → device membalas **"Configuration saved successfully"**. Persis seperti G02ID.
+
+### Penamaan OLT (rule #9) — SELISIH yang perlu keputusan Agung
+ONU di-set `Name=TestE04ID`, `Description=TestE04ID - 261023816972` (nilai yang dikonfirmasi Agung saat
+bind-onu). **CATATAN**: rule #9 di atas menyebut Description `TestE04ID - 261067914698` (CID = username
+PPPoE WAN1). Device saat ini menyimpan `...261023816972` (CID Dahlia). Selisih ini **belum di-resolve** —
+desc OLT TIDAK diubah tanpa konfirmasi (tulis OLT atas tebakan dihindari). Kalau yang benar `261067914698`,
+perlu `bind-onu`/update name ulang + `copy running-config startup-config` lagi.

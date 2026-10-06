@@ -33,10 +33,13 @@ v0.23.1 ini. **Wajib**:
 `root` **TIDAK BOLEH** menjadi kredensial permanen `olt_devices` untuk otomasi v0.23.2 dan seterusnya
 (lihat catatan decision-gate di kedua dokumen referensi CLI). Yang perlu dikerjakan Agung sebelum
 v0.23.2 mulai menyentuh OLT secara live:
-- **HSGQ-G02ID**: akun `boss` (khusus otomasi) sempat disebutkan sedang disiapkan Agung, TAPI **belum
-  bisa SSH** per pengecekan terakhir sesi ini — perlu ditelusuri kenapa (kemungkinan level akses
-  operator vs admin di firmware HSGQ, bukan sekadar salah password — perlu dicek dari sisi device
-  langsung, di luar kemampuan investigasi read-only murni via SSH).
+- **HSGQ-G02ID**: ✅ **DITUTUP (2026-10-06, keputusan Agung) — `root` DITERIMA sebagai kredensial
+  otomasi, tidak perlu investigasi lanjutan.** Alasan: (a) akses SSH G02ID sudah dibatasi ke IP private
+  (manajemen OLT, tidak terekspos publik); (b) akun non-root `boss` TERBUKTI tidak bisa SSH di percobaan
+  sebelumnya — level operator, bukan shell access — jadi tidak ada jalur non-root yang viable tanpa
+  kerja sisi-device yang tidak sepadan risikonya. Risiko diterima. (Catatan: ganti password `root` itu
+  sendiri TETAP item terbuka — lihat poin 1 di atas, tidak termasuk dalam penutupan ini.) Seluruh
+  aktivasi G02ID v0.23.6 berjalan dengan `root` sesuai keputusan ini.
 - **HSGQ-E04ID**: belum ada akun otomasi khusus non-root sama sekali sejauh riset ini — kredensial yang
   dipakai selama v0.23.1 tetap akun teknisi lama (bukan root, tapi juga bukan akun khusus otomasi
   ber-privilese terbatas).

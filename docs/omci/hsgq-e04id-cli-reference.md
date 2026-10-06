@@ -438,9 +438,14 @@ setelah WAN stabil (urutan rule #8 terbukti wajib):
 Command save E04ID **= SAMA dengan G02ID**: **`copy running-config startup-config`** (di mode privileged
 `#`, di luar config mode) → device membalas **"Configuration saved successfully"**. Persis seperti G02ID.
 
-### Penamaan OLT (rule #9) — SELISIH yang perlu keputusan Agung
-ONU di-set `Name=TestE04ID`, `Description=TestE04ID - 261023816972` (nilai yang dikonfirmasi Agung saat
-bind-onu). **CATATAN**: rule #9 di atas menyebut Description `TestE04ID - 261067914698` (CID = username
-PPPoE WAN1). Device saat ini menyimpan `...261023816972` (CID Dahlia). Selisih ini **belum di-resolve** —
-desc OLT TIDAK diubah tanpa konfirmasi (tulis OLT atas tebakan dihindari). Kalau yang benar `261067914698`,
-perlu `bind-onu`/update name ulang + `copy running-config startup-config` lagi.
+### Penamaan OLT (rule #9) — FINAL (TERVERIFIKASI)
+ONU di-set `Name=TestE04ID`, `Description=TestE04ID - 261067914698` (CID = username PPPoE WAN1 unit uji,
+dikonfirmasi final Agung). Nilai desc awal saat `bind-onu` sempat `...261023816972` lalu dikoreksi ke
+`...261067914698`.
+
+**Command update desc ONU existing (NON-DISRUPTIF, bukan re-bind)** — diverifikasi di `config-epon-<PON>`:
+`onu description <onu-id> "<DESC>"` (mis. `onu description 1 "TestE04ID - 261067914698"`). ONU tetap
+Online/Auth TRUE selama update (tidak drop). Ada juga `onu confirm <onu-id>` + `onu <1-64>` di bawah
+`onu` subcommand yang sama. Setelah update → `show onu-info onu-id 1` konfirmasi
+`ONU description : TestE04ID - 261067914698` (raw, tanpa kutip) → `copy running-config startup-config`
+("Configuration saved successfully").

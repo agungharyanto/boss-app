@@ -195,8 +195,26 @@ class GenieAcsPresetServiceTest extends TestCase
         $this->assertStringContainsString('isZTEGeneric', $script);
         // Cabang CT-COM (data model dominan fleet ini) + VLAN level-WCD.
         $this->assertStringContainsString('isCTCom', $script);
-        $this->assertStringContainsString('X_CT-COM_WANGponLinkConfig.VLANIDMark', $script);
         $this->assertStringContainsString('ctcFreeWcd', $script);
+
+        // Objek VLAN CT-COM GPON vs EPON (auto-detect, pluggable) — fix
+        // 2026-10-06 (aktivasi E04ID). Helper terisolasi mendeteksi jenis PON
+        // dari tree device; SEMUA titik tulis/baca/guard VLAN pakai hasilnya
+        // (`ctcVlanObj`), bukan lagi hardcode objek GPON.
+        $this->assertStringContainsString('function ctcVlanConfigObject', $script);
+        $this->assertStringContainsString('const ctcVlanObj = isCTCom ? ctcVlanConfigObject()', $script);
+        // Kedua nama objek PON disebut HANYA di dalam helper deteksi + default.
+        $this->assertStringContainsString('X_CT-COM_WANGponLinkConfig.VLANIDMark', $script); // GPON (G02ID/Dahlia)
+        $this->assertStringContainsString('X_CT-COM_WANEponLinkConfig.VLANIDMark', $script); // EPON (E04ID)
+        // Titik tulis VLAN WAN1 & WAN2 memakai objek hasil deteksi, bukan literal GPON.
+        $this->assertStringContainsString('`${wcdPath}.${ctcVlanObj}.VLANIDMark`', $script);
+        $this->assertStringContainsString('`${wcdPath}.${ctcVlanObj}.Mode`', $script);
+        // Guard bridge + ctcFreeWcd + discovery WCD juga pakai ctcVlanObj.
+        $this->assertStringContainsString('${ctcVlanObj}.VLANIDMark`, { value: Date.now() })', $script);
+        $this->assertStringContainsString('`${ctcVlanObj}.Mode`', $script);
+        // Tidak ada lagi titik yang menulis/membaca VLAN via objek GPON hardcode
+        // di LUAR helper (semua `${wcdPath}.X_CT-COM_WANGponLinkConfig...` hilang).
+        $this->assertStringNotContainsString('${wcdPath}.X_CT-COM_WANGponLinkConfig', $script);
         // WAN2 guard v2 — cek isi (bridge di posisi mana pun) + SN allowlist in-script.
         $this->assertStringContainsString('bridgeWithTargetVlanExists', $script);
         $this->assertStringContainsString('wan2Allowlist', $script);

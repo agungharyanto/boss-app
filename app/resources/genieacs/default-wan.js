@@ -100,6 +100,33 @@ if (enabled) {
 
   const wanDevicePath = "InternetGatewayDevice.WANDevice.1";
 
+  // ── OBJEK VLAN CT-COM: GPON vs EPON — auto-detect, pluggable ────────────
+  // Data model CT-COM menaruh VLAN per-WAN di sub-objek LEVEL-WCD yang NAMA
+  // objeknya BEDA per jenis PON (field di dalamnya identik:
+  // Mode/VLANIDMark/Enable/802-1pMark):
+  //   GPON → X_CT-COM_WANGponLinkConfig  (OLT GPON, mis. HSGQ-G02ID — Dahlia)
+  //   EPON → X_CT-COM_WANEponLinkConfig  (OLT EPON, mis. HSGQ-E04ID)
+  // Deteksi dari tree device SENDIRI (tanpa field DB/migration): kalau objek
+  // EPON ter-resolve di WCD mana pun → device EPON; else GPON (default fleet
+  // dominan). DIISOLASI dalam SATU fungsi `ctcVlanConfigObject()` supaya
+  // gampang diangkat jadi adapter penuh nanti (backlog ZTP). Semua titik yang
+  // dulu hardcode WANGponLinkConfig (tulis VLAN WAN1/WAN2 + guard bridge +
+  // discovery WCD) kini pakai hasil deteksi `ctcVlanObj`.
+  //
+  // DITEMUKAN 2026-10-06 (aktivasi E04ID CMDCA21C01E7): preset lama (GPON-only)
+  // menulis VLAN ke objek yang TIDAK ADA di device EPON → VLAN tak pernah
+  // ter-set (WAN1 VLAN0/Mode1, bridge beranak-pinak karena guard
+  // `bridgeWithTargetVlanExists` membaca VLAN lewat objek GPON yang NULL di
+  // EPON → tak pernah mendeteksi bridge-nya sendiri).
+  function ctcVlanConfigObject() {
+    const epon = declare(`${wanDevicePath}.WANConnectionDevice.*.X_CT-COM_WANEponLinkConfig.VLANIDMark`, { value: Date.now() });
+    if (epon.size) return "X_CT-COM_WANEponLinkConfig";
+    const gpon = declare(`${wanDevicePath}.WANConnectionDevice.*.X_CT-COM_WANGponLinkConfig.VLANIDMark`, { value: Date.now() });
+    if (gpon.size) return "X_CT-COM_WANGponLinkConfig";
+    return "X_CT-COM_WANGponLinkConfig"; // default GPON (dominan) sampai tree ter-refresh
+  }
+  const ctcVlanObj = isCTCom ? ctcVlanConfigObject() : "X_CT-COM_WANGponLinkConfig";
+
   // ══════════════════════════════════════════════════════════════════════
   // HISTORI BUG — instance number CT-COM (ditemukan 2026-09-08, fix 2026-09-09)
   //
@@ -169,9 +196,9 @@ if (enabled) {
   function ctcWcdInstances() {
     const seen = {};
     const leaves = [
-      "X_CT-COM_WANGponLinkConfig.Mode",
-      "X_CT-COM_WANGponLinkConfig.VLANIDMark",
-      "X_CT-COM_WANGponLinkConfig.Enable",
+      `${ctcVlanObj}.Mode`,
+      `${ctcVlanObj}.VLANIDMark`,
+      `${ctcVlanObj}.Enable`,
       "WANIPConnectionNumberOfEntries",
       "WANPPPConnectionNumberOfEntries",
     ];
@@ -192,8 +219,8 @@ if (enabled) {
     return out;
   }
 
-  // CT-COM: VLAN tiap WAN ada di X_CT-COM_WANGponLinkConfig LEVEL-WCD
-  // (`WANConnectionDevice.{N}.X_CT-COM_WANGponLinkConfig.VLANIDMark`),
+  // CT-COM: VLAN tiap WAN ada di objek link-config LEVEL-WCD (GPON/EPON,
+  // via ctcVlanObj — `WANConnectionDevice.{N}.${ctcVlanObj}.VLANIDMark`),
   // BUKAN di connection. Helper cari slot WCD KOSONG di antara WCD yang
   // GENUINELY ADA (ctcWcdInstances — bukan indeks 1..8 buta).
   //
@@ -213,7 +240,7 @@ if (enabled) {
   function ctcFreeWcd() {
     if (!isCTCom) return 0;
     for (const wcd of ctcWcdInstances()) {
-      const vlan = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, { value: Date.now() });
+      const vlan = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.${ctcVlanObj}.VLANIDMark`, { value: Date.now() });
       const v = vlan.size && vlan.value ? parseInt(vlan.value[0], 10) : NaN;
       if (!isNaN(v) && v > 1) continue; // VLAN nyata → WAN existing, skip
 
@@ -384,7 +411,8 @@ if (enabled) {
         //  - Username/Password = field STANDAR (bukan X_CT-COM_IPoE*)
         //  - ConnectionType = "IP_Routed" (BUKAN "PPPoE_Routed" — device
         //    tetap routed-PPPoE selama Username terisi)
-        //  - VLAN di X_CT-COM_WANGponLinkConfig.VLANIDMark LEVEL-WCD + Mode=2
+        //  - VLAN di objek link-config LEVEL-WCD (GPON/EPON — ctcVlanObj
+        //    auto-detect), field VLANIDMark + Mode=2
         //  - X_CT-COM_ServiceList = "INTERNET"
         //  - NATEnabled = false + X_CT-COM_LanInterface = "" (string kosong =
         //    genuinely tanpa binding, TERBUKTI diterima) + DHCPEnable = false.
@@ -406,9 +434,9 @@ if (enabled) {
           declare(`${basePath}.ConnectionType`, null, { value: "IP_Routed" });
           declare(`${basePath}.X_CT-COM_ServiceList`, null, { value: "INTERNET" });
           commit();
-          declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Enable`, null, { value: true });
-          declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Mode`, null, { value: 2 });
-          declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, null, { value: wan1Vlan });
+          declare(`${wcdPath}.${ctcVlanObj}.Enable`, null, { value: true });
+          declare(`${wcdPath}.${ctcVlanObj}.Mode`, null, { value: 2 });
+          declare(`${wcdPath}.${ctcVlanObj}.VLANIDMark`, null, { value: wan1Vlan });
           commit();
           // NAT=false (keputusan Agung v0.23.6): WAN1 = uplink routed murni,
           // NAT/routing ditangani sisi MikroTik/PPPoE, bukan CPE.
@@ -460,7 +488,7 @@ if (enabled) {
     const serialAllowed = wan2Allowlist.length === 0 || wan2Allowlist.indexOf(deviceSerial) !== -1;
 
     // Field VLAN per data model. CT-COM: VLAN ada di
-    // X_CT-COM_WANGponLinkConfig LEVEL-WCD, bukan di connection — jadi
+    // objek link-config LEVEL-WCD (ctcVlanObj, GPON/EPON), bukan di connection — jadi
     // dicek terpisah di dalam loop, `vlanFieldFor` di sini hanya untuk
     // H/C/Z (VLAN di level connection).
     const vlanFieldFor = isHuawei ? "X_HW_VLAN" : (isCMCC ? "X_CMCC_VLANIDMark" : "X_ZTE-COM_VLANID");
@@ -476,7 +504,7 @@ if (enabled) {
           if (!(ct.size && ct.value && ct.value[0])) continue;
           if (String(ct.value[0]).toLowerCase().indexOf("bridg") === -1) continue;
           if (isCTCom) {
-            const ctcVlan = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, { value: Date.now() });
+            const ctcVlan = declare(`${wanDevicePath}.WANConnectionDevice.${wcd}.${ctcVlanObj}.VLANIDMark`, { value: Date.now() });
             if (ctcVlan.size && ctcVlan.value && parseInt(ctcVlan.value[0], 10) === wan2Vlan) {
               bridgeWithTargetVlanExists = true;
             }
@@ -597,9 +625,9 @@ if (enabled) {
         declare(`${base2Path}.ConnectionType`, null, { value: "PPPoE_Bridged" });
         declare(`${base2Path}.X_CT-COM_ServiceList`, null, { value: "INTERNET" });
         commit();
-        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Enable`, null, { value: true });
-        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Mode`, null, { value: 2 });
-        declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, null, { value: wan2Vlan });
+        declare(`${wcdPath}.${ctcVlanObj}.Enable`, null, { value: true });
+        declare(`${wcdPath}.${ctcVlanObj}.Mode`, null, { value: 2 });
+        declare(`${wcdPath}.${ctcVlanObj}.VLANIDMark`, null, { value: wan2Vlan });
         commit();
         const nat2 = declare(`${base2Path}.NATEnabled`, { value: Date.now() });
         if (!nat2.size || nat2.value[0] != false) {

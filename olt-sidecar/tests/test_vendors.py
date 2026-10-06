@@ -671,3 +671,116 @@ def test_get_uplink_ports_empty_when_no_ports_and_none_discovered(monkeypatch):
 def test_gei_interface_help_is_a_known_probe_operation():
     assert zte_c300.PROBE_OPERATIONS.get('gei_interface_help') == 'execute_probe_gei_interface_help'
     assert 'get_uplink_ports' not in zte_c300.OPERATIONS  # read op via execute() branch, bukan template
+
+
+# ==========================================================================
+# v0.23.6 — G02ID resolve_onu_by_sn (READ) + set_ont_naming (WRITE)
+# Semua uji di bawah TIDAK menyentuh jaringan: validasi/parse/build command
+# terjadi SEBELUM sesi SSH apa pun dibuka.
+# ==========================================================================
+
+_SAMPLE_ONT_INFO = """show ont-info sn 5a494347296b1fad
+ PON ID                        : 1
+ ONU ID                        : 28
+ State                         : Active
+ Run State                     : Online
+ Config State                  : normal
+ Line Profile Name             : tr069
+"""
+
+
+def test_g02id_resolve_requires_sn_before_touching_network():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_g02id.execute({}, 'resolve_onu_by_sn', {})
+    assert "'sn'" in str(exc.value)
+
+
+def test_g02id_resolve_rejects_malformed_sn_before_network():
+    with pytest.raises(OltSessionError):
+        hsgq_g02id.execute({}, 'resolve_onu_by_sn', {'sn': 'bad sn!!'})
+
+
+def test_g02id_grab_field_distinguishes_state_from_run_state():
+    assert hsgq_g02id._grab_field(_SAMPLE_ONT_INFO, 'State') == 'Active'
+    assert hsgq_g02id._grab_field(_SAMPLE_ONT_INFO, 'Run State') == 'Online'
+
+
+def test_g02id_onu_id_regex_parses_id():
+    m = hsgq_g02id._ONU_ID_RE.search(_SAMPLE_ONT_INFO)
+    assert m is not None and int(m.group(1)) == 28
+
+
+def test_g02id_not_exist_regex_matches_device_message():
+    assert hsgq_g02id._NOT_EXIST_RE.search('Error, GET ont-auth table fail, reason: ONU is not exist.')
+    assert not hsgq_g02id._NOT_EXIST_RE.search(_SAMPLE_ONT_INFO)
+
+
+def test_g02id_execute_apply_rejects_unknown_write_op():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_g02id.execute_apply({}, 'ont_wanconfig_add', {})
+    assert 'tidak dikenal' in str(exc.value)
+
+
+def test_g02id_set_ont_naming_validates_pon_before_network():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_g02id.execute_apply({}, 'set_ont_naming', {'pon': 3, 'onu_id': 28, 'name': 'X - 1'})
+    assert "'pon'" in str(exc.value)
+
+
+def test_g02id_set_ont_naming_validates_onu_id_before_network():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_g02id.execute_apply({}, 'set_ont_naming', {'pon': 1, 'onu_id': 999, 'name': 'X - 1'})
+    assert "'onu_id'" in str(exc.value)
+
+
+def test_g02id_set_ont_naming_rejects_quote_in_name_before_network():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_g02id.execute_apply({}, 'set_ont_naming', {'pon': 1, 'onu_id': 28, 'name': 'bad"name'})
+    assert 'terlarang' in str(exc.value)
+
+
+def test_g02id_set_ont_naming_rejects_overlong_name_before_network():
+    with pytest.raises(OltSessionError):
+        hsgq_g02id.execute_apply({}, 'set_ont_naming', {'pon': 1, 'onu_id': 28, 'name': 'X' * 41})
+
+
+def test_g02id_build_set_ont_naming_commands_name_only():
+    cmds = hsgq_g02id._build_set_ont_naming_commands({'name': 'Dahlia - 255324578770'}, 28)
+    assert cmds == ['ont setting 28 name "Dahlia - 255324578770"']
+
+
+def test_g02id_build_set_ont_naming_commands_with_optional_desc():
+    cmds = hsgq_g02id._build_set_ont_naming_commands(
+        {'name': 'Dahlia - 255', 'desc': 'ODP Pondokpete'}, 28
+    )
+    assert cmds == [
+        'ont setting 28 name "Dahlia - 255"',
+        'ont setting 28 desc "ODP Pondokpete"',
+    ]
+
+
+def test_g02id_device_error_regex_catches_known_failures_not_success():
+    assert hsgq_g02id._DEVICE_ERROR_RE.search('Error, Ont WanConfig Add fail, reason: WAN data create fail.')
+    assert hsgq_g02id._DEVICE_ERROR_RE.search('% There is no matched command.')
+    assert hsgq_g02id._DEVICE_ERROR_RE.search('vty% Command incomplete.')
+    # sukses `ont setting` = echo + prompt bersih, tanpa penanda error
+    assert not hsgq_g02id._DEVICE_ERROR_RE.search('ont setting 28 name "Dahlia - 255"\nOLT-BUMIREJA(config-gpon-1)#')
+
+
+def test_g02id_execute_save_parses_success(monkeypatch):
+    monkeypatch.setattr(
+        hsgq_g02id.hsgq_common, 'run_hsgq_ssh_command',
+        lambda conn, cmd, overall_timeout=45.0: 'copy running-config startup-config\n Configuration saved successfully\nOLT-BUMIREJA#',
+    )
+    result = hsgq_g02id.execute_save({'host': 'h', 'username': 'u', 'password': 'p'})
+    assert result['saved'] is True
+    assert 'saved successfully' in result['raw_excerpt'].lower()
+
+
+def test_g02id_execute_save_raises_on_device_error(monkeypatch):
+    monkeypatch.setattr(
+        hsgq_g02id.hsgq_common, 'run_hsgq_ssh_command',
+        lambda conn, cmd, overall_timeout=45.0: '% command error',
+    )
+    with pytest.raises(OltSessionError):
+        hsgq_g02id.execute_save({'host': 'h', 'username': 'u', 'password': 'p'})

@@ -43,17 +43,11 @@ final class UnsupportedCpeAdapter implements CpeProvisioningAdapter
     public function capabilities(): AdapterCapabilities
     {
         return new AdapterCapabilities([
-            'admit' => false,
             'wan_internet' => false,
             'wan_bridge' => false,
             'ssid' => false,
             'verify' => false,
         ]);
-    }
-
-    public function admit(CpeDevice $cpe, array $context = []): array
-    {
-        $this->reject('admit');
     }
 
     public function pushWanInternet(CpeDevice $cpe, array $spec): array

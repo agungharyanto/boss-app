@@ -10,18 +10,15 @@ use App\Models\CpeDevice;
  * CMDC/CT-COM diimplementasi penuh (mulai v0.23.8.2); Huawei/CMCC/ZTE-generic
  * = stub belum didukung.
  *
- * Catatan: `admit()` dicantumkan sesuai spesifikasi interface, TAPI admisi ONU
- * sejatinya operasi sisi-OLT (lihat OltProvisioningAdapter) — pada CPE adapter
- * umumnya no-op/delegasi; dipertegas saat implementasi v0.23.8.2.
+ * Admisi ONU SENGAJA TIDAK ada di interface ini — murni operasi sisi-OLT
+ * (lihat OltProvisioningAdapter::admit). CPE adapter hanya menangani operasi
+ * TR-069 sisi-perangkat: WAN internet device-driven, WAN bridge, SSID.
  *
  * @param  array<string, mixed>  ...spec/context (bentuk konkret ditetapkan saat
  *                               template ZTP dibangun, v0.23.8.3/.4)
  */
 interface CpeProvisioningAdapter extends ProvisioningAdapter
 {
-    /** @return array<string, mixed> */
-    public function admit(CpeDevice $cpe, array $context = []): array;
-
     /** @return array<string, mixed> */
     public function pushWanInternet(CpeDevice $cpe, array $spec): array;
 

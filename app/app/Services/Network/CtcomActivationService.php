@@ -9,7 +9,7 @@ use Illuminate\Support\Sleep;
 use RuntimeException;
 
 /**
- * v0.23.6 — Aktivasi G02ID dengan arsitektur final:
+ * Aktivasi CT-COM (HSGQ G02ID = GPON & E04ID = EPON) — arsitektur final:
  *   WAN  -> TR-069 (device-driven; CPE CT-COM membentuk WAN-nya sendiri,
  *           BOSS cuma menyediakan kredensial RADIUS + menunggu Connected).
  *   NAMA -> OMCI-direct (`ont setting <id> name "Nama - CID"`), lewat sidecar
@@ -17,6 +17,14 @@ use RuntimeException;
  *
  * Alur (lihat activate()): (3a) tulis radcheck -> (3b) poll WAN PPPoE internet
  * sampai Connected via GenieACS -> (3c) resolve onu_id dari SN + set nama OMCI.
+ *
+ * v0.23.8.2 — di-rename dari G02idActivationService (dulu "G02id" tapi alur
+ * intinya universal CT-COM). `resolveInternetPppPathByVlan()`/
+ * `verifyBridgePresent()` kini mendeteksi objek VLAN GPON vs EPON
+ * (`X_CT-COM_WAN{Gpon,Epon}LinkConfig`) — sama pola `ctcVlanConfigObject()` di
+ * default-wan.js (v0.23.7) — sehingga service ini melayani E04ID juga, bukan
+ * hanya G02ID. Ini INTI logika yang di-wrap CtcomCpeAdapter (WAN internet/
+ * bridge) + CtcomOltAdapter (naming/save) di arsitektur dua-dimensi ZTP.
  *
  * PRASYARAT (BUKAN tanggung jawab service ini — sengaja): `Customer` sudah ada
  * dan `ppp_package_id`-nya sudah diset ke paket ber-VLAN (dari situ VLAN/
@@ -27,7 +35,7 @@ use RuntimeException;
  * tidak viable di fleet G02ID (lihat docs/omci/hsgq-g02id-cli-reference.md
  * "KESIMPULAN ARSITEKTUR FINAL v0.23.6").
  */
-class G02idActivationService
+class CtcomActivationService
 {
     /** Batas poll WAN Connected — disetarakan ke siklus cache GenieACS (~5,5 mnt). */
     public const POLL_MAX_SECONDS = 300;
@@ -222,7 +230,11 @@ class G02idActivationService
         $flat = [];
         $this->flatten($device, '', $flat);
         foreach ($flat as $key => $value) {
-            if (preg_match('/WANConnectionDevice\.\d+\.X_CT-COM_WANGponLinkConfig\.VLANIDMark$/', $key) && (int) $value === $bridgeVlan) {
+            // Objek VLAN CT-COM beda per jenis PON: GPON =
+            // X_CT-COM_WANGponLinkConfig, EPON = X_CT-COM_WANEponLinkConfig
+            // (sama pola ctcVlanConfigObject() default-wan.js, v0.23.7). Match
+            // keduanya supaya verifikasi bridge jalan di G02ID (GPON) & E04ID (EPON).
+            if (preg_match('/WANConnectionDevice\.\d+\.X_CT-COM_WAN(?:Gpon|Epon)LinkConfig\.VLANIDMark$/', $key) && (int) $value === $bridgeVlan) {
                 return true;
             }
             if (preg_match('/\.Name$/', $key) && stripos((string) $value, '_B_VID_'.$bridgeVlan) !== false) {
@@ -302,7 +314,11 @@ class G02idActivationService
             $wcdBase = $m[1];
             $name = (string) $value;
             $connType = (string) ($flat[$pppPath.'.ConnectionType'] ?? '');
-            $wcdVlan = $flat[$wcdBase.'.X_CT-COM_WANGponLinkConfig.VLANIDMark'] ?? null;
+            // GPON vs EPON: coba objek EPON dulu, lalu GPON (ctcVlanConfigObject
+            // pattern) — satu resolver melayani G02ID & E04ID.
+            $wcdVlan = $flat[$wcdBase.'.X_CT-COM_WANEponLinkConfig.VLANIDMark']
+                ?? $flat[$wcdBase.'.X_CT-COM_WANGponLinkConfig.VLANIDMark']
+                ?? null;
 
             $isBridged = stripos($name, '_B_') !== false || stripos($connType, 'bridg') !== false;
             if ($isBridged) {

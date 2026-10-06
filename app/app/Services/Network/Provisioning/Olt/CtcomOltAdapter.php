@@ -4,11 +4,14 @@ namespace App\Services\Network\Provisioning\Olt;
 
 use App\Enums\PonMode;
 use App\Enums\ProvisioningAdapterLayer;
+use App\Models\Customer;
 use App\Models\OltDevice;
+use App\Services\Network\CtcomActivationService;
 use App\Services\Network\Provisioning\AdapterCapabilities;
 use App\Services\Network\Provisioning\Contracts\OltProvisioningAdapter;
 use App\Services\Network\Provisioning\Exceptions\AdapterNotYetImplemented;
 use App\Services\Network\Provisioning\Exceptions\UnsupportedAdapterOperation;
+use RuntimeException;
 
 /**
  * OLT adapter CT-COM OLT (HSGQ G02ID = GPON, HSGQ E04ID = EPON) — satu class
@@ -78,21 +81,43 @@ final class CtcomOltAdapter implements OltProvisioningAdapter
         );
     }
 
+    /**
+     * Penamaan ONU "Nama - CID". Delegasi ke CtcomActivationService::
+     * applyOmciNaming (resolveOnuBySn + set_ont_naming sidecar). `$spec` wajib
+     * membawa `customer` (Customer) + `sn` (string).
+     *
+     * CATATAN E04ID: applyOmciNaming saat ini memakai `set_ont_naming` (OMCI
+     * G02ID, resolve gpon 1/2). Penamaan E04ID lewat `onu description <id>`
+     * (CLI, terbukti manual v0.23.7) BELUM punya operasi sidecar tersendiri —
+     * di-wire saat orkestrator device v0.23.8.5. Untuk G02ID (GPON) delegasi
+     * ini sudah penuh & teruji.
+     */
     public function applyNaming(OltDevice $olt, array $spec): array
     {
-        $this->pending('applyNaming');
+        $customer = $spec['customer'] ?? null;
+        $sn = $spec['sn'] ?? null;
+        if (! $customer instanceof Customer || ! is_string($sn) || $sn === '') {
+            throw new RuntimeException('CtcomOltAdapter::applyNaming butuh spec["customer"] (Customer) + spec["sn"] (string).');
+        }
+
+        return $this->service()->applyOmciNaming($olt, $customer, $sn, $spec['requested_by'] ?? null);
     }
 
     public function saveConfig(OltDevice $olt): array
     {
-        $this->pending('saveConfig');
+        return $this->service()->saveConfig($olt, null);
+    }
+
+    private function service(): CtcomActivationService
+    {
+        return app(CtcomActivationService::class);
     }
 
     private function pending(string $operation): never
     {
         throw new AdapterNotYetImplemented(
-            "CtcomOltAdapter::{$operation}() ({$this->vendorKey}) akan diimplementasi v0.23.8.2 "
-            .'(dipecah dari CtcomActivationService) — belum ada logika tulis device.'
+            "CtcomOltAdapter::{$operation}() ({$this->vendorKey}) akan diimplementasi v0.23.8.5 "
+            .'(admisi: G02ID auto / E04ID bind-onu+confirm — butuh orkestrator device).'
         );
     }
 }

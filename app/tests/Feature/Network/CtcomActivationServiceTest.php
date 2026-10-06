@@ -4,7 +4,7 @@ namespace Tests\Feature\Network;
 
 use App\Models\Customer;
 use App\Models\OltDevice;
-use App\Services\Network\G02idActivationService;
+use App\Services\Network\CtcomActivationService;
 use App\Services\Network\GenieAcsClientService;
 use App\Services\Network\OltSidecarClient;
 use App\Services\Network\RadcheckWriterService;
@@ -20,7 +20,7 @@ use Tests\TestCase;
  * TestCredentialSyncServiceTest); Sleep::fake(). TIDAK pernah memanggil
  * OLT/GenieACS sungguhan. Customer in-memory (new Customer, tanpa DB).
  */
-class G02idActivationServiceTest extends TestCase
+class CtcomActivationServiceTest extends TestCase
 {
     protected function setUp(): void
     {
@@ -48,8 +48,8 @@ class G02idActivationServiceTest extends TestCase
         ?GenieAcsClientService $genieacs = null,
         ?RadcheckWriterService $radcheck = null,
         ?TestCredentialSyncService $credentials = null,
-    ): G02idActivationService {
-        return new G02idActivationService(
+    ): CtcomActivationService {
+        return new CtcomActivationService(
             $radcheck ?? $this->createMock(RadcheckWriterService::class),
             $credentials ?? $this->createMock(TestCredentialSyncService::class),
             $genieacs ?? $this->createMock(GenieAcsClientService::class),
@@ -103,6 +103,63 @@ class G02idActivationServiceTest extends TestCase
         }
 
         return ['_id' => 'DEV', 'InternetGatewayDevice' => ['WANDevice' => ['1' => ['WANConnectionDevice' => $wcd]]]];
+    }
+
+    /**
+     * Device EPON (E04ID): objek VLAN = X_CT-COM_WANEponLinkConfig (BUKAN Gpon)
+     * — WAN internet VID131 di WCD.1, bridge VID172 di WCD.3. Membuktikan fix
+     * v0.23.8.2 (deteksi GPON/EPON) melayani E04ID.
+     */
+    private function genieDeviceEpon(): array
+    {
+        $wcd = [
+            '1' => [
+                'WANPPPConnection' => ['2' => [
+                    'Name' => ['_value' => '2_INTERNET_R_VID_131'],
+                    'ConnectionType' => ['_value' => 'IP_Routed'],
+                ]],
+                'X_CT-COM_WANEponLinkConfig' => ['VLANIDMark' => ['_value' => 131]],
+            ],
+            '3' => [
+                'WANPPPConnection' => ['1' => [
+                    'Name' => ['_value' => '3_INTERNET_B_VID_172'],
+                    'ConnectionType' => ['_value' => 'PPPoE_Bridged'],
+                ]],
+                'X_CT-COM_WANEponLinkConfig' => ['VLANIDMark' => ['_value' => 172]],
+            ],
+        ];
+
+        return ['_id' => 'DEV', 'InternetGatewayDevice' => ['WANDevice' => ['1' => ['WANConnectionDevice' => $wcd]]]];
+    }
+
+    public function test_verify_bridge_present_true_via_epon_object(): void
+    {
+        $genieacs = $this->createMock(GenieAcsClientService::class);
+        $genieacs->method('findDeviceById')->willReturn($this->genieDeviceEpon());
+
+        $this->assertTrue($this->makeService(genieacs: $genieacs)->verifyBridgePresent('DEV', 172));
+    }
+
+    public function test_push_network_policy_resolves_vlan_via_epon_object(): void
+    {
+        $credentials = $this->createMock(TestCredentialSyncService::class);
+        $credentials->method('deriveLiveWanParams')->willReturn([
+            'has_vlan_package' => true,
+            'username' => 'u@ppp.bajastu.id',
+            'password' => 'wifijadipasti',
+            'framed_pool' => 'PPPOE-REMOTE',
+            'vlan_pppoe' => 131,
+        ]);
+        $genieacs = $this->createMock(GenieAcsClientService::class);
+        $genieacs->method('findDeviceById')->willReturn($this->genieDeviceEpon());
+        $genieacs->method('sendTask')->willReturn(['task_id' => 't1', 'connection_request_ok' => false]);
+
+        $result = $this->makeService(genieacs: $genieacs, credentials: $credentials)
+            ->pushNetworkPolicy($this->customer(), 'DEV');
+
+        // Path WAN internet VID131 ter-resolve dari objek EPON (WCD.1 inst .2).
+        $this->assertSame('InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.2', $result['wan_path']);
+        $this->assertSame(131, $result['vlan']);
     }
 
     private function genieDevice(string $internetStatus): array

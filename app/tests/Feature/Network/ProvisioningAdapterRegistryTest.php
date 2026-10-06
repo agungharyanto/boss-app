@@ -6,6 +6,7 @@ use App\Enums\PonMode;
 use App\Models\CpeDevice;
 use App\Models\OltDevice;
 use App\Models\ProvisioningAdapter;
+use App\Services\Network\CtcomActivationService;
 use App\Services\Network\Provisioning\Cpe\CtcomCpeAdapter;
 use App\Services\Network\Provisioning\Cpe\UnsupportedCpeAdapter;
 use App\Services\Network\Provisioning\CpeAdapterRegistry;
@@ -43,8 +44,10 @@ class ProvisioningAdapterRegistryTest extends TestCase
         $this->assertInstanceOf(CtcomCpeAdapter::class, $adapter);
         $this->assertTrue($adapter->isSupported());
         $this->assertSame('tr069', $adapter->transport());
+        $this->assertTrue($adapter->capabilities()->operations['wan_internet']);
         $this->assertTrue($adapter->capabilities()->operations['ssid']);
-        $this->assertFalse($adapter->capabilities()->operations['admit']); // admisi = sisi OLT
+        // admisi SENGAJA tidak ada di CPE adapter (murni sisi-OLT) — key 'admit' absen.
+        $this->assertArrayNotHasKey('admit', $adapter->capabilities()->operations);
     }
 
     public function test_cpe_registry_returns_unsupported_stub_for_unverified_brands(): void
@@ -157,5 +160,35 @@ class ProvisioningAdapterRegistryTest extends TestCase
         $this->seed(ProvisioningAdapterSeeder::class);
 
         $this->assertSame(7, ProvisioningAdapter::count());
+    }
+
+    // ---- delegasi adapter -> CtcomActivationService (v0.23.8.2) ----------
+
+    public function test_ctcom_cpe_adapter_delegates_wan_bridge_to_activation_service(): void
+    {
+        $service = $this->createMock(CtcomActivationService::class);
+        $service->expects($this->once())->method('verifyBridgePresent')
+            ->with('DEV-GENIE', 172)->willReturn(true);
+        $this->app->instance(CtcomActivationService::class, $service);
+
+        $cpe = new CpeDevice;
+        $cpe->genieacs_device_id = 'DEV-GENIE';
+
+        $result = $this->cpe()->for('ctcom')->pushWanBridge($cpe, []);
+
+        $this->assertTrue($result['bridge_present']);
+        $this->assertTrue($result['device_driven']);
+    }
+
+    public function test_ctcom_olt_adapter_delegates_save_config_to_activation_service(): void
+    {
+        $service = $this->createMock(CtcomActivationService::class);
+        $service->expects($this->once())->method('saveConfig')
+            ->willReturn(['saved' => true, 'raw_excerpt' => 'Configuration saved successfully']);
+        $this->app->instance(CtcomActivationService::class, $service);
+
+        $result = $this->olt()->for('hsgq_e04id')->saveConfig(new OltDevice);
+
+        $this->assertTrue($result['saved']);
     }
 }

@@ -768,3 +768,27 @@ Pertanyaan "apakah `ont wanconfig add` berhasil di ONT genuinely-fresh/uncfg" di
 tidak relevan operasional** untuk fleet ini — karena ONT fresh praktis tidak pernah ada (auto-WAN
 device-driven terlalu cepat). Kalau suatu saat perlu, butuh unit uji yang sengaja diisolasi dari jalur
 TR-069/GenieACS — di luar kebutuhan v0.23.6.
+
+## Command SAVE / persist config — TERVERIFIKASI & DIEKSEKUSI (v0.23.6, 2026-10-06)
+
+**G02ID (HSGQ) BUTUH save EKSPLISIT** — BEDA dari ZTE C300 yang auto-write. Sepanjang v0.23.6 kita menulis
+ke running-config (`ont setting name`, dll) tanpa save → berisiko hilang saat OLT reboot. Dulu `save`
+teridentifikasi di daftar `configure ?` (riset v0.23.1) tapi **tidak pernah dieksekusi** (denylist) dan
+syntax level-2-nya tidak dikonfirmasi.
+
+**Command persist yang BENAR (dari bantuan CLI device sendiri, bukan tebakan):**
+```
+copy running-config startup-config
+```
+Dikonfirmasi via `copy running-config ?` → `startup-config  Copy running config to startup config
+(same as write file)`. Dijalankan di node **PRIVILEGED (`#` / enable)**. Respons device saat dieksekusi
+(2026-10-06, OLT BUMIREJA id=4): **`Configuration saved successfully`**. Non-disruptif — hanya menyalin
+running→startup; `show ont-info sn` setelahnya mengonfirmasi nama ONT + State/Run State + uptime tidak
+berubah (tidak reboot).
+
+- Probe `save ?` / `write ?` menampilkan command bare tanpa sub-opsi jelas (ambigu) — **gunakan
+  `copy running-config startup-config`** yang eksplisit & self-documented ("same as write file").
+- Diimplementasikan sebagai `hsgq_g02id.execute_save()` (sidecar, via `run_hsgq_ssh_command` login→enable→
+  command→logout) → route `POST /olt/<id>/save` → `OltSidecarClient::saveConfig()` →
+  `G02idActivationService::saveConfig()`, dipanggil sebagai **langkah WAJIB terakhir** di `activate()`
+  setelah `applyOmciNaming()`. Aktivasi G02ID dianggap tidak lengkap sebelum save ini sukses.

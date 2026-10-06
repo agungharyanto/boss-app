@@ -95,6 +95,28 @@ def execute_apply(connection: dict, operation: str, params: dict):
     }, None
 
 
+def execute_save(connection: dict) -> dict:
+    """Jalur SAVE (`/olt/<id>/save`). Persist running-config -> startup-config
+    via `copy running-config startup-config` — command TERVERIFIKASI dari
+    bantuan CLI device sendiri (`copy running-config ?` -> "startup-config:
+    Copy running config to startup config (same as write file)", 2026-10-06).
+    Device membalas "Configuration saved successfully". Dijalankan di node
+    PRIVILEGED (`#`) via run_hsgq_ssh_command (login->enable->command->logout).
+    BEDA dari ZTE C300 yang auto-write: G02ID (HSGQ) butuh save EKSPLISIT,
+    kalau tidak config hilang saat OLT reboot. Melempar OltSessionError kalau
+    device mengembalikan pola error eksplisit (_DEVICE_ERROR_RE)."""
+    output = hsgq_common.run_hsgq_ssh_command(
+        connection, 'copy running-config startup-config', overall_timeout=45.0
+    )
+    if _DEVICE_ERROR_RE.search(output):
+        raise OltSessionError(f"Device menolak save: {output.strip()[:500]}", 'command')
+
+    return {
+        'saved': 'saved successfully' in output.lower(),
+        'raw_excerpt': output.strip()[:500],
+    }
+
+
 # --------------------------------------------------------------------------
 # Validasi params (TULIS)
 # --------------------------------------------------------------------------

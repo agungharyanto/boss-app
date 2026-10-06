@@ -305,6 +305,7 @@ class G02idActivationServiceTest extends TestCase
         $sidecar = $this->createMock(OltSidecarClient::class);
         $sidecar->method('resolveOnuBySn')->willReturn(['success' => true, 'data' => ['found' => true, 'pon' => 1, 'onu_id' => 28]]);
         $sidecar->expects($this->once())->method('setOntNaming')->willReturn(['success' => true, 'data' => []]);
+        $sidecar->expects($this->once())->method('saveConfig')->willReturn(['success' => true, 'data' => ['saved' => true, 'raw_excerpt' => 'Configuration saved successfully']]);
 
         $service = $this->makeService($sidecar, $genieacs, $radcheck, $this->deriveStub());
         $result = $service->activate(new OltDevice, $this->customer(), 'CMDCA200BB76', 'DEV');
@@ -313,6 +314,19 @@ class G02idActivationServiceTest extends TestCase
         $this->assertSame('done', $result['stage']);
         $this->assertTrue($result['bridge_present']);
         $this->assertSame('Dahlia - 2026104603', $result['naming']['name']);
+        $this->assertTrue($result['save']['saved']);
+    }
+
+    public function test_save_config_persists_and_throws_on_failure(): void
+    {
+        $sidecarOk = $this->createMock(OltSidecarClient::class);
+        $sidecarOk->method('saveConfig')->willReturn(['success' => true, 'data' => ['saved' => true, 'raw_excerpt' => 'Configuration saved successfully']]);
+        $this->assertTrue($this->makeService(sidecar: $sidecarOk)->saveConfig(new OltDevice)['saved']);
+
+        $sidecarFail = $this->createMock(OltSidecarClient::class);
+        $sidecarFail->method('saveConfig')->willReturn(['success' => false, 'device_message' => '% error']);
+        $this->expectException(RuntimeException::class);
+        $this->makeService(sidecar: $sidecarFail)->saveConfig(new OltDevice);
     }
 
     public function test_activate_stops_at_radacct_poll_and_never_names(): void

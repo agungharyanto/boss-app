@@ -353,6 +353,10 @@ class G02idActivationService
 
         $bridgePresent = $this->verifyBridgePresent($genieAcsDeviceId);
         $naming = $this->applyOmciNaming($oltDevice, $customer, $sn, $requestedBy);
+        // WAJIB terakhir: persist running-config -> startup-config. G02ID (HSGQ)
+        // BUTUH save eksplisit (beda dari ZTE C300 yang auto-write) — tanpa ini
+        // config OLT (termasuk nama ONT) hilang saat OLT reboot.
+        $save = $this->saveConfig($oltDevice, $requestedBy);
 
         return [
             'ok' => true,
@@ -362,7 +366,30 @@ class G02idActivationService
             'poll' => $poll,
             'bridge_present' => $bridgePresent,
             'naming' => $naming,
+            'save' => $save,
         ];
+    }
+
+    /**
+     * Persist config OLT (running -> startup) lewat sidecar save_config
+     * (`copy running-config startup-config`). WAJIB setelah tulis apa pun ke
+     * OLT G02ID — HSGQ tidak auto-write seperti ZTE C300. Melempar
+     * RuntimeException kalau sidecar/device menolak.
+     *
+     * @return array{saved: bool, raw_excerpt: ?string}
+     */
+    public function saveConfig(OltDevice $oltDevice, ?int $requestedBy = null): array
+    {
+        $result = $this->sidecar->saveConfig($oltDevice, $requestedBy);
+        if (($result['success'] ?? false) !== true) {
+            throw new RuntimeException(
+                'Save config OLT gagal: '.($result['device_message'] ?? $result['error'] ?? 'tanpa pesan')
+            );
+        }
+
+        $data = $result['data'] ?? [];
+
+        return ['saved' => (bool) ($data['saved'] ?? false), 'raw_excerpt' => $data['raw_excerpt'] ?? null];
     }
 
     /** Format nama ONT "Nama - CID", dipangkas ke batas aman kalau kepanjangan. */

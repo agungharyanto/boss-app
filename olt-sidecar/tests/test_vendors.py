@@ -765,3 +765,22 @@ def test_g02id_device_error_regex_catches_known_failures_not_success():
     assert hsgq_g02id._DEVICE_ERROR_RE.search('vty% Command incomplete.')
     # sukses `ont setting` = echo + prompt bersih, tanpa penanda error
     assert not hsgq_g02id._DEVICE_ERROR_RE.search('ont setting 28 name "Dahlia - 255"\nOLT-BUMIREJA(config-gpon-1)#')
+
+
+def test_g02id_execute_save_parses_success(monkeypatch):
+    monkeypatch.setattr(
+        hsgq_g02id.hsgq_common, 'run_hsgq_ssh_command',
+        lambda conn, cmd, overall_timeout=45.0: 'copy running-config startup-config\n Configuration saved successfully\nOLT-BUMIREJA#',
+    )
+    result = hsgq_g02id.execute_save({'host': 'h', 'username': 'u', 'password': 'p'})
+    assert result['saved'] is True
+    assert 'saved successfully' in result['raw_excerpt'].lower()
+
+
+def test_g02id_execute_save_raises_on_device_error(monkeypatch):
+    monkeypatch.setattr(
+        hsgq_g02id.hsgq_common, 'run_hsgq_ssh_command',
+        lambda conn, cmd, overall_timeout=45.0: '% command error',
+    )
+    with pytest.raises(OltSessionError):
+        hsgq_g02id.execute_save({'host': 'h', 'username': 'u', 'password': 'p'})

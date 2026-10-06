@@ -375,3 +375,91 @@ cluster (bukan tiap sub-versi), sesuai aturan regression sprint.
 
 **Tidak ada migration/kode dibuat di dokumen ini.** Desain final (6 keputusan terkunci) + usulan tahapan
 menunggu review Agung SEBELUM migration pertama (v0.23.8.1) ditulis.
+
+---
+
+## G. REVISI (2026-10-07): TR-069 reachability OLT-INDEPENDENT → adapter DUA-DIMENSI
+
+**Hipotesis Agung TERKONFIRMASI via verifikasi read-only.** Mengubah struktur adapter dari "satu adapter per
+`vendor+pon_mode`" (bagian C/D1 di atas) menjadi **dua dimensi adapter yang terpisah**. Bagian ini
+MENGGANTIKAN bagian C "Lapis 1 — ADAPTER" dan D1 yang relevan; sisanya (template, D2-D6, keputusan #1-#6)
+tetap berlaku.
+
+### G1. Bukti verifikasi (read-only, 2026-10-07)
+- **135 dari 193 ONU yang terdaftar di OLT ZTE C300** (backup SmartOLT 2026-09-07, `onus_consolidated.csv`)
+  **ONLINE sekarang di GenieACS** (lastInform < 15 menit); 151/193 hadir (termasuk yang offline). Merek
+  campur: ZICG=109, CMDC=29, CIOT=27, RTEG=9, HWTC=6, ZTEG=6, GPON=6, VSOL=1.
+- **SmartOLT sendiri menandai `tr069=Disabled` untuk SEMUA 193** — tapi mereka tetap Inform ke GenieACS
+  kita → reachability TR-069 **TIDAK bergantung OLT maupun toggle SmartOLT**; digerakkan **DHCP Option 43
+  (ACS URL)** di VLAN manajemen TR-069, OLT-agnostic.
+- **Dibaca langsung (read-only)**: `CMDCA46FFE00` = pelanggan NYATA "PAUD BUNGA BANGSA" (CMDC-brand, bukan
+  unit test, tak pernah dipindah OLT), online, `WLANConfiguration` instance 1/5 terbaca, SSID + Enable
+  genuinely ada. CMDCA473F158 (Test-2) juga hadir di GenieACS.
+- **Honest caveat**: (a) backup OLT-attachment berumur ~1 bulan — bukti kuatnya adalah pelanggan nyata
+  tak-pernah-dipindah yang masih Inform, bukan unit test; kalau mau airtight "masih di ZTE C300 detik ini"
+  bisa cross-check read-only `show gpon onu` live di OLT id=1 (belum dilakukan, tak diminta). (b) **SSID
+  AddObject / WAN bridge WRITE di device ZTE-C300 BELUM diuji tulis** (read-only sesuai instruksi + Test-2
+  "jangan disentuh") — kesimpulan "AddObject bekerja sama seperti CT-COM-OLT" bersifat INFERENSI KUAT
+  (merek CPE sama, model WLAN TR-069 sama), bukan write-proven.
+
+### G2. Model adapter BARU — dua dimensi independen
+Operasi provisioning dipecah menurut **DI MANA** ia dieksekusi, bukan satu adapter monolit per vendor:
+
+**Dimensi 1 — OLT Adapter (per OLT vendor)** — operasi SISI-OLT:
+| Operasi | ZTE C300 | CT-COM OLT G02ID | CT-COM OLT E04ID |
+|---|---|---|---|
+| Admisi ONU | `uncfg`→config | auto-authorize | **bind-onu + onu confirm** |
+| WAN Internet (bila OMCI-driven) | **OMCI** (tcont/gemport/service-port) — PROVEN | — (device-driven TR-069) | — (device-driven TR-069) |
+| Penamaan ONU | `interface gpon-onu name/desc` | OMCI `set_ont_naming` | `onu description` |
+| Save config | auto-write | `copy run start` | `copy run start` |
+
+**Dimensi 2 — CPE Adapter (per MEREK CPE, via TR-069, LINTAS SEMUA OLT)** — operasi SISI-CPE, SATU
+implementasi per merek dipakai di OLT mana pun:
+| Operasi | CMDC/CT-COM (penuh) | Huawei/CMCC/ZTE-generic (stub) |
+|---|---|---|
+| WAN Internet (device-driven) | TR-069 push credential/VLAN/NAT (`X_CT-COM_*` + ctcVlanObj GPON/EPON) | stub |
+| **WAN Bridge** | **TR-069 device-driven** (`PPPoE_Bridged` + VLAN, reuse default-wan.js) | stub |
+| SSID | TR-069 AddObject sekuensial + resep open/wpa2 + peran→instance | stub |
+
+**Orkestrasi per aktivasi** memilih operasi dari dimensi yang tepat:
+- **CT-COM OLT (G02ID/E04ID) + CPE CMDC**: OLT-adapter = admisi (+save+naming); CPE-adapter = WAN Internet
+  + Bridge + SSID (semua TR-069). (Ini yang sudah terbukti di v0.23.6/v0.23.7.)
+- **ZTE C300 + CPE CMDC**: OLT-adapter = admisi uncfg→config + **WAN Internet via OMCI (proven)** + naming
+  + save(auto); CPE-adapter = **SSID via TR-069** (sama persis implementasi CMDC yang dipakai di G02ID/
+  E04ID — INI inti hipotesis yang terkonfirmasi).
+- **WAN Internet "milik" dimensi mana?** Tergantung OLT: ZTE = OMCI (OLT-adapter); CT-COM-OLT =
+  device-driven TR-069 (CPE-adapter). Orkestrator memutuskan via kapabilitas OLT-adapter
+  (`wan_internet_via=omci|tr069_device_driven|none`).
+
+### G3. PELUANG BARU — WAN Bridge ZTE C300 via TR-069 (bukan OMCI)
+Backlog lama "bridge VLAN172 ZTE C300 mentok di OMCI (`service other`/`mvlan`)" KEMUNGKINAN TERPECAHKAN:
+kalau CPE-nya CMDC-brand, **WAN Bridge bisa di-push device-driven via TR-069** (dimensi CPE-adapter,
+`PPPoE_Bridged`), sama seperti G02ID/E04ID — TANPA menyentuh OMCI bridge ZTE yang bermasalah. → Masuk
+v0.23.8 sebagai **eksperimen in-scope** (bukan backlog terpisah), diverifikasi hardware di tahap device.
+
+### G4. Dampak ke registry (revisi D1)
+DUA registry kode terpisah (keduanya pola `SUPPORTED_VENDOR_OPERATIONS`):
+- `OltAdapterRegistry`: `olt_vendor(+pon_mode via OltDevice::ponMode()) → OltAdapter` (admisi/OMCI-WAN/
+  naming/save). ZTE C300 + CT-COM GPON + CT-COM EPON diimplementasi; kapabilitas `wan_internet_via`.
+- `CpeAdapterRegistry`: `cpe_brand → CpeTr069Adapter` (WAN internet device-driven/bridge/SSID). CMDC/CT-COM
+  penuh; Huawei/CMCC/ZTE-generic stub. Merek CPE diturunkan dari OUI/manufacturer `cpe_devices` (bukan OLT).
+- Tabel mirror `cpe_adapters` (D1) → jadi DUA tabel mirror atau satu tabel + kolom `layer`
+  (`olt`/`cpe`) — visibilitas/matriks dukungan saja, bukan penentu class. Usul: satu tabel + kolom `layer`.
+
+### G5. Dampak ke rencana tahapan (revisi F)
+- **v0.23.8.1** diperluas: dua registry (`OltAdapterRegistry` + `CpeAdapterRegistry`) + interface
+  `OltAdapter` & `CpeTr069Adapter` + tabel mirror (kolom `layer`).
+- **v0.23.8.2** (rename `CtcomActivationService` + ctcVlanObj) → pecah fungsinya ke dimensi: bagian
+  SSID/WAN/bridge TR-069 → `CtcomCpeAdapter` (dimensi CPE); bagian admisi/naming/save → `CtcomOltAdapter`
+  (G02ID/E04ID).
+- **BARU v0.23.8.2b (atau tahap tersendiri) — ZTE C300 OLT Adapter MASUK SEKARANG** (bukan backlog):
+  WAN Internet via OMCI (tcont/gemport/service-port, sidecar) — PROVEN read, tinggal tulis; admisi
+  uncfg→config; naming; save auto. Verifikasi hardware ke ONU uji ZTE (bukan pelanggan nyata).
+- **v0.23.8.5** (eksekusi device) tambah skenario: **ZTE C300 + CPE CMDC** (OMCI WAN + TR-069 SSID) DAN
+  **eksperimen WAN Bridge ZTE via TR-069** (G3). Semua verifikasi hardware di ONU uji, JANGAN pelanggan
+  nyata / `test-x86-bajastu`.
+- CPE-adapter CMDC/CT-COM = SATU implementasi dipakai lintas OLT (G02ID/E04ID/ZTE C300) — inilah payoff
+  arsitektur dua-dimensi.
+
+**Status**: verifikasi G1 read-only selesai & mendukung. Revisi desain G2-G5 menunggu review Agung SEBELUM
+v0.23.8.1. Tidak ada write ke device mana pun dilakukan di verifikasi ini.

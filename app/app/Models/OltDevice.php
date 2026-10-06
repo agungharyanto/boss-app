@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\OltAccessProtocol;
 use App\Enums\OltConnectionTestResult;
+use App\Enums\PonMode;
 use App\Models\Concerns\BelongsToResellerScope;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\OltDeviceFactory;
@@ -135,6 +136,16 @@ class OltDevice extends Model
      *
      * @throws RuntimeException Kalau OLT ini belum dikenal/didukung sidecar.
      */
+    /**
+     * Mode PON OLT ini, diturunkan dari vendor (keputusan #5 ZTP v0.23.8) —
+     * dipakai memilih OLT adapter + sub-mode VLAN CT-COM (GPON/EPON). Tidak
+     * ada probe device / tabel baru.
+     */
+    public function ponMode(): PonMode
+    {
+        return PonMode::fromVendorKey($this->sidecarVendorKey());
+    }
+
     public function sidecarVendorKey(): string
     {
         $manufacturer = strtoupper(trim($this->oltModel?->manufacturer?->name ?? ''));

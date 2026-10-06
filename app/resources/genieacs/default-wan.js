@@ -386,8 +386,10 @@ if (enabled) {
         //    tetap routed-PPPoE selama Username terisi)
         //  - VLAN di X_CT-COM_WANGponLinkConfig.VLANIDMark LEVEL-WCD + Mode=2
         //  - X_CT-COM_ServiceList = "INTERNET"
-        //  - X_CT-COM_LanInterface = CSV path SSID (default SSID1+SSID5 =
-        //    wifi rumah), X_CT-COM_LanInterface-DHCPEnable = true (LAN mode)
+        //  - NATEnabled = false + X_CT-COM_LanInterface = "" (string kosong =
+        //    genuinely tanpa binding, TERBUKTI diterima) + DHCPEnable = false.
+        //    Lihat blok di bawah (keputusan Agung v0.23.6) — DULU SSID1+SSID5
+        //    LAN-mode; diubah karena WAN1 = uplink routed murni.
         const w1Wcd = ctcResolveWcd();
         if (w1Wcd > 0) {
         const wcdPath = `${wanDevicePath}.WANConnectionDevice.${w1Wcd}`;
@@ -408,15 +410,20 @@ if (enabled) {
           declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.Mode`, null, { value: 2 });
           declare(`${wcdPath}.X_CT-COM_WANGponLinkConfig.VLANIDMark`, null, { value: wan1Vlan });
           commit();
+          // NAT=false (keputusan Agung v0.23.6): WAN1 = uplink routed murni,
+          // NAT/routing ditangani sisi MikroTik/PPPoE, bukan CPE.
           const nat = declare(`${basePath}.NATEnabled`, { value: Date.now() });
-          if (!nat.size || nat.value[0] != true) {
-            declare(`${basePath}.NATEnabled`, null, { value: true });
+          if (!nat.size || nat.value[0] != false) {
+            declare(`${basePath}.NATEnabled`, null, { value: false });
             commit();
           }
-          declare(`${basePath}.X_CT-COM_LanInterface`, null, {
-            value: "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1,InternetGatewayDevice.LANDevice.1.WLANConfiguration.5",
-          });
-          declare(`${basePath}.X_CT-COM_LanInterface-DHCPEnable`, null, { value: true });
+          // Binding "kosong" = X_CT-COM_LanInterface="" (string kosong) —
+          // keputusan final, TERBUKTI diterima device CT-COM (Dahlia 2026-10-06,
+          // genuinely tanpa binding apa pun). Mengoreksi A1c awal yang sempat
+          // pakai LANEthernetInterfaceConfig.1 karena "" belum terverifikasi saat
+          // itu. Tidak ada WiFi/SSID di-bind ke WAN1. DHCPEnable=false (WAN mode).
+          declare(`${basePath}.X_CT-COM_LanInterface`, null, { value: "" });
+          declare(`${basePath}.X_CT-COM_LanInterface-DHCPEnable`, null, { value: false });
           commit();
         }
         // w1Inst === 0 → instance belum ter-refresh dalam eksekusi ini;

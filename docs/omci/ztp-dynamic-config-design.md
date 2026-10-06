@@ -150,7 +150,9 @@ interface CpeProvisioningAdapter {
 - **CT-COM adapter: diimplementasi PENUH**, dengan sub-mode GPON/EPON (reuse `ctcVlanConfigObject` + `bind-onu` admisi untuk EPON). Inti alur = `G02idActivationService` yang di-ctcVlanObj-kan + `default-wan.js` CT-COM.
 - **ZTE C300 adapter: diimplementasi** (OMCI/CLI — tcont/gemport/service-port/flow via sidecar) — sebagian sudah ada jalur sidecar; naming/save beda (auto-write).
 - **Huawei / CMCC / ZTE-generic: STUB eksplisit "belum didukung"** (lempar `UnsupportedAdapterOperation`, UI tampil "belum didukung") — field TR-069-nya sudah terkatalog (A) tapi belum diverifikasi hardware. Pola gating = `SUPPORTED_VENDOR_OPERATIONS` (B4).
-- **Resolusi adapter**: `vendor_key` (dari `OltDevice::sidecarVendorKey()`) + `pon_mode` (auto-detect device, mis. objek EPON/GPON di tree, atau dari `olt_models.supported_pon_type`) → adapter dari REGISTRY (C-skema).
+- **Resolusi adapter (keputusan #5)**: `vendor_key` (dari `OltDevice::sidecarVendorKey()`) + `pon_mode`
+  (**derive dari `olt_devices.vendor` via `OltDevice::ponMode()`** — `hsgq_g02id`→`gpon`, `hsgq_e04id`→`epon`,
+  `zte_c300`→`gpon`; TANPA probe tree / tabel baru) → adapter dari `AdapterRegistry` (kode, D1).
 
 ### Lapis 2 — TEMPLATE (vendor-agnostic) — TEPAT 2 jenis + WAN mgmt otomatis
 1. **Template "WAN Internet"**: `wan_mode` (pppoe/dhcp/static), `vlan`, `nat_enabled` (on/off), diikat ke **PERAN WiFi** (`primary_wifi` / `guest_wifi` / `none`) — **bukan nomor instance hardcode**. PPPoE cred TIDAK disimpan di template (per-pelanggan: `{cid}@ppp.bajastu.id`), template hanya menyimpan STRATEGI (`derive_from_cid` vs `static`).
@@ -170,21 +172,26 @@ interface CpeProvisioningAdapter {
 > Semua tabel tenant-scoped (`tenant_id`) kecuali adapter registry (platform-level, seperti
 > `payment_gateway_channels`). Nama final bisa disesuaikan saat implementasi.
 
-### D1. Adapter registry — `cpe_adapters` (platform-level, seeded, bukan di-edit user)
+### D1. Adapter registry — KODE (sumber kebenaran) + `cpe_adapters` (tabel mirror status/visibilitas)
+**Keputusan #1**: handler ditentukan KODE, bukan tabel. Di kode:
+- `CpeProvisioningAdapter` (interface, lihat C) + implementasi per vendor.
+- `AdapterRegistry` PHP: map `vendor_key(+pon_mode) → FQCN handler` (pola `OnuRegistryService::
+  SUPPORTED_VENDOR_OPERATIONS`), + `UnsupportedAdapterOperation` untuk stub.
+- `OltDevice::ponMode()`: derive `gpon`/`epon` dari `olt_devices.vendor` (keputusan #5) —
+  `hsgq_g02id`→`gpon`, `hsgq_e04id`→`epon`, `zte_c300`→`gpon`. Tidak ada tabel/probe baru.
+
+Tabel `cpe_adapters` HANYA mirror untuk matriks dukungan di UI (bukan penentu class):
 | Kolom | Tipe | Keterangan |
 |---|---|---|
 | id | pk | |
-| vendor_key | string | cocok `OltDevice::sidecarVendorKey()` / data-model TR-069 (ctcom/huawei/cmcc/zte_generic/zte_c300) |
-| pon_mode | enum nullable | `gpon`/`epon`/null (null = tak relevan, mis. deteksi runtime) |
-| handler_class | string | FQCN implementasi `CpeProvisioningAdapter` |
-| transport | enum | `tr069` / `omci_cli` (GenieACS vs sidecar) |
-| is_supported | bool | false = stub "belum didukung" (gating UI) |
-| capabilities | json | `{admit,wan_internet,wan_bridge,ssid,naming,save}` bool masing-masing |
+| vendor_key | string | `ctcom`/`huawei`/`cmcc`/`zte_generic`/`zte_c300` |
+| pon_mode | enum nullable | `gpon`/`epon`/null |
+| transport | enum | `tr069` / `omci_cli` |
+| is_supported | bool | false = stub "belum didukung" |
+| capabilities | json | `{admit,wan_internet,wan_bridge,ssid,naming,save}` + per-wan_mode flag `untested_on_hardware` (lihat D3/#4) |
 | notes | text nullable | |
 
-Unik: `(vendor_key, pon_mode)`. Resolver: `vendor_key`+`pon_mode` device → row (fallback `pon_mode=null`).
-*(Alternatif: registry murni di kode (array const seperti `SUPPORTED_VENDOR_OPERATIONS`) + tabel ini
-hanya cache/visibilitas. Usulan: tabel, agar UI bisa tampilkan matriks dukungan.)*
+Unik: `(vendor_key, pon_mode)`. Baris di-seed dari registry kode (kode = sumber; seeder menulis mirror).
 
 ### D2. Profil provisioning — `provisioning_profiles` (bundle template bernama)
 | Kolom | Tipe | Keterangan |
@@ -204,7 +211,7 @@ Satu profil = satu WAN-Internet (wajib) + 0..1 WAN-Bridge + 0..N SSID.
 |---|---|---|
 | id | pk | |
 | provisioning_profile_id | fk unique | one-to-one |
-| wan_mode | enum | `pppoe`/`dhcp`/`static` |
+| wan_mode | enum | `pppoe`/`dhcp`/`static` (keputusan #4: ketiganya dibangun; **`dhcp`/`static` = `untested_on_hardware` — logic tulis belum diverifikasi device, UI wajib tampilkan peringatan, jangan diklaim production-ready; hanya `pppoe` production-ready**) |
 | vlan | smallint | |
 | nat_enabled | bool | |
 | wifi_role | enum | `primary_wifi`/`guest_wifi`/`none` (peran WiFi yang di-bind, BUKAN instance) |
@@ -237,14 +244,33 @@ Satu profil = satu WAN-Internet (wajib) + 0..1 WAN-Bridge + 0..N SSID.
 Unik: `(provisioning_profile_id, wifi_role, band)`.
 
 ### D6. Keterhubungan Customer/OLT/CPE → profil (resolusi on-demand, TIDAK disimpan di device)
-Pola DIPERTAHANKAN dari `WanConfigTemplateResolverService` (B6): device cuma tahu paket + tipe modem,
-profil di-resolve saat aktivasi.
-- **`ppp_packages.provisioning_profile_id`** (fk nullable) ATAU tabel map `package_provisioning_profiles
-  (ppp_package_id unique, provisioning_profile_id)` — profil default per PAKET.
-- **`cpe_devices.provisioning_profile_id`** (fk nullable) — OVERRIDE per-CPE opsional (menang atas paket).
-- **Adapter** dipilih terpisah: `cpe_devices.modem_type_id` → `modem_types` (sudah ada) → `vendor_key` +
-  `pon_mode` → `cpe_adapters` (D1). ONU/OLT: `OltDevice` memberi `vendor_key` & kredensial; `pon_mode`
-  bisa dari `olt_models.supported_pon_type` atau auto-detect device.
+Pola DIPERTAHANKAN dari `WanConfigTemplateResolverService` (B6): device cuma tahu paket + override-nya,
+profil di-resolve saat aktivasi (bukan disimpan permanen di device).
+
+**Keputusan #2 — MANY-TO-MANY via pivot** (bukan kolom di `ppp_packages`):
+`package_provisioning_profiles`:
+| Kolom | Tipe | Keterangan |
+|---|---|---|
+| id | pk | |
+| ppp_package_id | fk | |
+| provisioning_profile_id | fk | |
+| is_default | bool | penanda profil default paket ini (lihat aturan pemilihan) |
+
+Unik: `(ppp_package_id, provisioning_profile_id)`. Satu paket boleh >1 profil & satu profil boleh dipakai
+banyak paket. **`cpe_devices.provisioning_profile_id`** (fk nullable) = OVERRIDE per-CPE (menang di atas
+paket).
+
+**Aturan pemilihan resolver** (karena many-to-many bisa >1 kandidat):
+1. `cpe.provisioning_profile_id` (override eksplisit) — menang.
+2. else profil paket yang `is_default=true`.
+3. else kalau paket punya tepat 1 profil → itu.
+4. else (>1 non-default, tak ada default) → tidak auto-resolve; UI aktivasi WAJIB minta pilih eksplisit
+   (hindari tebak-tebakan).
+
+**Adapter dipilih terpisah (keputusan #5)**: dari **`olt_devices.vendor`** → `OltDevice::ponMode()`
+(vendor→gpon/epon) + `vendor_key` → `AdapterRegistry` (kode). TIDAK pakai `olt_models.supported_pon_type`
+maupun probe tree device. (`cpe_devices.modem_type_id` tetap dipakai untuk aturan SSID4/8 applicability
+seperti sebelumnya, bukan untuk pilih adapter.)
 
 **Resolver aktivasi (pseudo)**:
 ```
@@ -267,20 +293,85 @@ identity = { cid, name } dari customer                                          
 
 ---
 
-## E. PERTANYAAN TERBUKA untuk Agung (perlu keputusan sebelum implementasi)
-1. **Adapter registry**: tabel DB (D1) atau const di kode + tabel visibilitas saja? (Usul: tabel.)
-2. **Profil → paket**: kolom `ppp_packages.provisioning_profile_id` vs tabel map terpisah? Dan apakah
-   override per-CPE (`cpe_devices.provisioning_profile_id`) diperlukan sekarang atau nanti?
-3. **`wan_config_templates` lama**: migrasikan datanya ke profil, atau mulai bersih (tabel lama ditinggal
-   sampai pensiun)? Ada data produksi di dalamnya?
-4. **wan_mode selain PPPoE**: DHCP/Static benar-benar dibutuhkan di template Internet sekarang, atau
-   PPPoE-only dulu (kolom disiapkan tapi UI PPPoE saja)?
-5. **PON mode source**: auto-detect dari tree device (objek EPON/GPON) ATAU dari `olt_models.
-   supported_pon_type`? (Auto-detect lebih akurat per-device; `olt_models` lebih sederhana.)
-6. **Rename `G02idActivationService` → `CtcomActivationService`** (+ ctcVlanObj-kan `resolveInternetPppPathByVlan`/
-   `verifyBridgePresent`) saat jadi adapter — setuju?
+## E. KEPUTUSAN FINAL TERKUNCI (Agung, v0.23.8)
+
+1. **Adapter registry = KODE (class PHP) + tabel DB status/visibilitas.** Sumber kebenaran handler ada di
+   kode (interface `CpeProvisioningAdapter` + implementasi + sebuah `AdapterRegistry` PHP yang memetakan
+   `vendor_key(+pon_mode) → class`, pola sama `OnuRegistryService::SUPPORTED_VENDOR_OPERATIONS`). Tabel DB
+   `cpe_adapters` HANYA mirror status/visibilitas (untuk matriks dukungan di UI + flag `is_supported`),
+   **bukan** yang menentukan class mana dijalankan. Konsekuensi: adapter baru = tambah class + daftarkan
+   di registry kode + 1 baris seed tabel; tabel tidak pernah jadi satu-satunya sumber.
+2. **Paket ↔ Profil = tabel map terpisah, MANY-TO-MANY.** Pivot `package_provisioning_profiles`
+   (`ppp_package_id`, `provisioning_profile_id`) — satu paket boleh punya >1 profil (mis. profil beda per
+   skenario) dan satu profil boleh dipakai banyak paket. **TIDAK** ada kolom `provisioning_profile_id` di
+   `ppp_packages`. Override per-CPE (`cpe_devices.provisioning_profile_id`, nullable) tetap disediakan
+   sebagai pemenang resolusi. Karena many-to-many bisa menghasilkan >1 kandidat profil per paket, resolver
+   butuh aturan pemilihan (lihat D6 — default-flag / pilihan eksplisit saat aktivasi).
+3. **`wan_config_templates` lama = TIDAK ADA data produksi (0 baris, terkonfirmasi).** Mulai BERSIH —
+   **tidak ada migrasi data**. Tabel/resolver lama ditinggalkan di tempat (dipensiunkan bertahap), ZTP
+   pakai `provisioning_profiles` dari nol.
+4. **WAN mode = bangun PPPoE + DHCP + Static sekarang (skema + UI).** TAPI: **logic TULIS DHCP/Static ke
+   device BELUM PERNAH diverifikasi hardware** sepanjang sprint ini (hanya PPPoE yang teruji nyata —
+   Dahlia GPON, unit-uji E04ID). → wajib flag eksplisit **`untested_on_hardware`** di level kode (konstanta/
+   atribut capability per adapter per wan_mode) DAN peringatan di UI. **JANGAN diklaim production-ready**
+   untuk DHCP/Static sampai diuji nyata. PPPoE = production-ready.
+5. **PON mode = DERIVE dari `olt_devices.vendor` yang SUDAH ADA** (`hsgq_g02id`→`gpon`, `hsgq_e04id`→`epon`;
+   `zte_c300`→`gpon`). **TIDAK** ada tabel baru, **TIDAK** ada live-probe device. Pemetaan vendor→pon_mode
+   ada di kode (helper, mis. `OltDevice::ponMode()` atau di `AdapterRegistry`). *(Catatan: ini menyederhanakan
+   dari usul auto-detect tree device di draf awal — vendor OLT sudah cukup menentukan GPON vs EPON.)*
+6. **Rename `G02idActivationService` → `CtcomActivationService`** + perbaiki 2 method yang masih hardcode
+   GPON (`resolveInternetPppPathByVlan`, `verifyBridgePresent`) agar pakai deteksi objek VLAN yang sama
+   seperti `ctcVlanConfigObject()` (GPON/EPON) → otomatis berlaku untuk E04ID. Semua pemanggil lama
+   di-update; test di-rename/di-extend untuk cakupan EPON.
 
 ---
 
-**Tidak ada migration/kode dibuat di dokumen ini.** Menunggu review & keputusan Agung atas skema + 6
-pertanyaan terbuka sebelum implementasi sub-versi berikutnya.
+## F. USULAN PEMECAHAN TAHAPAN IMPLEMENTASI (sub-versi kecil — usul Claude Code, bukan final)
+
+Mengikuti kebiasaan sprint ini (sub-versi kecil, satu area per commit, verifikasi bertahap — BUKAN satu
+commit raksasa). Tiap tahap: migration (kalau ada) + kode + test + `db:seed` ulang bila ada permission +
+Pint, hijau sebelum lanjut. Verifikasi hardware HANYA di tahap yang menyentuh device nyata (pakai unit-uji
+`CMDCA21C01E7` / NAS `ro-hotspot`, JANGAN `test-x86-bajastu` produksi).
+
+- **v0.23.8.1 — Pondasi adapter (kode, nol device).** Interface `CpeProvisioningAdapter`, `AdapterRegistry`
+  (map `vendor_key+pon_mode → class`, pola `SUPPORTED_VENDOR_OPERATIONS`), helper `OltDevice::ponMode()`
+  (derive dari vendor, poin #5), migration + model `cpe_adapters` (mirror status/visibilitas) + seeder.
+  Stub adapter Huawei/CMCC/ZTE-generic (`is_supported=false`, lempar `UnsupportedAdapterOperation`).
+  Belum ada operasi tulis device. Test: resolusi registry, derive pon_mode, gating stub.
+- **v0.23.8.2 — Rename + ctcVlanObj-kan `CtcomActivationService` (poin #6).** Rename
+  `G02idActivationService`→`CtcomActivationService`, perbaiki `resolveInternetPppPathByVlan`/
+  `verifyBridgePresent` pakai deteksi GPON/EPON, update pemanggil + test (tambah kasus EPON). Belum ada
+  skema template — murni refactor agar satu service CT-COM melayani G02ID DAN E04ID. **Verifikasi:** re-run
+  aktivasi path ke unit-uji (read-only/idempoten) memastikan tak ada regresi.
+- **v0.23.8.3 — Skema template inti.** Migration + model: `provisioning_profiles`,
+  `provisioning_wan_internets` (1:1, + flag `untested_on_hardware` untuk dhcp/static), `provisioning_wan_bridges`
+  (0..1), pivot `package_provisioning_profiles`, `cpe_devices.provisioning_profile_id` (override). Enum
+  `WanMode`(pppoe/dhcp/static), `WifiRole`(primary_wifi/guest_wifi/none). CRUD service + Form Request +
+  policy/permission (`provisioning.view`/`.manage`). Resolver profil on-demand (pivot + override, aturan
+  pemilihan D6). BELUM nyentuh device. Test penuh resolusi.
+- **v0.23.8.4 — SSID template.** `provisioning_ssids` (per peran, placeholder `{cid}`/`{name}`, open/wpa2,
+  band). Logika peran→instance per vendor DI DALAM adapter CT-COM (reuse AddObject sekuensial + resep open
+  dari default-wan.js). Test render nama + resolusi peran→SSID spec.
+- **v0.23.8.5 — Eksekusi ZTP end-to-end via adapter CT-COM (device nyata).** Orkestrator aktivasi yang
+  meresolusi profil+adapter+identitas lalu memanggil adapter (admit→wan internet→bridge→ssid→naming→save).
+  **Verifikasi hardware** ke unit-uji `CMDCA21C01E7` (E04ID) + sekali ke G02ID: hasilkan end-state yang sama
+  seperti v0.23.6/v0.23.7 TAPI dari template, bukan hardcode. PPPoE-only yang diklaim production-ready.
+- **v0.23.8.6 — UI "Profil Provisioning".** Halaman kelola profil + WAN Internet/Bridge + SSID + map paket,
+  override per-CPE di Detail Perangkat. Peringatan `untested_on_hardware` tampil untuk DHCP/Static. Matriks
+  dukungan adapter (dari `cpe_adapters`).
+- **v0.23.8.7 — Pensiun tabel lama + `default-wan.js` di-drive profil.** `RemoteWanConfig` singleton &
+  `wan_config_templates` ditandai deprecated / preset `default-wan` menerima args dari profil (bukan
+  singleton). (Bisa digeser lebih akhir kalau risiko tinggi.)
+- **(DILUAR scope ZTP, dicatat)**: adapter ZTE C300 penuh (OMCI tcont/gemport/service-port) + adapter
+  Huawei/CMCC/ZTE-generic nyata — tahap tersendiri setelah pondasi CT-COM mapan, masing-masing butuh
+  verifikasi hardware sendiri.
+
+**Catatan urutan**: 8.1→8.2 (pondasi+refactor, nol risiko device) → 8.3→8.4 (skema, nol device) →
+8.5 (device nyata, titik verifikasi utama) → 8.6 (UI) → 8.7 (pensiun). Tiap sub-versi di-merge `--no-ff`
+develop→main + tag sesuai BOSS-013, FULL regression OLT-related hanya di titik yang menyentuh device/penutup
+cluster (bukan tiap sub-versi), sesuai aturan regression sprint.
+
+---
+
+**Tidak ada migration/kode dibuat di dokumen ini.** Desain final (6 keputusan terkunci) + usulan tahapan
+menunggu review Agung SEBELUM migration pertama (v0.23.8.1) ditulis.

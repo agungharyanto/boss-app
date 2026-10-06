@@ -505,3 +505,290 @@ dikonfirmasi ulang lewat rantai bantuan yang lebih dalam (`ont add 0 sn-auth <SN
   `ont-srvprofile-id` genuinely muncul di bantuan, dan urutan/format persisnya).
 - Apakah baris eksplisit `ont tr069-profile <id> profile-id 1` per-ONT genuinely wajib atau redundan
   terhadap warisan line-profile (belum berubah dari Sesi 2).
+
+## Sesi 4 (G02ID) — v0.23.6 UJI TULIS PERTAMA (2026-10-02)
+
+**Sesi pertama yang BENAR-BENAR MENULIS ke G02ID** (bukan lagi hanya bantuan `?`/read). Dilakukan
+terkontrol dengan Agung mengawasi, mulai dari operasi paling ringan. **Kredensial masih akun `root`
+sementara** (belum dirotasi — utang keamanan v0.23.1 masih berlaku); dipakai untuk read + 2 write
+`ont setting desc` (tulis + rollback) pada SATU ONT. **Semua data pelanggan di contoh di bawah di-mask.**
+
+### Target uji & izin
+ONT uji = milik keluarga Agung sendiri (izin eksplisit untuk diuji meski sedang online). Ternyata ONT ini
+**sudah terdaftar & aktif-online** di G02ID yang sama sebagai pelanggan produksi (`onu_id` di PON 1,
+`State=Active`/`Run State=Online`, uptime hari-an), ter-provision lewat TR-069 — **bukan** unit factory
+bebas. SN (`show ont-info sn <SN-DI-MASK>`) + `name`/`desc` pelanggan **di-mask**. Keputusan: uji tulis
+LANGSUNG ke binding existing (tanpa cabut fisik), mulai dari metadata (non-disruptif) dulu.
+
+### 1. `ont setting <id> name`/`desc` — **TERUJI EKSEKUSI NYATA** (bukan hanya bantuan)
+
+Tulis metadata **AMAN & NON-DISRUPTIF**, dibuktikan di ONT PRODUKSI AKTIF:
+```
+configure
+interface gpon 1
+  ont setting <id> desc "<desc-asli-DI-MASK> -TEST-v0.23.6"   # tulis (append suffix, pertahankan asli)
+  ont setting <id> desc "<desc-asli-DI-MASK>"                  # rollback ke nilai asli
+```
+- Verifikasi via `show ont-info sn <SN-DI-MASK>`: `Ont Description` berubah lalu kembali persis; `ONU
+  Name`, `Line Profile`, `Srv Profile`, `TR069 Profile`, `State/Run State` **semua tetap**.
+- **Bukti non-disruptif konkret**: `Last down Time` ONT **TIDAK berubah** (tidak ada event down baru) dan
+  `Ont uptime` **terus bertambah / tidak reset** sepanjang tulis + rollback → sesi GPON/PPPoE pelanggan
+  **tidak pernah putus**. Inilah operasi tulis paling ringan (label metadata murni — tidak menyentuh
+  VLAN/line-profile/srv-profile/auth).
+- Hanya mengubah **running-config** — **tidak ada `save`/`copy`** dijalankan (sesuai denylist); startup-config
+  asli tak tersentuh.
+- **Batas panjang `name`/`desc` — pertanyaan lama (Sesi 1-3 [TIDAK BISA DIVERIFIKASI]) kini TERJAWAB dari
+  bantuan nyata**: `ont setting <id> name ?`/`desc ?` → `"NAME"`/`"DESC"` string bebas dengan catatan
+  "If NAME/DESC contains spaces, use \"\" quotes it" — **firmware TIDAK mendeklarasikan batas numerik**.
+  Jadi tetap hanya observasi pasif (~38 char name / ~40 char desc), bukan batas resmi. Karakter `[` `]`
+  tidak dikonfirmasi diizinkan → uji ini pakai suffix bebas-kurung (`-TEST-v0.23.6`) yang **diterima**.
+
+### 2. `ont wanconfig add` — grammar SEBAGIAN TERUJI (read-only bantuan, NOL eksekusi)
+
+Jawaban pertanyaan "adakah push kredensial PPPoE via OMCI-direct di G02ID (seperti ZTE)?": **ADA.**
+```
+interface gpon <N>
+  ont wanconfig add <onu-id 0-127> connection-type <service> vlan {tag <vlan>|transparent|untag} ipmode <...>
+  ont wanconfig delete <onu-id> ...
+```
+- `<service>` (8 nilai TERUJI): `internet` / `internet_tr069` / `tr069` / `voice` / `voice_internet` /
+  `voice_internet_tr069` / `voice_tr069` / `other` — **kategori LAYANAN, bukan protokol**.
+- Setelah `connection-type internet` → wajib `vlan` → `{tag <vlan-id> | transparent | untag}`.
+- Setelah `vlan tag <vlan>` → token berikutnya **`ipmode`** (IP mode set).
+- **⚠️ BELUM DITUNTASKAN**: token di bawah **`ipmode`** (protokol `pppoe`/`dhcp`/`static`) dan — di bawah
+  `ipmode pppoe` — **`username`/`password` PPPoE**. **LANJUTKAN read-only (`?`-help) di sesi berikutnya,
+  SEBELUM eksekusi apa pun.** Baca-balik config WAN: `show ont-wanconfig <onu-id>` (**tidak dieksekusi**
+  sesi ini — hindari dump kredensial PPPoE pelanggan).
+- Kandidat lain yang dicek & gugur: `ont pppoe` → `% There is no matched command`; `ont wan` → sekadar
+  alias pendek ke `wanconfig`/`wan-remoteconfig`; `ont setting <id>` → hanya `name`/`desc`.
+- **⛔ `ont wanconfig add` BELUM PERNAH dieksekusi sungguhan** — menjalankannya ke ONT existing
+  (Kambari/onu produksi) berisiko membuat WAN config BARU yang bentrok/mengganggu jalur TR-069 yang sedang
+  dipakai. **Keputusan terpisah, butuh persetujuan eksplisit Agung dulu.**
+
+### 3. `ont wan-remoteconfig <id>` — temuan terpisah (BUKAN kredensial PPPoE)
+
+`ont wan-remoteconfig <0-127>` → `{clear | http | https | icmp | telnet}` = **kontrol akses MANAJEMEN
+REMOTE ke ONT** (protokol apa yang diizinkan mencapai ONT dari sisi WAN), bukan provisioning WAN /
+kredensial PPPoE. Jangan tertukar dengan `ont wanconfig`.
+
+### 4. Catatan arsitektur — TR-069 vs OMCI-direct (keputusan desain tertunda)
+
+Dump config Sesi 1 (171 ONT) **tidak memuat satu pun baris `ont wanconfig add`** — seluruh fleet existing
+(termasuk ONT uji ini) ter-provision WAN-nya lewat **TR-069** (line-profile `tr069-mode enable` +
+`ont tr069-profile <id> profile-id 1` per-ONT), BUKAN OMCI-direct. Jadi: **kapabilitas OMCI-direct
+`ont wanconfig` TERSEDIA tapi tidak dipakai fleet**. Kedua jalur valid — pilihan "OMCI-direct vs TR-069"
+untuk skema v0.23.x belum diputuskan (paralel dengan ZTE yang juga harus memilih `config_method` OMCI vs
+TR069).
+
+### 5. Mekanisme `?`-probe aman (dipakai sepanjang sesi ini)
+
+`?`-help dikirim **TANPA newline** lalu **Ctrl-C** untuk membuang baris input — sehingga baris tidak lengkap
+(`ont setting 35 name`, `ont wanconfig add 35 ...`) **tidak pernah ter-submit sebagai command**. Terbukti
+nol write lintas belasan probe. (Kontras insiden ZTE `wan 2 service internet ?` yang ter-commit karena
+baris yang diprobe KEBETULAN sudah lengkap — di sini token selalu sengaja tidak lengkap.) Event
+"`ONU ... dying gasp`" untuk ONT LAIN yang sesekali bocor ke sesi = log real-time pasif (gaya
+`terminal monitor`), **bukan** akibat aktivitas kami.
+
+### [BELUM DITUNTASKAN] — untuk sesi v0.23.6 berikutnya (read-only dulu)
+- Drill `ont wanconfig add <id> connection-type internet vlan tag <vlan> ipmode ?` → protokol
+  (`pppoe`/`dhcp`/`static`) → token `username`/`password` PPPoE. **`?`-help dulu, sebelum eksekusi.**
+- Eksekusi `ont wanconfig add` sungguhan = keputusan terpisah + persetujuan eksplisit Agung.
+- Rotasi kredensial `root` → akun BOSS non-root (utang keamanan v0.23.1).
+
+## Sesi 5 (G02ID) — v0.23.6 Uji OMCI-direct WAN: grammar LENGKAP + WRITE GAGAL (2026-10-02)
+
+**Grammar `ont wanconfig add` dituntaskan penuh (read-only `?`-help), lalu DICOBA EKSEKUSI NYATA sekali —
+GAGAL ditolak device.** Eksekusi tulis disetujui Agung di satu unit aktif (risiko terjadwal diterima);
+rollback penuh dilakukan setelahnya. Data pelanggan di-mask.
+
+### Grammar OMCI-direct WAN — LENGKAP (dari `?`-help, read-only)
+```
+ont wanconfig add <onu-id 0-127> connection-type <service> vlan {tag <vlan>|transparent|untag} ipmode <mode> [<USER> <PASS>] [opsional...]
+ont wanconfig delete <onu-id> ...
+show ont-wanconfig <onu-id> {<0-8>|all}        # baca WAN; butuh index/all (bare = "Command incomplete")
+show ont-info sn {<SN-16hex>|<HWTCxxxx vendor-ASCII>}   # KEDUA format SN diterima, resolve ke ONT sama
+```
+- `<service>` (8): `internet` / `internet_tr069` / `tr069` / `voice` / `voice_internet` /
+  `voice_internet_tr069` / `voice_tr069` / `other`.
+- `vlan`: `tag <vlan-id>` | `transparent` | `untag`.
+- `ipmode`: `bridge` | `dhcp` | `ipstatic` | **`pppoe`**.
+- `ipmode pppoe <USER> <PASS>` — **keduanya POSITIONAL, masing-masing max 32** (`USER PPPoE user, max 32`
+  lalu `PASS PPPoE password, max 32`, TERUJI dari help). Setelah user+pass → `<cr>` (sudah valid) +
+  opsional: `servicename`, `priority`, `mtu`, `dns`/`primarydns`/`secondarydns`, `lan_eth`/`lan_ssid`/
+  `lan_ssid5g` (binding LAN/WiFi), `portmapping`, `igmpproxy`, `multicastvlan`, `addressmode`/`ipprotocol`,
+  `name`. **Tidak ada keyword `nat`/`host`** (beda pola ZTE).
+
+### ⛔ HASIL EKSEKUSI NYATA — GAGAL (HIPOTESIS, BELUM TERKONFIRMASI)
+Dicoba SEKALI di **onu 69** (ONT Huawei **EG8141A5**, serial `4857…71a0` / `HWTC…`, aktif TR-069 VLAN
+pelanggan, `show ont-wanconfig 69 all` = "no wan interface" sebelumnya):
+```
+ont wanconfig add 69 connection-type internet vlan tag 10 ipmode pppoe <user>@ppp.bajastu.id <pass>
+  -> Error, Ont WanConfig Add fail, reason: Create WAN profile fail.
+```
+WAN **tidak terbentuk** (`show ont-wanconfig 69 all` POST tetap "no wan interface").
+
+**HIPOTESIS KUAT (BELUM FAKTA): vendor-mismatch.** OMCI-direct WAN (`ont wanconfig`) kemungkinan **hanya
+didukung ONT ber-merek HSGQ asli**, BUKAN ONT Huawei yang terpasang di OLT HSGQ lewat kompatibilitas GPON
+standar. **Bukti pendukung (tidak membuktikan):** SELURUH 171 ONT fleet existing G02ID (kemungkinan besar
+Huawei/non-HSGQ) ter-provision WAN via **TR-069**, **NOL** memakai `ont wanconfig` — mungkin justru karena
+OMCI-direct WAN tak jalan di ONT-ONT ini. **BELUM dikonfirmasi** karena `ont wanconfig add` belum pernah
+dicoba pada ONT ber-merek HSGQ asli.
+
+**PERTANYAAN TERBUKA untuk sesi berikutnya**: *Apakah `ont wanconfig add` berhasil di ONT HSGQ-brand asli?*
+Perlu **unit uji ber-merek HSGQ, bukan Huawei**. Kandidat alternatif penyebab (juga belum diuji): tr069-mode
+aktif di line-profile menolak WAN OMCI berdampingan; atau karakter `@`/`.` di username (walau 27<32 char).
+
+### ✅ Temuan keamanan operasional penting: `ont wanconfig add` GAGAL = ATOMIK, nol gangguan
+Device memvalidasi **sebelum** menyentuh ONT: `Create WAN profile fail` ditolak utuh tanpa efek samping.
+`show ont-info sn` PRE vs POST **identik** — `Ont uptime` tidak reset, `Last down Time` tidak berubah,
+State tetap Active/Online. **Sesi pelanggan aktif TIDAK drop** meski add dicoba di ONT-nya. (Berbeda dari
+kekhawatiran "tambah-WAN di unit aktif pasti drop" — untuk kasus add yang DITOLAK, nol dampak.)
+
+### Sisi BOSS App (dilakukan lalu di-rollback penuh)
+Untuk uji ini customer BOSS "Yusup" (CID `255324578770`) sempat: `is_test_fixture`=true, `ppp_package_id`=17
+(PPPoE-Remote/VLAN 10), + radcheck `255324578770@ppp.bajastu.id` (`RadcheckWriterService::write`, Framed-Pool
+PPPOE-REMOTE). **Semua di-ROLLBACK persis ke baseline** setelah OMCI gagal (`is_test_fixture`=false,
+`ppp_package_id`=null, radcheck/radreply dihapus via `RadcheckWriterService::remove`) — diverifikasi
+berdampingan field-per-field. Catatan arsitektur: ONT Huawei fleet G02ID auth PPPoE-nya **bukan** via
+FreeRADIUS BOSS (radcheck) — dikelola sistem lama; jadi skema `ppp_package_id`/`TestCredentialSyncService`
+(v0.23.5, dibangun untuk OMCI ZTE) **belum** cocok untuk ONT Huawei G02ID tanpa jalur WAN yang berfungsi.
+
+### Referensi cepat (read-only, dari sesi ini)
+- **Verifikasi SN bebas** (WAJIB sebelum aktivasi): `show ont-info sn <SN>` di gpon 1 DAN gpon 2, cek kedua
+  format (raw-16hex + vendor-ASCII). Baris `ONU ID :`+`State` = TERIKAT; `Error ... ONU is not exist` = bebas.
+- **`show ont-info all`** = tabel ringkas (kolom `PON/ONU  Type  Serial  State  Run  Config  Match  ...  ONT
+  Name`), diakhiri `Total: N  Online:x  Offline:y`. Parse onu_id dari kolom `<pon>/<id>` (regex
+  `^<pon>/(\d+)`). onu_id KOSONG G02ID saat sesi ini: **gpon1 = 28,94,123-127 (121 terpakai)**; **gpon2 =
+  53-127 (53 terpakai)**. Slot aman untuk aktivasi fresh: id tinggi **123-127** (kosong di kedua PON).
+- `ont setting <id> name/desc` = tulis metadata **AMAN & non-disruptif** (TERUJI Sesi 4, tetap berlaku).
+
+### ⚠️ AMANDEMEN Sesi 5 (sesi lanjutan 2026-10-02) — hipotesis vendor-mismatch **TERBANTAHKAN**
+
+Dibaca `show ont-version`/`show ont-capability` dari 2 ONT (read-only) untuk menguji hipotesis
+vendor-mismatch di atas — hasilnya **membantahnya**:
+
+| ONT | Vendor-ID | Equipment-ID | `ont wanconfig add`? | `WAN Support` (ont-capability) |
+|---|---|---|---|---|
+| **Yusup** onu 69 | **HWTC** (Huawei) | **EG8141A5** | **GAGAL** "Create WAN profile fail" | **Support** |
+| **Rachmat** onu 0 | **ZICG** (ZTE) | **F663NV3a** | belum dicoba | **Not support** |
+
+**→ Vendor BUKAN penyebab.** ONT yang GAGAL (Huawei EG8141A5) justru melaporkan `WAN Support: Support` —
+jadi kegagalan `ont wanconfig add` **bukan** karena merek ONT maupun ketiadaan kapabilitas WAN. (Flag
+`WAN Support` dari `show ont-capability` berguna sebagai profiling read-only, TAPI tidak cocok dengan
+kegagalan yang teramati — "Support" tapi tetap gagal — jadi ia pun bukan penentu.) Hipotesis "OMCI-direct
+WAN hanya untuk ONT HSGQ-brand asli" dari catatan Sesi 5 di atas dengan ini **ditandai TERBANTAHKAN**.
+
+**Kandidat penyebab BARU "Create WAN profile fail" (urut dari paling mungkin, semua BELUM diuji):**
+- **(a) [LEADING] Konflik dengan WAN TR-069 yang SUDAH AKTIF** di ONT tersebut saat `ont wanconfig add`
+  dijalankan. **SEMUA ONT yang diuji sejauh ini (Kambari onu 35, Kambari onu 55, Yusup onu 69) sudah
+  online via TR-069 lebih dulu** — belum pernah sekali pun dicoba di ONT yang BENAR-BENAR tanpa WAN
+  existing. OMCI WAN mungkin ditolak karena ONT sudah punya WAN (TR-069-managed) yang berebut
+  slot/resource.
+- (b) Prasyarat WAN-profile template di sisi OLT yang belum terpenuhi (mis. profil WAN harus didefinisikan
+  dulu sebelum `add`).
+- (c) Parameter/charset username PPPoE (`@`/`.`) — paling tidak mungkin, "Create WAN profile fail" generik.
+
+**PERTANYAAN TERBUKA PALING PRIORITAS untuk sesi berikutnya** (menggantikan pertanyaan "perlu unit HSGQ"
+dari Sesi 5 — itu kini tidak relevan karena vendor bukan faktor): **apakah `ont wanconfig add` berhasil di
+ONT yang BELUM punya WAN apa pun?** Ini soal STATUS WAN KOSONG, bukan merek — butuh ONT **genuinely
+fresh** (`uncfg` / belum pernah `ont authorize`), bukan sekadar ONT aktif merek berbeda.
+
+**Referensi read-only ONT profiling** (dari sesi ini): `show ont-version <id>` → Vendor-ID / Equipment-ID /
+Ont Version / Main Software Version; `show ont-capability <id>` → `WAN Support` + jumlah port ETH/POTS/GEM/
+T-CONT. Keduanya aman (read-only), berguna untuk identifikasi merek/model ONT tanpa menebak dari SN.
+
+### ⚠️ AMANDEMEN Sesi 5 #2 — uji WRITE nyata TAHAP 1+2 (2026-10-02): **WAN-existing memblokir `ont wanconfig add`**
+
+`ont wanconfig add <id> connection-type internet vlan tag 10 ipmode pppoe <user> <pass>` diuji nyata ke ONT
+yang SUDAH punya WAN existing. **Semua data pelanggan di-mask** — hanya onu-id + vendor/model yang ditulis
+(TIDAK ada nama pelanggan, SN penuh, atau kredensial asli di dokumen ini).
+
+**Tabel gabungan 4 ONT yang diinvestigasi (semua punya WAN existing TR-069/bridge):**
+
+| onu_id | Vendor/Model | `WAN Support` | WAN existing | `ont wanconfig add` diuji? | Hasil |
+|---|---|---|---|---|---|
+| 35 | ZTE (prefix ZICG) | (tak dicek) | TR-069 | Tidak — hanya rename `desc` (Sesi 4) | desc write **sukses**, non-disruptif |
+| 55 | Huawei EG8141A5 | (tak dicek) | TR-069 | Tidak (rencana dibatalkan) | — |
+| 69 | Huawei EG8141A5 | **Support** | TR-069 | Ya, 1× | **GAGAL** "Create WAN **profile** fail" |
+| 0 | ZTE F663NV3a | **Not support** | TR-069 + bridge VID172 | Ya, **4×** (1 dummy + 3 kredensial-asli) | **GAGAL** "WAN **data** create fail" (identik tiap kali) |
+
+Catatan akurasi: `ont wanconfig add` **hanya benar-benar dieksekusi di onu 69 & onu 0**; onu 35/55 tidak
+di-write-test (tapi sama-sama ber-WAN-existing). onu 0 diuji total 4× (TAHAP 1 dummy 1× + TAHAP 2
+kredensial-asli 3× berturut) — **semua "WAN data create fail" identik** → bukan transient.
+
+**Hipotesis yang TERSINGKIR (dibantah data):**
+1. **Charset username** — TERSINGKIR. Dummy `TEST-OMCI-G02ID-2` (tanpa `@`/`.`) tetap "WAN data create
+   fail" (sebelumnya sempat dicurigai karena username asli mengandung `@ppp.bajastu.id`).
+2. **Vendor / flag `WAN Support`** — TERSINGKIR sebagai penyebab TUNGGAL. Huawei onu 69 (`WAN Support:
+   Support`) DAN ZTE onu 0 (`WAN Support: Not support`) **sama-sama gagal** — dua vendor berbeda, dua nilai
+   flag berbeda, hasil sama. (Perbedaan teks pesan — "profile" vs "data" — mungkin berkorelasi flag, tapi
+   tak mengubah kesimpulan gagal.)
+3. **Kredensial asli vs dummy** — TIDAK berpengaruh. onu 0 gagal identik baik dengan dummy maupun
+   kredensial PPPoE asli → kegagalan ada di level **pembuatan WAN-data OMCI, SEBELUM autentikasi PPPoE**
+   pernah dicoba (creds-independent).
+
+**KESIMPULAN UTAMA (menggantikan semua hipotesis yang tersingkir):** `ont wanconfig add` kemungkinan besar
+**ditolak selama ONT sudah punya WAN config apa pun (TR-069/bridge) yang aktif**. KEEMPAT ONT uji punya
+WAN existing; dua yang di-write-test gagal konsisten. **BELUM PERNAH diuji di ONT genuinely-fresh (`uncfg`
+/ belum pernah `ont authorize`, nol WAN).**
+
+**→ PERTANYAAN PRIORITAS TERTINGGI sesi berikutnya** (satu-satunya hipotesis tersisa yang belum teruji):
+*Apakah `ont wanconfig add` BERHASIL di ONT yang BENAR-BENAR tanpa WAN (fresh/uncfg)?* Butuh unit uji
+genuinely-fresh — bukan ONT aktif mana pun.
+
+**Properti keamanan dikonfirmasi ulang:** kegagalan `ont wanconfig add` **atomik** di SEMUA percobaan
+(Huawei & ZTE, dummy & real, 1× & 4×) — OLT menolak sebelum menyentuh ONT; `show ont-info sn` PRE vs POST
+selalu identik (uptime terus naik tak reset, Last-down tak berubah, State Active/Online). **Sesi pelanggan
+aktif tidak pernah drop** meski add dicoba berkali-kali. Catatan: WAN TR-069/bridge existing TIDAK terlihat
+di `show ont-wanconfig <id> all` OLT (dikelola sisi-ONT via TR-069, di luar view OMCI OLT) — keutuhannya
+hanya bisa dikonfirmasi via GenieACS, bukan OLT CLI.
+
+### ✅ KESIMPULAN ARSITEKTUR FINAL v0.23.6 (penutup investigasi, 2026-10-02)
+
+Setelah **5 percobaan `ont wanconfig add` di 4 ONT berbeda** (Kambari×2 — sebenarnya onu 69 Yusup &
+onu 0 Rachmat yang di-write-test; Kambari onu 35/55 ber-WAN-existing tapi tak di-write-test), **semua
+gagal konsisten** ("Create WAN profile fail" / "WAN data create fail", termasuk 3× berturut kredensial
+asli), **PLUS Dahlia (onu 28, CMDC H3-2S XPON, aktivasi hari ini ~1 jam) dikonfirmasi via GenieACS sudah
+punya WAN lengkap** (3 WANConnectionDevice: TR-069 mgmt + bridge VID172 + internet PPPoE VID10) dalam
+hitungan menit setelah Inform pertama:
+
+**`ont wanconfig add` TIDAK VIABLE di fleet G02ID BUMIREJA.** Penyebab: GenieACS/CT-COM auto-WAN
+(device-driven, template ISP standar di firmware CPE) **selalu lebih cepat** membentuk WAN existing pada
+setiap ONT baru — dan WAN existing itulah yang memblokir OMCI-direct (`ont wanconfig add` ditolak di level
+pembuatan WAN-data). Tidak ada window praktis di mana ONT fleet ini "tanpa WAN" untuk OMCI-direct.
+
+**KEPUTUSAN ARSITEKTUR G02ID (final):**
+- **WAN → TR-069** (reuse mekanisme RemoteWanConfig/GenieACS, pola sama ZTE Test-1/Test-2). WAN G02ID
+  terbentuk via jalur TR-069/CT-COM, **bukan** OMCI-direct.
+- **OMCI-direct HANYA untuk PENAMAAN** — `ont setting <id> name/desc` (format "Nama - CID"). Mekanisme ini
+  **TERUJI AMAN di produksi**: 5× operasi tulis/rollback metadata (Sesi 4 + saga ini) **nol gangguan** ke
+  sesi pelanggan aktif (fail atomik untuk wanconfig; desc write/rollback bersih).
+
+Pertanyaan "apakah `ont wanconfig add` berhasil di ONT genuinely-fresh/uncfg" ditutup sebagai **akademis /
+tidak relevan operasional** untuk fleet ini — karena ONT fresh praktis tidak pernah ada (auto-WAN
+device-driven terlalu cepat). Kalau suatu saat perlu, butuh unit uji yang sengaja diisolasi dari jalur
+TR-069/GenieACS — di luar kebutuhan v0.23.6.
+
+## Command SAVE / persist config — TERVERIFIKASI & DIEKSEKUSI (v0.23.6, 2026-10-06)
+
+**G02ID (HSGQ) BUTUH save EKSPLISIT** — BEDA dari ZTE C300 yang auto-write. Sepanjang v0.23.6 kita menulis
+ke running-config (`ont setting name`, dll) tanpa save → berisiko hilang saat OLT reboot. Dulu `save`
+teridentifikasi di daftar `configure ?` (riset v0.23.1) tapi **tidak pernah dieksekusi** (denylist) dan
+syntax level-2-nya tidak dikonfirmasi.
+
+**Command persist yang BENAR (dari bantuan CLI device sendiri, bukan tebakan):**
+```
+copy running-config startup-config
+```
+Dikonfirmasi via `copy running-config ?` → `startup-config  Copy running config to startup config
+(same as write file)`. Dijalankan di node **PRIVILEGED (`#` / enable)**. Respons device saat dieksekusi
+(2026-10-06, OLT BUMIREJA id=4): **`Configuration saved successfully`**. Non-disruptif — hanya menyalin
+running→startup; `show ont-info sn` setelahnya mengonfirmasi nama ONT + State/Run State + uptime tidak
+berubah (tidak reboot).
+
+- Probe `save ?` / `write ?` menampilkan command bare tanpa sub-opsi jelas (ambigu) — **gunakan
+  `copy running-config startup-config`** yang eksplisit & self-documented ("same as write file").
+- Diimplementasikan sebagai `hsgq_g02id.execute_save()` (sidecar, via `run_hsgq_ssh_command` login→enable→
+  command→logout) → route `POST /olt/<id>/save` → `OltSidecarClient::saveConfig()` →
+  `G02idActivationService::saveConfig()`, dipanggil sebagai **langkah WAJIB terakhir** di `activate()`
+  setelah `applyOmciNaming()`. Aktivasi G02ID dianggap tidak lengkap sebelum save ini sukses.

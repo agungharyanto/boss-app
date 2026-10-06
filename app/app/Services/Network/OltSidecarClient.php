@@ -175,6 +175,31 @@ class OltSidecarClient
     }
 
     /**
+     * v0.23.6 (G02ID) — BACA: cari onu_id + state dari SN (`show ont-info sn`,
+     * coba gpon 1 lalu gpon 2). maskSensitive=false (konsisten OnuRegistry):
+     * data balik terstruktur TANPA PII (pon/onu_id/state/run_state saja).
+     *
+     * @return array<string, mixed>
+     */
+    public function resolveOnuBySn(OltDevice $oltDevice, string $sn, ?int $requestedBy = null): array
+    {
+        return $this->read($oltDevice, 'resolve_onu_by_sn', ['sn' => $sn], $requestedBy, maskSensitive: false);
+    }
+
+    /**
+     * v0.23.6 (G02ID) — TULIS: `ont setting <id> name "<Nama - CID>"`
+     * (+ `desc` opsional). Arsitektur final G02ID: OMCI-direct HANYA untuk
+     * penamaan (WAN lewat TR-069). `$params`: `pon`/`onu_id`/`name`/`desc?`.
+     *
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    public function setOntNaming(OltDevice $oltDevice, array $params, ?int $requestedBy = null): array
+    {
+        return $this->apply($oltDevice, 'set_ont_naming', $params, $requestedBy);
+    }
+
+    /**
      * @param  array<string, mixed>  $params
      * @return array<string, mixed>
      */

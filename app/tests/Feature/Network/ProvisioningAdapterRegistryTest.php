@@ -10,7 +10,6 @@ use App\Services\Network\CtcomActivationService;
 use App\Services\Network\Provisioning\Cpe\CtcomCpeAdapter;
 use App\Services\Network\Provisioning\Cpe\UnsupportedCpeAdapter;
 use App\Services\Network\Provisioning\CpeAdapterRegistry;
-use App\Services\Network\Provisioning\Exceptions\AdapterNotYetImplemented;
 use App\Services\Network\Provisioning\Exceptions\UnsupportedAdapterOperation;
 use App\Services\Network\Provisioning\Olt\CtcomOltAdapter;
 use App\Services\Network\Provisioning\Olt\ZteC300OltAdapter;
@@ -18,6 +17,7 @@ use App\Services\Network\Provisioning\OltAdapterRegistry;
 use Database\Seeders\ProvisioningAdapterSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use InvalidArgumentException;
+use RuntimeException;
 use Tests\TestCase;
 
 /**
@@ -76,9 +76,12 @@ class ProvisioningAdapterRegistryTest extends TestCase
         $this->cpe()->for('nokia_xyz');
     }
 
-    public function test_supported_ctcom_cpe_operation_throws_not_yet_implemented(): void
+    public function test_ctcom_cpe_pushssid_requires_genieacs_device_id(): void
     {
-        $this->expectException(AdapterNotYetImplemented::class);
+        // pushSsid sudah diimplementasi (v0.23.8.4) — tanpa genieacs_device_id
+        // ia menolak jelas (bukan AdapterNotYetImplemented lagi).
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches('/genieacs_device_id/');
         $this->cpe()->for('ctcom')->pushSsid(new CpeDevice, []);
     }
 

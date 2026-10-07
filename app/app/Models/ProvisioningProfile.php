@@ -41,6 +41,11 @@ class ProvisioningProfile extends Model
         return $this->hasOne(ProvisioningWanBridge::class);
     }
 
+    public function ssids(): HasMany
+    {
+        return $this->hasMany(ProvisioningSsid::class);
+    }
+
     public function pppPackages(): BelongsToMany
     {
         return $this->belongsToMany(PppPackage::class, 'package_provisioning_profiles')

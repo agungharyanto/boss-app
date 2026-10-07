@@ -13,7 +13,7 @@ use App\Services\Network\Provisioning\Olt\ZteC300OltAdapter;
  *   hsgq_g02id / hsgq_e04id → CtcomOltAdapter (satu class, pon_mode per key)
  *   zte_c300                → ZteC300OltAdapter
  */
-final class OltAdapterRegistry
+class OltAdapterRegistry
 {
     /**
      * @var array<string, callable(string): OltProvisioningAdapter>

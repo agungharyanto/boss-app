@@ -14,7 +14,7 @@ use App\Services\Network\Provisioning\Exceptions\UnsupportedAdapterOperation;
  *   ctcom       → CMDC / CT-COM (DIDUKUNG penuh, lintas semua OLT)
  *   huawei/cmcc/zte_generic → stub belum didukung
  */
-final class CpeAdapterRegistry
+class CpeAdapterRegistry
 {
     /**
      * vendor_key (merek) → factory(vendor_key): CpeProvisioningAdapter.

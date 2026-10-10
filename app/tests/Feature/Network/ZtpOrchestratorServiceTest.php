@@ -19,6 +19,7 @@ use App\Services\Network\Provisioning\AdapterCapabilities;
 use App\Services\Network\Provisioning\Contracts\CpeProvisioningAdapter;
 use App\Services\Network\Provisioning\Contracts\OltProvisioningAdapter;
 use App\Services\Network\Provisioning\CpeAdapterRegistry;
+use App\Services\Network\Provisioning\Exceptions\UnsupportedAdapterOperation;
 use App\Services\Network\Provisioning\OltAdapterRegistry;
 use App\Services\Network\Provisioning\ProvisioningProfileResolver;
 use App\Services\Network\Provisioning\SsidNameResolver;
@@ -132,6 +133,8 @@ class ZtpOrchestratorServiceTest extends TestCase
             ->willReturn(['configured' => [1], 'pending' => [4], 'addobject_issued' => true]);
         $this->oltAdapter->expects($this->once())->method('applyNaming')->willReturn(['named_inline' => true]);
         $this->oltAdapter->expects($this->once())->method('saveConfig')->willReturn(['saved' => true]);
+        // Orkestrator TIDAK PERNAH memanggil admit() (admisi = alur device terpisah/8.5b).
+        $this->oltAdapter->expects($this->never())->method('admit');
 
         $result = $this->orchestrator()->provision($cpe, $this->olt());
 
@@ -234,5 +237,65 @@ class ZtpOrchestratorServiceTest extends TestCase
         $result = $this->orchestrator()->provision($cpe, $this->olt());
         $this->assertFalse($result['ok']);
         $this->assertSame('select_adapter', $result['stage']);
+    }
+
+    // ---- LANGKAH D: kanal provisioning per-OLT ----------------------------
+
+    public function test_omci_channel_disabled_blocks_before_any_stage(): void
+    {
+        // Profil WAN-internet-only via OMCI + OLT omci_channel_enabled=false.
+        $data = $this->makeProfile(withBridge: false, withSsid: false);
+        $cpe = $this->makeCpe($data['package']);
+        $olt = $this->olt();
+        $olt->omci_channel_enabled = false;
+
+        $this->oltAdapter->expects($this->never())->method('pushWanInternetOmci');
+        $this->cpeAdapter->expects($this->never())->method('pushWanInternet');
+
+        $result = $this->orchestrator('omci')->provision($cpe, $olt);
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame('channel_check', $result['stage']);
+        $this->assertSame(['omci'], $result['disabled_channels']);
+        $this->assertSame([], $result['stages']);
+    }
+
+    public function test_tr069_channel_disabled_blocks_before_any_stage(): void
+    {
+        // Profil default (WAN via TR-069 + bridge + SSID) + tr069 dimatikan.
+        $data = $this->makeProfile();
+        $cpe = $this->makeCpe($data['package']);
+        $olt = $this->olt();
+        $olt->tr069_channel_enabled = false;
+
+        $this->cpeAdapter->expects($this->never())->method('pushWanInternet');
+        $this->cpeAdapter->expects($this->never())->method('pushSsid');
+
+        $result = $this->orchestrator()->provision($cpe, $olt);
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame('channel_check', $result['stage']);
+        $this->assertSame(['tr069'], $result['disabled_channels']);
+    }
+
+    public function test_cpe_brand_key_maps_the_real_device_families(): void
+    {
+        $svc = $this->orchestrator();
+        $m = new \ReflectionMethod($svc, 'cpeBrandKey');
+        $m->setAccessible(true);
+        $cpe = function (string $mfr): CpeDevice {
+            $c = new CpeDevice;
+            $c->manufacturer = $mfr;
+
+            return $c;
+        };
+
+        $this->assertSame('ctcom', $m->invoke($svc, $cpe('CMDC')));
+        $this->assertSame('ctcom', $m->invoke($svc, $cpe('CMDC H3-2S XPON')));
+        $this->assertSame('zte_generic', $m->invoke($svc, $cpe('ZTE')));
+        $this->assertSame('huawei', $m->invoke($svc, $cpe('Huawei Technologies')));
+
+        $this->expectException(UnsupportedAdapterOperation::class);
+        $m->invoke($svc, $cpe('Nokia'));
     }
 }

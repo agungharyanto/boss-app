@@ -54,6 +54,9 @@ class OltDevice extends Model
         'snmp_ro_community',
         'snmp_rw_community',
         'pon_port_count',
+        'requires_bind_onu',
+        'omci_channel_enabled',
+        'tr069_channel_enabled',
         'last_connection_test_at',
         'last_connection_test_result',
         'last_connection_test_message',
@@ -77,7 +80,29 @@ class OltDevice extends Model
             'snmp_rw_community' => 'encrypted',
             'last_connection_test_at' => 'datetime',
             'last_connection_test_result' => OltConnectionTestResult::class,
+            'requires_bind_onu' => 'boolean',
+            'omci_channel_enabled' => 'boolean',
+            'tr069_channel_enabled' => 'boolean',
         ];
+    }
+
+    /**
+     * NILAI AWAL (seed/backfill) `requires_bind_onu` yang diturunkan dari vendor
+     * key — HANYA untuk mengisi default kolom; admisi runtime membaca KOLOM
+     * (`requires_bind_onu`), bukan method ini, sehingga admin bisa override
+     * per-device (keputusan LANGKAH D REVISI: admission mode per-device).
+     *
+     *   hsgq_e04id → true  (EPON deny-by-default, butuh bind-onu+confirm)
+     *   hsgq_g02id → false (GPON auto-authorize)
+     *   zte_c300 / lainnya → null (WAN via OMCI / belum ditentukan)
+     */
+    public static function defaultRequiresBindOnu(string $vendorKey): ?bool
+    {
+        return match ($vendorKey) {
+            'hsgq_e04id' => true,
+            'hsgq_g02id' => false,
+            default => null,
+        };
     }
 
     public function nas(): BelongsTo

@@ -463,3 +463,62 @@ DUA registry kode terpisah (keduanya pola `SUPPORTED_VENDOR_OPERATIONS`):
 
 **Status**: verifikasi G1 read-only selesai & mendukung. Revisi desain G2-G5 menunggu review Agung SEBELUM
 v0.23.8.1. Tidak ada write ke device mana pun dilakukan di verifikasi ini.
+
+## H. LANGKAH D (2026-10-11): Admission mode PER-DEVICE + penegasan kontrak orkestrator
+
+Admisi ONU tidak lagi di-hardcode per adapter class — dipindah ke **kolom
+`olt_devices.requires_bind_onu`** (migration `2026_10_11_090000`), sumber
+kebenaran runtime. Dua saklar kanal (`omci_channel_enabled`/`tr069_channel_enabled`,
+default true) menyertai.
+
+### H1. admission mode (per-device)
+- `requires_bind_onu = true`  → EPON deny-by-default (E04ID): `CtcomOltAdapter::admit()`
+  menjalankan `bind-onu mac <MAC> [name] [desc]` + `onu confirm onu-id <N>` via
+  operasi sidecar BARU `hsgq_e04id.bind_onu` (`OltSidecarClient::bindOnu`).
+- `requires_bind_onu = false` → GPON auto-authorize (G02ID): `admit()` no-op sukses.
+- `requires_bind_onu = null`  → mode belum ditentukan → `admit()` **melempar error
+  eksplisit** (tidak diam-diam pilih default). ZTE C300 di-backfill `null` (WAN via
+  OMCI `activate_onu`, bukan admisi bind-onu; `ZteC300OltAdapter::admit()` tetap
+  melempar `AdapterNotYetImplemented` karena alokasi onu-id belum tuntas — tak berubah).
+- Backfill 3 row riil: #1 zte_c300→null, #2 hsgq_e04id→true, #4 hsgq_g02id→false.
+  Default (seed) diturunkan dari vendor via `OltDevice::defaultRequiresBindOnu()` —
+  HANYA untuk mengisi kolom; admisi runtime membaca KOLOM, admin bisa override per-device.
+
+### H2. kontrak sidecar `bind_onu` (deterministik, nol device di batch ini)
+`bind-onu` dikirim TANPA onu-id (device meng-assign — sintaks terbukti v0.23.7);
+`onu confirm onu-id <N>` memakai **onu_id yang disuplai pemanggil**. Kalau device
+meng-assign id berbeda → `onu confirm` ditolak (gagal KERAS, bukan salah diam-diam).
+Alokasi onu-id yang andal = sama terbuka seperti ZTE (diselesaikan pemanggil/8.5b).
+Builder (`_build_bind_onu_commands`) + validator MAC/pon/onu_id murni & teruji
+pytest; jalur SSH interaktif penuh diverifikasi ke device di **v0.23.8.5b**.
+**Sidecar image WAJIB di-rebuild** sebelum `bind_onu` melayani produksi (kode
+di-COPY saat build; container running saat ini sudah di-`docker cp` HANYA untuk pytest).
+
+### H3. kanal provisioning (orkestrator)
+`ZtpOrchestratorService` melakukan **pre-check kanal UPFRONT** (sebelum tahap apa pun):
+WAN via `omci` butuh `omci_channel_enabled`; WAN via `tr069_device_driven` + WAN
+bridge + SSID butuh `tr069_channel_enabled`. Hanya `=== false` memblokir (null/true =
+aktif, konsisten default kolom + kompatibel model mock lama). Diblokir → hasil
+`{ok:false, stage:'channel_check', disabled_channels:[...]}`, NOL tahap dijalankan.
+
+### H4. penegasan kontrak orkestrator (sisa poin 2-6, dikonfirmasi via kode+test)
+2. **`provision()` TIDAK memanggil `admit()`** — admisi adalah alur device terpisah
+   (dijalankan sebelum/di luar orkestrasi template). Ditegaskan test
+   `oltAdapter->expects(never)->method('admit')` di happy-path.
+3. **Keamanan replay registrasi ZTE** — `activate_onu` ZTE menulis blok registrasi
+   PON penuh; menjalankan ulang pada onu-id yang sudah teregistrasi berisiko config
+   campur aduk (lihat catatan `fix_onu_vlan`/`delete_onu` v0.23.5). Orkestrator saat
+   ini TIDAK idempotent (`rollback_safe=false`, jujur) — re-run ZTE WAN-OMCI BUKAN
+   aman; konvergensi/guard "sudah teregistrasi?" = tanggung jawab 8.5b sebelum re-run.
+4. **cpeBrandKey 3 keluarga device** — `CMDC*`→`ctcom` (jalur terbukti), `ZTE*`→
+   `zte_generic` (stub), `HUAWEI*`→`huawei` (stub), tak dikenal→lempar (tahap
+   `select_adapter`). Diuji via reflection.
+5. **Susun $options OMCI riil per device (untuk 8.5b, BUKAN batch ini)** — ZTE C300
+   WAN-OMCI butuh pemanggil menyuplai `onu_id`, `onu_type`, `tcont_profile`,
+   `traffic_profile`, `vlan_mgmt`, `vlan_bridge`, `pon_interface` lewat `$options`
+   (profil hanya menyediakan `vlan_pppoe` + nama dari customer). CT-COM (E04ID/G02ID)
+   TIDAK butuh $options OMCI — WAN device-driven TR-069.
+6. **Urutan tahap vs gotcha CT-COM** — urutan: WAN internet → WAN bridge → SSID →
+   naming → save. WAN SEBELUM SSID disengaja: SSID CT-COM memakai AddObject
+   band-grouped (guest 4/8) yang bergantung pada WAN/LAN-binding sudah mapan lebih
+   dulu (reuse teknik Dahlia/CMDCA21C01E7). Naming+save paling akhir (OLT-side).

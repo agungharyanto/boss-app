@@ -81,11 +81,30 @@ class ZtpOrchestratorService
 
         $customer = $cpe->loadMissing('customer')->customer;
         $requestedBy = $options['requested_by'] ?? null;
+        $via = $oltAdapter->capabilities()->wanInternetVia;
+
+        // 2b. Pre-check KANAL (LANGKAH D): orkestrator MENOLAK merutekan WAN
+        //     lewat kanal yang dimatikan per-OLT (omci_channel_enabled /
+        //     tr069_channel_enabled). Hanya `=== false` yang memblokir —
+        //     null/true dianggap aktif (default kolom = true; model mock lama
+        //     tanpa atribut → null → tetap lolos). Dicek UPFRONT (sebelum
+        //     tahap apa pun) agar tak ada separuh-jalan.
+        $disabled = $this->disabledChannels($profile, $via, $olt);
+        if ($disabled !== []) {
+            return [
+                'ok' => false,
+                'stage' => 'channel_check',
+                'reason' => 'Kanal provisioning dinonaktifkan pada OLT: '.implode(', ', $disabled),
+                'disabled_channels' => $disabled,
+                'profile' => $this->profileSummary($profile, $resolution->source),
+                'stages' => [],
+            ];
+        }
+
         $stages = [];
 
         // 3a. WAN internet — rute sesuai kapabilitas OLT adapter.
         if ($profile->wanInternet !== null) {
-            $via = $oltAdapter->capabilities()->wanInternetVia;
             $ok = $this->runStage($stages, 'wan_internet', ['via' => $via], function () use ($via, $cpeAdapter, $oltAdapter, $cpe, $olt, $profile, $customer, $options, $requestedBy) {
                 if ($via === 'omci') {
                     return $oltAdapter->pushWanInternetOmci($olt, $this->buildOmciWanSpec($profile, $customer, $cpe, $options));
@@ -140,6 +159,31 @@ class ZtpOrchestratorService
             'stages' => $stages,
             'rollback_safe' => false,
         ];
+    }
+
+    /**
+     * Kanal yang DIBUTUHKAN profil tapi dinonaktifkan pada OLT. WAN internet
+     * via 'omci' → butuh omci_channel; via 'tr069_device_driven' → tr069.
+     * WAN bridge + SSID selalu lewat TR-069 (CPE adapter) → butuh tr069.
+     *
+     * @return list<string>
+     */
+    private function disabledChannels(ProvisioningProfile $profile, string $via, OltDevice $olt): array
+    {
+        $needsOmci = $profile->wanInternet !== null && $via === 'omci';
+        $needsTr069 = ($profile->wanInternet !== null && $via === 'tr069_device_driven')
+            || $profile->wanBridge !== null
+            || $profile->ssids->isNotEmpty();
+
+        $disabled = [];
+        if ($needsOmci && $olt->omci_channel_enabled === false) {
+            $disabled[] = 'omci';
+        }
+        if ($needsTr069 && $olt->tr069_channel_enabled === false) {
+            $disabled[] = 'tr069';
+        }
+
+        return $disabled;
     }
 
     /**

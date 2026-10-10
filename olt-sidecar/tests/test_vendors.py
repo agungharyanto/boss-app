@@ -784,3 +784,73 @@ def test_g02id_execute_save_raises_on_device_error(monkeypatch):
     )
     with pytest.raises(OltSessionError):
         hsgq_g02id.execute_save({'host': 'h', 'username': 'u', 'password': 'p'})
+
+
+# --- HSGQ E04ID bind_onu (v0.23.8 LANGKAH D) — builder MURNI, nol device ---
+
+def test_e04id_exposes_bind_onu_as_the_only_write_operation():
+    assert hsgq_e04id.OPERATIONS_WRITE == ('bind_onu',)
+
+
+def test_e04id_build_bind_onu_commands_full_sequence():
+    commands = hsgq_e04id._build_bind_onu_commands(
+        'ec:9b:2d:f2:f6:39', 1, 'TestE04ID', 'TestE04ID - 261067914698'
+    )
+    # bind-onu TANPA onu-id (device meng-assign); confirm memakai onu-id caller.
+    assert commands == [
+        'bind-onu mac ec:9b:2d:f2:f6:39 name TestE04ID desc "TestE04ID - 261067914698"',
+        'onu confirm onu-id 1',
+    ]
+
+
+def test_e04id_build_bind_onu_commands_name_and_desc_optional():
+    # Builder menerima MAC yang SUDAH dinormalisasi (_require_mac), verbatim.
+    assert hsgq_e04id._build_bind_onu_commands('ec:9b:2d:f2:f6:39', 3, None, None) == [
+        'bind-onu mac ec:9b:2d:f2:f6:39',
+        'onu confirm onu-id 3',
+    ]
+
+
+def test_e04id_require_mac_normalises_to_colon_lowercase():
+    assert hsgq_e04id._require_mac({'mac': 'EC-9B-2D-F2-F6-39'}) == 'ec:9b:2d:f2:f6:39'
+    assert hsgq_e04id._require_mac({'mac': 'ec9b2df2f639'}) == 'ec:9b:2d:f2:f6:39'
+
+
+@pytest.mark.parametrize('bad', ['', 'ec9b2d', 'ZZ:9b:2d:f2:f6:39', '1234567890123'])
+def test_e04id_require_mac_rejects_invalid(bad):
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._require_mac({'mac': bad})
+    assert exc.value.stage == 'params'
+
+
+@pytest.mark.parametrize('pon', [0, 5, 'dua', None])
+def test_e04id_require_pon_rejects_out_of_range(pon):
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._require_pon({'pon': pon})
+    assert exc.value.stage == 'params'
+
+
+@pytest.mark.parametrize('onu_id', [0, 65, 'satu', None])
+def test_e04id_require_onu_id_rejects_out_of_range(onu_id):
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._require_onu_id({'onu_id': onu_id})
+    assert exc.value.stage == 'params'
+
+
+@pytest.mark.parametrize('name', ['nama spasi', 'a"b', 'x' * 41])
+def test_e04id_build_rejects_unsafe_name(name):
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._build_bind_onu_commands('ec9b2df2f639', 1, name, None)
+    assert exc.value.stage == 'params'
+
+
+def test_e04id_build_rejects_desc_with_double_quote():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._build_bind_onu_commands('ec9b2df2f639', 1, None, 'a"b')
+    assert exc.value.stage == 'params'
+
+
+def test_e04id_execute_apply_rejects_unknown_write_operation():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id.execute_apply({}, 'operasi_tak_dikenal', {'pon': 1, 'mac': 'ec9b2df2f639', 'onu_id': 1})
+    assert exc.value.stage == 'operation'

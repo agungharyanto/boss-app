@@ -122,6 +122,20 @@ final class CtcomOltAdapter implements OltProvisioningAdapter
     /**
      * Validasi + rakit params bind-onu dari $context admisi.
      *
+     * KEPUTUSAN EKSPLISIT onu_id (v0.23.8, batch doc-review) — `onu_id` WAJIB
+     * disuplai PEMANGGIL; tidak ada auto-allocate di batch ini (alasan sama spt
+     * jalur OMCI ZTE: allocator smallest-free belum terverifikasi device).
+     *
+     * CARA BENAR mengambil onu_id NYATA (E04ID) sudah DITEMUKAN & TERUJI tapi
+     * BELUM di-wire: `bind-onu` membuat device meng-auto-assign onu-id, dan
+     * `show onu-info all` (EKSEKUSI NYATA v0.23.7, hsgq-e04id-cli-reference.md
+     * §"Hasil Aktivasi CMDCA21C01E7": `2/1` → onu-id 1, Status Initial, sebelum
+     * `onu confirm`) MENAMPILKAN id itu. Jadi alur ideal 8.5b = bind → baca
+     * `show onu-info all` → confirm pakai id hasil-baca (bukan caller-supply).
+     * Op sidecar `bind_onu` saat ini masih caller-supply onu_id (mismatch →
+     * `onu confirm` gagal keras); read-back `show onu-info all` ditambahkan di
+     * 8.5b, BUKAN batch doc-review ini.
+     *
      * @param  array<string, mixed>  $context
      * @return array<string, mixed>
      */

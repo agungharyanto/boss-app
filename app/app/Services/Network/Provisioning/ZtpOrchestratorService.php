@@ -255,6 +255,15 @@ class ZtpOrchestratorService
      * disuplai pemanggil v0.23.8.5b). Field kurang -> ZteC300OltAdapter sendiri
      * yang menolak jelas saat push.
      *
+     * KEPUTUSAN EKSPLISIT onu_id (v0.23.8, batch doc-review) — `onu_id` WAJIB
+     * disuplai PEMANGGIL lewat $options; orkestrator TIDAK meng-auto-allocate.
+     * TIDAK membangun allocator "smallest-free" di batch ini karena BELUM pernah
+     * diverifikasi ke device nyata: `show gpon onu next-available` DITOLAK OLT
+     * (`%Error 20202`, zte-c300-cli-reference.md Sesi 6) dan indeks `show gpon onu
+     * uncfg` TERBUKTI bentrok dgn ID yang sudah terpakai (idem, "indeks uncfg
+     * hanyalah USULAN"). Membangun allocator sekarang = logic baru buta → ditunda.
+     * onu_id absen → spec di-filter tanpa onu_id → ZteC300OltAdapter menolak jelas.
+     *
      * @param  array<string, mixed>  $options
      * @return array<string, mixed>
      */

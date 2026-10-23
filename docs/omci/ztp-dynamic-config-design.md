@@ -522,3 +522,28 @@ aktif, konsisten default kolom + kompatibel model mock lama). Diblokir → hasil
    naming → save. WAN SEBELUM SSID disengaja: SSID CT-COM memakai AddObject
    band-grouped (guest 4/8) yang bergantung pada WAN/LAN-binding sudah mapan lebih
    dulu (reuse teknik Dahlia/CMDCA21C01E7). Naming+save paling akhir (OLT-side).
+
+### H5. Status dua gap terbuka (batch doc-review 2026-10-23, murni baca docs+kode)
+
+**Gap 1 — ZTE replay-safety (`activate_onu` pada onu_id yang sudah terisi): MASIH TERBUKA, terdokumentasi.**
+Perilaku `onu <id> type <t> sn <sn>` saat dijalankan ulang ke onu_id terisi = **[TIDAK BISA
+DIVERIFIKASI]** (zte-c300-cli-reference.md §"Temuan untuk desain v0.23.5"): tidak pernah dicoba
+(dilarang — produksi 400+ pelanggan), tidak ada referensi publik eksplisit; doc sendiri menyebut
+"kemungkinan besar ditolak 'ID already exists'... tapi ini DUGAAN, bukan fakta terverifikasi". **Sesuai
+instruksi: TIDAK mendesain guard idempotensi berdasarkan dugaan.** Orkestrator tetap `rollback_safe=false`
+(jujur). Menutup gap ini butuh observasi read-only/terkontrol ke device nyata (ZTE C300) — keputusan
+terpisah, bukan otomatis.
+
+**Gap 2 — alokasi onu_id: diputuskan (first-run) + sebagian tertutup-oleh-temuan.**
+- **Keputusan first-run (unblock 8.5b, bukan permanen): onu_id WAJIB disuplai pemanggil, NOL auto-allocate.**
+  Ditulis eksplisit di kode: `ZtpOrchestratorService::buildOmciWanSpec()` (jalur OMCI ZTE) +
+  `CtcomOltAdapter::bindParams()` (admisi E04ID). Alasan: allocator "smallest-free" belum pernah
+  terverifikasi device — `show gpon onu next-available` DITOLAK OLT (`%Error 20202`), indeks `show gpon
+  onu uncfg` terbukti bentrok dgn ID terpakai. Membangun allocator sekarang = logic baru buta.
+- **E04ID — cara benar ambil onu_id NYATA: TERTUTUP-OLEH-TEMUAN (tested), wiring=8.5b.** `bind-onu`
+  membuat OLT auto-assign onu-id; **`show onu-info all` (EKSEKUSI NYATA v0.23.7, hsgq-e04id-cli-reference.md
+  §"Hasil Aktivasi CMDCA21C01E7": `2/1`→onu-id 1 Status Initial, sebelum `onu confirm`) MENAMPILKANNYA.**
+  Alur ideal: bind → baca `show onu-info all` → confirm pakai id hasil-baca. Op sidecar `bind_onu` saat
+  ini masih caller-supply (mismatch → `onu confirm` gagal keras); read-back ditambahkan di 8.5b.
+- **ZTE — tetap caller-supply** (tak ada command auto-assign-lalu-baca yang setara + tested seperti E04ID;
+  `next-available` ditolak). Open sampai ada mekanisme terverifikasi device.

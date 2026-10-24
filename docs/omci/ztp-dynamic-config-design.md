@@ -547,3 +547,22 @@ terpisah, bukan otomatis.
   ini masih caller-supply (mismatch → `onu confirm` gagal keras); read-back ditambahkan di 8.5b.
 - **ZTE — tetap caller-supply** (tak ada command auto-assign-lalu-baca yang setara + tested seperti E04ID;
   `next-available` ditolak). Open sampai ada mekanisme terverifikasi device.
+
+### H6. v0.23.8.5b — read-back onu-id E04ID DI-WIRE (pre-flight: device unreachable)
+
+Gap H5 "E04ID onu_id read-back" dari status "temuan, wiring=8.5b" → **SUDAH DI-WIRE** (kode, mock-tested):
+- Sidecar `hsgq_e04id.bind_onu` kini: bind (TANPA onu-id) → `show onu-info all` → `_parse_assigned_onu_id`
+  (ambil onu-id device untuk MAC) → `_resolve_confirm_onu_id` (caller onu_id opsional = cross-check;
+  mismatch/not-found = GAGAL KERAS) → `onu confirm onu-id <id-device>`. `CtcomOltAdapter::admit()` onu_id
+  jadi OPSIONAL; return pakai `confirmed_onu_id` device.
+- **Mock-tested** (157 pytest + 15 PHP): match / mismatch-fails-hard / not-found-fails / no-caller-onu_id.
+- **BELUM divalidasi live**: (a) parser `_parse_assigned_onu_id` format ASUMSI (`<pon>/<onu-id>`+MAC se-baris,
+  dari doc v0.23.7 `2/1`→1; output `show onu-info all` mentah tak pernah terlihat di sesi ini) — WAJIB cek
+  vs output nyata; (b) navigasi mode session (bind@epon → `end`→`#` → `show` → `configure`→epon → confirm)
+  belum dijalankan ke device. Keduanya ditandai eksplisit di kode.
+
+**Blocker pre-flight v0.23.8.5b (device uji):** CMDCA21C01E7 TIDAK siap live-run — (1) nol baris
+`cpe_devices` (nol customer/profile/binding), (2) GenieACS `_lastInform` beku Oct-7 (belum Inform sejak
+pulih), (3) E04ID CILED (10.168.100.5) unreachable STACK-WIDE (sidecar nol route 10.168.100.0/24; librenms
+ping 100% loss) — kemungkinan tunnel NAS CILED down / OLT mati (infra terpisah dari GenieACS). Live-run
+butuh device+OLT reachable dulu.

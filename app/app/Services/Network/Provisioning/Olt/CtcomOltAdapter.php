@@ -101,7 +101,10 @@ final class CtcomOltAdapter implements OltProvisioningAdapter
             ];
         }
 
-        // true → bind-onu + onu confirm (E04ID). Butuh pon/mac/onu_id dari context.
+        // true → bind-onu + READ-BACK onu-id + confirm (E04ID). Butuh pon+mac
+        // dari context; onu_id OPSIONAL (cross-check). Sidecar `bind_onu` yang
+        // membaca onu-id auto-assign device (`show onu-info all`) + confirm
+        // pakai id itu — lihat hsgq_e04id._run_e04id_bind_with_readback.
         $params = $this->bindParams($context);
         $result = $this->sidecar()->bindOnu($olt, $params, $context['requested_by'] ?? null);
 
@@ -110,41 +113,39 @@ final class CtcomOltAdapter implements OltProvisioningAdapter
             throw new RuntimeException("Admisi bind-onu E04ID gagal (OLT #{$olt->id}): {$msg}");
         }
 
+        // onu_id OTORITATIF = hasil-baca device (confirmed_onu_id), BUKAN nilai
+        // caller. Sidecar sudah gagal-keras kalau caller-supplied beda dari device.
+        $data = $result['data'] ?? [];
+
         return [
             'admitted' => true,
             'mode' => 'bind_onu',
             'pon' => $params['pon'],
-            'onu_id' => $params['onu_id'],
-            'result' => $result['data'] ?? null,
+            'onu_id' => $data['confirmed_onu_id'] ?? $data['assigned_onu_id'] ?? null,
+            'result' => $data,
         ];
     }
 
     /**
      * Validasi + rakit params bind-onu dari $context admisi.
      *
-     * KEPUTUSAN EKSPLISIT onu_id (v0.23.8, batch doc-review) — `onu_id` WAJIB
-     * disuplai PEMANGGIL; tidak ada auto-allocate di batch ini (alasan sama spt
-     * jalur OMCI ZTE: allocator smallest-free belum terverifikasi device).
-     *
-     * CARA BENAR mengambil onu_id NYATA (E04ID) sudah DITEMUKAN & TERUJI tapi
-     * BELUM di-wire: `bind-onu` membuat device meng-auto-assign onu-id, dan
-     * `show onu-info all` (EKSEKUSI NYATA v0.23.7, hsgq-e04id-cli-reference.md
-     * §"Hasil Aktivasi CMDCA21C01E7": `2/1` → onu-id 1, Status Initial, sebelum
-     * `onu confirm`) MENAMPILKAN id itu. Jadi alur ideal 8.5b = bind → baca
-     * `show onu-info all` → confirm pakai id hasil-baca (bukan caller-supply).
-     * Op sidecar `bind_onu` saat ini masih caller-supply onu_id (mismatch →
-     * `onu confirm` gagal keras); read-back `show onu-info all` ditambahkan di
-     * 8.5b, BUKAN batch doc-review ini.
+     * onu_id (v0.23.8.5b — read-back DI-WIRE): WAJIB cuma `pon` + `mac`.
+     * `onu_id` OPSIONAL = CROSS-CHECK (bukan sumber kebenaran): sidecar
+     * `bind_onu` membaca onu-id auto-assign device via `show onu-info all`
+     * (TERUJI v0.23.7: `2/1`→onu-id 1) lalu confirm pakai id itu; kalau
+     * `onu_id` caller disuplai & beda dari device → GAGAL KERAS di sidecar.
+     * Tidak ada auto-allocate caller-side (alasan sama jalur OMCI ZTE:
+     * allocator smallest-free belum terverifikasi device).
      *
      * @param  array<string, mixed>  $context
      * @return array<string, mixed>
      */
     private function bindParams(array $context): array
     {
-        foreach (['pon', 'mac', 'onu_id'] as $key) {
+        foreach (['pon', 'mac'] as $key) {
             if (! isset($context[$key]) || $context[$key] === '') {
                 throw new RuntimeException(
-                    "Admisi bind-onu ({$this->vendorKey}) butuh context['{$key}'] (pon/mac/onu_id)."
+                    "Admisi bind-onu ({$this->vendorKey}) butuh context['{$key}'] (pon + mac)."
                 );
             }
         }
@@ -152,7 +153,8 @@ final class CtcomOltAdapter implements OltProvisioningAdapter
         return array_filter([
             'pon' => (int) $context['pon'],
             'mac' => (string) $context['mac'],
-            'onu_id' => (int) $context['onu_id'],
+            // onu_id opsional → cross-check di sidecar; null kalau caller tak suplai.
+            'onu_id' => isset($context['onu_id']) && $context['onu_id'] !== '' ? (int) $context['onu_id'] : null,
             'name' => $context['name'] ?? null,
             'desc' => $context['desc'] ?? null,
         ], fn ($v) => $v !== null);

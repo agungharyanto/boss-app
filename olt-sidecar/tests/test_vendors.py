@@ -13,7 +13,7 @@ from app.vendors.base import (
 
 
 def test_hsgq_e04id_only_exposes_show_version_as_teruji_operation():
-    assert hsgq_e04id.OPERATIONS == {'show_version': 'show version'}
+    assert hsgq_e04id.OPERATIONS == {'show_version': 'show version', 'show_onu_info_all': 'show onu-info all'}
 
 
 def test_hsgq_g02id_only_exposes_show_version_as_teruji_operation():
@@ -854,3 +854,58 @@ def test_e04id_execute_apply_rejects_unknown_write_operation():
     with pytest.raises(OltSessionError) as exc:
         hsgq_e04id.execute_apply({}, 'operasi_tak_dikenal', {'pon': 1, 'mac': 'ec9b2df2f639', 'onu_id': 1})
     assert exc.value.stage == 'operation'
+
+
+# --- E04ID read-back onu-id (v0.23.8.5b) — logika verify MURNI, nol device ---
+
+_SHOW_ONU_INFO_SAMPLE = """\
+OnuIndex  MAC               Status   Dist
+2/1       ec:9b:2d:f2:f6:39 Initial  1234
+2/3       aa:bb:cc:dd:ee:ff Online   2000
+"""  # FORMAT ASUMSI (lihat _parse_assigned_onu_id docstring) — divalidasi live
+
+
+def test_e04id_parse_assigned_onu_id_found_colon():
+    assert hsgq_e04id._parse_assigned_onu_id(_SHOW_ONU_INFO_SAMPLE, 'ec:9b:2d:f2:f6:39') == 1
+
+
+def test_e04id_parse_assigned_onu_id_found_plain_mac_input():
+    # MAC disuplai tanpa colon tetap cocok (normalisasi plain-hex)
+    assert hsgq_e04id._parse_assigned_onu_id(_SHOW_ONU_INFO_SAMPLE, 'ec9b2df2f639') == 1
+
+
+def test_e04id_parse_assigned_onu_id_not_found_returns_none():
+    assert hsgq_e04id._parse_assigned_onu_id(_SHOW_ONU_INFO_SAMPLE, '11:22:33:44:55:66') is None
+
+
+def test_e04id_resolve_confirm_onu_id_match_or_no_expected():
+    assert hsgq_e04id._resolve_confirm_onu_id(1, None) == 1   # tanpa cross-check
+    assert hsgq_e04id._resolve_confirm_onu_id(1, 1) == 1      # cocok
+
+
+def test_e04id_resolve_confirm_onu_id_mismatch_fails_hard():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._resolve_confirm_onu_id(1, 2)
+    assert exc.value.stage == 'mismatch'
+
+
+def test_e04id_resolve_confirm_onu_id_not_found_fails():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._resolve_confirm_onu_id(None, 1)
+    assert exc.value.stage == 'readback'
+
+
+@pytest.mark.parametrize('val,expected', [(None, None), ('', None), (3, 3)])
+def test_e04id_optional_onu_id_accepts_absent_or_valid(val, expected):
+    assert hsgq_e04id._optional_onu_id({'onu_id': val} if val is not None else {}) == expected
+
+
+@pytest.mark.parametrize('bad', [0, 65, 'x'])
+def test_e04id_optional_onu_id_rejects_out_of_range(bad):
+    with pytest.raises(OltSessionError):
+        hsgq_e04id._optional_onu_id({'onu_id': bad})
+
+
+def test_e04id_build_bind_command_no_onu_id():
+    assert hsgq_e04id._build_bind_command('ec:9b:2d:f2:f6:39', 'TestE04ID', None) \
+        == 'bind-onu mac ec:9b:2d:f2:f6:39 name TestE04ID'

@@ -23,6 +23,11 @@ from .base import (
 
 OPERATIONS = {
     'show_version': 'show version',
+    # v0.23.8.5b — READ-only: daftar+status semua ONU (pon/onu-id, MAC, Status
+    # Initial/Online). Dipakai pre-flight + sebagai cara BENAR membaca onu-id
+    # auto-assign setelah bind-onu (hsgq-e04id-cli-reference.md §"Hasil Aktivasi
+    # CMDCA21C01E7" — `2/1`→onu-id 1). Paging `--More--` ditangani base.
+    'show_onu_info_all': 'show onu-info all',
 }
 
 # Operasi TULIS (jalur `/olt/<id>/apply`). Hanya `bind_onu` — admisi EPON
@@ -68,28 +73,68 @@ def execute(connection: dict, operation: str, args: dict, mask_sensitive: bool =
 def execute_apply(connection: dict, operation: str, params: dict):
     """Jalur TULIS (`/olt/<id>/apply`). `params` SELALU dict terstruktur.
     Mengembalikan (result_dict, None) kalau sukses; melempar OltSessionError
-    kalau validasi gagal atau device menolak."""
+    kalau validasi gagal atau device menolak.
+
+    v0.23.8.5b — READ-BACK onu-id (Bagian H poin 3 di-wire): `bind-onu` TIDAK
+    membawa onu-id (device auto-assign), lalu `show onu-info all` DIBACA untuk
+    mengambil onu-id yang BENAR-BENAR di-assign device untuk MAC ini, baru
+    `onu confirm onu-id <id-dari-device>`. `onu_id` di params kini OPSIONAL:
+    kalau disuplai pemanggil → dijadikan CROSS-CHECK (mismatch vs device =
+    GAGAL KERAS, tidak confirm diam-diam id mana pun); kalau tidak → pakai
+    id hasil-baca device langsung."""
     if operation != 'bind_onu':
         raise OltSessionError(f"Operasi tulis '{operation}' tidak dikenal untuk hsgq_e04id", 'operation')
 
     pon = _require_pon(params)
-    onu_id = _require_onu_id(params)
     mac = _require_mac(params)
-    commands = _build_bind_onu_commands(mac, onu_id, params.get('name'), params.get('desc'))
+    expected_onu_id = _optional_onu_id(params)  # cross-check, BUKAN sumber kebenaran
+    bind_command = _build_bind_command(mac, params.get('name'), params.get('desc'))
 
-    outputs = _run_e04id_epon_session(connection, pon, commands, check_errors=True)
+    return _run_e04id_bind_with_readback(connection, pon, mac, bind_command, expected_onu_id), None
 
-    return {
-        'pon': pon,
-        'onu_id': onu_id,
-        'mac': mac,
-        'commands_applied': len(outputs),
-        # onu_id = NILAI YANG DIMINTA PEMANGGIL (bukan hasil baca-balik). Device
-        # meng-assign onu-id saat `bind-onu`; `onu confirm onu-id <onu_id>` di
-        # bawah MENGONFIRMASI id itu — kalau device meng-assign id berbeda,
-        # `onu confirm` ditolak (gagal KERAS, bukan salah diam-diam). Alokasi
-        # onu-id yang andal = tanggung jawab pemanggil/8.5b (sama terbuka spt ZTE).
-    }, None
+
+def _parse_assigned_onu_id(info_output: str, mac: str) -> 'int | None':
+    """MURNI — dari output `show onu-info all`, temukan baris MAC target lalu
+    ambil onu-id dari token `<pon>/<onu-id>` (format TERUJI v0.23.7: `2/1` →
+    onu-id 1). Return None kalau MAC tak ada (bind gagal / belum muncul).
+
+    PERINGATAN: layout kolom persis `show onu-info all` BELUM pernah terlihat
+    mentah di sesi ini (device unreachable + doc tidak mengutip mentah) — pola
+    `<digit>/<digit>` + MAC di baris sama adalah ASUMSI dari dokumentasi; WAJIB
+    divalidasi vs output NYATA saat live-run sebelum dipercaya (sama disiplin
+    'jangan percaya logic buta' seperti allocator onu-id)."""
+    mac_colon = mac.strip().lower()
+    mac_plain = re.sub(r'[^0-9a-f]', '', mac_colon)
+    for line in info_output.splitlines():
+        low = line.lower()
+        line_plain = re.sub(r'[^0-9a-f]', '', low)
+        if (mac_colon and mac_colon in low) or (mac_plain and mac_plain in line_plain):
+            m = re.search(r'(\d+)\s*/\s*(\d+)', line)
+            if m:
+                return int(m.group(2))
+    return None
+
+
+def _resolve_confirm_onu_id(parsed: 'int | None', expected: 'int | None') -> int:
+    """MURNI — putuskan onu-id untuk `onu confirm`, dari id hasil-baca device
+    (`parsed`) + id yg disuplai pemanggil (`expected`, opsional):
+      parsed None             → GAGAL ('tak ketemu row Initial' — bind gagal/MAC
+                                 belum muncul), JANGAN tebak/confirm apa pun.
+      expected diberi & beda  → GAGAL KERAS (mismatch), JANGAN confirm diam-diam.
+      selain itu              → pakai `parsed` (sumber kebenaran = device)."""
+    if parsed is None:
+        raise OltSessionError(
+            "onu-id auto-assign tak ditemukan di 'show onu-info all' untuk MAC ini "
+            '(row Initial tak ada) — bind-onu kemungkinan gagal, TIDAK confirm.',
+            'readback',
+        )
+    if expected is not None and int(expected) != int(parsed):
+        raise OltSessionError(
+            f"onu-id device ({parsed}) BEDA dari yang disuplai pemanggil ({expected}) — "
+            'GAGAL KERAS, tidak confirm id mana pun.',
+            'mismatch',
+        )
+    return int(parsed)
 
 
 def _require_pon(params: dict) -> int:
@@ -112,6 +157,15 @@ def _require_onu_id(params: dict) -> int:
     return onu_id
 
 
+def _optional_onu_id(params: dict) -> 'int | None':
+    """onu_id OPSIONAL (cross-check, v0.23.8.5b). Absen/None/'' → None.
+    Kalau ada, divalidasi rentang 1-64 (nilai ngawur ditolak dini)."""
+    v = params.get('onu_id')
+    if v is None or v == '':
+        return None
+    return _require_onu_id(params)
+
+
 def _require_mac(params: dict) -> str:
     """Normalisasi MAC ke format colon lowercase (xx:xx:xx:xx:xx:xx)."""
     raw = str(params.get('mac') or '').strip().lower()
@@ -121,13 +175,10 @@ def _require_mac(params: dict) -> str:
     return ':'.join(hexonly[i:i + 2] for i in range(0, 12, 2))
 
 
-def _build_bind_onu_commands(mac: str, onu_id: int, name, desc) -> list[str]:
-    """Rakit urutan command node `interface epon <PON>` — MURNI (deterministik,
-    bisa diuji tanpa device). `bind-onu` TANPA onu-id (device meng-assign;
-    sintaks TERUJI v0.23.7), `onu confirm onu-id <N>` memakai onu_id pemanggil.
-
-    name opsional (token aman), desc opsional (bebas spasi, dibungkus kutip —
-    kutip ganda di dalam ditolak agar tak merusak sintaks CLI)."""
+def _build_bind_command(mac: str, name, desc) -> str:
+    """MURNI — string `bind-onu mac <MAC> [name <N>] [desc "<D>"]` (TANPA onu-id;
+    device auto-assign). name opsional (token aman), desc opsional (bebas spasi,
+    dibungkus kutip — kutip ganda di dalam ditolak agar tak merusak sintaks)."""
     bind = f'bind-onu mac {mac}'
     if name is not None and str(name) != '':
         name = str(name)
@@ -141,8 +192,14 @@ def _build_bind_onu_commands(mac: str, onu_id: int, name, desc) -> list[str]:
         if len(desc) > 60:
             raise OltSessionError("Param 'desc' terlalu panjang (maks 60)", 'params')
         bind += f' desc "{desc}"'
+    return bind
 
-    return [bind, f'onu confirm onu-id {onu_id}']
+
+def _build_bind_onu_commands(mac: str, onu_id: int, name, desc) -> list[str]:
+    """[LEGACY pra-v0.23.8.5b, dipertahankan untuk test lama] bind + confirm
+    dgn onu_id caller-supplied (tanpa read-back). Alur produksi kini pakai
+    execute_apply → _run_e04id_bind_with_readback (confirm pakai id device)."""
+    return [_build_bind_command(mac, name, desc), f'onu confirm onu-id {onu_id}']
 
 
 def _run_e04id_epon_session(
@@ -222,3 +279,77 @@ def _logout_e04id(child: 'pexpect.spawn') -> None:
     except Exception:
         pass
     hsgq_common._logout_hsgq(child)
+
+
+def _run_e04id_bind_with_readback(
+    connection: dict,
+    pon: int,
+    mac: str,
+    bind_command: str,
+    expected_onu_id: 'int | None',
+    overall_timeout: float = 120.0,
+) -> dict:
+    """v0.23.8.5b — bind-onu → `show onu-info all` (baca onu-id auto-assign
+    device) → verify (mismatch/not-found = GAGAL KERAS) → `onu confirm onu-id
+    <id-device>`. Confirm memakai id HASIL-BACA DEVICE, bukan caller mentah.
+
+    Login/enable/node = pola _run_e04id_epon_session. Navigasi mode (bind di
+    `interface epon`, lalu `end`→`#` untuk `show onu-info all`, lalu
+    `configure`→`interface epon` untuk `onu confirm`) BELUM divalidasi ke
+    device nyata (unreachable saat ini) — WAJIB dicek live sebelum go. Parser
+    onu-id juga ASUMSI-format (lihat _parse_assigned_onu_id)."""
+    host = connection['host']
+    port = connection.get('port') or 22
+    username = connection['username']
+    password = connection['password']
+
+    args = hsgq_common.SSH_OPTIONS + ['-p', str(port), f'{username}@{host}']
+    child = pexpect.spawn('ssh', args, timeout=15, encoding='utf-8', codec_errors='replace')
+    deadline = time.monotonic() + overall_timeout
+
+    try:
+        try:
+            index = child.expect([INITIAL_PASSWORD_RE, pexpect.TIMEOUT, pexpect.EOF], timeout=15)
+            if index != 0:
+                raise OltSessionError('Tidak ada prompt password (negosiasi/konektivitas)', 'login')
+            child.sendline(password)
+        finally:
+            password = None  # noqa: F841
+
+        index = child.expect(
+            [PROMPT_RE, hsgq_common.PERMISSION_DENIED_RE, INITIAL_PASSWORD_RE, pexpect.TIMEOUT, pexpect.EOF],
+            timeout=30,
+        )
+        if index == 1:
+            raise OltSessionError('Device menolak kredensial ("Permission denied")', 'login')
+        if index == 2:
+            raise OltSessionError('Prompt password KEDUA muncul — menolak menjawabnya', 'login')
+        if index in (3, 4):
+            raise OltSessionError('Tidak ada prompt CLI awal setelah login', 'login')
+
+        _run_command_or_raise(child, 'enable', deadline)
+        _run_command_or_raise(child, 'configure', deadline)
+        _run_command_or_raise(child, f'interface epon {pon}', deadline)
+        # 1. bind (device auto-assign onu-id; TANPA onu-id di command)
+        _run_command_or_raise(child, bind_command, deadline)
+        # 2. keluar ke privileged '#' untuk exec `show onu-info all` (read-only,
+        #    paging '--More--' ditangani run_command_and_capture/base)
+        _run_command_or_raise(child, 'end', deadline)
+        info = run_command_and_capture(child, 'show onu-info all', deadline)
+        # 3. parse + verify (GAGAL KERAS di sini kalau mismatch/not-found —
+        #    SEBELUM confirm apa pun)
+        parsed = _parse_assigned_onu_id(info, mac)
+        confirm_id = _resolve_confirm_onu_id(parsed, expected_onu_id)
+        # 4. confirm pakai id hasil-baca device
+        _run_command_or_raise(child, 'configure', deadline)
+        _run_command_or_raise(child, f'interface epon {pon}', deadline)
+        _run_command_or_raise(child, f'onu confirm onu-id {confirm_id}', deadline)
+        return {
+            'pon': pon,
+            'mac': mac,
+            'assigned_onu_id': parsed,       # dibaca dari device (sumber kebenaran)
+            'expected_onu_id': expected_onu_id,  # cross-check caller (opsional)
+            'confirmed_onu_id': confirm_id,
+        }
+    finally:
+        _logout_e04id(child)

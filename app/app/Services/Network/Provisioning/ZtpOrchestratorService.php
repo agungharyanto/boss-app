@@ -117,8 +117,13 @@ class ZtpOrchestratorService
                     return $oltAdapter->pushWanInternetOmci($olt, $this->buildOmciWanSpec($profile, $customer, $cpe, $options));
                 }
 
-                // tr069_device_driven (CT-COM) — CPE adapter (derive kredensial dari customer/paket).
-                return $cpeAdapter->pushWanInternet($cpe, ['requested_by' => $requestedBy]);
+                // tr069_device_driven (CT-COM) — CPE adapter. Kredensial WAN
+                // di-resolve dari profil (strategi static) / radcheck, dgn guard
+                // "username wajib ada di radcheck" (lihat resolveWanCredentials).
+                return $cpeAdapter->pushWanInternet($cpe, [
+                    'requested_by' => $requestedBy,
+                    'profile_wan_internet' => $profile->wanInternet,
+                ]);
             });
             if (! $ok) {
                 return $this->fail($stages, 'wan_internet', $profile, $resolution->source);

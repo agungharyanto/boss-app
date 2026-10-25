@@ -4,6 +4,7 @@ namespace App\Services\Network;
 
 use App\Models\Customer;
 use App\Models\OltDevice;
+use App\Models\ProvisioningWanInternet;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Sleep;
 use RuntimeException;
@@ -50,6 +51,7 @@ class CtcomActivationService
         private readonly TestCredentialSyncService $credentials,
         private readonly GenieAcsClientService $genieacs,
         private readonly OltSidecarClient $sidecar,
+        private readonly RadiusCredentialService $radiusCredentials,
     ) {}
 
     /**
@@ -182,13 +184,19 @@ class CtcomActivationService
      *
      * @return array<string, mixed>
      */
-    public function pushNetworkPolicy(Customer $customer, string $genieAcsDeviceId, ?int $requestedBy = null): array
+    public function pushNetworkPolicy(Customer $customer, string $genieAcsDeviceId, ?int $requestedBy = null, ?ProvisioningWanInternet $profileWan = null): array
     {
         $live = $this->credentials->deriveLiveWanParams($customer);
         if (($live['has_vlan_package'] ?? false) !== true) {
             throw new RuntimeException($live['message'] ?? 'Pelanggan belum punya paket ber-VLAN — atur ppp_package_id dulu.');
         }
         $vlan = (int) $live['vlan_pppoe'];
+
+        // Kredensial dari sumber BENAR (profil static / radcheck / fallback) +
+        // GUARD KERAS "username wajib ada di radcheck" — BUKAN lagi username
+        // {cid}@ppp.bajastu.id buta dari deriveLiveWanParams (yang bisa memutus
+        // PPPoE pelanggan termigrasi, insiden 2026-10-25).
+        $wanCred = $this->resolveWanCredentials($customer, $profileWan);
 
         // Resolve WAN PPPoE internet DINAMIS by VLAN — nomor WCD CT-COM berubah-ubah
         // (3->5->7, terbukti), JANGAN hardcode index (#1 doc).
@@ -200,8 +208,8 @@ class CtcomActivationService
         $result = $this->genieacs->sendTask($genieAcsDeviceId, [
             'name' => 'setParameterValues',
             'parameterValues' => [
-                ["{$path}.Username", $live['username'], 'xsd:string'],
-                ["{$path}.Password", $live['password'], 'xsd:string'],
+                ["{$path}.Username", $wanCred['username'], 'xsd:string'],
+                ["{$path}.Password", $wanCred['password'], 'xsd:string'],
                 ["{$path}.NATEnabled", false, 'xsd:boolean'],
                 ['InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.DHCPServerEnable', false, 'xsd:boolean'],
             ],
@@ -210,10 +218,85 @@ class CtcomActivationService
         return [
             'wan_path' => $path,
             'vlan' => $vlan,
-            'username' => $live['username'],
+            'username' => $wanCred['username'],
             'task_id' => $result['task_id'] ?? null,
             'connection_request_ok' => $result['connection_request_ok'] ?? null,
         ];
+    }
+
+    /**
+     * Resolve kredensial WAN PPPoE yang AKAN dipush ke device, berurutan
+     * (v0.23.8.6c, menutup backlog 5.2a / insiden 2026-10-25):
+     *   a. profil strategi `static` → username/password static profil;
+     *   b. derive / tanpa profil → RadiusCredentialService::lookupForCustomer
+     *      (username+password yang BENAR-BENAR ada di radcheck);
+     *   c. fallback {cid}@ppp.bajastu.id — HANYA pelanggan baru tanpa radcheck,
+     *      dan HANYA setelah writeRadcheck sukses (alur aktivasi lama).
+     * GUARD KERAS: username final WAJIB punya baris radcheck; kalau tidak →
+     * throw, TIDAK push apa pun (cegah device auth dgn username tak-ada-di-RADIUS
+     * yang memutus PPPoE pelanggan).
+     *
+     * @return array{username: string, password: string}
+     */
+    public function resolveWanCredentials(Customer $customer, ?ProvisioningWanInternet $profileWan = null): array
+    {
+        $username = null;
+        $password = null;
+
+        // a. profil static.
+        if ($profileWan !== null
+            && $profileWan->pppoe_username_strategy === 'static'
+            && ($profileWan->pppoe_username_static ?? '') !== '') {
+            $username = $profileWan->pppoe_username_static;
+            if ($profileWan->pppoe_password_strategy === 'static' && ($profileWan->pppoe_password_static ?? '') !== '') {
+                $password = $profileWan->pppoe_password_static;
+            }
+        }
+
+        // b. derive → radcheck lookup (by customer).
+        if ($username === null) {
+            $cred = $this->radiusCredentials->lookupForCustomer($customer);
+            if ($cred !== null) {
+                $username = $cred['username'];
+                $password = $password ?? $cred['password'];
+            }
+        }
+
+        // c. fallback pelanggan baru: writeRadcheck (bikin baris radcheck utk
+        //    {cid}@...) lalu pakai username itu. writeRadcheck throw kalau paket
+        //    tak ber-VLAN.
+        if ($username === null) {
+            $live = $this->credentials->deriveLiveWanParams($customer);
+            $this->writeRadcheck($customer);
+            $username = $live['username'];
+            $password = $password ?? $live['password'];
+        }
+
+        // Password dari radcheck utk username FINAL kalau belum ketemu.
+        if ($password === null) {
+            $row = DB::connection('radius')->table('radcheck')
+                ->where('username', $username)
+                ->where('attribute', 'Cleartext-Password')
+                ->first();
+            $password = $row->value ?? null;
+        }
+
+        // GUARD KERAS.
+        $exists = DB::connection('radius')->table('radcheck')
+            ->where('username', $username)
+            ->where('attribute', 'Cleartext-Password')
+            ->exists();
+        if (! $exists) {
+            throw new RuntimeException(
+                "GUARD: username PPPoE \"{$username}\" tidak punya baris radcheck — menolak push WAN "
+                .'(cegah device auth dengan username yang tidak ada di RADIUS → PPPoE pelanggan putus).'
+            );
+        }
+        if ($password === null || $password === '') {
+            throw new RuntimeException("GUARD: password PPPoE untuk \"{$username}\" tak ditemukan di radcheck.");
+        }
+
+        return ['username' => $username, 'password' => (string) $password];
     }
 
     /**
@@ -397,15 +480,20 @@ class CtcomActivationService
      */
     public function activate(OltDevice $oltDevice, Customer $customer, string $sn, string $genieAcsDeviceId, ?int $requestedBy = null): array
     {
-        $radcheck = $this->writeRadcheck($customer);
+        // pushNetworkPolicy me-resolve kredensial dari sumber BENAR + menulis
+        // radcheck sendiri bila perlu (jalur c, pelanggan baru) + GUARD username
+        // wajib ada di radcheck. Jadi TIDAK ada lagi writeRadcheck terpisah di sini
+        // — mencegah double-write & double-identity {cid}@... vs nomor-telepon
+        // untuk pelanggan termigrasi (insiden 2026-10-25). Username final (yang
+        // benar-benar dipush) dipakai untuk poll radacct.
         $policy = $this->pushNetworkPolicy($customer, $genieAcsDeviceId, $requestedBy);
-        $poll = $this->pollRadacctConnected($radcheck['username']);
+        $poll = $this->pollRadacctConnected($policy['username']);
 
         if ($poll['connected'] !== true) {
             return [
                 'ok' => false,
                 'stage' => 'poll_radacct',
-                'radcheck' => $radcheck,
+                'username' => $policy['username'],
                 'policy' => $policy,
                 'poll' => $poll,
                 'bridge_present' => null,
@@ -423,7 +511,7 @@ class CtcomActivationService
         return [
             'ok' => true,
             'stage' => 'done',
-            'radcheck' => $radcheck,
+            'username' => $policy['username'],
             'policy' => $policy,
             'poll' => $poll,
             'bridge_present' => $bridgePresent,

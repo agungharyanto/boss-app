@@ -70,6 +70,7 @@ final class CtcomCpeAdapter implements CpeProvisioningAdapter
             $this->resolveCustomer($cpe),
             $this->resolveGenieAcsDeviceId($cpe),
             $spec['requested_by'] ?? null,
+            $spec['profile_wan_internet'] ?? null,  // kredensial dari profil kalau strategi static
         );
     }
 

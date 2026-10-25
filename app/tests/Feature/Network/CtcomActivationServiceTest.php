@@ -4,10 +4,12 @@ namespace Tests\Feature\Network;
 
 use App\Models\Customer;
 use App\Models\OltDevice;
+use App\Models\ProvisioningWanInternet;
 use App\Services\Network\CtcomActivationService;
 use App\Services\Network\GenieAcsClientService;
 use App\Services\Network\OltSidecarClient;
 use App\Services\Network\RadcheckWriterService;
+use App\Services\Network\RadiusCredentialService;
 use App\Services\Network\TestCredentialSyncService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Sleep;
@@ -30,6 +32,22 @@ class CtcomActivationServiceTest extends TestCase
         DB::connection('radius')->statement(
             'CREATE TABLE radacct (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, acctstarttime TEXT, acctstoptime TEXT, framedipaddress TEXT, nasipaddress TEXT)'
         );
+        DB::connection('radius')->statement(
+            'CREATE TABLE radcheck (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, attribute TEXT, op TEXT, value TEXT)'
+        );
+        DB::connection('radius')->statement(
+            'CREATE TABLE radreply (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, attribute TEXT, op TEXT, value TEXT)'
+        );
+        // Username yang dipakai deriveStub() — supaya guard radcheck (v0.23.8.6c)
+        // lolos di test pushNetworkPolicy/activate yang memang mengharapkan sukses.
+        $this->insertRadcheck('u@ppp.bajastu.id', 'wifijadipasti');
+    }
+
+    private function insertRadcheck(string $username, string $password): void
+    {
+        DB::connection('radius')->table('radcheck')->insert([
+            'username' => $username, 'attribute' => 'Cleartext-Password', 'op' => ':=', 'value' => $password,
+        ]);
     }
 
     private function seedActiveRadacct(string $username, string $ip = '10.0.1.139'): void
@@ -48,12 +66,15 @@ class CtcomActivationServiceTest extends TestCase
         ?GenieAcsClientService $genieacs = null,
         ?RadcheckWriterService $radcheck = null,
         ?TestCredentialSyncService $credentials = null,
+        ?RadiusCredentialService $radiusCredentials = null,
     ): CtcomActivationService {
         return new CtcomActivationService(
             $radcheck ?? $this->createMock(RadcheckWriterService::class),
             $credentials ?? $this->createMock(TestCredentialSyncService::class),
             $genieacs ?? $this->createMock(GenieAcsClientService::class),
             $sidecar ?? $this->createMock(OltSidecarClient::class),
+            // Nyata (bukan mock): query ke koneksi radius sqlite in-memory test.
+            $radiusCredentials ?? app(RadiusCredentialService::class),
         );
     }
 
@@ -246,6 +267,89 @@ class CtcomActivationServiceTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('VLAN 10 tidak ditemukan');
         $this->makeService(genieacs: $genieacs, credentials: $this->deriveStub())->pushNetworkPolicy($this->customer(), 'DEV');
+    }
+
+    // ---- resolveWanCredentials (v0.23.8.6c, insiden 2026-10-25) ----------
+
+    /**
+     * Pelanggan termigrasi v0.8.4 (#57): username PPPoE = NOMOR TELEPON, sudah ada
+     * di radcheck. Tanpa profil static → jalur (b) lookupForCustomer mengembalikan
+     * username+password NYATA dari radcheck, BUKAN {cid}@ppp.bajastu.id.
+     */
+    public function test_resolve_wan_credentials_uses_real_radcheck_username_for_migrated_customer(): void
+    {
+        $this->insertRadcheck('085601070033', 'passreal');
+        $c = $this->customer('Khikmatul', '245595852');
+        $c->phone_number = '085601070033';
+
+        $cred = $this->makeService(credentials: $this->deriveStub())->resolveWanCredentials($c);
+
+        $this->assertSame('085601070033', $cred['username']);
+        $this->assertSame('passreal', $cred['password']);
+    }
+
+    /** Pelanggan TANPA radcheck & tanpa writeRadcheck yang menulis → guard melempar, nol push. */
+    public function test_resolve_wan_credentials_guard_throws_when_username_absent_from_radcheck(): void
+    {
+        $credentials = $this->createMock(TestCredentialSyncService::class);
+        $credentials->method('deriveLiveWanParams')->willReturn([
+            'has_vlan_package' => true,
+            'username' => 'hantu@ppp.bajastu.id',
+            'password' => 'x',
+            'framed_pool' => 'PPPOE-REMOTE',
+            'vlan_pppoe' => 10,
+        ]);
+        // writeRadcheck di-mock noop (TIDAK menulis baris) → username tetap absen.
+        $radcheck = $this->createMock(RadcheckWriterService::class);
+        $c = $this->customer('Tanpa', '999000');
+        $c->phone_number = '081111'; // tak ada di radcheck
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('tidak punya baris radcheck');
+        $this->makeService(radcheck: $radcheck, credentials: $credentials)->resolveWanCredentials($c);
+    }
+
+    /** Pelanggan BARU: jalur (c) fallback {cid}@... — writeRadcheck menulis dulu, lalu guard lolos. */
+    public function test_resolve_wan_credentials_falls_back_to_cid_after_write_radcheck_for_new_customer(): void
+    {
+        $credentials = $this->createMock(TestCredentialSyncService::class);
+        $credentials->method('deriveLiveWanParams')->willReturn([
+            'has_vlan_package' => true,
+            'username' => '777001@ppp.bajastu.id',
+            'password' => 'wifijadipasti',
+            'framed_pool' => 'PPPOE-REMOTE',
+            'vlan_pppoe' => 10,
+        ]);
+        // writeRadcheck NYATA menulis baris (simulasi efek RadcheckWriterService).
+        $radcheck = $this->createMock(RadcheckWriterService::class);
+        $radcheck->method('write')->willReturnCallback(function (string $u, string $p): void {
+            $this->insertRadcheck($u, $p);
+        });
+        $c = $this->customer('Baru', '777001'); // tanpa phone/legacy → kandidat = 777001@ppp.bajastu.id
+
+        $cred = $this->makeService(radcheck: $radcheck, credentials: $credentials)->resolveWanCredentials($c);
+
+        $this->assertSame('777001@ppp.bajastu.id', $cred['username']);
+        $this->assertSame('wifijadipasti', $cred['password']);
+    }
+
+    /** Profil strategi static: username DAN password dari profil (bukan dari radcheck). */
+    public function test_resolve_wan_credentials_uses_static_profile_username_and_password(): void
+    {
+        // radcheck punya password BEDA utk username yg sama → buktikan password
+        // diambil dari profil static, bukan radcheck.
+        $this->insertRadcheck('085601070033', 'passradcheck');
+        $profile = new ProvisioningWanInternet([
+            'pppoe_username_strategy' => 'static',
+            'pppoe_username_static' => '085601070033',
+            'pppoe_password_strategy' => 'static',
+            'pppoe_password_static' => 'passprofile',
+        ]);
+
+        $cred = $this->makeService()->resolveWanCredentials($this->customer(), $profile);
+
+        $this->assertSame('085601070033', $cred['username']);
+        $this->assertSame('passprofile', $cred['password']);
     }
 
     // ---- verifyBridgePresent --------------------------------------------

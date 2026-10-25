@@ -566,3 +566,28 @@ Gap H5 "E04ID onu_id read-back" dari status "temuan, wiring=8.5b" → **SUDAH DI
 pulih), (3) E04ID CILED (10.168.100.5) unreachable STACK-WIDE (sidecar nol route 10.168.100.0/24; librenms
 ping 100% loss) — kemungkinan tunnel NAS CILED down / OLT mati (infra terpisah dari GenieACS). Live-run
 butuh device+OLT reachable dulu.
+
+### H7. v0.23.8.5b — TERVERIFIKASI LIVE DI MODEM PELANGGAN (2026-10-25)
+
+Blocker H6 tuntas: E04ID-Cileg reachable kembali (setelah pulih WireGuard/IPAM), dan live-run dijalankan
+pada modem pelanggan nyata **ZICG2976A4FC** (GM219, customer #57 Khikmatul Khoeriyah, cpe_device #261).
+
+- **Gap onu-id read-back E04ID — TERTUTUP (terbukti hardware).** Admisi `bind-onu mac f8:6c:e1:76:a4:14
+  name <N> desc "<D>"` di `interface epon 3` → device **auto-assign onu-id 15** (BUKAN 1) → `show onu-info
+  all` (di node `configure`) membaca baris itu → `onu confirm onu-id 15` → `show onu-info mac` konfirmasi
+  `Authrize state TRUE / Status Online / LOID ZICG2976A4FC`. Parser `<pon>/<onu-id>`+MAC se-baris & navigasi
+  mode (bind@epon → `end`→`#` → `show` → `configure`→epon → confirm) **terbukti benar**. **Pelajaran
+  onu-id**: JANGAN hardcode `onu confirm onu-id 1` — selalu bind → baca `show onu-info` → ambil onu-id baris
+  MAC itu → confirm. Detail CLI: `docs/omci/hsgq-e04id-cli-reference.md` (blok "SINTAKS TERVERIFIKASI").
+- **Naming E04ID = NO-OP** (dikonfirmasi): `bind-onu ... name ... desc "..."` SUDAH mengisi name+desc ONU;
+  tak ada langkah penamaan OLT terpisah. `CtcomOltAdapter::applyNaming()` short-circuit no-op untuk ponMode
+  EPON (tidak memanggil op naming OMCI G02ID `set_ont_naming`).
+- **Jalur TR-069 CT-COM terverifikasi di modem pelanggan** (via `CtcomCpeAdapter` langsung, bukan
+  `provision()` penuh): `pushWanBridge` set `WCD.3(VID172).X_CT-COM_LanInterface=WLANConfiguration.4` +
+  `-DHCPEnable=false`; `pushSsid` guest 2.4g instance 4 = "TOKEN WIFI" open (Enable=true, tanpa AddObject);
+  `disableUnboundWlan` mematikan WLAN.1 (primary, unbound). Semua diverifikasi via refreshObject
+  before/after — WLAN.1 primary & WAN10 (PPPoE `extIP 10.0.0.243`) TIDAK berubah saat perubahan bridge/SSID
+  (gotcha "WAN reset WLAN/DHCP" tidak terjadi dgn urutan bridge→(stabil)→ssid).
+- **LanInterface diturunkan dari instance yang BENAR-BENAR ada** (bukan `4,8` buta): device 4-WLAN hanya
+  dapat `WLANConfiguration.4`. `disableUnboundWlan` (tahap baru orkestrator, setelah ssid): WLAN yang ada
+  tapi tak dipakai SSID profil & tak di-bind LanInterface WAN mana pun → Enable=false.

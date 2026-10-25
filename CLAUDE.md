@@ -8986,6 +8986,35 @@ terpisah, sehingga delivery pesan masuk jadi non-deterministik dan merusak isola
 sekarang mencegah ini otomatis (lihat WhatsappSessionService — validasi nomor duplikat saat pairing
 selesai).
 
+## OMCI/ZTP gotcha E04ID + CT-COM — terverifikasi hardware (v0.23.8.5b, 2026-10-25)
+
+Dari live-run NYATA di modem pelanggan `ZICG2976A4FC` (E04ID-Cileg, customer #57). Detail penuh:
+`docs/omci/hsgq-e04id-cli-reference.md` + `docs/omci/ztp-dynamic-config-design.md` Bagian H7.
+
+- **`bind-onu` E04ID TANPA onu-id — device AUTO-ASSIGN.** Sintaks yang BEKERJA (di `configure` →
+  `interface epon <PON>`): `bind-onu mac <MAC> name <NamaTanpaSpasi> desc "<Nama - Kontak>"` — TANPA onu-id,
+  TANPA onu-type (beda dari observasi config lama `bind-onu <onu-id> mac ... onu-type ...`). Device meng-
+  assign onu-id sendiri; **JANGAN hardcode `onu confirm onu-id 1`** — modem ZICG2976A4FC di-assign **15**.
+  Selalu: bind → baca `show onu-info` → ambil onu-id baris MAC itu → `onu confirm onu-id <id-device>`.
+- **`show onu-info ...` HANYA di node `configure` (`OLT-Cileg(config)#`), BUKAN enable (`OLT-Cileg#`).** Di
+  enable = "Unknown command" (`node:6`). `show onu-info all` (semua ONU; pager — `terminal length 0` di
+  enable utk matikan) atau `show onu-info mac <MAC>` (satu ONU, ringkas, tanpa pager — cara terbaik ambil
+  onu-id). Spasi command di PTY OLT baik-baik saja; "spasi hilang" dulu sebenarnya device menolak token di
+  node salah.
+- **Cocokkan ONU TR-069 ↔ fisik lewat LOID/serial, BUKAN MAC.** Satu ONU punya MAC berbeda per layer: MAC
+  PON/akses (mis. `f8:6c:e1:76:a4:14`, yang muncul di tabel ONU OLT) ≠ MAC WAN/TR-069 (`...a4:fc`/`...a4:fd`
+  di GenieACS). OLT `show onu-info mac` menampilkan field **`LOID`** = serial (`ZICG2976A4FC`) = GenieACS
+  device `_id` (`F86CE1-GM219-ZICG2976A4FC`). Jadi jangan simpulkan "MAC beda = ONU beda" — cocokkan via
+  serial/LOID. (Catatan: E04ID ini XPON — ONU GPON bisa teregistrasi, jadi "GPON tak bisa di EPON" keliru.)
+- **`cpe_devices` TIDAK menyimpan kolom `mac_address`.** Identitas device = `genieacs_device_id` +
+  `serial_number`. Jangan query `cpe_devices.mac_address` (tak ada); untuk MAC, baca tree GenieACS atau
+  tabel ONU OLT.
+- **Backlog (dicatat, belum dikerjakan):** op sidecar `hsgq_e04id.bind_onu` READ-BACK memakai jalur one-shot
+  exec yang salah-node untuk `show onu-info all` (padahal butuh node `configure` interaktif) — live-run
+  2026-10-25 dilakukan via sesi pexpect manual, bukan op sidecar; op sidecar perlu diperbaiki ke node yang
+  benar sebelum dipakai produksi. Juga: guard 5GHz di `pushSsid` (hard-map 1/4/5/8 tanpa cek jumlah WLAN),
+  dan replay-safety ZTE.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

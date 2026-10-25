@@ -13,7 +13,13 @@ from app.vendors.base import (
 
 
 def test_hsgq_e04id_only_exposes_show_version_as_teruji_operation():
-    assert hsgq_e04id.OPERATIONS == {'show_version': 'show version', 'show_onu_info_all': 'show onu-info all'}
+    # show_version = one-shot exec; show onu-info di-pindah ke OPERATIONS_CONFIG_READ
+    # (v0.23.8.5b: HANYA valid di node config, bukan enable/exec).
+    assert hsgq_e04id.OPERATIONS == {'show_version': 'show version'}
+    assert hsgq_e04id.OPERATIONS_CONFIG_READ == {
+        'show_onu_info_all': 'show onu-info all',
+        'show_onu_info_mac': 'show onu-info mac {mac}',
+    }
 
 
 def test_hsgq_g02id_only_exposes_show_version_as_teruji_operation():
@@ -854,6 +860,108 @@ def test_e04id_execute_apply_rejects_unknown_write_operation():
     with pytest.raises(OltSessionError) as exc:
         hsgq_e04id.execute_apply({}, 'operasi_tak_dikenal', {'pon': 1, 'mac': 'ec9b2df2f639', 'onu_id': 1})
     assert exc.value.stage == 'operation'
+
+
+# --- E04ID parser read-back — fixture output NYATA 2026-10-25 (ZICG2976A4FC) ---
+
+_E04ID_MAC_DETAIL = """show onu-info mac f8:6c:e1:76:a4:14
+----------------------------------------------------------------------------------------------------
+ PON ID                        : 3
+ ONU ID                        : 15
+ ONU LLID                      : 19
+ ONU Name                      : KhikmatulKhoeriyah
+ Authrize mode                 : mac
+ Authrize state                : TRUE
+ Status                        : Online
+ Mac address                   : f8:6c:e1:76:a4:14
+ LOID                          : ZICG2976A4FC
+OLT-Cileg(config)#"""
+
+_E04ID_TABLE = """show onu-info all
+ PON/ONU     Mac-Address    Status   Auth  Cfg     Reg-time            ONU-Name     ONU-Desc
+ 3/14    d4:f7:56:ee:0d:d4 Online    TRUE  TRUE  2026/10/25 04:50:45      Miftahul     Miftaful And
+ 3/15    f8:6c:e1:76:a4:14 Online    TRUE  TRUE  2026/10/25 18:13:50      KhikmatulKho Khikmatul Kh
+ 3/16    50:70:97:65:dc:ff Online    TRUE  TRUE  2026/10/25 04:50:48      Darmanto     Darmanto - 2
+OLT-Cileg(config)#"""
+
+
+def test_e04id_parse_mac_detail_real_output():
+    assert hsgq_e04id._parse_mac_detail(_E04ID_MAC_DETAIL, 'f8:6c:e1:76:a4:14') == {'pon': 3, 'onu_id': 15}
+
+
+def test_e04id_parse_mac_detail_absent_mac_returns_none():
+    assert hsgq_e04id._parse_mac_detail(_E04ID_MAC_DETAIL, 'aa:bb:cc:dd:ee:ff') is None
+
+
+def test_e04id_parse_assigned_onu_id_from_table_real_output():
+    assert hsgq_e04id._parse_assigned_onu_id(_E04ID_TABLE, 'f8:6c:e1:76:a4:14') == 15
+
+
+def test_e04id_parse_auth_true_real_output():
+    assert hsgq_e04id._parse_auth_true(_E04ID_MAC_DETAIL, 'f8:6c:e1:76:a4:14') is True
+    assert hsgq_e04id._parse_auth_true(_E04ID_MAC_DETAIL, 'aa:bb:cc:dd:ee:ff') is False
+
+
+def test_e04id_bind_with_readback_command_sequence(monkeypatch):
+    """Urutan command bind-with-readback (mock pexpect) — read-back di node
+    config (show onu-info mac), confirm pakai onu-id device, verify Auth, save."""
+    recorded = []
+
+    def fake_login(connection, deadline):
+        return object()  # fake child; semua interaksi di-mock di bawah
+
+    def fake_run_or_raise(child, command, deadline):
+        recorded.append(command)
+        return ''
+
+    def fake_capture(child, command, deadline):
+        recorded.append(command)
+        if command.startswith('show onu-info mac'):
+            return _E04ID_MAC_DETAIL
+        if command.startswith('copy running-config'):
+            return ' Configuration saved successfully '
+        return ''
+
+    monkeypatch.setattr(hsgq_e04id, '_e04id_login', fake_login)
+    monkeypatch.setattr(hsgq_e04id, '_logout_e04id', lambda child: None)
+    monkeypatch.setattr(hsgq_e04id, '_run_command_or_raise', fake_run_or_raise)
+    monkeypatch.setattr(hsgq_e04id, 'run_command_and_capture', fake_capture)
+
+    bind_cmd = 'bind-onu mac f8:6c:e1:76:a4:14 name KhikmatulKhoeriyah desc "Khikmatul Khoeriyah - 245595852"'
+    result = hsgq_e04id._run_e04id_bind_with_readback({}, 3, 'f8:6c:e1:76:a4:14', bind_cmd, None)
+
+    assert recorded == [
+        'interface epon 3',
+        bind_cmd,
+        'exit',
+        'show onu-info mac f8:6c:e1:76:a4:14',
+        'interface epon 3',
+        'onu confirm onu-id 15',
+        'exit',
+        'show onu-info mac f8:6c:e1:76:a4:14',
+        'end',
+        'copy running-config startup-config',
+    ]
+    assert result['assigned_onu_id'] == 15
+    assert result['confirmed_onu_id'] == 15
+    assert result['auth_true'] is True
+    assert result['saved'] is True
+
+
+def test_e04id_bind_with_readback_cross_check_mismatch_fails_before_confirm(monkeypatch):
+    """expected_onu_id caller BEDA dari device → GAGAL KERAS sebelum confirm."""
+    recorded = []
+    monkeypatch.setattr(hsgq_e04id, '_e04id_login', lambda c, d: object())
+    monkeypatch.setattr(hsgq_e04id, '_logout_e04id', lambda child: None)
+    monkeypatch.setattr(hsgq_e04id, '_run_command_or_raise', lambda c, cmd, d: recorded.append(cmd) or '')
+    monkeypatch.setattr(hsgq_e04id, 'run_command_and_capture',
+                        lambda c, cmd, d: recorded.append(cmd) or (_E04ID_MAC_DETAIL if cmd.startswith('show onu-info mac') else ''))
+
+    with pytest.raises(OltSessionError) as exc:
+        # device assign 15, caller suplai 7 → mismatch
+        hsgq_e04id._run_e04id_bind_with_readback({}, 3, 'f8:6c:e1:76:a4:14', 'bind-onu mac f8:6c:e1:76:a4:14', 7)
+    assert exc.value.stage == 'mismatch'
+    assert 'onu confirm' not in ' '.join(recorded)  # TIDAK pernah confirm
 
 
 # --- E04ID read-back onu-id (v0.23.8.5b) — logika verify MURNI, nol device ---

@@ -169,18 +169,31 @@ final class CtcomOltAdapter implements OltProvisioningAdapter
     }
 
     /**
-     * Penamaan ONU "Nama - CID". Delegasi ke CtcomActivationService::
-     * applyOmciNaming (resolveOnuBySn + set_ont_naming sidecar). `$spec` wajib
-     * membawa `customer` (Customer) + `sn` (string).
+     * Penamaan ONU "Nama - CID".
      *
-     * CATATAN E04ID: applyOmciNaming saat ini memakai `set_ont_naming` (OMCI
-     * G02ID, resolve gpon 1/2). Penamaan E04ID lewat `onu description <id>`
-     * (CLI, terbukti manual v0.23.7) BELUM punya operasi sidecar tersendiri —
-     * di-wire saat orkestrator device v0.23.8.5. Untuk G02ID (GPON) delegasi
-     * ini sudah penuh & teruji.
+     * E04ID (EPON) = NO-OP TERDOKUMENTASI (v0.23.8.5b, terverifikasi device):
+     * `bind-onu mac <MAC> name <N> desc "<D>"` saat admisi SUDAH mengisi
+     * name+desc ONU (dikonfirmasi live 2026-10-25 di modem ZICG2976A4FC —
+     * `show onu-info mac` menampilkan ONU-Name/ONU-Desc yang benar). Jadi tak
+     * ada langkah penamaan OLT terpisah untuk E04ID, dan op naming OMCI G02ID
+     * (`set_ont_naming`, resolve gpon 1/2) TIDAK dipanggil untuknya (akan salah
+     * vendor/node). Lihat docs/omci/hsgq-e04id-cli-reference.md.
+     *
+     * G02ID (GPON) = delegasi penuh ke CtcomActivationService::applyOmciNaming
+     * (resolveOnuBySn + set_ont_naming sidecar). `$spec` wajib membawa `customer`
+     * (Customer) + `sn` (string).
      */
     public function applyNaming(OltDevice $olt, array $spec): array
     {
+        if ($this->ponMode() === PonMode::Epon) {
+            // E04ID: name+desc sudah terisi saat bind-onu admisi → no-op.
+            return [
+                'named' => true,
+                'mode' => 'noop_bind_onu',
+                'note' => 'E04ID (EPON): name+desc diisi saat bind-onu admisi; penamaan OLT terpisah = no-op.',
+            ];
+        }
+
         $customer = $spec['customer'] ?? null;
         $sn = $spec['sn'] ?? null;
         if (! $customer instanceof Customer || ! is_string($sn) || $sn === '') {

@@ -200,6 +200,53 @@ final class CtcomCpeAdapter implements CpeProvisioningAdapter
         return ['configured' => $configured, 'pending' => $pending, 'addobject_issued' => $needAddObject];
     }
 
+    /**
+     * Matikan instance WLAN yang ADA di device tapi tak terpakai: bukan target
+     * SSID profil (`$ssidSpecs` → `wlanInstanceFor`) DAN tak di-bind
+     * `X_CT-COM_LanInterface` WAN mana pun. Idempoten (set Enable=false; instance
+     * yang sudah false tak berubah di device). Instance terpakai TIDAK disentuh.
+     *
+     * Contoh #261 (4-WLAN, profil guest-only instance 4, bridge VID172 bind WLAN.4):
+     * existing={1,2,3,4}, kept={4} → disable {1,2,3} (menutup WLAN.1 primary dkk).
+     *
+     * @param  array<int, array{wifi_role: WifiRole|string, band: SsidBand|string}>  $ssidSpecs
+     * @return array{existing: list<int>, kept: list<int>, disabled: list<int>}
+     */
+    public function disableUnboundWlan(CpeDevice $cpe, array $ssidSpecs): array
+    {
+        $deviceId = $this->resolveGenieAcsDeviceId($cpe);
+        $device = $this->genieacs()->findDeviceById($deviceId);
+        if ($device === null) {
+            throw new RuntimeException("Device GenieACS {$deviceId} tidak ditemukan — CPE belum Inform.");
+        }
+
+        $existing = $this->existingWlanInstances($device);
+
+        $covered = [];
+        foreach ($ssidSpecs as $spec) {
+            $covered[] = $this->wlanInstanceFor($this->asWifiRole($spec['wifi_role']), $this->asBand($spec['band']));
+        }
+        $kept = array_values(array_unique(array_merge($covered, $this->boundWlanInstances($device))));
+
+        $toDisable = array_values(array_filter(
+            $existing,
+            static fn (int $i): bool => ! in_array($i, $kept, true),
+        ));
+
+        if ($toDisable !== []) {
+            $params = [];
+            foreach ($toDisable as $i) {
+                $params[] = ["InternetGatewayDevice.LANDevice.1.WLANConfiguration.{$i}.Enable", false, 'xsd:boolean'];
+            }
+            $this->genieacs()->sendTask($deviceId, [
+                'name' => 'setParameterValues',
+                'parameterValues' => $params,
+            ], false);
+        }
+
+        return ['existing' => $existing, 'kept' => $kept, 'disabled' => $toDisable];
+    }
+
     public function verify(CpeDevice $cpe, array $expectation = []): array
     {
         $bridgeVlan = (int) ($expectation['bridge_vlan'] ?? 172);
@@ -290,6 +337,44 @@ final class CtcomCpeAdapter implements CpeProvisioningAdapter
         sort($out);
 
         return $out;
+    }
+
+    /**
+     * Instance WLANConfiguration yang di-bind oleh `X_CT-COM_LanInterface` WAN
+     * mana pun (WANPPPConnection/WANIPConnection di semua WCD) — di-parse dari
+     * referensi `...WLANConfiguration.<n>` di nilai LanInterface.
+     *
+     * @param  array<string, mixed>  $device
+     * @return list<int>
+     */
+    private function boundWlanInstances(array $device): array
+    {
+        $wcds = $device['InternetGatewayDevice']['WANDevice'][1]['WANConnectionDevice'] ?? [];
+        $out = [];
+        foreach ($wcds as $wcdKey => $wcd) {
+            if (! is_numeric($wcdKey) || ! is_array($wcd)) {
+                continue;
+            }
+            foreach (['WANPPPConnection', 'WANIPConnection'] as $connType) {
+                $conns = $wcd[$connType] ?? [];
+                if (! is_array($conns)) {
+                    continue;
+                }
+                foreach ($conns as $connKey => $conn) {
+                    if (! is_numeric($connKey) || ! is_array($conn)) {
+                        continue;
+                    }
+                    $lanIf = $conn['X_CT-COM_LanInterface']['_value'] ?? null;
+                    if (is_string($lanIf) && $lanIf !== '' && preg_match_all('/WLANConfiguration\.(\d+)/', $lanIf, $m)) {
+                        foreach ($m[1] as $n) {
+                            $out[] = (int) $n;
+                        }
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique($out));
     }
 
     private function asWifiRole(WifiRole|string $v): WifiRole

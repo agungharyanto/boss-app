@@ -65,6 +65,11 @@ final class UnsupportedCpeAdapter implements CpeProvisioningAdapter
         $this->reject('pushSsid');
     }
 
+    public function disableUnboundWlan(CpeDevice $cpe, array $ssidSpecs): array
+    {
+        $this->reject('disableUnboundWlan');
+    }
+
     public function verify(CpeDevice $cpe, array $expectation = []): array
     {
         $this->reject('verify');

@@ -4,6 +4,7 @@ namespace Tests\Feature\Network;
 
 use App\Enums\PonMode;
 use App\Models\CpeDevice;
+use App\Models\Customer;
 use App\Models\OltDevice;
 use App\Models\ProvisioningAdapter;
 use App\Services\Network\CtcomActivationService;
@@ -292,5 +293,106 @@ class ProvisioningAdapterRegistryTest extends TestCase
             'InternetGatewayDevice.LANDevice.1.WLANConfiguration.4,InternetGatewayDevice.LANDevice.1.WLANConfiguration.8',
             $this->lanInterfaceValueFrom($tasks),
         );
+    }
+
+    // ---- disableUnboundWlan: matikan WLAN yg tak dipakai, jangan sentuh yg dipakai
+
+    /**
+     * @param  list<int>  $boundInstances  instance WLAN yang di-bind LanInterface WAN
+     * @return array<string, mixed>
+     */
+    private function wlanDeviceWithBoundInstances(int $count, array $boundInstances): array
+    {
+        $wlan = [];
+        for ($i = 1; $i <= $count; $i++) {
+            $wlan[$i] = ['SSID' => ['_value' => "SSID{$i}"], 'Enable' => ['_value' => $i === 1]];
+        }
+        $lanIf = implode(',', array_map(
+            static fn (int $i): string => "InternetGatewayDevice.LANDevice.1.WLANConfiguration.{$i}",
+            $boundInstances,
+        ));
+
+        return [
+            '_id' => 'DEV-GENIE',
+            'InternetGatewayDevice' => [
+                'WANDevice' => ['1' => ['WANConnectionDevice' => [
+                    '3' => ['WANPPPConnection' => ['1' => [
+                        'Name' => ['_value' => '3_Other_B_VID_172'],
+                        'X_CT-COM_LanInterface' => ['_value' => $lanIf],
+                    ]]],
+                ]]],
+                'LANDevice' => ['1' => ['WLANConfiguration' => $wlan]],
+            ],
+        ];
+    }
+
+    /**
+     * @param  list<int>  $boundInstances
+     * @param  array<int, array<string, mixed>>  $ssidSpecs
+     * @return array{result: array<string, mixed>, tasks: list<array<string, mixed>>}
+     */
+    private function runDisableUnbound(int $count, array $boundInstances, array $ssidSpecs): array
+    {
+        $genie = $this->createMock(GenieAcsClientService::class);
+        $genie->method('findDeviceById')->willReturn($this->wlanDeviceWithBoundInstances($count, $boundInstances));
+        $tasks = [];
+        $genie->method('sendTask')->willReturnCallback(function (string $id, array $task, bool $cr) use (&$tasks) {
+            $tasks[] = $task;
+
+            return ['task_id' => 't1'];
+        });
+        $this->app->instance(GenieAcsClientService::class, $genie);
+
+        $cpe = new CpeDevice;
+        $cpe->genieacs_device_id = 'DEV-GENIE';
+
+        return ['result' => $this->cpe()->for('ctcom')->disableUnboundWlan($cpe, $ssidSpecs), 'tasks' => $tasks];
+    }
+
+    public function test_disable_unbound_wlan_4_wlan_device_turns_off_only_unused(): void
+    {
+        // profil guest-only (instance 4), bridge bind WLAN.4 → kept {4}, disable {1,2,3}
+        ['result' => $r, 'tasks' => $tasks] = $this->runDisableUnbound(4, [4], [
+            ['wifi_role' => 'guest_wifi', 'band' => '2.4g'],
+        ]);
+
+        $this->assertSame([1, 2, 3], $r['disabled']);
+        $this->assertContains(4, $r['kept']);
+
+        $names = array_column($tasks[0]['parameterValues'], 0);
+        foreach ([1, 2, 3] as $i) {
+            $this->assertContains("InternetGatewayDevice.LANDevice.1.WLANConfiguration.{$i}.Enable", $names);
+        }
+        $this->assertNotContains('InternetGatewayDevice.LANDevice.1.WLANConfiguration.4.Enable', $names);
+        foreach ($tasks[0]['parameterValues'] as $pv) {
+            $this->assertFalse($pv[1]); // semua Enable=false
+        }
+    }
+
+    public function test_disable_unbound_wlan_8_wlan_device_keeps_covered_and_bound(): void
+    {
+        // profil primary+guest 2.4g → covered {1,4}; bound {4}; disable {2,3,5,6,7,8}
+        ['result' => $r] = $this->runDisableUnbound(8, [4], [
+            ['wifi_role' => 'primary_wifi', 'band' => '2.4g'],
+            ['wifi_role' => 'guest_wifi', 'band' => '2.4g'],
+        ]);
+
+        $this->assertSame([2, 3, 5, 6, 7, 8], $r['disabled']);
+        $this->assertContains(1, $r['kept']);
+        $this->assertContains(4, $r['kept']);
+    }
+
+    public function test_ctcom_e04id_apply_naming_is_a_documented_noop(): void
+    {
+        // E04ID: name+desc sudah via bind-onu → naming OLT = no-op, TIDAK memanggil
+        // op naming OMCI G02ID (applyOmciNaming).
+        $svc = $this->createMock(CtcomActivationService::class);
+        $svc->expects($this->never())->method('applyOmciNaming');
+        $this->app->instance(CtcomActivationService::class, $svc);
+
+        $result = $this->olt()->for('hsgq_e04id')->applyNaming(new OltDevice, ['customer' => new Customer, 'sn' => 'ZICG2976A4FC']);
+
+        $this->assertTrue($result['named']);
+        $this->assertSame('noop_bind_onu', $result['mode']);
     }
 }

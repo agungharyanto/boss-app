@@ -131,6 +131,8 @@ class ZtpOrchestratorServiceTest extends TestCase
                     && in_array('TOKEN WIFI', $names, true);
             }))
             ->willReturn(['configured' => [1], 'pending' => [4], 'addobject_issued' => true]);
+        $this->cpeAdapter->expects($this->once())->method('disableUnboundWlan')
+            ->willReturn(['existing' => [1, 2, 3, 4], 'kept' => [1, 4], 'disabled' => [2, 3]]);
         $this->oltAdapter->expects($this->once())->method('applyNaming')->willReturn(['named_inline' => true]);
         $this->oltAdapter->expects($this->once())->method('saveConfig')->willReturn(['saved' => true]);
         // Orkestrator TIDAK PERNAH memanggil admit() (admisi = alur device terpisah/8.5b).
@@ -142,7 +144,7 @@ class ZtpOrchestratorServiceTest extends TestCase
         $this->assertSame('home', $result['profile']['slug']);
         $this->assertSame('package_default', $result['profile']['resolved_via']);
         $this->assertSame(
-            ['wan_internet', 'wan_bridge', 'ssid', 'naming', 'save'],
+            ['wan_internet', 'wan_bridge', 'ssid', 'disable_unbound_wlan', 'naming', 'save'],
             array_column($result['stages'], 'stage'),
         );
         $this->assertSame('tr069_device_driven', $result['stages'][0]['via']);

@@ -31,6 +31,16 @@ interface CpeProvisioningAdapter extends ProvisioningAdapter
      */
     public function pushSsid(CpeDevice $cpe, array $ssidSpecs): array;
 
+    /**
+     * Matikan (Enable=false) instance WLAN yang ADA di device tapi TIDAK dipakai:
+     * tidak tercakup SSID profil (`$ssidSpecs`) DAN tidak di `X_CT-COM_LanInterface`
+     * WAN mana pun. Dijalankan SETELAH pushSsid + pushWanBridge.
+     *
+     * @param  array<int, array<string, mixed>>  $ssidSpecs  spec SSID profil (role/band) — penentu "terpakai"
+     * @return array<string, mixed>
+     */
+    public function disableUnboundWlan(CpeDevice $cpe, array $ssidSpecs): array;
+
     /** @return array<string, mixed> */
     public function verify(CpeDevice $cpe, array $expectation = []): array;
 }

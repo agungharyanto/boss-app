@@ -138,6 +138,18 @@ class ZtpOrchestratorService
             }
         }
 
+        // 3c-bis. Matikan WLAN yang ADA di device tapi tak dipakai (bukan target
+        //         SSID profil & tak di-bind LanInterface WAN) — SETELAH ssid+bridge.
+        //         Hanya dijalankan kalau profil memang mengurus WiFi (punya SSID
+        //         ATAU WAN bridge) — jaga-jaga JANGAN mematikan semua WLAN pada
+        //         profil WAN-only yang tak menyentuh WiFi sama sekali.
+        if ($profile->ssids->isNotEmpty() || $profile->wanBridge !== null) {
+            $ok = $this->runStage($stages, 'disable_unbound_wlan', [], fn () => $cpeAdapter->disableUnboundWlan($cpe, $ssidSpecs));
+            if (! $ok) {
+                return $this->fail($stages, 'disable_unbound_wlan', $profile, $resolution->source);
+            }
+        }
+
         // 3d. Naming (OLT) + 3e. Save (OLT).
         $ok = $this->runStage($stages, 'naming', [], fn () => $oltAdapter->applyNaming($olt, [
             'customer' => $customer,

@@ -67,6 +67,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedNetworkProfileGroupPermissions();
         $this->seedHotspotPackagePermissions();
         $this->seedPppPackagePermissions();
+        $this->seedProvisioningProfilePermissions();
         $this->seedFiberNetworkPermissions();
         $this->seedUserManagementPermissions();
     }
@@ -552,6 +553,17 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedPppPackagePermissions(): void
     {
         $permissions = ['ppp_packages.view', 'ppp_packages.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
+    }
+
+    private function seedProvisioningProfilePermissions(): void
+    {
+        $permissions = ['provisioning_profiles.view', 'provisioning_profiles.manage'];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

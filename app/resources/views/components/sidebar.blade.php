@@ -67,6 +67,7 @@
                 || request()->routeIs('web.network-profile-groups.*')
                 || request()->routeIs('web.hotspot-packages.*')
                 || request()->routeIs('web.ppp-packages.*')
+                || request()->routeIs('web.provisioning-profiles.*')
                 // "Referrer" + "Rate Komisi" dipindah ke sini dari
                 // "Operasional" (komisi/keuangan).
                 || request()->routeIs('web.referrers.*')
@@ -121,6 +122,9 @@
                                 : null,
                             auth()->user()->can('viewAny', \App\Models\PppPackage::class)
                                 ? ['route' => 'web.ppp-packages.index', 'label' => __('Profil PPP')]
+                                : null,
+                            auth()->user()->can('viewAny', \App\Models\ProvisioningProfile::class)
+                                ? ['route' => 'web.provisioning-profiles.index', 'label' => __('Profil Provisioning')]
                                 : null,
                         ]),
                     ]

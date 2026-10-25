@@ -239,6 +239,11 @@
         @livewire('network.cpe-signal-history-graph', ['cpeDeviceId' => $device->id], key('cpe-signal-history-graph-'.$device->id))
     </div>
 
+    {{-- v0.23.8.6b — override Profil Provisioning (ZTP) + hasil resolver. --}}
+    <div class="bg-white border border-gray-200 rounded-md p-5 mt-6">
+        @livewire('network.cpe-provisioning-override', ['cpeDevice' => $device], key('cpe-provisioning-override-'.$device->id))
+    </div>
+
     {{-- v0.23.5 (revisi OPSI a) — panel Konfigurasi WAN ONU (Test),
          dipindah dari halaman Detail Pelanggan ke sini. HANYA untuk
          perangkat milik customer is_test_fixture. Paket/VLAN/username/

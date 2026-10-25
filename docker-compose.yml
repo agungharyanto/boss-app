@@ -1386,7 +1386,20 @@ networks:
         # VPN_SUBNET_CIDR (the OpenVPN client pool, 172.23.194.0/24) to
         # avoid any address overlap between "containers on boss-network"
         # and "NAS clients tunneled in over OpenVPN".
+        #
+        # ip_range (2026-10-25, Opsi B) — DYNAMIC allocation pool constrained to
+        # 172.28.0.64/26 (.64-.127) so Docker never hands a dynamic (unpinned)
+        # container one of the STATIC ipv4_address pins, which live OUTSIDE this
+        # range: low .4/.5/.11 (wireguard node2/node3/node1) + high .221/.222
+        # (openvpn-node2/genieacs-ui) + .225-.231 (infra block: freeradius,
+        # genieacs-cwmp/nbi, librenms, librenms-dispatcher, rsyslog, olt-sidecar).
+        # Root cause of the recurring "Address already in use" IPAM-collision
+        # incident: without ip_range the dynamic pool spanned the whole /24 and
+        # collided with these pins after an unclean container death. Gateway .1
+        # stays implicit (first usable, outside the range). 62 usable >> ~19
+        # unpinned containers.
         - subnet: 172.28.0.0/24
+          ip_range: 172.28.0.64/26
 
 volumes:
   boss_postgres_data:

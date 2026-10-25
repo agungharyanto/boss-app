@@ -794,8 +794,27 @@ def test_g02id_execute_save_raises_on_device_error(monkeypatch):
 
 # --- HSGQ E04ID bind_onu (v0.23.8 LANGKAH D) — builder MURNI, nol device ---
 
-def test_e04id_exposes_bind_onu_as_the_only_write_operation():
-    assert hsgq_e04id.OPERATIONS_WRITE == ('bind_onu',)
+def test_e04id_exposes_bind_onu_and_save_as_write_operations():
+    assert hsgq_e04id.OPERATIONS_WRITE == ('bind_onu', 'save_config')
+
+
+def test_e04id_execute_save_parses_success(monkeypatch):
+    monkeypatch.setattr(
+        hsgq_e04id.hsgq_common, 'run_hsgq_ssh_command',
+        lambda conn, cmd, overall_timeout=45.0: 'copy running-config startup-config\n Configuration saved successfully\nOLT-Cileg#',
+    )
+    result = hsgq_e04id.execute_save({'host': 'h', 'username': 'u', 'password': 'p'})
+    assert result['saved'] is True
+    assert 'saved successfully' in result['raw_excerpt'].lower()
+
+
+def test_e04id_execute_save_raises_on_device_error(monkeypatch):
+    monkeypatch.setattr(
+        hsgq_e04id.hsgq_common, 'run_hsgq_ssh_command',
+        lambda conn, cmd, overall_timeout=45.0: '% command error',
+    )
+    with pytest.raises(OltSessionError):
+        hsgq_e04id.execute_save({'host': 'h', 'username': 'u', 'password': 'p'})
 
 
 def test_e04id_build_bind_onu_commands_full_sequence():

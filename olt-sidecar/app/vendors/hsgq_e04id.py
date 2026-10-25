@@ -44,7 +44,7 @@ OPERATIONS_CONFIG_READ = {
 # startup-config`. TERVERIFIKASI device nyata 2026-10-25 (modem ZICG2976A4FC,
 # onu-id auto-assign = 15), lihat docs/omci/hsgq-e04id-cli-reference.md
 # §"SINTAKS TERVERIFIKASI".
-OPERATIONS_WRITE = ('bind_onu',)
+OPERATIONS_WRITE = ('bind_onu', 'save_config')
 
 # Pola error device untuk jalur TULIS — melempar OltSessionError berisi teks
 # device PERSIS (disiplin "laporkan pesan error apa adanya").
@@ -110,6 +110,24 @@ def execute_apply(connection: dict, operation: str, params: dict):
     bind_command = _build_bind_command(mac, params.get('name'), params.get('desc'))
 
     return _run_e04id_bind_with_readback(connection, pon, mac, bind_command, expected_onu_id), None
+
+
+def execute_save(connection: dict) -> dict:
+    """Jalur SAVE (`/olt/<id>/save`). `copy running-config startup-config` di
+    node privileged `#` via run_hsgq_ssh_command (login->enable->command->logout,
+    identik mekanisme g02id). TERVERIFIKASI device nyata 2026-10-25 (modem
+    ZICG2976A4FC, lewat jalur bind — device membalas "Configuration saved
+    successfully"). HSGQ butuh save EKSPLISIT (tak auto-write seperti ZTE C300)."""
+    output = hsgq_common.run_hsgq_ssh_command(
+        connection, 'copy running-config startup-config', overall_timeout=45.0
+    )
+    if _DEVICE_ERROR_RE.search(output):
+        raise OltSessionError(f"Device menolak save: {output.strip()[:500]}", 'command')
+
+    return {
+        'saved': 'saved successfully' in output.lower(),
+        'raw_excerpt': output.strip()[:500],
+    }
 
 
 _MAC_DETAIL_ONU_ID_RE = re.compile(r'(?im)^\s*ONU\s+ID\s*:\s*(\d+)\s*$')

@@ -44,7 +44,8 @@ class ZtpOrchestratorService
     ) {}
 
     /**
-     * @param  array<string, mixed>  $options  requested_by + (OMCI) onu_id/onu_type/
+     * @param  array<string, mixed>  $options  requested_by + `stages` (list<string>
+     *                                         subset tahap device; absent=semua) + (OMCI) onu_id/onu_type/
      *                                         tcont_profile/traffic_profile/vlan_mgmt/
      *                                         vlan_bridge/pon_interface.
      * @return array<string, mixed>
@@ -103,8 +104,14 @@ class ZtpOrchestratorService
 
         $stages = [];
 
+        // v0.23.8.6c — subset tahap DEVICE opsional (uji dua gelombang; jalan
+        // sementara sampai Inform-wait antar-tahap dibangun — lihat backlog).
+        // null/absent = SEMUA tahap (perilaku lama tak berubah). resolve_profile/
+        // select_adapter/channel_check SELALU jalan (di atas, tak termasuk ini).
+        $enabledStages = $options['stages'] ?? null;
+
         // 3a. WAN internet — rute sesuai kapabilitas OLT adapter.
-        if ($profile->wanInternet !== null) {
+        if ($profile->wanInternet !== null && $this->stageEnabled($enabledStages, 'wan_internet')) {
             $ok = $this->runStage($stages, 'wan_internet', ['via' => $via], function () use ($via, $cpeAdapter, $oltAdapter, $cpe, $olt, $profile, $customer, $options, $requestedBy) {
                 if ($via === 'omci') {
                     return $oltAdapter->pushWanInternetOmci($olt, $this->buildOmciWanSpec($profile, $customer, $cpe, $options));
@@ -119,7 +126,7 @@ class ZtpOrchestratorService
         }
 
         // 3b. WAN bridge (kalau profil punya) — device-driven CPE.
-        if ($profile->wanBridge !== null) {
+        if ($profile->wanBridge !== null && $this->stageEnabled($enabledStages, 'wan_bridge')) {
             $ok = $this->runStage($stages, 'wan_bridge', [], fn () => $cpeAdapter->pushWanBridge($cpe, [
                 'bridge_vlan' => $profile->wanBridge->vlan,
                 'requested_by' => $requestedBy,
@@ -131,7 +138,7 @@ class ZtpOrchestratorService
 
         // 3c. SSID per role (resolve placeholder nama via customer).
         $ssidSpecs = $this->buildSsidSpecs($profile, $customer);
-        if ($ssidSpecs !== []) {
+        if ($ssidSpecs !== [] && $this->stageEnabled($enabledStages, 'ssid')) {
             $ok = $this->runStage($stages, 'ssid', ['count' => count($ssidSpecs)], fn () => $cpeAdapter->pushSsid($cpe, $ssidSpecs));
             if (! $ok) {
                 return $this->fail($stages, 'ssid', $profile, $resolution->source);
@@ -143,7 +150,7 @@ class ZtpOrchestratorService
         //         Hanya dijalankan kalau profil memang mengurus WiFi (punya SSID
         //         ATAU WAN bridge) — jaga-jaga JANGAN mematikan semua WLAN pada
         //         profil WAN-only yang tak menyentuh WiFi sama sekali.
-        if ($profile->ssids->isNotEmpty() || $profile->wanBridge !== null) {
+        if (($profile->ssids->isNotEmpty() || $profile->wanBridge !== null) && $this->stageEnabled($enabledStages, 'disable_unbound_wlan')) {
             $ok = $this->runStage($stages, 'disable_unbound_wlan', [], fn () => $cpeAdapter->disableUnboundWlan($cpe, $ssidSpecs));
             if (! $ok) {
                 return $this->fail($stages, 'disable_unbound_wlan', $profile, $resolution->source);
@@ -151,18 +158,22 @@ class ZtpOrchestratorService
         }
 
         // 3d. Naming (OLT) + 3e. Save (OLT).
-        $ok = $this->runStage($stages, 'naming', [], fn () => $oltAdapter->applyNaming($olt, [
-            'customer' => $customer,
-            'sn' => (string) $cpe->serial_number,
-            'requested_by' => $requestedBy,
-        ]));
-        if (! $ok) {
-            return $this->fail($stages, 'naming', $profile, $resolution->source);
+        if ($this->stageEnabled($enabledStages, 'naming')) {
+            $ok = $this->runStage($stages, 'naming', [], fn () => $oltAdapter->applyNaming($olt, [
+                'customer' => $customer,
+                'sn' => (string) $cpe->serial_number,
+                'requested_by' => $requestedBy,
+            ]));
+            if (! $ok) {
+                return $this->fail($stages, 'naming', $profile, $resolution->source);
+            }
         }
 
-        $ok = $this->runStage($stages, 'save', [], fn () => $oltAdapter->saveConfig($olt));
-        if (! $ok) {
-            return $this->fail($stages, 'save', $profile, $resolution->source);
+        if ($this->stageEnabled($enabledStages, 'save')) {
+            $ok = $this->runStage($stages, 'save', [], fn () => $oltAdapter->saveConfig($olt));
+            if (! $ok) {
+                return $this->fail($stages, 'save', $profile, $resolution->source);
+            }
         }
 
         return [
@@ -171,6 +182,18 @@ class ZtpOrchestratorService
             'stages' => $stages,
             'rollback_safe' => false,
         ];
+    }
+
+    /**
+     * Apakah tahap device `$name` dijalankan. `$enabled` null = semua tahap
+     * (perilaku lama). Hanya tahap DEVICE yang bisa di-subset; resolve_profile/
+     * select_adapter/channel_check selalu jalan di luar mekanisme ini.
+     *
+     * @param  list<string>|null  $enabled
+     */
+    private function stageEnabled(?array $enabled, string $name): bool
+    {
+        return $enabled === null || in_array($name, $enabled, true);
     }
 
     /**

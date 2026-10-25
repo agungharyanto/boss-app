@@ -151,6 +151,42 @@ class ZtpOrchestratorServiceTest extends TestCase
         $this->assertFalse($result['rollback_safe']);
     }
 
+    public function test_stages_option_runs_only_requested_wan_stages(): void
+    {
+        $data = $this->makeProfile();
+        $cpe = $this->makeCpe($data['package']);
+
+        $this->cpeAdapter->expects($this->once())->method('pushWanInternet')->willReturn(['wan' => 'ok']);
+        $this->cpeAdapter->expects($this->once())->method('pushWanBridge')->willReturn(['bridge_present' => true]);
+        $this->cpeAdapter->expects($this->never())->method('pushSsid');
+        $this->cpeAdapter->expects($this->never())->method('disableUnboundWlan');
+        $this->oltAdapter->expects($this->never())->method('applyNaming');
+        $this->oltAdapter->expects($this->never())->method('saveConfig');
+
+        $result = $this->orchestrator()->provision($cpe, $this->olt(), ['stages' => ['wan_internet', 'wan_bridge']]);
+
+        $this->assertTrue($result['ok']);
+        $this->assertSame(['wan_internet', 'wan_bridge'], array_column($result['stages'], 'stage'));
+    }
+
+    public function test_stages_option_runs_only_requested_ssid_and_olt_stages(): void
+    {
+        $data = $this->makeProfile();
+        $cpe = $this->makeCpe($data['package']);
+
+        $this->cpeAdapter->expects($this->never())->method('pushWanInternet');
+        $this->cpeAdapter->expects($this->never())->method('pushWanBridge');
+        $this->cpeAdapter->expects($this->once())->method('pushSsid')->willReturn(['configured' => [4], 'pending' => [], 'skipped' => [], 'addobject_issued' => false]);
+        $this->cpeAdapter->expects($this->once())->method('disableUnboundWlan')->willReturn(['existing' => [1, 2, 3, 4], 'kept' => [4], 'disabled' => [1, 2, 3]]);
+        $this->oltAdapter->expects($this->once())->method('applyNaming')->willReturn(['named' => true]);
+        $this->oltAdapter->expects($this->once())->method('saveConfig')->willReturn(['saved' => true]);
+
+        $result = $this->orchestrator()->provision($cpe, $this->olt(), ['stages' => ['ssid', 'disable_unbound_wlan', 'naming', 'save']]);
+
+        $this->assertTrue($result['ok']);
+        $this->assertSame(['ssid', 'disable_unbound_wlan', 'naming', 'save'], array_column($result['stages'], 'stage'));
+    }
+
     public function test_resolver_failure_stops_with_resolver_reason(): void
     {
         // Paket tanpa profil -> no_profile.

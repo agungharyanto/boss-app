@@ -7,6 +7,7 @@ use App\Models\CpeDevice;
 use App\Models\OltDevice;
 use App\Models\ProvisioningAdapter;
 use App\Services\Network\CtcomActivationService;
+use App\Services\Network\GenieAcsClientService;
 use App\Services\Network\Provisioning\Cpe\CtcomCpeAdapter;
 use App\Services\Network\Provisioning\Cpe\UnsupportedCpeAdapter;
 use App\Services\Network\Provisioning\CpeAdapterRegistry;
@@ -193,5 +194,103 @@ class ProvisioningAdapterRegistryTest extends TestCase
         $result = $this->olt()->for('hsgq_e04id')->saveConfig(new OltDevice);
 
         $this->assertTrue($result['saved']);
+    }
+
+    // ---- pushWanBridge: set X_CT-COM_LanInterface, instance di-derive dari
+    //      WLAN yang GENUINELY ada (v0.23.8.5b — gap LAN-binding ditutup) ------
+
+    /**
+     * Tree CT-COM dgn bridge VID172 (WCD.3 PPPoE_Bridged) + `$wlanCount` instance
+     * WLANConfiguration (1..N). 4 → device 2.4g-only; 8 → device dual-band.
+     *
+     * @return array<string, mixed>
+     */
+    private function ctcomBridgeDevice(int $wlanCount): array
+    {
+        $wlan = [];
+        for ($i = 1; $i <= $wlanCount; $i++) {
+            $wlan[$i] = ['SSID' => ['_value' => "SSID{$i}"]];
+        }
+
+        return [
+            '_id' => 'DEV-GENIE',
+            'InternetGatewayDevice' => [
+                'WANDevice' => ['1' => ['WANConnectionDevice' => [
+                    '3' => [
+                        'WANPPPConnection' => ['1' => [
+                            'Name' => ['_value' => '3_Other_B_VID_172'],
+                            'ConnectionType' => ['_value' => 'PPPoE_Bridged'],
+                        ]],
+                        'X_CT-COM_WANGponLinkConfig' => ['VLANIDMark' => ['_value' => 172]],
+                    ],
+                ]]],
+                'LANDevice' => ['1' => ['WLANConfiguration' => $wlan]],
+            ],
+        ];
+    }
+
+    /**
+     * @return array{result: array<string, mixed>, tasks: list<array<string, mixed>>}
+     */
+    private function runPushWanBridge(int $wlanCount): array
+    {
+        $genie = $this->createMock(GenieAcsClientService::class);
+        $genie->method('findDeviceById')->willReturn($this->ctcomBridgeDevice($wlanCount));
+        $tasks = [];
+        $genie->method('sendTask')->willReturnCallback(function (string $id, array $task, bool $cr) use (&$tasks) {
+            $tasks[] = $task;
+
+            return ['task_id' => 't1'];
+        });
+        $this->app->instance(GenieAcsClientService::class, $genie);
+
+        $cpe = new CpeDevice;
+        $cpe->genieacs_device_id = 'DEV-GENIE';
+
+        return ['result' => $this->cpe()->for('ctcom')->pushWanBridge($cpe, ['bridge_vlan' => 172]), 'tasks' => $tasks];
+    }
+
+    private function lanInterfaceValueFrom(array $tasks): ?string
+    {
+        foreach ($tasks as $task) {
+            if (($task['name'] ?? null) !== 'setParameterValues') {
+                continue;
+            }
+            foreach ($task['parameterValues'] as $pv) {
+                if (str_ends_with((string) $pv[0], '.X_CT-COM_LanInterface')) {
+                    return (string) $pv[1];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    public function test_pushwanbridge_binds_only_existing_guest_instance_on_a_4_wlan_device(): void
+    {
+        ['result' => $result, 'tasks' => $tasks] = $this->runPushWanBridge(4);
+
+        $this->assertTrue($result['bridge_present']);
+        $this->assertTrue($result['lan_binding_set']);
+        $this->assertSame([4], $result['lan_binding_instances']);
+        $this->assertSame(
+            'InternetGatewayDevice.LANDevice.1.WLANConfiguration.4',
+            $this->lanInterfaceValueFrom($tasks),
+        );
+        // DHCPEnable=false ikut terkirim
+        $flat = array_merge(...array_map(fn ($t) => $t['parameterValues'] ?? [], $tasks));
+        $this->assertContains('InternetGatewayDevice.WANDevice.1.WANConnectionDevice.3.WANPPPConnection.1.X_CT-COM_LanInterface-DHCPEnable', array_column($flat, 0));
+    }
+
+    public function test_pushwanbridge_binds_instances_4_and_8_on_an_8_wlan_device(): void
+    {
+        ['result' => $result, 'tasks' => $tasks] = $this->runPushWanBridge(8);
+
+        $this->assertTrue($result['lan_binding_set']);
+        $this->assertSame([4, 8], $result['lan_binding_instances']);
+        $this->assertSame(
+            'InternetGatewayDevice.LANDevice.1.WLANConfiguration.4,InternetGatewayDevice.LANDevice.1.WLANConfiguration.8',
+            $this->lanInterfaceValueFrom($tasks),
+        );
     }
 }

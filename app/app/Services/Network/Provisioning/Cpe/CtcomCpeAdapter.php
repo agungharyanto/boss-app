@@ -75,13 +75,70 @@ final class CtcomCpeAdapter implements CpeProvisioningAdapter
 
     public function pushWanBridge(CpeDevice $cpe, array $spec): array
     {
-        // Bridge CT-COM bersifat device-driven (CPE membentuk sendiri) — adapter
-        // VERIFIKASI keberadaannya, tidak mem-push dari nol. (Eksperimen push
-        // bridge via TR-069 untuk ZTE C300 = v0.23.8.5, section G3.)
+        // WAN bridge CT-COM itu sendiri device-driven (CPE/firmware membentuk WCD
+        // bridge VID172) — adapter VERIFIKASI keberadaannya, tidak mem-push dari
+        // nol (eksperimen push bridge ZTE C300 = v0.23.8.5, section G3). TAPI
+        // LAN-binding-nya (`X_CT-COM_LanInterface`: WLAN instance mana yang
+        // di-bridge WAN ini) BUKAN device-driven — HARUS di-set eksplisit, dan
+        // dulunya HANYA di-set `default-wan.js` (preset auto-WAN v0.7.8, hardcode
+        // "4,8"). Di sini kita set-nya di jalur ZTP, dengan instance di-DERIVE
+        // dari yang GENUINELY ada di device (2.4g-only → cuma .4; 8-WLAN → .4,.8),
+        // bukan "4,8" buta. Idempoten: `X_CT-COM_LanInterface` writable-but-not-
+        // readable di TR-069 (g02id doc #24) → set TIAP run, tak andalkan read-back.
+        $deviceId = $this->resolveGenieAcsDeviceId($cpe);
         $bridgeVlan = (int) ($spec['bridge_vlan'] ?? 172);
-        $present = $this->service()->verifyBridgePresent($this->resolveGenieAcsDeviceId($cpe), $bridgeVlan);
+        $present = $this->service()->verifyBridgePresent($deviceId, $bridgeVlan);
 
-        return ['bridge_present' => $present, 'bridge_vlan' => $bridgeVlan, 'device_driven' => true];
+        $base = ['bridge_present' => $present, 'bridge_vlan' => $bridgeVlan, 'device_driven' => true];
+
+        $bridgePath = $this->service()->findBridgePppPath($deviceId, $bridgeVlan);
+        if ($bridgePath === null) {
+            return $base + [
+                'lan_binding_set' => false,
+                'lan_binding_instances' => [],
+                'lan_binding_reason' => 'WANPPPConnection bridge tidak ditemukan di tree — LanInterface tak bisa di-set (bridge device-driven belum terbentuk / CPE belum Inform).',
+            ];
+        }
+
+        $device = $this->genieacs()->findDeviceById($deviceId);
+        $existing = $device !== null ? $this->existingWlanInstances($device) : [];
+
+        // Bridge melayani WiFi guest → instance guest yang ADA (2.4g=4, 5g=8).
+        $instances = [];
+        foreach ([SsidBand::Band24, SsidBand::Band5] as $band) {
+            $inst = $this->wlanInstanceFor(WifiRole::GuestWifi, $band);
+            if (in_array($inst, $existing, true)) {
+                $instances[] = $inst;
+            }
+        }
+
+        if ($instances === []) {
+            return $base + [
+                'lan_binding_set' => false,
+                'lan_binding_instances' => [],
+                'lan_binding_reason' => 'Belum ada instance WLAN guest di device (mis. .4 belum di-AddObject oleh pushSsid) — binding ditunda sampai SSID guest terbentuk; orkestrator memanggil ulang.',
+            ];
+        }
+
+        $csv = implode(',', array_map(
+            static fn (int $i): string => "InternetGatewayDevice.LANDevice.1.WLANConfiguration.{$i}",
+            $instances,
+        ));
+
+        $this->genieacs()->sendTask($deviceId, [
+            'name' => 'setParameterValues',
+            'parameterValues' => [
+                ["{$bridgePath}.X_CT-COM_LanInterface", $csv, 'xsd:string'],
+                ["{$bridgePath}.X_CT-COM_LanInterface-DHCPEnable", false, 'xsd:boolean'],
+            ],
+        ], false);
+
+        return $base + [
+            'lan_binding_set' => true,
+            'lan_binding_instances' => $instances,
+            'lan_binding_value' => $csv,
+            'bridge_path' => $bridgePath,
+        ];
     }
 
     /**

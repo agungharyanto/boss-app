@@ -246,6 +246,52 @@ class CtcomActivationService
     }
 
     /**
+     * Cari path WANPPPConnection BRIDGE by VLAN (mirror `resolveInternetPppPathByVlan`
+     * dengan kondisi `_B_`/bridged DIBALIK) — dipakai `CtcomCpeAdapter::pushWanBridge`
+     * untuk tahu di mana men-set `X_CT-COM_LanInterface`. Dinamis (nomor WCD
+     * CT-COM berubah-ubah, #1 doc). null kalau tak ada WANPPPConnection bridge
+     * ber-VLAN itu di tree (mis. bridge belum terbentuk / device-driven belum
+     * Inform). Sengaja method terpisah (bukan refactor `verifyBridgePresent`,
+     * yang semantik bool-nya dipakai test existing + mencakup match VLANIDMark
+     * level-WCD tanpa path PPP).
+     */
+    public function findBridgePppPath(string $genieAcsDeviceId, int $bridgeVlan = 172): ?string
+    {
+        $device = $this->genieacs->findDeviceById($genieAcsDeviceId);
+        if ($device === null) {
+            return null;
+        }
+        $flat = [];
+        $this->flatten($device, '', $flat);
+
+        foreach ($flat as $key => $value) {
+            if (! preg_match('#^(InternetGatewayDevice\.WANDevice\.\d+\.WANConnectionDevice\.\d+)\.WANPPPConnection\.\d+\.Name$#', $key, $m)) {
+                continue;
+            }
+            $pppPath = substr($key, 0, -strlen('.Name'));
+            $wcdBase = $m[1];
+            $name = (string) $value;
+            $connType = (string) ($flat[$pppPath.'.ConnectionType'] ?? '');
+            $wcdVlan = $flat[$wcdBase.'.X_CT-COM_WANEponLinkConfig.VLANIDMark']
+                ?? $flat[$wcdBase.'.X_CT-COM_WANGponLinkConfig.VLANIDMark']
+                ?? null;
+
+            $isBridged = stripos($name, '_B_') !== false || stripos($connType, 'bridg') !== false;
+            if (! $isBridged) {
+                continue;
+            }
+
+            $matchesVlan = ($wcdVlan !== null && (int) $wcdVlan === $bridgeVlan)
+                || stripos($name, 'VID_'.$bridgeVlan) !== false;
+            if ($matchesVlan) {
+                return $pppPath;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Verifikasi "Connected" via radacct (BUKAN GenieACS ConnectionStatus yang
      * lagging/tak akurat, #1 doc) — ada sesi radacct AKTIF (acctstoptime null)
      * untuk username. BUKAN infinite loop; Sleep facade (fake di test).

@@ -9009,11 +9009,16 @@ Dari live-run NYATA di modem pelanggan `ZICG2976A4FC` (E04ID-Cileg, customer #57
 - **`cpe_devices` TIDAK menyimpan kolom `mac_address`.** Identitas device = `genieacs_device_id` +
   `serial_number`. Jangan query `cpe_devices.mac_address` (tak ada); untuk MAC, baca tree GenieACS atau
   tabel ONU OLT.
-- **Backlog (dicatat, belum dikerjakan):** op sidecar `hsgq_e04id.bind_onu` READ-BACK memakai jalur one-shot
-  exec yang salah-node untuk `show onu-info all` (padahal butuh node `configure` interaktif) — live-run
-  2026-10-25 dilakukan via sesi pexpect manual, bukan op sidecar; op sidecar perlu diperbaiki ke node yang
-  benar sebelum dipakai produksi. Juga: guard 5GHz di `pushSsid` (hard-map 1/4/5/8 tanpa cek jumlah WLAN),
-  dan replay-safety ZTE.
+- **Backlog — DUA DITUTUP (2026-10-25), satu tersisa:**
+  - ✅ **DITUTUP:** op sidecar `hsgq_e04id.bind_onu` read-back kini di node `configure` interaktif
+    (`_e04id_login` → `exit` ke `(config)#` → `show onu-info mac <MAC>` ringkas, fallback `show onu-info
+    all`; confirm pakai onu-id device; verify Auth=TRUE; `copy running-config startup-config`). Read op
+    baru `show_onu_info_mac` (node config) terverifikasi read-only ke OLT nyata 2026-10-25. Pytest parser +
+    urutan command (mock pexpect) hijau (170 total).
+  - ✅ **DITUTUP:** guard 5GHz di `CtcomCpeAdapter::pushSsid` — spec band 5g yang instance-nya (5-8) tak
+    ada di device di-SKIP (`skipped[]` + alasan), tak AddObject buta; spec 2.4g belum-ada tetap AddObject
+    berurutan.
+  - ⏳ **Tersisa:** replay-safety ZTE.
 
 ## Architecture
 

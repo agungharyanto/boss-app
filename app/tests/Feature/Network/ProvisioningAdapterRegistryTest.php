@@ -395,4 +395,71 @@ class ProvisioningAdapterRegistryTest extends TestCase
         $this->assertTrue($result['named']);
         $this->assertSame('noop_bind_onu', $result['mode']);
     }
+
+    // ---- pushSsid guard 5GHz --------------------------------------------------
+
+    /**
+     * @param  array<int, array<string, mixed>>  $ssidSpecs
+     * @return array{result: array<string, mixed>, tasks: list<array<string, mixed>>}
+     */
+    private function runPushSsid(int $wlanCount, array $ssidSpecs): array
+    {
+        $genie = $this->createMock(GenieAcsClientService::class);
+        $genie->method('findDeviceById')->willReturn($this->ctcomBridgeDevice($wlanCount));
+        $tasks = [];
+        $genie->method('sendTask')->willReturnCallback(function (string $id, array $task, bool $cr) use (&$tasks) {
+            $tasks[] = $task;
+
+            return ['task_id' => 't1'];
+        });
+        $this->app->instance(GenieAcsClientService::class, $genie);
+
+        $cpe = new CpeDevice;
+        $cpe->genieacs_device_id = 'DEV-GENIE';
+
+        return ['result' => $this->cpe()->for('ctcom')->pushSsid($cpe, $ssidSpecs), 'tasks' => $tasks];
+    }
+
+    public function test_pushssid_skips_5g_spec_on_a_4_wlan_device_without_blind_addobject(): void
+    {
+        // device 4-WLAN (tak ada instance 5G 5-8), spec guest 5g → di-skip + alasan,
+        // TIDAK AddObject buta.
+        ['result' => $r, 'tasks' => $tasks] = $this->runPushSsid(4, [
+            ['wifi_role' => 'guest_wifi', 'band' => '5g', 'ssid_name' => 'X', 'security_mode' => 'open', 'password' => null],
+        ]);
+
+        $this->assertSame([], $r['configured']);
+        $this->assertFalse($r['addobject_issued']);
+        $this->assertCount(1, $r['skipped']);
+        $this->assertSame(8, $r['skipped'][0]['instance']);
+        $this->assertSame('5g', $r['skipped'][0]['band']);
+        $this->assertStringContainsString('5G', $r['skipped'][0]['reason']);
+        // tak ada task addObject terkirim
+        $this->assertNotContains('addObject', array_column($tasks, 'name'));
+    }
+
+    public function test_pushssid_5g_spec_on_an_8_wlan_device_runs_normally(): void
+    {
+        // device 8-WLAN (instance 8 ada), spec guest 5g → configured, tanpa skip.
+        ['result' => $r, 'tasks' => $tasks] = $this->runPushSsid(8, [
+            ['wifi_role' => 'guest_wifi', 'band' => '5g', 'ssid_name' => 'X', 'security_mode' => 'open', 'password' => null],
+        ]);
+
+        $this->assertSame([8], $r['configured']);
+        $this->assertSame([], $r['skipped']);
+        $this->assertFalse($r['addobject_issued']);
+        $this->assertSame('setParameterValues', $tasks[0]['name']);
+    }
+
+    public function test_pushssid_2_4g_spec_on_a_4_wlan_device_runs_normally(): void
+    {
+        // device 4-WLAN, spec guest 2.4g (instance 4 ada) → configured, tanpa skip.
+        ['result' => $r] = $this->runPushSsid(4, [
+            ['wifi_role' => 'guest_wifi', 'band' => '2.4g', 'ssid_name' => 'X', 'security_mode' => 'open', 'password' => null],
+        ]);
+
+        $this->assertSame([4], $r['configured']);
+        $this->assertSame([], $r['skipped']);
+        $this->assertFalse($r['addobject_issued']);
+    }
 }

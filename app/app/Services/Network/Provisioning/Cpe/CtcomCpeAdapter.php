@@ -152,8 +152,14 @@ final class CtcomCpeAdapter implements CpeProvisioningAdapter
      * Peran→instance CT-COM (terbukti): primary_wifi 2.4g=1/5g=5 (SUDAH ADA, tak
      * perlu AddObject); guest_wifi 2.4g=4/5g=8 (perlu AddObject kalau belum ada).
      *
+     * GUARD 5GHz: spec band 5g yang instance-nya (5-8) TIDAK ada di device di-SKIP
+     * (tak AddObject buta — AddObject cuma mengisi urutan 2.4g, tak pernah
+     * memunculkan radio 5G yang memang tak ada di device 2.4GHz-only); dikembalikan
+     * di `skipped[]` + alasan per-spec. Spec band 2.4g yang belum ada TETAP
+     * AddObject berurutan.
+     *
      * @param  array<int, array{wifi_role: WifiRole|string, band: SsidBand|string, ssid_name: string, security_mode: SsidSecurity|string, password?: ?string}>  $ssidSpecs
-     * @return array{configured: list<int>, pending: list<int>, addobject_issued: bool}
+     * @return array{configured: list<int>, pending: list<int>, skipped: list<array<string, mixed>>, addobject_issued: bool}
      */
     public function pushSsid(CpeDevice $cpe, array $ssidSpecs): array
     {
@@ -166,6 +172,7 @@ final class CtcomCpeAdapter implements CpeProvisioningAdapter
         $existing = $this->existingWlanInstances($device);
         $configured = [];
         $pending = [];
+        $skipped = [];
         $needAddObject = false;
 
         foreach ($ssidSpecs as $spec) {
@@ -182,7 +189,20 @@ final class CtcomCpeAdapter implements CpeProvisioningAdapter
                     ),
                 ], false);
                 $configured[] = $instance;
+            } elseif ($band === SsidBand::Band5) {
+                // GUARD 5GHz: instance 5G target (5-8) TIDAK ada di device →
+                // device 2.4GHz-only. JANGAN AddObject buta (AddObject di CT-COM
+                // mengisi instance berikutnya di urutan band 2.4g 1→2→3→4, tak
+                // pernah memunculkan radio 5G yang memang tak ada hardware-nya).
+                // Skip spec ini + beri alasan per-spec.
+                $skipped[] = [
+                    'instance' => $instance,
+                    'wifi_role' => $role->value,
+                    'band' => $band->value,
+                    'reason' => "device tidak punya instance 5G (WLANConfiguration.{$instance})",
+                ];
             } else {
+                // 2.4g target belum ada → AddObject berurutan (perilaku lama).
                 $pending[] = $instance;
                 $needAddObject = true;
             }
@@ -190,14 +210,19 @@ final class CtcomCpeAdapter implements CpeProvisioningAdapter
 
         if ($needAddObject) {
             // SATU AddObject per panggilan (device isi instance berikutnya di
-            // urutan band) — konvergensi aman, tanpa risiko beranak berlebih.
+            // urutan band 2.4g) — konvergensi aman, tanpa risiko beranak berlebih.
             $this->genieacs()->sendTask($deviceId, [
                 'name' => 'addObject',
                 'objectName' => 'InternetGatewayDevice.LANDevice.1.WLANConfiguration',
             ], false);
         }
 
-        return ['configured' => $configured, 'pending' => $pending, 'addobject_issued' => $needAddObject];
+        return [
+            'configured' => $configured,
+            'pending' => $pending,
+            'skipped' => $skipped,
+            'addobject_issued' => $needAddObject,
+        ];
     }
 
     /**

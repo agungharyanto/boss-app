@@ -666,3 +666,31 @@ ter-hook ke `SubscriptionRenewalService::renew()` (best-effort) + tombol Detail 
 saat ini, tapi feature siap pakai. Menghapus tabel/feature ini = keputusan sendiri, bukan efek samping
 pensiun auto-WAN. Catatan: `/remote-config` menampung `RemoteConfigSettings` (auto-WAN) DAN
 `WanConfigPushLookup`; policy `remote_config.*` dipakai keduanya.
+
+### H10. v0.23.9 — Status akhir cluster (regresi penuh 8.9, 2026-10-26)
+
+Branch `v0.23.8-ztp-dynamic-config` (27 commit sejak `main`). **NOL merge/tag, NOL device.**
+
+**Regresi:** PHP `php artisan test` (tanpa filter) = **2426 lulus / 3 gagal / 0 skip** (7511 assertions,
+~22 mnt); pytest olt-sidecar = **172 lulus**; Pint 65 file berubah = clean.
+
+**3 gagal, di-triage thd `develop`:**
+- `FrontendBuildTest > every alpine factory referenced in blade views is present in the built bundle` —
+  **PRE-EXISTING (bukan v0.23)**. `work-orders/claim.blade.php` pakai `x-data="claimForm("` tapi
+  `window.claimForm` tak pernah didefinisikan di `resources/js/app.js` (oversight sejak v0.12.6). Gagal
+  identik di `develop`.
+- `WhatsappIncomingMessageWebhookTest > a message that matches nothing gets the generic fallback reply` —
+  **PRE-EXISTING (bukan v0.23)**. Gagal identik di `develop`; file tak disentuh cluster ini.
+- `ProvisioningSsidTest > guest_wifi_absent_triggers_addobject_and_defers` — **v0.23, TEST BASI (bukan bug
+  produk)**. Guard 5GHz (commit `2be6e2e`) mengubah `pushSsid`: spec band 5g yang instance-nya (5-8) tak
+  ada → `skipped[]`, bukan `pending[]`. Perilaku ini TERVERIFIKASI hardware (`ZICG2976A4FC`) + terdokumentasi
+  (H8, section guard 5GHz). Test (baris 152) masih meng-assert `pending=[4,8]` (lama) → kini `[4]`. **Fix
+  disarankan (belum diterapkan)**: `assertSame([4], $result['pending'])` + assert entri 5g ada di
+  `$result['skipped']`. Tidak diubah di sesi ini (prinsip "jangan ubah test untuk memaksa lulus" + menunggu
+  verifikasi manual Agung).
+
+**Kesimpulan**: tidak ada bug produk dari cluster v0.23; satu-satunya kegagalan ber-akar v0.23 adalah test
+basi yang perlu 1 assertion diperbarui. Cluster SIAP TUTUP setelah: (a) assertion ProvisioningSsid
+diperbarui, (b) verifikasi manual browser Agung (checklist v0.23.5–v0.23.8.6 disiapkan terpisah), (c) 2
+kegagalan pre-existing ditangani di jalurnya sendiri (di luar scope v0.23). Backlog v0.23 lengkap: ROADMAP
+baris `v0.23.0` + CLAUDE.md "v0.23.0 Cluster Closure".

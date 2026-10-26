@@ -9062,6 +9062,45 @@ guard revert: **WAN10 Status=Connected / User=085601070033 / extIP=10.0.0.243 KO
 PPPoE pelanggan tak pernah putus (push value-identik). naming E04ID = `noop_bind_onu` (nama diisi saat
 bind-onu), save = "Configuration saved successfully". Detail: `docs/omci/ztp-dynamic-config-design.md` H8.
 
+## v0.23.0 Cluster Closure — regresi penuh + gotcha konsolidasi (8.9, 2026-10-26)
+
+Regresi penuh branch `v0.23.8-ztp-dynamic-config` (27 commit sejak `main`, NOL merge/tag, NOL device):
+- **PHP `php artisan test` (tanpa filter)**: **2426 lulus, 3 gagal, ~22 mnt**. pytest olt-sidecar: **172 lulus**.
+  Pint: 65 file berubah clean. `/var` 49G free.
+- **Triage 3 gagal** (dicek di `develop` langsung):
+  1. `FrontendBuildTest > every alpine factory...` — **PRE-EXISTING** (bukan v0.23): blade
+     `work-orders/claim.blade.php` pakai `x-data="claimForm("` tapi `window.claimForm` TAK PERNAH ada di
+     `resources/js/app.js` (oversight v0.12.6 `ae15a5a`). Gagal identik di develop (file byte-identik).
+  2. `WhatsappIncomingMessageWebhookTest > a message that matches nothing...` — **PRE-EXISTING** (bukan
+     v0.23): tak disentuh cluster ini, gagal identik di develop.
+  3. `ProvisioningSsidTest > guest_wifi_absent_triggers_addobject_and_defers` (baris 152) — **v0.23, TEST
+     BASI (bukan bug produk)**: commit `2be6e2e` menambah guard 5GHz di `CtcomCpeAdapter::pushSsid`
+     (spec band 5g yang instance-nya 5-8 tak ada → masuk `skipped[]`, BUKAN `pending[]`/AddObject buta —
+     perilaku TERVERIFIKASI hardware di `ZICG2976A4FC` + terdokumentasi) tapi LUPA memperbarui sibling test
+     ini yang masih meng-assert `pending=[4,8]` (kini `[4]`, 8 di `skipped`). **Fix yang disarankan** (belum
+     diterapkan — menunggu keputusan, sesuai "jangan ubah test untuk memaksa lulus"): ubah assertion jadi
+     `pending=[4]` + assert entri 5g ada di `result['skipped']`.
+
+**Gotcha v0.23 (detail di section masing-masing + design doc):**
+- **bind-onu E04ID**: auto-assign onu-id (read-back di node `configure`, JANGAN hardcode onu-id 1) — section
+  "OMCI/ZTP gotcha E04ID + CT-COM".
+- **Deteksi merek dari data-model** + **guard radcheck** (kredensial WAN wajib ada di radcheck sebelum
+  push) — section "ZTP brand-detection + credential source" + design doc H8.
+- **disableUnboundWlan** (matikan WLAN existing tak-terpakai setelah ssid+bridge) — design doc H8.
+- **Ghost IPAM `boss-network`** — AKAR (tak ada `ip-range` → pool dinamis serobot IP node WireGuard
+  ter-pin) kini **DITUTUP** oleh commit `3b9df1e` (`infra/boss-network-ipam-ip-range`, cherry-picked ke
+  branch ini): `boss-network` dapat `ip_range 172.28.0.64/26` sehingga alokasi dinamis Docker tidak lagi
+  menyerobot `.4/.5/.11` dkk. Lihat section "WireGuard Node IP Collision" (Opsi B2 — kini terlaksana).
+- **session.upload_progress dimatikan** (hardening, mitigasi CVE-2026-109618/109619) — commit `562886d`
+  (`infra/php-session-upload-progress-hardening`, cherry-picked ke branch ini).
+- **Log rotation (docker json-file, max-size 20m/max-file 5)** — commit `904d0fd` ADA di branch
+  `infra/php-session-upload-progress-hardening` TAPI **TIDAK** di-cherry-pick ke cluster ini (`git cherry`
+  menandai `+`). Merge-nya terpisah; jangan diasumsikan sudah aktif di branch ini.
+
+**Status cherry-pick infra (agar merge nanti tak bentrok)**: `3b9df1e` (ipam) & `562886d`
+(session.upload_progress) keduanya `-` terhadap HEAD (patch-equivalent, sudah ada di branch ini) — saat
+branch infra di-merge ke `main`, keduanya duplikat/no-op, bukan konflik.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

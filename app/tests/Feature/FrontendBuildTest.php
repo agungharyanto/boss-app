@@ -48,19 +48,129 @@ class FrontendBuildTest extends TestCase
      * — a bare identifier immediately followed by `(` (deliberately NOT
      * matching Alpine's own inline object-literal form, `x-data="{ ... }"`,
      * which starts with `{`, not an identifier) — and asserts each such
-     * factory name is genuinely defined (`window.<name>`) in the built
-     * bundle. Auto-discovers new charts as they're added rather than
-     * relying on a manually-maintained list, which would itself be exactly
-     * the kind of thing that silently goes stale.
+     * factory name is genuinely registered by ONE of the two mechanisms this
+     * codebase actually uses:
+     *   (a) `window.<name>` present in the built JS bundle (resources/js/app.js
+     *       → public/build) — the staleness guard the 8 chart factories rely on
+     *       (trafficChart/signalHistoryChart/deviceHistoryChart/...); OR
+     *   (b) registered inline via `Alpine.data('<name>', ...)` inside a
+     *       `<script>` on a Blade page itself — work-orders/claim.blade.php's
+     *       `claimForm` (a standalone public signed-link page that ships its
+     *       own factory, never a window.X global in app.js, so the bundle
+     *       check alone would wrongly flag it missing — the v0.13.4.1.1 false
+     *       positive this OR-branch exists to fix).
+     * Auto-discovers new charts/factories as they're added rather than relying
+     * on a manually-maintained list, which would itself be exactly the kind of
+     * thing that silently goes stale.
      */
     public function test_every_alpine_factory_referenced_in_blade_views_is_present_in_the_built_bundle(): void
     {
+        $builtJs = $this->builtJsBundle();
+        $factories = $this->bladeXDataFactories();
+        $inlineRegistered = $this->inlineAlpineDataNames();
+
+        $this->assertNotEmpty($factories, 'No x-data="factory(...)" reference found in any Blade view — the scan itself may be broken.');
+
+        foreach ($factories as $factory) {
+            $this->assertTrue(
+                $this->factoryIsRegistered($factory, $builtJs, $inlineRegistered),
+                "Alpine factory '{$factory}' (referenced via x-data in a Blade view) is registered by NEITHER mechanism this codebase uses: ".
+                "it is not present as `window.{$factory}` in the built JS bundle (the staleness guard the chart factories rely on — ".
+                'run `npm run build`, see CLAUDE.md "Dashboard Monitoring Fixes"), '.
+                "AND it is not registered inline via `Alpine.data('{$factory}', ...)` in any Blade view (the pattern work-orders/claim.blade.php uses)."
+            );
+        }
+    }
+
+    /**
+     * A factory registered ONLY inline via `Alpine.data('<name>', ...)` on its
+     * own Blade page (never as a window.X global in app.js) must count as
+     * present — this is the v0.13.4.1.1 fix for the `claimForm` false positive.
+     */
+    public function test_a_factory_registered_inline_via_alpine_data_in_a_blade_counts_as_present(): void
+    {
+        $builtJs = $this->builtJsBundle();
+        $inlineRegistered = $this->inlineAlpineDataNames();
+
+        $this->assertContains('claimForm', $this->bladeXDataFactories(), 'claimForm should still be referenced via x-data in work-orders/claim.blade.php.');
+        $this->assertContains('claimForm', $inlineRegistered, "claimForm must be detected as inline-registered via Alpine.data('claimForm', ...).");
+        $this->assertStringNotContainsString('window.claimForm', $builtJs, 'claimForm is deliberately NOT a window.X global in app.js — this test guards the inline path specifically.');
+        $this->assertTrue($this->factoryIsRegistered('claimForm', $builtJs, $inlineRegistered));
+    }
+
+    /**
+     * The guard must NOT be weakened: a factory registered by neither mechanism
+     * (not window.X in the bundle, not inline Alpine.data() in any Blade) is
+     * still reported missing — this is the exact staleness the chart factories
+     * rely on being caught.
+     */
+    public function test_a_factory_registered_by_neither_mechanism_is_reported_missing(): void
+    {
+        $builtJs = $this->builtJsBundle();
+        $inlineRegistered = $this->inlineAlpineDataNames();
+
+        $this->assertFalse(
+            $this->factoryIsRegistered('totallyMadeUpFactoryThatExistsNowhere', $builtJs, $inlineRegistered),
+            'A factory registered by neither window.X nor inline Alpine.data() must still be reported missing — the staleness guard must not be weakened.'
+        );
+    }
+
+    private function builtJsBundle(): string
+    {
         $manifest = json_decode(file_get_contents(public_path('build/manifest.json')), true);
         $jsFile = $manifest['resources/js/app.js']['file'];
-        $builtJs = file_get_contents(public_path("build/{$jsFile}"));
 
+        return file_get_contents(public_path("build/{$jsFile}"));
+    }
+
+    /**
+     * Distinct factory names referenced as `x-data="fn("` across every Blade view.
+     *
+     * @return list<string>
+     */
+    private function bladeXDataFactories(): array
+    {
         $factories = [];
+        foreach ($this->bladeViewContents() as $contents) {
+            preg_match_all('/x-data="([a-zA-Z_][a-zA-Z0-9_]*)\(/', $contents, $matches);
+            $factories = array_merge($factories, $matches[1]);
+        }
 
+        return array_values(array_unique($factories));
+    }
+
+    /**
+     * Distinct names registered inline via `Alpine.data('name'|"name"` across
+     * every Blade view (the standalone-page registration mechanism, as opposed
+     * to a window.X global in the built bundle).
+     *
+     * @return list<string>
+     */
+    private function inlineAlpineDataNames(): array
+    {
+        $names = [];
+        foreach ($this->bladeViewContents() as $contents) {
+            preg_match_all('/Alpine\.data\(\s*[\'"]([a-zA-Z_][a-zA-Z0-9_]*)[\'"]/', $contents, $matches);
+            $names = array_merge($names, $matches[1]);
+        }
+
+        return array_values(array_unique($names));
+    }
+
+    /**
+     * @param  list<string>  $inlineRegistered
+     */
+    private function factoryIsRegistered(string $factory, string $builtJs, array $inlineRegistered): bool
+    {
+        return str_contains($builtJs, "window.{$factory}")
+            || in_array($factory, $inlineRegistered, true);
+    }
+
+    /**
+     * @return \Generator<string>
+     */
+    private function bladeViewContents(): \Generator
+    {
         foreach ((new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator(resource_path('views'), \FilesystemIterator::SKIP_DOTS)
         )) as $file) {
@@ -68,22 +178,7 @@ class FrontendBuildTest extends TestCase
                 continue;
             }
 
-            preg_match_all('/x-data="([a-zA-Z_][a-zA-Z0-9_]*)\(/', file_get_contents($file->getPathname()), $matches);
-            $factories = array_merge($factories, $matches[1]);
-        }
-
-        $factories = array_unique($factories);
-
-        $this->assertNotEmpty($factories, 'No x-data="factory(...)" reference found in any Blade view — the scan itself may be broken.');
-
-        foreach ($factories as $factory) {
-            $this->assertStringContainsString(
-                "window.{$factory}",
-                $builtJs,
-                "window.{$factory} (referenced via x-data in a Blade view) is missing from the built JS bundle — ".
-                'this is exactly the class of staleness that caused the v0.8.2 Traffic-graph-shows-nothing bug '.
-                '(see CLAUDE.md "Dashboard Monitoring Fixes"). Run `npm run build`.'
-            );
+            yield file_get_contents($file->getPathname());
         }
     }
 

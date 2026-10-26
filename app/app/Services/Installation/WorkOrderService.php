@@ -174,6 +174,37 @@ class WorkOrderService
     }
 
     /**
+     * v0.13.4.2.1 — dipanggil WorkOrderActivationService saat teknisi
+     * mengaktivasi pelanggan: assign ke teknisi pengklaim lalu pindah ke
+     * InProgress. Aturan transisi WorkOrderStatus TIDAK dilonggarkan — sah
+     * HANYA dari Ready (Ready->Assigned->InProgress) atau Assigned
+     * (Assigned->InProgress). Status lain melempar
+     * InvalidWorkOrderStatusTransitionException (defense-in-depth; prepare()
+     * sudah menolak lebih dulu dengan pesan Indonesia yang jelas). Guard
+     * status dicek PALING AWAL agar jalur tolak tidak keburu menulis
+     * technician_id.
+     */
+    public function startFromActivation(WorkOrder $workOrder, Technician $technician): WorkOrder
+    {
+        if (! in_array($workOrder->status, [WorkOrderStatus::Ready, WorkOrderStatus::Assigned], true)) {
+            throw new InvalidWorkOrderStatusTransitionException($workOrder->status, WorkOrderStatus::InProgress);
+        }
+
+        if ($workOrder->status === WorkOrderStatus::Ready) {
+            // Ready -> Assigned (transisi legal) + set technician_id ke pengklaim.
+            $this->assignTechnician($workOrder, $technician);
+            $workOrder->refresh();
+        } else {
+            // Sudah Assigned (mis. admin assign manual lebih dulu) — cukup
+            // pastikan technician_id = pengklaim; TIDAK transisi status lagi
+            // (Assigned->Assigned ilegal di canTransitionTo).
+            $workOrder->update(['technician_id' => $technician->id]);
+        }
+
+        return $this->start($workOrder);
+    }
+
+    /**
      * State-machine legality is checked FIRST (an illegal jump, e.g.
      * pending_verification -> completed, must fail as a transition error
      * even if photos/devices happen to be incomplete too — the transition

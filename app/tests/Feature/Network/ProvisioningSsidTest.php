@@ -149,9 +149,16 @@ class ProvisioningSsidTest extends TestCase
         ]);
 
         $this->assertSame([], $result['configured']);
-        $this->assertSame([4, 8], $result['pending']);
+        // Guard 5GHz (v0.23.8.6, commit 2be6e2e): guest 2.4g (inst 4) absent ->
+        // pending + AddObject; guest 5g (inst 8) absent -> SKIP (device 2.4GHz-only,
+        // AddObject tak pernah memunculkan radio 5G), BUKAN pending.
+        $this->assertSame([4], $result['pending']);
+        $this->assertCount(1, $result['skipped']);
+        $this->assertSame(8, $result['skipped'][0]['instance']);
+        $this->assertSame(SsidBand::Band5->value, $result['skipped'][0]['band']);
+        $this->assertStringContainsString('device tidak punya instance 5G', $result['skipped'][0]['reason']);
         $this->assertTrue($result['addobject_issued']);
-        // Hanya addObject (SATU) — belum ada setParameterValues (instance belum ada).
+        // Hanya addObject (SATU, untuk 2.4g) — belum ada setParameterValues (instance belum ada).
         $this->assertSame(['addObject'], $names);
     }
 

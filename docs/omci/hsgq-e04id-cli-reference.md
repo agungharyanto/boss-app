@@ -94,7 +94,32 @@ onu confirm onu-id <onu-id>
   aslinya `bind-onu`/`onu confirm`, bukan istilah "deny-list add/approve" seperti dugaan riset manual
   awal — **kemungkinan istilah "deny-list" di riset manual adalah istilah generik, bukan nama command
   real firmware ini**).
-- **Kedua command ini DENYLIST — tidak pernah dieksekusi, sintaks murni dari observasi config tersimpan.**
+- ~~**Kedua command ini DENYLIST — tidak pernah dieksekusi, sintaks murni dari observasi config
+  tersimpan.**~~ **USANG — DIEKSEKUSI + TERVERIFIKASI LIVE DI HARDWARE 2026-10-25** (OLT-Cileg,
+  firmware `HSGQ-E04ID_IR_V3.3.3ID_Rel`, SN `H4EG202310300088`).
+
+**SINTAKS TERVERIFIKASI (2026-10-25) — menggantikan sintaks observasi di atas:**
+```
+# di dalam: configure -> interface epon <PON>
+bind-onu mac <MAC> name <NamaTanpaSpasi> desc "<Nama - Kontak>"
+# (CATATAN: bukan `bind-onu <onu-id> mac ... onu-type ...` seperti observasi config lama —
+#  yang BEKERJA adalah `bind-onu mac <MAC> name <N> desc "<D>"`, TANPA onu-id & TANPA onu-type.
+#  onu-id TIDAK disuplai: device AUTO-ASSIGN. JANGAN asumsi nomor.)
+onu confirm onu-id <N>      # N = onu-id hasil AUTO-ASSIGN device, DIBACA dari show onu-info
+```
+- **Baca onu-id auto-assign + verifikasi di NODE `configure` (`OLT-Cileg(config)#`), BUKAN enable
+  (`OLT-Cileg#`)** — di enable, `show onu-info ...` = "Unknown command" (`node:6`). Command valid:
+  `show onu-info all` (seluruh ONU) atau `show onu-info mac <MAC>` (satu ONU, output ringkas tanpa pager —
+  cara TERBAIK mengambil onu-id untuk MAC tertentu). `terminal length 0` (di enable) mematikan pager
+  untuk `show onu-info all` yang panjang.
+- Save: `copy running-config startup-config` (di enable) → `Configuration saved successfully`.
+- **Contoh nyata terverifikasi**: `bind-onu mac f8:6c:e1:76:a4:14 name KhikmatulKhoeriyah
+  desc "Khikmatul Khoeriyah - 245595852"` di `interface epon 3` → device auto-assign **onu-id 15** →
+  `onu confirm onu-id 15` → `show onu-info mac f8:6c:e1:76:a4:14` menampilkan `PON 3 / ONU 15 /
+  Authrize state TRUE / Status Online / LOID ZICG2976A4FC / ONU Extend model ZX-F663NV3a XPON`. Save OK.
+- **Pelajaran onu-id**: jangan pernah hardcode `onu confirm onu-id 1` — pada kasus ini device meng-assign
+  **15**, bukan 1. Selalu `bind-onu` dulu → baca `show onu-info` → ambil onu-id baris MAC itu → baru
+  `onu confirm`.
 
 **2. Penamaan per-ONU (di luar blok epon, satu blok per ONU)**
 ```

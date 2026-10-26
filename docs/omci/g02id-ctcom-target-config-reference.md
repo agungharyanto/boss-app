@@ -187,3 +187,28 @@ FINAL:** selesaikan + stabilkan SEMUA perubahan WAN (VLAN, NAT, LanInterface, **
 DULU → BARU set DHCPServerEnable=false + apply WLAN sebagai langkah TERAKHIR → verifikasi fresh (dengan
 refreshObject, jangan andalkan tree yang mungkin basi) SETELAH semuanya. Jangan set DHCP/WLAN di tengah
 proses WAN — pasti tertimpa.
+
+## Verifikasi TR-069 CT-COM di modem pelanggan NYATA — 2026-10-25 (v0.23.8.5b)
+
+Modem uji: **ZICG2976A4FC** (`ZX-F663NV3a XPON` / GM219, customer #57), via `CtcomCpeAdapter` langsung
+(bukan `provision()` penuh). Semua diverifikasi `refreshObject` before/after, device Inform ~60s.
+
+- **X_CT-COM_LanInterface diturunkan dari instance WLAN yang BENAR-BENAR ADA — bukan `4,8` buta.** Modem
+  ini **4-WLAN** (WLANConfiguration.1-4 saja, TANPA 5GHz / instance 5-8). `CtcomCpeAdapter::pushWanBridge`
+  menghitung target bind dari `existingWlanInstances() ∩ wlanInstanceFor(guest,band)` → di device ini =
+  **cuma `WLANConfiguration.4`**. (Di device 8-WLAN → `WLANConfiguration.4,8`.) Nilai hardcode lama
+  `WLANConfiguration.4,8` di `default-wan.js` (preset auto-WAN v0.7.8) akan menyebut instance 8 yang tak
+  ada di modem 4-WLAN — makanya binding ZTP TIDAK memakai nilai buta itu.
+- **Aturan WLAN tanpa binding dimatikan** (`disableUnboundWlan`, tahap orkestrator setelah ssid): WLAN yang
+  ada di device tapi (a) bukan target SSID profil DAN (b) tak di-bind `X_CT-COM_LanInterface` WAN mana pun
+  → `Enable=false`. Di modem ini (profil guest-only instance 4): `kept={4}` → `disabled={1,2,3}` (menutup
+  WLAN.1 primary). Instance terpakai TIDAK disentuh.
+- **Hasil nyata (before→after, 2026-10-25):** `WCD.3(VID172).X_CT-COM_LanInterface`
+  `LANEthernetInterfaceConfig.1,2,3,WLANConfiguration.1` → **`WLANConfiguration.4`** + `-DHCPEnable=false`;
+  `WLAN.4` `SSID4/WPA2/Enable=False` → **`TOKEN WIFI`/open(BeaconType=None,WEP=Disabled,KeyPassphrase="")/
+  Enable=True**; `WLAN.1` primary → `Enable=False` (SSID & param lain tak berubah). **WLAN.1 lain & WAN10
+  (PPPoE routed, `extIP 10.0.0.243`) TIDAK berubah** saat perubahan bridge/SSID — gotcha "WAN reset WLAN/
+  DHCP" tidak terjadi dengan urutan bridge → (tunggu Inform stabil) → ssid.
+- **Password WiFi writable-but-not-readable tetap berlaku**, tapi `refreshObject` memang memunculkan
+  `X_CT-COM_LanInterface`/`BeaconType`/`WEPEncryptionLevel` (yang sebelumnya kosong tanpa refresh) — jadi
+  verifikasi after WAJIB pakai refreshObject, bukan tree basi.

@@ -4,8 +4,10 @@ namespace App\Livewire\Network;
 
 use App\Models\OltDevice;
 use App\Models\OltUplinkPort;
+use App\Services\Network\OltProvisioningSettingsService;
 use App\Services\Network\OltUplinkService;
 use Illuminate\Support\Collection;
+use InvalidArgumentException;
 use Livewire\Attributes\Computed;
 use Livewire\Component;
 
@@ -28,6 +30,21 @@ class OltDeviceDetail extends Component
 
     public ?string $refreshNotice = null;
 
+    // --- Tab Provisioning (v0.23.8.6a) ---
+    public bool $requiresBindOnu = false;
+
+    public bool $omciChannelEnabled = true;
+
+    public bool $tr069ChannelEnabled = true;
+
+    public bool $usesUncfgParadigm = false;
+
+    public ?bool $originalRequiresBindOnu = null;
+
+    public ?string $provError = null;
+
+    public ?string $provNotice = null;
+
     /**
      * Daftar tab (meniru SmartOLT). Hanya 'uplink' enabled sprint ini.
      *
@@ -40,6 +57,7 @@ class OltDeviceDetail extends Component
             ['key' => 'cards', 'label' => 'OLT cards', 'enabled' => false],
             ['key' => 'pon', 'label' => 'PON ports', 'enabled' => false],
             ['key' => 'uplink', 'label' => 'Uplink', 'enabled' => true],
+            ['key' => 'provisioning', 'label' => 'Provisioning', 'enabled' => true],
             ['key' => 'vlans', 'label' => 'VLANs', 'enabled' => false],
             ['key' => 'onu_ip_pools', 'label' => 'ONU IP Pools', 'enabled' => false],
             ['key' => 'remote_acls', 'label' => 'Remote ACLs', 'enabled' => false],
@@ -53,6 +71,48 @@ class OltDeviceDetail extends Component
     {
         $this->authorize('view', $oltDevice);
         $this->oltDevice = $oltDevice;
+        $this->hydrateProvisioningFromModel();
+    }
+
+    /** Isi properti form Provisioning dari kolom DB (nilai terbaru). */
+    private function hydrateProvisioningFromModel(): void
+    {
+        $this->usesUncfgParadigm = app(OltProvisioningSettingsService::class)->usesUncfgParadigm($this->oltDevice);
+        $this->requiresBindOnu = (bool) $this->oltDevice->requires_bind_onu;
+        $this->originalRequiresBindOnu = $this->oltDevice->requires_bind_onu;
+        $this->omciChannelEnabled = (bool) $this->oltDevice->omci_channel_enabled;
+        $this->tr069ChannelEnabled = (bool) $this->oltDevice->tr069_channel_enabled;
+    }
+
+    /** True kalau pilihan requires_bind_onu berbeda dari nilai tersimpan (untuk
+     *  peringatan + konfirmasi; hanya relevan OLT bind-onu-paradigm). */
+    #[Computed]
+    public function requiresBindOnuChanged(): bool
+    {
+        return ! $this->usesUncfgParadigm
+            && (bool) $this->originalRequiresBindOnu !== $this->requiresBindOnu;
+    }
+
+    public function saveProvisioning(OltProvisioningSettingsService $service): void
+    {
+        $this->authorize('manage', $this->oltDevice);
+        $this->provError = null;
+        $this->provNotice = null;
+
+        try {
+            $service->update(
+                $this->oltDevice,
+                $this->requiresBindOnu,
+                $this->omciChannelEnabled,
+                $this->tr069ChannelEnabled,
+                auth()->id(),
+            );
+            $this->oltDevice->refresh();
+            $this->hydrateProvisioningFromModel();
+            $this->provNotice = __('Setelan provisioning tersimpan.');
+        } catch (InvalidArgumentException $e) {
+            $this->provError = $e->getMessage();
+        }
     }
 
     public function selectTab(string $key): void

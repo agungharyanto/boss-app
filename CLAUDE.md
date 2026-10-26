@@ -8986,6 +8986,121 @@ terpisah, sehingga delivery pesan masuk jadi non-deterministik dan merusak isola
 sekarang mencegah ini otomatis (lihat WhatsappSessionService — validasi nomor duplikat saat pairing
 selesai).
 
+## OMCI/ZTP gotcha E04ID + CT-COM — terverifikasi hardware (v0.23.8.5b, 2026-10-25)
+
+Dari live-run NYATA di modem pelanggan `ZICG2976A4FC` (E04ID-Cileg, customer #57). Detail penuh:
+`docs/omci/hsgq-e04id-cli-reference.md` + `docs/omci/ztp-dynamic-config-design.md` Bagian H7.
+
+- **`bind-onu` E04ID TANPA onu-id — device AUTO-ASSIGN.** Sintaks yang BEKERJA (di `configure` →
+  `interface epon <PON>`): `bind-onu mac <MAC> name <NamaTanpaSpasi> desc "<Nama - Kontak>"` — TANPA onu-id,
+  TANPA onu-type (beda dari observasi config lama `bind-onu <onu-id> mac ... onu-type ...`). Device meng-
+  assign onu-id sendiri; **JANGAN hardcode `onu confirm onu-id 1`** — modem ZICG2976A4FC di-assign **15**.
+  Selalu: bind → baca `show onu-info` → ambil onu-id baris MAC itu → `onu confirm onu-id <id-device>`.
+- **`show onu-info ...` HANYA di node `configure` (`OLT-Cileg(config)#`), BUKAN enable (`OLT-Cileg#`).** Di
+  enable = "Unknown command" (`node:6`). `show onu-info all` (semua ONU; pager — `terminal length 0` di
+  enable utk matikan) atau `show onu-info mac <MAC>` (satu ONU, ringkas, tanpa pager — cara terbaik ambil
+  onu-id). Spasi command di PTY OLT baik-baik saja; "spasi hilang" dulu sebenarnya device menolak token di
+  node salah.
+- **Cocokkan ONU TR-069 ↔ fisik lewat LOID/serial, BUKAN MAC.** Satu ONU punya MAC berbeda per layer: MAC
+  PON/akses (mis. `f8:6c:e1:76:a4:14`, yang muncul di tabel ONU OLT) ≠ MAC WAN/TR-069 (`...a4:fc`/`...a4:fd`
+  di GenieACS). OLT `show onu-info mac` menampilkan field **`LOID`** = serial (`ZICG2976A4FC`) = GenieACS
+  device `_id` (`F86CE1-GM219-ZICG2976A4FC`). Jadi jangan simpulkan "MAC beda = ONU beda" — cocokkan via
+  serial/LOID. (Catatan: E04ID ini XPON — ONU GPON bisa teregistrasi, jadi "GPON tak bisa di EPON" keliru.)
+- **`cpe_devices` TIDAK menyimpan kolom `mac_address`.** Identitas device = `genieacs_device_id` +
+  `serial_number`. Jangan query `cpe_devices.mac_address` (tak ada); untuk MAC, baca tree GenieACS atau
+  tabel ONU OLT.
+- **Backlog — DUA DITUTUP (2026-10-25), satu tersisa:**
+  - ✅ **DITUTUP:** op sidecar `hsgq_e04id.bind_onu` read-back kini di node `configure` interaktif
+    (`_e04id_login` → `exit` ke `(config)#` → `show onu-info mac <MAC>` ringkas, fallback `show onu-info
+    all`; confirm pakai onu-id device; verify Auth=TRUE; `copy running-config startup-config`). Read op
+    baru `show_onu_info_mac` (node config) terverifikasi read-only ke OLT nyata 2026-10-25. Pytest parser +
+    urutan command (mock pexpect) hijau (170 total).
+  - ✅ **DITUTUP:** guard 5GHz di `CtcomCpeAdapter::pushSsid` — spec band 5g yang instance-nya (5-8) tak
+    ada di device di-SKIP (`skipped[]` + alasan), tak AddObject buta; spec 2.4g belum-ada tetap AddObject
+    berurutan.
+  - ⏳ **Tersisa:** replay-safety ZTE.
+
+## ZTP brand-detection + credential source + UJI PENUTUP provision() (v0.23.8.6c, 2026-10-26)
+
+Orkestrator `provision()` terverifikasi END-TO-END di modem pelanggan NYATA `ZICG2976A4FC` (GM219, customer
+#57, cpe_device #261, di belakang E04ID-Cileg) — nol gangguan ke internet pelanggan. `test-x86-bajastu`
+tidak disentuh. Dua fix inti:
+
+**1. Sumber kredensial WAN CT-COM + GUARD KERAS (commit `f84778c`).** `CtcomActivationService::
+resolveWanCredentials(Customer, ?ProvisioningWanInternet)` resolve username/password PPPoE berurutan:
+**(a)** profil strategi `static` → nilai static profil; **(b)** derive → `RadiusCredentialService::
+lookupForCustomer` (kredensial NYATA dari radcheck via `RadiusUsernameResolver::candidatesFor` =
+phone/legacy/`{cid}@ppp.bajastu.id`); **(c)** fallback `{cid}@ppp.bajastu.id` HANYA setelah `writeRadcheck`
+sukses. **GUARD**: sebelum `setParameterValues`, username final WAJIB punya baris radcheck — kalau tidak,
+**throw, NOL push**. Ini mencegah bug asli: `deriveLiveWanParams` lama hardcode `{cid}@ppp.bajastu.id`,
+padahal pelanggan termigrasi v0.8.4 pakai **nomor telepon** sebagai username PPPoE (= password, konvensi
+migrasi) — push `{cid}@...` buta akan memutus PPPoE. `CtcomActivationService::activate()` tidak lagi
+`writeRadcheck` terpisah (cegah double-write + double-identity `{cid}@` vs nomor-telepon). Pelanggan baru =
+jalur (c) tetap jalan.
+
+**2. Deteksi merek CPE dari data-model GenieACS (commit `09d1c9b`).** `ZtpOrchestratorService::cpeBrandKey()`
+3-cabang: (a) `manufacturer` DIKENAL (CMDC/CT-COM/HUAWEI/CMCC/ZTE) → jalur lama; (b) TAK dikenal → inject
+`GenieAcsClientService`, baca pohon device, objek `X_CT-COM_*` ada → `ctcom`; (c) selain itu tetap tak
+dikenal (alasan menyebut manufacturer + hasil cek data-model). **Akar masalah fleet**: `cpe_devices.
+manufacturer` diisi **PREFIX SERIAL 4-huruf**, BUKAN nama vendor — distribusi: ZICG 212, CIOT 95, CMDC 43,
+ZTE 29, RTEG 11, MONU 8, ZTEG 5, HWTC 4, GGCL 4, GPON 2, null 7. **343 dari 420 (82%) TAK match** aturan
+brand-key berbasis nama vendor; itu sebab orkestrator dulu berhenti di `select_adapter` untuk #261 ("ZICG").
+Device manufacturer-dikenal TIDAK di-remap (29 "ZTE" tetap → `zte_generic`).
+
+**BACKLOG TEKNIS (belum dikerjakan, keputusan Agung diperlukan):**
+- **Audit 29 device manufacturer "ZTE"** (→ `zte_generic`) — kemungkinan besar data-model-nya CT-COM
+  (`X_CT-COM_*`), harusnya ke `ctcom`, bukan `zte_generic` (model legacy `X_ZTE-COM_*`). Sengaja TIDAK
+  di-remap sekarang.
+- **`cpe_devices.manufacturer` fleet berisi prefix serial, bukan nama vendor** (ZICG 212, CIOT 95, dll) —
+  pertimbangkan normalisasi sumber `manufacturer` (atau derive merek dari data-model/OUI secara umum, bukan
+  hanya fallback CT-COM). JANGAN ubah `manufacturer` device existing tanpa keputusan ini.
+
+**UJI PENUTUP (nol gangguan, terbukti):** subset aman (`wan_bridge/ssid/disable_unbound_wlan/naming/save`,
+tanpa wan_internet) idempoten, nol divergensi config dari BEFORE. Gelombang penuh (`wan_internet/wan_bridge`)
+dengan dry-check (username WAJIB `085601070033` + sesi RADIUS aktif, else STOP) + monitor WAN10 5 menit +
+guard revert: **WAN10 Status=Connected / User=085601070033 / extIP=10.0.0.243 KONSTAN sepanjang ~5 Inform**,
+PPPoE pelanggan tak pernah putus (push value-identik). naming E04ID = `noop_bind_onu` (nama diisi saat
+bind-onu), save = "Configuration saved successfully". Detail: `docs/omci/ztp-dynamic-config-design.md` H8.
+
+## v0.23.0 Cluster Closure — regresi penuh + gotcha konsolidasi (8.9, 2026-10-26)
+
+Regresi penuh branch `v0.23.8-ztp-dynamic-config` (27 commit sejak `main`, NOL merge/tag, NOL device):
+- **PHP `php artisan test` (tanpa filter)**: **2426 lulus, 3 gagal, ~22 mnt**. pytest olt-sidecar: **172 lulus**.
+  Pint: 65 file berubah clean. `/var` 49G free.
+- **Triage 3 gagal** (dicek di `develop` langsung):
+  1. `FrontendBuildTest > every alpine factory...` — **PRE-EXISTING** (bukan v0.23): blade
+     `work-orders/claim.blade.php` pakai `x-data="claimForm("` tapi `window.claimForm` TAK PERNAH ada di
+     `resources/js/app.js` (oversight v0.12.6 `ae15a5a`). Gagal identik di develop (file byte-identik).
+  2. `WhatsappIncomingMessageWebhookTest > a message that matches nothing...` — **PRE-EXISTING** (bukan
+     v0.23): tak disentuh cluster ini, gagal identik di develop.
+  3. `ProvisioningSsidTest > guest_wifi_absent_triggers_addobject_and_defers` (baris 152) — **v0.23, TEST
+     BASI (bukan bug produk)**: commit `2be6e2e` menambah guard 5GHz di `CtcomCpeAdapter::pushSsid`
+     (spec band 5g yang instance-nya 5-8 tak ada → masuk `skipped[]`, BUKAN `pending[]`/AddObject buta —
+     perilaku TERVERIFIKASI hardware di `ZICG2976A4FC` + terdokumentasi) tapi LUPA memperbarui sibling test
+     ini yang masih meng-assert `pending=[4,8]` (kini `[4]`, 8 di `skipped`). **Fix yang disarankan** (belum
+     diterapkan — menunggu keputusan, sesuai "jangan ubah test untuk memaksa lulus"): ubah assertion jadi
+     `pending=[4]` + assert entri 5g ada di `result['skipped']`.
+
+**Gotcha v0.23 (detail di section masing-masing + design doc):**
+- **bind-onu E04ID**: auto-assign onu-id (read-back di node `configure`, JANGAN hardcode onu-id 1) — section
+  "OMCI/ZTP gotcha E04ID + CT-COM".
+- **Deteksi merek dari data-model** + **guard radcheck** (kredensial WAN wajib ada di radcheck sebelum
+  push) — section "ZTP brand-detection + credential source" + design doc H8.
+- **disableUnboundWlan** (matikan WLAN existing tak-terpakai setelah ssid+bridge) — design doc H8.
+- **Ghost IPAM `boss-network`** — AKAR (tak ada `ip-range` → pool dinamis serobot IP node WireGuard
+  ter-pin) kini **DITUTUP** oleh commit `3b9df1e` (`infra/boss-network-ipam-ip-range`, cherry-picked ke
+  branch ini): `boss-network` dapat `ip_range 172.28.0.64/26` sehingga alokasi dinamis Docker tidak lagi
+  menyerobot `.4/.5/.11` dkk. Lihat section "WireGuard Node IP Collision" (Opsi B2 — kini terlaksana).
+- **session.upload_progress dimatikan** (hardening, mitigasi CVE-2026-109618/109619) — commit `562886d`
+  (`infra/php-session-upload-progress-hardening`, cherry-picked ke branch ini).
+- **Log rotation (docker json-file, max-size 20m/max-file 5)** — commit `904d0fd` ADA di branch
+  `infra/php-session-upload-progress-hardening` TAPI **TIDAK** di-cherry-pick ke cluster ini (`git cherry`
+  menandai `+`). Merge-nya terpisah; jangan diasumsikan sudah aktif di branch ini.
+
+**Status cherry-pick infra (agar merge nanti tak bentrok)**: `3b9df1e` (ipam) & `562886d`
+(session.upload_progress) keduanya `-` terhadap HEAD (patch-equivalent, sudah ada di branch ini) — saat
+branch infra di-merge ke `main`, keduanya duplikat/no-op, bukan konflik.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

@@ -13,7 +13,13 @@ from app.vendors.base import (
 
 
 def test_hsgq_e04id_only_exposes_show_version_as_teruji_operation():
+    # show_version = one-shot exec; show onu-info di-pindah ke OPERATIONS_CONFIG_READ
+    # (v0.23.8.5b: HANYA valid di node config, bukan enable/exec).
     assert hsgq_e04id.OPERATIONS == {'show_version': 'show version'}
+    assert hsgq_e04id.OPERATIONS_CONFIG_READ == {
+        'show_onu_info_all': 'show onu-info all',
+        'show_onu_info_mac': 'show onu-info mac {mac}',
+    }
 
 
 def test_hsgq_g02id_only_exposes_show_version_as_teruji_operation():
@@ -784,3 +790,249 @@ def test_g02id_execute_save_raises_on_device_error(monkeypatch):
     )
     with pytest.raises(OltSessionError):
         hsgq_g02id.execute_save({'host': 'h', 'username': 'u', 'password': 'p'})
+
+
+# --- HSGQ E04ID bind_onu (v0.23.8 LANGKAH D) — builder MURNI, nol device ---
+
+def test_e04id_exposes_bind_onu_and_save_as_write_operations():
+    assert hsgq_e04id.OPERATIONS_WRITE == ('bind_onu', 'save_config')
+
+
+def test_e04id_execute_save_parses_success(monkeypatch):
+    monkeypatch.setattr(
+        hsgq_e04id.hsgq_common, 'run_hsgq_ssh_command',
+        lambda conn, cmd, overall_timeout=45.0: 'copy running-config startup-config\n Configuration saved successfully\nOLT-Cileg#',
+    )
+    result = hsgq_e04id.execute_save({'host': 'h', 'username': 'u', 'password': 'p'})
+    assert result['saved'] is True
+    assert 'saved successfully' in result['raw_excerpt'].lower()
+
+
+def test_e04id_execute_save_raises_on_device_error(monkeypatch):
+    monkeypatch.setattr(
+        hsgq_e04id.hsgq_common, 'run_hsgq_ssh_command',
+        lambda conn, cmd, overall_timeout=45.0: '% command error',
+    )
+    with pytest.raises(OltSessionError):
+        hsgq_e04id.execute_save({'host': 'h', 'username': 'u', 'password': 'p'})
+
+
+def test_e04id_build_bind_onu_commands_full_sequence():
+    commands = hsgq_e04id._build_bind_onu_commands(
+        'ec:9b:2d:f2:f6:39', 1, 'TestE04ID', 'TestE04ID - 261067914698'
+    )
+    # bind-onu TANPA onu-id (device meng-assign); confirm memakai onu-id caller.
+    assert commands == [
+        'bind-onu mac ec:9b:2d:f2:f6:39 name TestE04ID desc "TestE04ID - 261067914698"',
+        'onu confirm onu-id 1',
+    ]
+
+
+def test_e04id_build_bind_onu_commands_name_and_desc_optional():
+    # Builder menerima MAC yang SUDAH dinormalisasi (_require_mac), verbatim.
+    assert hsgq_e04id._build_bind_onu_commands('ec:9b:2d:f2:f6:39', 3, None, None) == [
+        'bind-onu mac ec:9b:2d:f2:f6:39',
+        'onu confirm onu-id 3',
+    ]
+
+
+def test_e04id_require_mac_normalises_to_colon_lowercase():
+    assert hsgq_e04id._require_mac({'mac': 'EC-9B-2D-F2-F6-39'}) == 'ec:9b:2d:f2:f6:39'
+    assert hsgq_e04id._require_mac({'mac': 'ec9b2df2f639'}) == 'ec:9b:2d:f2:f6:39'
+
+
+@pytest.mark.parametrize('bad', ['', 'ec9b2d', 'ZZ:9b:2d:f2:f6:39', '1234567890123'])
+def test_e04id_require_mac_rejects_invalid(bad):
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._require_mac({'mac': bad})
+    assert exc.value.stage == 'params'
+
+
+@pytest.mark.parametrize('pon', [0, 5, 'dua', None])
+def test_e04id_require_pon_rejects_out_of_range(pon):
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._require_pon({'pon': pon})
+    assert exc.value.stage == 'params'
+
+
+@pytest.mark.parametrize('onu_id', [0, 65, 'satu', None])
+def test_e04id_require_onu_id_rejects_out_of_range(onu_id):
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._require_onu_id({'onu_id': onu_id})
+    assert exc.value.stage == 'params'
+
+
+@pytest.mark.parametrize('name', ['nama spasi', 'a"b', 'x' * 41])
+def test_e04id_build_rejects_unsafe_name(name):
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._build_bind_onu_commands('ec9b2df2f639', 1, name, None)
+    assert exc.value.stage == 'params'
+
+
+def test_e04id_build_rejects_desc_with_double_quote():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._build_bind_onu_commands('ec9b2df2f639', 1, None, 'a"b')
+    assert exc.value.stage == 'params'
+
+
+def test_e04id_execute_apply_rejects_unknown_write_operation():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id.execute_apply({}, 'operasi_tak_dikenal', {'pon': 1, 'mac': 'ec9b2df2f639', 'onu_id': 1})
+    assert exc.value.stage == 'operation'
+
+
+# --- E04ID parser read-back — fixture output NYATA 2026-10-25 (ZICG2976A4FC) ---
+
+_E04ID_MAC_DETAIL = """show onu-info mac f8:6c:e1:76:a4:14
+----------------------------------------------------------------------------------------------------
+ PON ID                        : 3
+ ONU ID                        : 15
+ ONU LLID                      : 19
+ ONU Name                      : KhikmatulKhoeriyah
+ Authrize mode                 : mac
+ Authrize state                : TRUE
+ Status                        : Online
+ Mac address                   : f8:6c:e1:76:a4:14
+ LOID                          : ZICG2976A4FC
+OLT-Cileg(config)#"""
+
+_E04ID_TABLE = """show onu-info all
+ PON/ONU     Mac-Address    Status   Auth  Cfg     Reg-time            ONU-Name     ONU-Desc
+ 3/14    d4:f7:56:ee:0d:d4 Online    TRUE  TRUE  2026/10/25 04:50:45      Miftahul     Miftaful And
+ 3/15    f8:6c:e1:76:a4:14 Online    TRUE  TRUE  2026/10/25 18:13:50      KhikmatulKho Khikmatul Kh
+ 3/16    50:70:97:65:dc:ff Online    TRUE  TRUE  2026/10/25 04:50:48      Darmanto     Darmanto - 2
+OLT-Cileg(config)#"""
+
+
+def test_e04id_parse_mac_detail_real_output():
+    assert hsgq_e04id._parse_mac_detail(_E04ID_MAC_DETAIL, 'f8:6c:e1:76:a4:14') == {'pon': 3, 'onu_id': 15}
+
+
+def test_e04id_parse_mac_detail_absent_mac_returns_none():
+    assert hsgq_e04id._parse_mac_detail(_E04ID_MAC_DETAIL, 'aa:bb:cc:dd:ee:ff') is None
+
+
+def test_e04id_parse_assigned_onu_id_from_table_real_output():
+    assert hsgq_e04id._parse_assigned_onu_id(_E04ID_TABLE, 'f8:6c:e1:76:a4:14') == 15
+
+
+def test_e04id_parse_auth_true_real_output():
+    assert hsgq_e04id._parse_auth_true(_E04ID_MAC_DETAIL, 'f8:6c:e1:76:a4:14') is True
+    assert hsgq_e04id._parse_auth_true(_E04ID_MAC_DETAIL, 'aa:bb:cc:dd:ee:ff') is False
+
+
+def test_e04id_bind_with_readback_command_sequence(monkeypatch):
+    """Urutan command bind-with-readback (mock pexpect) — read-back di node
+    config (show onu-info mac), confirm pakai onu-id device, verify Auth, save."""
+    recorded = []
+
+    def fake_login(connection, deadline):
+        return object()  # fake child; semua interaksi di-mock di bawah
+
+    def fake_run_or_raise(child, command, deadline):
+        recorded.append(command)
+        return ''
+
+    def fake_capture(child, command, deadline):
+        recorded.append(command)
+        if command.startswith('show onu-info mac'):
+            return _E04ID_MAC_DETAIL
+        if command.startswith('copy running-config'):
+            return ' Configuration saved successfully '
+        return ''
+
+    monkeypatch.setattr(hsgq_e04id, '_e04id_login', fake_login)
+    monkeypatch.setattr(hsgq_e04id, '_logout_e04id', lambda child: None)
+    monkeypatch.setattr(hsgq_e04id, '_run_command_or_raise', fake_run_or_raise)
+    monkeypatch.setattr(hsgq_e04id, 'run_command_and_capture', fake_capture)
+
+    bind_cmd = 'bind-onu mac f8:6c:e1:76:a4:14 name KhikmatulKhoeriyah desc "Khikmatul Khoeriyah - 245595852"'
+    result = hsgq_e04id._run_e04id_bind_with_readback({}, 3, 'f8:6c:e1:76:a4:14', bind_cmd, None)
+
+    assert recorded == [
+        'interface epon 3',
+        bind_cmd,
+        'exit',
+        'show onu-info mac f8:6c:e1:76:a4:14',
+        'interface epon 3',
+        'onu confirm onu-id 15',
+        'exit',
+        'show onu-info mac f8:6c:e1:76:a4:14',
+        'end',
+        'copy running-config startup-config',
+    ]
+    assert result['assigned_onu_id'] == 15
+    assert result['confirmed_onu_id'] == 15
+    assert result['auth_true'] is True
+    assert result['saved'] is True
+
+
+def test_e04id_bind_with_readback_cross_check_mismatch_fails_before_confirm(monkeypatch):
+    """expected_onu_id caller BEDA dari device → GAGAL KERAS sebelum confirm."""
+    recorded = []
+    monkeypatch.setattr(hsgq_e04id, '_e04id_login', lambda c, d: object())
+    monkeypatch.setattr(hsgq_e04id, '_logout_e04id', lambda child: None)
+    monkeypatch.setattr(hsgq_e04id, '_run_command_or_raise', lambda c, cmd, d: recorded.append(cmd) or '')
+    monkeypatch.setattr(hsgq_e04id, 'run_command_and_capture',
+                        lambda c, cmd, d: recorded.append(cmd) or (_E04ID_MAC_DETAIL if cmd.startswith('show onu-info mac') else ''))
+
+    with pytest.raises(OltSessionError) as exc:
+        # device assign 15, caller suplai 7 → mismatch
+        hsgq_e04id._run_e04id_bind_with_readback({}, 3, 'f8:6c:e1:76:a4:14', 'bind-onu mac f8:6c:e1:76:a4:14', 7)
+    assert exc.value.stage == 'mismatch'
+    assert 'onu confirm' not in ' '.join(recorded)  # TIDAK pernah confirm
+
+
+# --- E04ID read-back onu-id (v0.23.8.5b) — logika verify MURNI, nol device ---
+
+_SHOW_ONU_INFO_SAMPLE = """\
+OnuIndex  MAC               Status   Dist
+2/1       ec:9b:2d:f2:f6:39 Initial  1234
+2/3       aa:bb:cc:dd:ee:ff Online   2000
+"""  # FORMAT ASUMSI (lihat _parse_assigned_onu_id docstring) — divalidasi live
+
+
+def test_e04id_parse_assigned_onu_id_found_colon():
+    assert hsgq_e04id._parse_assigned_onu_id(_SHOW_ONU_INFO_SAMPLE, 'ec:9b:2d:f2:f6:39') == 1
+
+
+def test_e04id_parse_assigned_onu_id_found_plain_mac_input():
+    # MAC disuplai tanpa colon tetap cocok (normalisasi plain-hex)
+    assert hsgq_e04id._parse_assigned_onu_id(_SHOW_ONU_INFO_SAMPLE, 'ec9b2df2f639') == 1
+
+
+def test_e04id_parse_assigned_onu_id_not_found_returns_none():
+    assert hsgq_e04id._parse_assigned_onu_id(_SHOW_ONU_INFO_SAMPLE, '11:22:33:44:55:66') is None
+
+
+def test_e04id_resolve_confirm_onu_id_match_or_no_expected():
+    assert hsgq_e04id._resolve_confirm_onu_id(1, None) == 1   # tanpa cross-check
+    assert hsgq_e04id._resolve_confirm_onu_id(1, 1) == 1      # cocok
+
+
+def test_e04id_resolve_confirm_onu_id_mismatch_fails_hard():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._resolve_confirm_onu_id(1, 2)
+    assert exc.value.stage == 'mismatch'
+
+
+def test_e04id_resolve_confirm_onu_id_not_found_fails():
+    with pytest.raises(OltSessionError) as exc:
+        hsgq_e04id._resolve_confirm_onu_id(None, 1)
+    assert exc.value.stage == 'readback'
+
+
+@pytest.mark.parametrize('val,expected', [(None, None), ('', None), (3, 3)])
+def test_e04id_optional_onu_id_accepts_absent_or_valid(val, expected):
+    assert hsgq_e04id._optional_onu_id({'onu_id': val} if val is not None else {}) == expected
+
+
+@pytest.mark.parametrize('bad', [0, 65, 'x'])
+def test_e04id_optional_onu_id_rejects_out_of_range(bad):
+    with pytest.raises(OltSessionError):
+        hsgq_e04id._optional_onu_id({'onu_id': bad})
+
+
+def test_e04id_build_bind_command_no_onu_id():
+    assert hsgq_e04id._build_bind_command('ec:9b:2d:f2:f6:39', 'TestE04ID', None) \
+        == 'bind-onu mac ec:9b:2d:f2:f6:39 name TestE04ID'

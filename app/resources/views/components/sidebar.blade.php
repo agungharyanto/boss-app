@@ -67,6 +67,8 @@
                 || request()->routeIs('web.network-profile-groups.*')
                 || request()->routeIs('web.hotspot-packages.*')
                 || request()->routeIs('web.ppp-packages.*')
+                // ("web.provisioning-profiles.*" dipindah ke cluster Network —
+                //  entri menu-nya kini di grup "Remote CPE").
                 // "Referrer" + "Rate Komisi" dipindah ke sini dari
                 // "Operasional" (komisi/keuangan).
                 || request()->routeIs('web.referrers.*')
@@ -122,6 +124,8 @@
                             auth()->user()->can('viewAny', \App\Models\PppPackage::class)
                                 ? ['route' => 'web.ppp-packages.index', 'label' => __('Profil PPP')]
                                 : null,
+                            // "Profil Provisioning" (ZTP) dipindah ke grup "Remote CPE"
+                            // (cluster Network) — lihat di sana.
                         ]),
                     ]
                     : null,
@@ -186,7 +190,7 @@
         [
             'id' => 'network',
             'label' => __('Network'),
-            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.remote-config.*') || request()->routeIs('web.wan-config-templates.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*'),
+            'active' => request()->routeIs('web.nas.*') || request()->routeIs('web.vpn-script-generator.*') || request()->routeIs('web.cpe-devices.*') || request()->routeIs('web.remote-config.*') || request()->routeIs('web.provisioning-profiles.*') || request()->routeIs('web.wan-config-templates.*') || request()->routeIs('web.olt-devices.*') || request()->routeIs('web.monitoring.*'),
             // v0.8.1 — nested one level deeper than a plain link: an item
             // with a 'children' key renders as its own expand/collapse
             // sub-group (own localStorage key, same pattern as the
@@ -243,6 +247,13 @@
                                 : null,
                             auth()->user()->can('remote_config.view')
                                 ? ['route' => 'web.remote-config.index', 'label' => __('Konfig Remote')]
+                                : null,
+                            // "Profil Provisioning" (ZTP) dipindah ke sini dari grup
+                            // "Profil Paket" (v0.23.8.6b) — tepat setelah Konfig Remote.
+                            // Route /provisioning-profiles + gate provisioning_profiles.view
+                            // (viewAny ProvisioningProfile) tetap.
+                            auth()->user()->can('viewAny', \App\Models\ProvisioningProfile::class)
+                                ? ['route' => 'web.provisioning-profiles.index', 'label' => __('Profil Provisioning')]
                                 : null,
                             // v0.12.5 — reuse remote_config.view (sama
                             // permission dengan Konfig Remote, lihat

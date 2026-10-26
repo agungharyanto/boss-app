@@ -3049,3 +3049,19 @@ muncul pertanyaan lebih besar dari Agung: apakah teknisi butuh akses self-servic
 **INI SENGAJA DIPISAH dari v0.13.4** — v0.13.4 cukup pakai signed-URL tanpa login (lihat entry v0.13.4
 untuk detail alur klaim/aktivasi/close WO). Kalau nanti mau dikembangkan, ini kelanjutan alami dari v0.22.0
 (Manajemen Staff + role teknisi) — bukan bagian WhatsApp Gateway.
+
+## Backlog — Bug Pre-existing (di luar v0.23, ditemukan saat regresi 8.9 2026-10-26)
+
+Ditemukan saat regresi penuh penutupan cluster v0.23.0; **keduanya gagal identik di `develop`** → bukan
+akibat v0.23, ditangani di sprint terpisah.
+
+- **PRIORITAS — `window.claimForm` tidak ada di `resources/js/app.js`.** Blade `work-orders/claim.blade.php`
+  memakai `x-data="claimForm("` tapi factory `window.claimForm` tak pernah didefinisikan di `app.js`
+  (oversight sejak v0.12.6, commit `ae15a5a`). Konsekuensi: halaman **`/work-orders/claim`** (klaim WO via
+  signed-link teknisi) **kemungkinan RUSAK di browser** (Alpine memanggil fungsi undefined). Ditangkap
+  `FrontendBuildTest`. **Aksi**: cek langsung di browser (buka signed-link klaim WO), lalu perbaiki
+  (definisikan `window.claimForm` + `npm run build`) di sprint terpisah.
+- **`WhatsappIncomingMessageWebhookTest > a message that matches nothing gets the generic fallback reply`**
+  gagal (juga di `develop`): `whatsapp_message_logs` tidak mencatat `event_type=unrecognized_message_fallback`
+  saat pesan masuk tak match apa pun (jalur fallback generik sesi "direct", v0.13.3). Perlu investigasi
+  terpisah apakah regresi perilaku fallback inbound atau test yang perlu disesuaikan — bukan scope v0.23.

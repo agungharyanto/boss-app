@@ -15,6 +15,7 @@ use App\Models\ProvisioningSsid;
 use App\Models\ProvisioningWanBridge;
 use App\Models\ProvisioningWanInternet;
 use App\Models\Tenant;
+use App\Services\Network\GenieAcsClientService;
 use App\Services\Network\Provisioning\AdapterCapabilities;
 use App\Services\Network\Provisioning\Contracts\CpeProvisioningAdapter;
 use App\Services\Network\Provisioning\Contracts\OltProvisioningAdapter;
@@ -41,12 +42,17 @@ class ZtpOrchestratorServiceTest extends TestCase
 
     private OltProvisioningAdapter $oltAdapter;
 
+    private GenieAcsClientService $genieacs;
+
     protected function setUp(): void
     {
         parent::setUp();
         $this->tenant = Tenant::factory()->create();
         $this->cpeAdapter = $this->createMock(CpeProvisioningAdapter::class);
         $this->oltAdapter = $this->createMock(OltProvisioningAdapter::class);
+        // Default: findDeviceById() -> null (createMock default) = "device tak
+        // ditemukan di GenieACS". Jalur manufacturer-dikenal tak pernah memanggilnya.
+        $this->genieacs = $this->createMock(GenieAcsClientService::class);
     }
 
     private function orchestrator(string $wanInternetVia = 'tr069_device_driven'): ZtpOrchestratorService
@@ -65,6 +71,7 @@ class ZtpOrchestratorServiceTest extends TestCase
             $cpeReg,
             $oltReg,
             new SsidNameResolver,
+            $this->genieacs,
         );
     }
 
@@ -335,5 +342,78 @@ class ZtpOrchestratorServiceTest extends TestCase
 
         $this->expectException(UnsupportedAdapterOperation::class);
         $m->invoke($svc, $cpe('Nokia'));
+    }
+
+    // ---- v0.23.8.6c: deteksi merek dari data-model GenieACS ---------------
+
+    public function test_brand_key_known_manufacturer_keeps_legacy_path_without_reading_genieacs(): void
+    {
+        // Jalur (a): manufacturer dikenal -> GenieACS TAK PERNAH dibaca.
+        $this->genieacs->expects($this->never())->method('findDeviceById');
+        $svc = $this->orchestrator();
+        $m = new \ReflectionMethod($svc, 'cpeBrandKey');
+        $m->setAccessible(true);
+        $c = new CpeDevice;
+        $c->manufacturer = 'CMDC';
+        $c->genieacs_device_id = 'DEV';
+        $this->assertSame('ctcom', $m->invoke($svc, $c));
+    }
+
+    public function test_brand_key_unknown_manufacturer_with_ctcom_datamodel_resolves_ctcom(): void
+    {
+        // Jalur (b): ZICG (prefix serial, tak dikenal) + pohon ber-X_CT-COM_* -> ctcom.
+        $this->genieacs->method('findDeviceById')->willReturn([
+            '_id' => 'F86CE1-GM219-ZICG2976A4FC',
+            'InternetGatewayDevice' => ['WANDevice' => ['1' => ['WANConnectionDevice' => ['1' => [
+                'X_CT-COM_WANGponLinkConfig' => ['VLANIDMark' => ['_value' => 10]],
+            ]]]]],
+        ]);
+        $svc = $this->orchestrator();
+        $m = new \ReflectionMethod($svc, 'cpeBrandKey');
+        $m->setAccessible(true);
+        $c = new CpeDevice;
+        $c->manufacturer = 'ZICG';
+        $c->genieacs_device_id = 'F86CE1-GM219-ZICG2976A4FC';
+        $this->assertSame('ctcom', $m->invoke($svc, $c));
+    }
+
+    public function test_brand_key_unknown_manufacturer_without_ctcom_datamodel_is_unknown(): void
+    {
+        // Jalur (c): ZICG + pohon ADA tapi tanpa X_CT-COM_* -> tak dikenal, alasan jelas.
+        $this->genieacs->method('findDeviceById')->willReturn([
+            '_id' => 'DEV',
+            'InternetGatewayDevice' => ['DeviceInfo' => ['SerialNumber' => ['_value' => 'X']]],
+        ]);
+        $svc = $this->orchestrator();
+        $m = new \ReflectionMethod($svc, 'cpeBrandKey');
+        $m->setAccessible(true);
+        $c = new CpeDevice;
+        $c->manufacturer = 'ZICG';
+        $c->genieacs_device_id = 'DEV';
+        try {
+            $m->invoke($svc, $c);
+            $this->fail('expected UnsupportedAdapterOperation');
+        } catch (UnsupportedAdapterOperation $e) {
+            $this->assertStringContainsString('ZICG', $e->getMessage());
+            $this->assertStringContainsString('X_CT-COM_* tidak ada', $e->getMessage());
+        }
+    }
+
+    public function test_brand_key_unknown_manufacturer_device_absent_is_unknown(): void
+    {
+        // Jalur (c): CIOT + device tak ada di GenieACS (findDeviceById default null).
+        $svc = $this->orchestrator();
+        $m = new \ReflectionMethod($svc, 'cpeBrandKey');
+        $m->setAccessible(true);
+        $c = new CpeDevice;
+        $c->manufacturer = 'CIOT';
+        $c->genieacs_device_id = 'DEV';
+        try {
+            $m->invoke($svc, $c);
+            $this->fail('expected UnsupportedAdapterOperation');
+        } catch (UnsupportedAdapterOperation $e) {
+            $this->assertStringContainsString('CIOT', $e->getMessage());
+            $this->assertStringContainsString('tidak ditemukan di GenieACS', $e->getMessage());
+        }
     }
 }

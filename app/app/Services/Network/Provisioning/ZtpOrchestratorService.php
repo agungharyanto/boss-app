@@ -5,6 +5,7 @@ namespace App\Services\Network\Provisioning;
 use App\Models\CpeDevice;
 use App\Models\OltDevice;
 use App\Models\ProvisioningProfile;
+use App\Services\Network\GenieAcsClientService;
 use App\Services\Network\Provisioning\Exceptions\UnsupportedAdapterOperation;
 use RuntimeException;
 use Throwable;
@@ -41,6 +42,7 @@ class ZtpOrchestratorService
         private readonly CpeAdapterRegistry $cpeRegistry,
         private readonly OltAdapterRegistry $oltRegistry,
         private readonly SsidNameResolver $ssidNameResolver,
+        private readonly GenieAcsClientService $genieacs,
     ) {}
 
     /**
@@ -274,19 +276,80 @@ class ZtpOrchestratorService
      * TR-069 seperti default-wan.js) butuh baca device, disempurnakan kemudian.
      * CMDC = jalur TERBUKTI. Merek tak dikenal -> registry melempar (ditangani tahap).
      */
+    /**
+     * Resolve brand-key adapter CPE (v0.23.8.6c — deteksi dari data-model):
+     *   (a) manufacturer yang SUDAH dikenal (CMDC/CT-COM/HUAWEI/CMCC/ZTE) —
+     *       jalur lama, tanpa perubahan; device "ZTE" tetap ke zte_generic
+     *       (audit apakah data-model-nya CT-COM = backlog, bukan di sini).
+     *   (b) manufacturer TAK dikenal — fleet ini kebanyakan mengisi `manufacturer`
+     *       dengan PREFIX SERIAL (ZICG 212, CIOT 95, dll), bukan nama vendor —
+     *       jadi baca pohon GenieACS: kehadiran objek `X_CT-COM_*` = keluarga
+     *       data-model CT-COM → adapter ctcom.
+     *   (c) selain itu tetap "tak dikenal" → select_adapter berhenti dengan
+     *       alasan yang menyebut manufacturer + hasil cek data-model.
+     */
     private function cpeBrandKey(CpeDevice $cpe): string
     {
         $m = strtoupper((string) $cpe->manufacturer);
 
-        return match (true) {
+        $known = match (true) {
             str_contains($m, 'CMDC'), str_contains($m, 'CT-COM'), str_contains($m, 'CTCOM') => 'ctcom',
             str_contains($m, 'HUAWEI') => 'huawei',
             str_contains($m, 'CMCC') => 'cmcc',
             str_contains($m, 'ZTE') => 'zte_generic',
-            default => throw new UnsupportedAdapterOperation(
-                "Merek CPE tak dikenal dari manufacturer \"{$cpe->manufacturer}\" (CpeDevice #{$cpe->id})."
-            ),
+            default => null,
         };
+        if ($known !== null) {
+            return $known;
+        }
+
+        $dataModel = $this->detectCtcomDataModel($cpe);
+        if ($dataModel === true) {
+            return 'ctcom';
+        }
+
+        throw new UnsupportedAdapterOperation(sprintf(
+            'Merek CPE tak dikenal dari manufacturer "%s" (CpeDevice #%d); cek data-model GenieACS: %s.',
+            (string) $cpe->manufacturer,
+            (int) $cpe->id,
+            $dataModel === null ? 'device tidak ditemukan di GenieACS' : 'objek X_CT-COM_* tidak ada'
+        ));
+    }
+
+    /**
+     * Baca pohon GenieACS device & cek kehadiran objek `X_CT-COM_*`.
+     * true = ada (data-model CT-COM), false = pohon ada tapi tanpa objek itu,
+     * null = tak bisa dicek (genieacs_device_id kosong / device tak ditemukan).
+     */
+    private function detectCtcomDataModel(CpeDevice $cpe): ?bool
+    {
+        $id = (string) $cpe->genieacs_device_id;
+        if ($id === '') {
+            return null;
+        }
+        $device = $this->genieacs->findDeviceById($id);
+        if ($device === null) {
+            return null;
+        }
+
+        return $this->treeHasCtcomKey($device);
+    }
+
+    /**
+     * @param  array<string, mixed>  $node
+     */
+    private function treeHasCtcomKey(array $node): bool
+    {
+        foreach ($node as $key => $value) {
+            if (is_string($key) && str_starts_with($key, 'X_CT-COM_')) {
+                return true;
+            }
+            if (is_array($value) && $this->treeHasCtcomKey($value)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

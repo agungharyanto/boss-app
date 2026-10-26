@@ -9020,6 +9020,48 @@ Dari live-run NYATA di modem pelanggan `ZICG2976A4FC` (E04ID-Cileg, customer #57
     berurutan.
   - ⏳ **Tersisa:** replay-safety ZTE.
 
+## ZTP brand-detection + credential source + UJI PENUTUP provision() (v0.23.8.6c, 2026-10-26)
+
+Orkestrator `provision()` terverifikasi END-TO-END di modem pelanggan NYATA `ZICG2976A4FC` (GM219, customer
+#57, cpe_device #261, di belakang E04ID-Cileg) — nol gangguan ke internet pelanggan. `test-x86-bajastu`
+tidak disentuh. Dua fix inti:
+
+**1. Sumber kredensial WAN CT-COM + GUARD KERAS (commit `f84778c`).** `CtcomActivationService::
+resolveWanCredentials(Customer, ?ProvisioningWanInternet)` resolve username/password PPPoE berurutan:
+**(a)** profil strategi `static` → nilai static profil; **(b)** derive → `RadiusCredentialService::
+lookupForCustomer` (kredensial NYATA dari radcheck via `RadiusUsernameResolver::candidatesFor` =
+phone/legacy/`{cid}@ppp.bajastu.id`); **(c)** fallback `{cid}@ppp.bajastu.id` HANYA setelah `writeRadcheck`
+sukses. **GUARD**: sebelum `setParameterValues`, username final WAJIB punya baris radcheck — kalau tidak,
+**throw, NOL push**. Ini mencegah bug asli: `deriveLiveWanParams` lama hardcode `{cid}@ppp.bajastu.id`,
+padahal pelanggan termigrasi v0.8.4 pakai **nomor telepon** sebagai username PPPoE (= password, konvensi
+migrasi) — push `{cid}@...` buta akan memutus PPPoE. `CtcomActivationService::activate()` tidak lagi
+`writeRadcheck` terpisah (cegah double-write + double-identity `{cid}@` vs nomor-telepon). Pelanggan baru =
+jalur (c) tetap jalan.
+
+**2. Deteksi merek CPE dari data-model GenieACS (commit `09d1c9b`).** `ZtpOrchestratorService::cpeBrandKey()`
+3-cabang: (a) `manufacturer` DIKENAL (CMDC/CT-COM/HUAWEI/CMCC/ZTE) → jalur lama; (b) TAK dikenal → inject
+`GenieAcsClientService`, baca pohon device, objek `X_CT-COM_*` ada → `ctcom`; (c) selain itu tetap tak
+dikenal (alasan menyebut manufacturer + hasil cek data-model). **Akar masalah fleet**: `cpe_devices.
+manufacturer` diisi **PREFIX SERIAL 4-huruf**, BUKAN nama vendor — distribusi: ZICG 212, CIOT 95, CMDC 43,
+ZTE 29, RTEG 11, MONU 8, ZTEG 5, HWTC 4, GGCL 4, GPON 2, null 7. **343 dari 420 (82%) TAK match** aturan
+brand-key berbasis nama vendor; itu sebab orkestrator dulu berhenti di `select_adapter` untuk #261 ("ZICG").
+Device manufacturer-dikenal TIDAK di-remap (29 "ZTE" tetap → `zte_generic`).
+
+**BACKLOG TEKNIS (belum dikerjakan, keputusan Agung diperlukan):**
+- **Audit 29 device manufacturer "ZTE"** (→ `zte_generic`) — kemungkinan besar data-model-nya CT-COM
+  (`X_CT-COM_*`), harusnya ke `ctcom`, bukan `zte_generic` (model legacy `X_ZTE-COM_*`). Sengaja TIDAK
+  di-remap sekarang.
+- **`cpe_devices.manufacturer` fleet berisi prefix serial, bukan nama vendor** (ZICG 212, CIOT 95, dll) —
+  pertimbangkan normalisasi sumber `manufacturer` (atau derive merek dari data-model/OUI secara umum, bukan
+  hanya fallback CT-COM). JANGAN ubah `manufacturer` device existing tanpa keputusan ini.
+
+**UJI PENUTUP (nol gangguan, terbukti):** subset aman (`wan_bridge/ssid/disable_unbound_wlan/naming/save`,
+tanpa wan_internet) idempoten, nol divergensi config dari BEFORE. Gelombang penuh (`wan_internet/wan_bridge`)
+dengan dry-check (username WAJIB `085601070033` + sesi RADIUS aktif, else STOP) + monitor WAN10 5 menit +
+guard revert: **WAN10 Status=Connected / User=085601070033 / extIP=10.0.0.243 KONSTAN sepanjang ~5 Inform**,
+PPPoE pelanggan tak pernah putus (push value-identik). naming E04ID = `noop_bind_onu` (nama diisi saat
+bind-onu), save = "Configuration saved successfully". Detail: `docs/omci/ztp-dynamic-config-design.md` H8.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

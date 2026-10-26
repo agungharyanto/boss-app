@@ -591,3 +591,40 @@ pada modem pelanggan nyata **ZICG2976A4FC** (GM219, customer #57 Khikmatul Khoer
 - **LanInterface diturunkan dari instance yang BENAR-BENAR ada** (bukan `4,8` buta): device 4-WLAN hanya
   dapat `WLANConfiguration.4`. `disableUnboundWlan` (tahap baru orkestrator, setelah ssid): WLAN yang ada
   tapi tak dipakai SSID profil & tak di-bind LanInterface WAN mana pun → Enable=false.
+
+### H8. v0.23.8.6c — Deteksi merek dari data-model + UJI PENUTUP provision() (2026-10-26)
+
+Dua fix + uji end-to-end orkestrator penuh di modem pelanggan nyata **ZICG2976A4FC** (GM219, customer #57,
+cpe_device #261), di belakang OLT E04ID-Cileg. `test-x86-bajastu` tidak disentuh.
+
+**1. Sumber kredensial WAN CT-COM diperbaiki + guard keras (commit `f84778c`).** `CtcomActivationService::
+resolveWanCredentials(Customer, ?ProvisioningWanInternet)` me-resolve username/password PPPoE berurutan:
+(a) profil strategi `static` → nilai static profil; (b) derive → `RadiusCredentialService::lookupForCustomer`
+(kredensial NYATA dari radcheck, lewat `RadiusUsernameResolver::candidatesFor` = phone/legacy/cid); (c)
+fallback `{cid}@ppp.bajastu.id` HANYA setelah `writeRadcheck` sukses. **GUARD KERAS**: username final WAJIB
+punya baris radcheck sebelum `setParameterValues` — kalau tidak → throw, NOL push (cegah memutus PPPoE
+pelanggan termigrasi v0.8.4 yang username-nya = nomor telepon, bukan `{cid}@...`). `activate()` tidak lagi
+`writeRadcheck` terpisah (cegah double-write + double-identity).
+
+**2. Deteksi merek CPE dari data-model GenieACS (commit `09d1c9b`).** `cpeBrandKey()` 3-cabang:
+(a) manufacturer DIKENAL (CMDC/CT-COM/HUAWEI/CMCC/ZTE) → jalur lama tanpa perubahan; (b) TAK dikenal → baca
+pohon GenieACS, objek `X_CT-COM_*` → `ctcom`; (c) selain itu tetap tak dikenal, alasan menyebut manufacturer
++ hasil cek data-model. **Alasan**: `cpe_devices.manufacturer` fleet diisi PREFIX SERIAL (ZICG 212, CIOT 95,
+CMDC 43, ZTE 29, RTEG/MONU/ZTEG/HWTC/GGCL/GPON/null) — 343 dari 420 (82%) TAK match brand-key berbasis nama
+vendor. Device yg manufacturer-nya sudah dikenal TIDAK di-remap (29 "ZTE" tetap → zte_generic; audit
+data-model-nya = backlog). Nol ubah `cpe_devices.manufacturer`. Dry-check live #261 → brand key `ctcom`.
+
+**UJI PENUTUP provision() end-to-end di #261 — SUKSES, nol gangguan pelanggan:**
+- Subset aman dulu (`wan_bridge, ssid, disable_unbound_wlan, naming, save`, TANPA wan_internet): idempoten,
+  nol divergensi config dari BEFORE (hanya `_lastInform` maju). wan_bridge `LanInterface=WLANConfiguration.4`,
+  ssid guest 2.4g "TOKEN WIFI" open configured=[4] no-AddObject, disable_unbound_wlan {1,2,3} (sudah false),
+  naming `noop_bind_onu`, save "Configuration saved successfully".
+- Gelombang penuh (`wan_internet, wan_bridge`): dry-check LOLOS (resolveWanCredentials → `085601070033` dari
+  profil static = kredensial WAN10 aktif; sesi RADIUS aktif). Push value-identik, async (connection_request
+  off). **Monitor WAN10 5 menit (10 poll, ~5 Inform segar): Status=Connected, User=085601070033,
+  extIP=10.0.0.243 KONSTAN** — PPPoE pelanggan tak pernah putus. Guard revert (ke 085601070033 bila drop
+  dalam 5 menit) tak pernah terpicu.
+
+**Backlog teknis baru** (lihat ROADMAP + CLAUDE.md): (1) audit 29 device manufacturer "ZTE" → zte_generic —
+kemungkinan data-model-nya CT-COM (harusnya ctcom); (2) `cpe_devices.manufacturer` fleet = prefix serial,
+bukan nama vendor — pertimbangkan normalisasi sumbernya.

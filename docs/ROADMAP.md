@@ -3055,12 +3055,24 @@ untuk detail alur klaim/aktivasi/close WO). Kalau nanti mau dikembangkan, ini ke
 Ditemukan saat regresi penuh penutupan cluster v0.23.0; **keduanya gagal identik di `develop`** → bukan
 akibat v0.23, ditangani di sprint terpisah.
 
-- **PRIORITAS — `window.claimForm` tidak ada di `resources/js/app.js`.** Blade `work-orders/claim.blade.php`
-  memakai `x-data="claimForm("` tapi factory `window.claimForm` tak pernah didefinisikan di `app.js`
-  (oversight sejak v0.12.6, commit `ae15a5a`). Konsekuensi: halaman **`/work-orders/claim`** (klaim WO via
-  signed-link teknisi) **kemungkinan RUSAK di browser** (Alpine memanggil fungsi undefined). Ditangkap
-  `FrontendBuildTest`. **Aksi**: cek langsung di browser (buka signed-link klaim WO), lalu perbaiki
-  (definisikan `window.claimForm` + `npm run build`) di sprint terpisah.
+- **`FrontendBuildTest` false positive `claimForm` — DIPERBAIKI di v0.13.4.1.1 (patch, test + docs saja;
+  konfirmasi akhir browser menunggu verifikasi manual Agung).** **Koreksi catatan lama (KELIRU)**:
+  `window.claimForm` **tidak pernah ada** di `resources/js/app.js` (bukan dihapus — `git log -S claimForm`
+  menunjukkan `claimForm` hanya pernah muncul di commit `8a6ed72` v0.13.4.1 dan HANYA di
+  `work-orders/claim.blade.php`, tidak pernah di `app.js`; `ae15a5a` BUKAN penyebab). Halaman
+  **`/work-orders/claim`** (klaim WO via signed-link teknisi) **TIDAK rusak** — factory `claimForm`
+  didaftarkan **inline via `Alpine.data('claimForm', ...)`** di dalam `<script>` pada
+  `claim.blade.php` sendiri (pola Alpine standar untuk factory ber-argumen), jadi `x-data="claimForm({...})"`
+  resolve dengan benar di runtime (payload form ↔ `WorkOrderClaimController::submit` cocok 1:1;
+  `WorkOrderClaim*Test` 16/16 hijau). Yang GAGAL adalah heuristik `FrontendBuildTest` yang terlalu sempit —
+  hanya mengecek `window.<fn>` di bundle, tidak sadar sebuah factory bisa didaftarkan inline via
+  `Alpine.data()` di halamannya sendiri. **v0.13.4.1.1 (OPSI A)**: `FrontendBuildTest::
+  test_every_alpine_factory_...` kini menerima factory yang terdaftar lewat SALAH SATU mekanisme —
+  `window.<nama>` di bundle (guard staleness 8 chart factory TETAP utuh) **atau** `Alpine.data('<nama>'`
+  inline di blade mana pun; + 2 test baru (jalur inline `claimForm` lulus, kasus negatif factory tak
+  terdaftar di mana pun tetap gagal). TIDAK menyentuh `claim.blade.php`/`app.js`/bundle, TANPA
+  `npm run build`. **Status v0.13.4.1 "Selesai" tidak berubah.** Konfirmasi akhir (buka signed-link klaim
+  WO di browser sungguhan) menunggu verifikasi manual Agung sebelum merge/tag v0.13.4.1.1.
 - **`WhatsappIncomingMessageWebhookTest > a message that matches nothing gets the generic fallback reply`**
   gagal (juga di `develop`): `whatsapp_message_logs` tidak mencatat `event_type=unrecognized_message_fallback`
   saat pesan masuk tak match apa pun (jalur fallback generik sesi "direct", v0.13.3). Perlu investigasi

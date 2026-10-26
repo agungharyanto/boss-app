@@ -4345,6 +4345,21 @@ wasn't rebuilt after code changed" gotcha class already documented many
 times elsewhere in this file, now confirmed to apply to the frontend build
 artifact specifically too.
 
+**Amendment (v0.13.4.1.1, 2026-10-26) — the `window.<name>`-only check was
+too narrow and produced a real false positive.** A factory can also be
+registered **inline via `Alpine.data('<name>', ...)` inside a `<script>` on
+its own Blade page** (standalone pages that ship their own factory, never a
+`window.X` global in `app.js`) — `work-orders/claim.blade.php`'s `claimForm`
+does exactly this and is NOT broken, but the `window.<name>`-only assertion
+flagged it missing every run (originally mis-blamed on `app.js`/commit
+`ae15a5a` — `claimForm` was never in `app.js` at all, only ever in the blade
+since v0.13.4.1 `8a6ed72`). `test_every_alpine_factory_...` now passes a
+factory when EITHER `window.<name>` is in the bundle (the staleness guard the
+8 chart factories still rely on — unchanged) OR it is inline-registered via
+`Alpine.data('<name>'`/`"<name>"` in any Blade view; two new cases cover the
+inline path (`claimForm`) and a negative (a name registered nowhere still
+fails). Test + docs only — `claim.blade.php`/`app.js`/bundle untouched.
+
 **New feature: "+ Tambah Device" — onboard a generic SNMP device (switch,
 server, anything with an SNMP agent) directly from the Monitoring page.**
 `LibreNmsService::addDevice()` — the SAME `POST /devices` call already

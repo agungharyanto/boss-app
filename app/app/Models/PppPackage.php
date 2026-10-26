@@ -10,6 +10,7 @@ use Database\Factories\PppPackageFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -93,6 +94,14 @@ class PppPackage extends Model
     public function commissionRate(): HasOne
     {
         return $this->hasOne(CommissionRate::class);
+    }
+
+    /** v0.23.8.3 — profil ZTP (many-to-many, +is_default). */
+    public function provisioningProfiles(): BelongsToMany
+    {
+        return $this->belongsToMany(ProvisioningProfile::class, 'package_provisioning_profiles')
+            ->withPivot('is_default')
+            ->withTimestamps();
     }
 
     /**

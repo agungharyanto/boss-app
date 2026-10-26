@@ -130,6 +130,22 @@ class OltSidecarClient
     }
 
     /**
+     * v0.23.8 (LANGKAH D) — admisi EPON deny-by-default (HSGQ E04ID):
+     * `bind-onu mac <MAC> [name <N>] [desc "<D>"]` lalu `onu confirm onu-id
+     * <N>` di node `configure -> interface epon <PON>` (TERUJI manual v0.23.7).
+     * `$params`: `pon` (1-4), `mac`, `onu_id` (1-64, dipakai di `onu confirm`),
+     * + opsional `name`/`desc`. Sidecar yang merakit+memvalidasi command —
+     * bukan string CLI mentah. Device verifikasi end-to-end = v0.23.8.5b.
+     *
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    public function bindOnu(OltDevice $oltDevice, array $params, ?int $requestedBy = null): array
+    {
+        return $this->apply($oltDevice, 'bind_onu', $params, $requestedBy);
+    }
+
+    /**
      * v0.23.5 — koreksi VLAN PPPoE pada ONU yang SUDAH ter-apply, TANPA
      * reapply seluruh blok dari nol (sidecar
      * `zte_c300.OPERATIONS_WRITE['fix_onu_vlan']` hanya menyentuh 3 baris

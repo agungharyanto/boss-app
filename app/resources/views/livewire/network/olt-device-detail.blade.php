@@ -113,4 +113,76 @@
             <p class="text-[11px] text-gray-400">{{ __('Data read-only dari OLT. Tombol "Configure" belum aktif (tidak ada tulis ke OLT di sprint ini).') }}</p>
         </div>
     @endif
+
+    @if ($activeTab === 'provisioning')
+        <div class="space-y-5 max-w-2xl">
+            <p class="text-xs text-gray-500">{{ __('Setelan ini mengatur BAGAIMANA ONU diaktifkan di OLT ini. Disimpan ke BOSS App — TIDAK ada tulis/push ke OLT dari halaman ini.') }}</p>
+
+            @if ($provError)
+                <div class="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">{{ $provError }}</div>
+            @endif
+            @if ($provNotice)
+                <div class="text-sm text-green-700 bg-green-50 border border-green-200 rounded px-3 py-2">{{ $provNotice }}</div>
+            @endif
+
+            {{-- 1. Admission mode (requires_bind_onu) --}}
+            <div class="border border-gray-200 rounded-md p-4 space-y-2">
+                <h3 class="text-sm font-medium text-gray-800">{{ __('Mode admisi ONU') }}</h3>
+                @if ($usesUncfgParadigm)
+                    <p class="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded px-3 py-2">
+                        {{ __('Tidak berlaku untuk OLT ini — adapter-nya memakai daftar uncfg (mis. ZTE/Huawei). Admisi ONU lewat daftar uncfg, bukan bind-onu.') }}
+                    </p>
+                @else
+                    <label class="flex items-center gap-2 text-sm">
+                        <input type="radio" wire:model.live="requiresBindOnu" value="1" @disabled(! auth()->user()->can('manage', $oltDevice))>
+                        {{ __('Wajib bind-onu (deny-by-default)') }}
+                    </label>
+                    <label class="flex items-center gap-2 text-sm">
+                        <input type="radio" wire:model.live="requiresBindOnu" value="0" @disabled(! auth()->user()->can('manage', $oltDevice))>
+                        {{ __('Auto-authorize') }}
+                    </label>
+                    @if ($this->requiresBindOnuChanged)
+                        <div class="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                            ⚠️ {{ __('Mengubah mode admisi memengaruhi cara ONU BARU diterima di OLT ini. Kalau OLT ini sedang melayani pelanggan, pastikan perubahan ini memang disengaja — tekan Simpan akan meminta konfirmasi.') }}
+                        </div>
+                    @endif
+                @endif
+            </div>
+
+            {{-- 2. Channel flags --}}
+            <div class="border border-gray-200 rounded-md p-4 space-y-2">
+                <h3 class="text-sm font-medium text-gray-800">{{ __('Channel provisioning') }}</h3>
+                <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" wire:model.live="omciChannelEnabled" @disabled(! auth()->user()->can('manage', $oltDevice))>
+                    {{ __('OMCI aktif') }}
+                </label>
+                <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" wire:model.live="tr069ChannelEnabled" @disabled(! auth()->user()->can('manage', $oltDevice))>
+                    {{ __('TR-069 aktif') }}
+                </label>
+                @if (! $omciChannelEnabled && ! $tr069ChannelEnabled)
+                    <p class="text-sm text-red-700">{{ __('Minimal satu channel harus aktif.') }}</p>
+                @endif
+            </div>
+
+            @can('manage', $oltDevice)
+                @php($blockSave = ! $omciChannelEnabled && ! $tr069ChannelEnabled)
+                @if ($this->requiresBindOnuChanged)
+                    <button wire:click="saveProvisioning"
+                        wire:confirm="{{ __('Yakin ubah mode admisi ONU untuk OLT ini? Ini memengaruhi ONU baru yang mendaftar.') }}"
+                        @disabled($blockSave)
+                        class="px-4 py-2 text-sm bg-primary text-white rounded-md hover:opacity-90 disabled:opacity-50">
+                        {{ __('Simpan') }}
+                    </button>
+                @else
+                    <button wire:click="saveProvisioning" @disabled($blockSave)
+                        class="px-4 py-2 text-sm bg-primary text-white rounded-md hover:opacity-90 disabled:opacity-50">
+                        {{ __('Simpan') }}
+                    </button>
+                @endif
+            @else
+                <p class="text-xs text-gray-400">{{ __('Hanya bisa dilihat — butuh izin kelola OLT untuk mengubah.') }}</p>
+            @endcan
+        </div>
+    @endif
 </div>

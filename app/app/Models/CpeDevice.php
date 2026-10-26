@@ -41,6 +41,8 @@ class CpeDevice extends Model
         // App\Services\Network\WanConfigTemplateResolverService).
         'modem_type_id',
         'modem_type_source',
+        // v0.23.8.3 — override profil ZTP per-CPE (menang di atas profil paket).
+        'provisioning_profile_id',
     ];
 
     protected function casts(): array
@@ -59,6 +61,12 @@ class CpeDevice extends Model
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    /** v0.23.8.3 — override profil ZTP per-CPE (nullable; menang saat resolusi). */
+    public function provisioningProfile(): BelongsTo
+    {
+        return $this->belongsTo(ProvisioningProfile::class);
     }
 
     public function reseller(): BelongsTo

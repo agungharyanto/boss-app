@@ -50,6 +50,7 @@ use App\Livewire\Network\OdpRouteCheck;
 use App\Livewire\Network\OltDeviceDetail;
 use App\Livewire\Network\OltDeviceIndex;
 use App\Livewire\Network\PppPackageIndex;
+use App\Livewire\Network\ProvisioningProfileIndex;
 use App\Livewire\Network\RemoteConfigSettings;
 use App\Livewire\Network\VpnScriptGenerator;
 use App\Livewire\Network\WanConfigTemplateIndex;
@@ -301,6 +302,9 @@ Route::middleware(['auth', 'admin.panel', 'password.changed'])->name('web.')->gr
     // v0.14.5 — same cluster "Profil Paket", same posture as
     // /hotspot-packages above.
     Route::get('/ppp-packages', PppPackageIndex::class)->name('ppp-packages.index');
+
+    // v0.23.8.6b — "Profil Provisioning" (ZTP), tenant-level, same posture.
+    Route::get('/provisioning-profiles', ProvisioningProfileIndex::class)->name('provisioning-profiles.index');
 
     // v0.12.5 — "Template Konfig CPE" (matrix Paket x Tipe Modem), grup
     // sidebar "Remote CPE" (bukan cluster "Profil Paket" secara sidebar,

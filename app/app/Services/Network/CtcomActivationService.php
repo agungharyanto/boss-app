@@ -4,12 +4,13 @@ namespace App\Services\Network;
 
 use App\Models\Customer;
 use App\Models\OltDevice;
+use App\Models\ProvisioningWanInternet;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Sleep;
 use RuntimeException;
 
 /**
- * v0.23.6 — Aktivasi G02ID dengan arsitektur final:
+ * Aktivasi CT-COM (HSGQ G02ID = GPON & E04ID = EPON) — arsitektur final:
  *   WAN  -> TR-069 (device-driven; CPE CT-COM membentuk WAN-nya sendiri,
  *           BOSS cuma menyediakan kredensial RADIUS + menunggu Connected).
  *   NAMA -> OMCI-direct (`ont setting <id> name "Nama - CID"`), lewat sidecar
@@ -17,6 +18,14 @@ use RuntimeException;
  *
  * Alur (lihat activate()): (3a) tulis radcheck -> (3b) poll WAN PPPoE internet
  * sampai Connected via GenieACS -> (3c) resolve onu_id dari SN + set nama OMCI.
+ *
+ * v0.23.8.2 — di-rename dari G02idActivationService (dulu "G02id" tapi alur
+ * intinya universal CT-COM). `resolveInternetPppPathByVlan()`/
+ * `verifyBridgePresent()` kini mendeteksi objek VLAN GPON vs EPON
+ * (`X_CT-COM_WAN{Gpon,Epon}LinkConfig`) — sama pola `ctcVlanConfigObject()` di
+ * default-wan.js (v0.23.7) — sehingga service ini melayani E04ID juga, bukan
+ * hanya G02ID. Ini INTI logika yang di-wrap CtcomCpeAdapter (WAN internet/
+ * bridge) + CtcomOltAdapter (naming/save) di arsitektur dua-dimensi ZTP.
  *
  * PRASYARAT (BUKAN tanggung jawab service ini — sengaja): `Customer` sudah ada
  * dan `ppp_package_id`-nya sudah diset ke paket ber-VLAN (dari situ VLAN/
@@ -27,7 +36,7 @@ use RuntimeException;
  * tidak viable di fleet G02ID (lihat docs/omci/hsgq-g02id-cli-reference.md
  * "KESIMPULAN ARSITEKTUR FINAL v0.23.6").
  */
-class G02idActivationService
+class CtcomActivationService
 {
     /** Batas poll WAN Connected — disetarakan ke siklus cache GenieACS (~5,5 mnt). */
     public const POLL_MAX_SECONDS = 300;
@@ -42,6 +51,7 @@ class G02idActivationService
         private readonly TestCredentialSyncService $credentials,
         private readonly GenieAcsClientService $genieacs,
         private readonly OltSidecarClient $sidecar,
+        private readonly RadiusCredentialService $radiusCredentials,
     ) {}
 
     /**
@@ -174,13 +184,19 @@ class G02idActivationService
      *
      * @return array<string, mixed>
      */
-    public function pushNetworkPolicy(Customer $customer, string $genieAcsDeviceId, ?int $requestedBy = null): array
+    public function pushNetworkPolicy(Customer $customer, string $genieAcsDeviceId, ?int $requestedBy = null, ?ProvisioningWanInternet $profileWan = null): array
     {
         $live = $this->credentials->deriveLiveWanParams($customer);
         if (($live['has_vlan_package'] ?? false) !== true) {
             throw new RuntimeException($live['message'] ?? 'Pelanggan belum punya paket ber-VLAN — atur ppp_package_id dulu.');
         }
         $vlan = (int) $live['vlan_pppoe'];
+
+        // Kredensial dari sumber BENAR (profil static / radcheck / fallback) +
+        // GUARD KERAS "username wajib ada di radcheck" — BUKAN lagi username
+        // {cid}@ppp.bajastu.id buta dari deriveLiveWanParams (yang bisa memutus
+        // PPPoE pelanggan termigrasi, insiden 2026-10-25).
+        $wanCred = $this->resolveWanCredentials($customer, $profileWan);
 
         // Resolve WAN PPPoE internet DINAMIS by VLAN — nomor WCD CT-COM berubah-ubah
         // (3->5->7, terbukti), JANGAN hardcode index (#1 doc).
@@ -192,8 +208,8 @@ class G02idActivationService
         $result = $this->genieacs->sendTask($genieAcsDeviceId, [
             'name' => 'setParameterValues',
             'parameterValues' => [
-                ["{$path}.Username", $live['username'], 'xsd:string'],
-                ["{$path}.Password", $live['password'], 'xsd:string'],
+                ["{$path}.Username", $wanCred['username'], 'xsd:string'],
+                ["{$path}.Password", $wanCred['password'], 'xsd:string'],
                 ["{$path}.NATEnabled", false, 'xsd:boolean'],
                 ['InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.DHCPServerEnable', false, 'xsd:boolean'],
             ],
@@ -202,10 +218,85 @@ class G02idActivationService
         return [
             'wan_path' => $path,
             'vlan' => $vlan,
-            'username' => $live['username'],
+            'username' => $wanCred['username'],
             'task_id' => $result['task_id'] ?? null,
             'connection_request_ok' => $result['connection_request_ok'] ?? null,
         ];
+    }
+
+    /**
+     * Resolve kredensial WAN PPPoE yang AKAN dipush ke device, berurutan
+     * (v0.23.8.6c, menutup backlog 5.2a / insiden 2026-10-25):
+     *   a. profil strategi `static` → username/password static profil;
+     *   b. derive / tanpa profil → RadiusCredentialService::lookupForCustomer
+     *      (username+password yang BENAR-BENAR ada di radcheck);
+     *   c. fallback {cid}@ppp.bajastu.id — HANYA pelanggan baru tanpa radcheck,
+     *      dan HANYA setelah writeRadcheck sukses (alur aktivasi lama).
+     * GUARD KERAS: username final WAJIB punya baris radcheck; kalau tidak →
+     * throw, TIDAK push apa pun (cegah device auth dgn username tak-ada-di-RADIUS
+     * yang memutus PPPoE pelanggan).
+     *
+     * @return array{username: string, password: string}
+     */
+    public function resolveWanCredentials(Customer $customer, ?ProvisioningWanInternet $profileWan = null): array
+    {
+        $username = null;
+        $password = null;
+
+        // a. profil static.
+        if ($profileWan !== null
+            && $profileWan->pppoe_username_strategy === 'static'
+            && ($profileWan->pppoe_username_static ?? '') !== '') {
+            $username = $profileWan->pppoe_username_static;
+            if ($profileWan->pppoe_password_strategy === 'static' && ($profileWan->pppoe_password_static ?? '') !== '') {
+                $password = $profileWan->pppoe_password_static;
+            }
+        }
+
+        // b. derive → radcheck lookup (by customer).
+        if ($username === null) {
+            $cred = $this->radiusCredentials->lookupForCustomer($customer);
+            if ($cred !== null) {
+                $username = $cred['username'];
+                $password = $password ?? $cred['password'];
+            }
+        }
+
+        // c. fallback pelanggan baru: writeRadcheck (bikin baris radcheck utk
+        //    {cid}@...) lalu pakai username itu. writeRadcheck throw kalau paket
+        //    tak ber-VLAN.
+        if ($username === null) {
+            $live = $this->credentials->deriveLiveWanParams($customer);
+            $this->writeRadcheck($customer);
+            $username = $live['username'];
+            $password = $password ?? $live['password'];
+        }
+
+        // Password dari radcheck utk username FINAL kalau belum ketemu.
+        if ($password === null) {
+            $row = DB::connection('radius')->table('radcheck')
+                ->where('username', $username)
+                ->where('attribute', 'Cleartext-Password')
+                ->first();
+            $password = $row->value ?? null;
+        }
+
+        // GUARD KERAS.
+        $exists = DB::connection('radius')->table('radcheck')
+            ->where('username', $username)
+            ->where('attribute', 'Cleartext-Password')
+            ->exists();
+        if (! $exists) {
+            throw new RuntimeException(
+                "GUARD: username PPPoE \"{$username}\" tidak punya baris radcheck — menolak push WAN "
+                .'(cegah device auth dengan username yang tidak ada di RADIUS → PPPoE pelanggan putus).'
+            );
+        }
+        if ($password === null || $password === '') {
+            throw new RuntimeException("GUARD: password PPPoE untuk \"{$username}\" tak ditemukan di radcheck.");
+        }
+
+        return ['username' => $username, 'password' => (string) $password];
     }
 
     /**
@@ -222,7 +313,11 @@ class G02idActivationService
         $flat = [];
         $this->flatten($device, '', $flat);
         foreach ($flat as $key => $value) {
-            if (preg_match('/WANConnectionDevice\.\d+\.X_CT-COM_WANGponLinkConfig\.VLANIDMark$/', $key) && (int) $value === $bridgeVlan) {
+            // Objek VLAN CT-COM beda per jenis PON: GPON =
+            // X_CT-COM_WANGponLinkConfig, EPON = X_CT-COM_WANEponLinkConfig
+            // (sama pola ctcVlanConfigObject() default-wan.js, v0.23.7). Match
+            // keduanya supaya verifikasi bridge jalan di G02ID (GPON) & E04ID (EPON).
+            if (preg_match('/WANConnectionDevice\.\d+\.X_CT-COM_WAN(?:Gpon|Epon)LinkConfig\.VLANIDMark$/', $key) && (int) $value === $bridgeVlan) {
                 return true;
             }
             if (preg_match('/\.Name$/', $key) && stripos((string) $value, '_B_VID_'.$bridgeVlan) !== false) {
@@ -231,6 +326,52 @@ class G02idActivationService
         }
 
         return false;
+    }
+
+    /**
+     * Cari path WANPPPConnection BRIDGE by VLAN (mirror `resolveInternetPppPathByVlan`
+     * dengan kondisi `_B_`/bridged DIBALIK) — dipakai `CtcomCpeAdapter::pushWanBridge`
+     * untuk tahu di mana men-set `X_CT-COM_LanInterface`. Dinamis (nomor WCD
+     * CT-COM berubah-ubah, #1 doc). null kalau tak ada WANPPPConnection bridge
+     * ber-VLAN itu di tree (mis. bridge belum terbentuk / device-driven belum
+     * Inform). Sengaja method terpisah (bukan refactor `verifyBridgePresent`,
+     * yang semantik bool-nya dipakai test existing + mencakup match VLANIDMark
+     * level-WCD tanpa path PPP).
+     */
+    public function findBridgePppPath(string $genieAcsDeviceId, int $bridgeVlan = 172): ?string
+    {
+        $device = $this->genieacs->findDeviceById($genieAcsDeviceId);
+        if ($device === null) {
+            return null;
+        }
+        $flat = [];
+        $this->flatten($device, '', $flat);
+
+        foreach ($flat as $key => $value) {
+            if (! preg_match('#^(InternetGatewayDevice\.WANDevice\.\d+\.WANConnectionDevice\.\d+)\.WANPPPConnection\.\d+\.Name$#', $key, $m)) {
+                continue;
+            }
+            $pppPath = substr($key, 0, -strlen('.Name'));
+            $wcdBase = $m[1];
+            $name = (string) $value;
+            $connType = (string) ($flat[$pppPath.'.ConnectionType'] ?? '');
+            $wcdVlan = $flat[$wcdBase.'.X_CT-COM_WANEponLinkConfig.VLANIDMark']
+                ?? $flat[$wcdBase.'.X_CT-COM_WANGponLinkConfig.VLANIDMark']
+                ?? null;
+
+            $isBridged = stripos($name, '_B_') !== false || stripos($connType, 'bridg') !== false;
+            if (! $isBridged) {
+                continue;
+            }
+
+            $matchesVlan = ($wcdVlan !== null && (int) $wcdVlan === $bridgeVlan)
+                || stripos($name, 'VID_'.$bridgeVlan) !== false;
+            if ($matchesVlan) {
+                return $pppPath;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -302,7 +443,11 @@ class G02idActivationService
             $wcdBase = $m[1];
             $name = (string) $value;
             $connType = (string) ($flat[$pppPath.'.ConnectionType'] ?? '');
-            $wcdVlan = $flat[$wcdBase.'.X_CT-COM_WANGponLinkConfig.VLANIDMark'] ?? null;
+            // GPON vs EPON: coba objek EPON dulu, lalu GPON (ctcVlanConfigObject
+            // pattern) — satu resolver melayani G02ID & E04ID.
+            $wcdVlan = $flat[$wcdBase.'.X_CT-COM_WANEponLinkConfig.VLANIDMark']
+                ?? $flat[$wcdBase.'.X_CT-COM_WANGponLinkConfig.VLANIDMark']
+                ?? null;
 
             $isBridged = stripos($name, '_B_') !== false || stripos($connType, 'bridg') !== false;
             if ($isBridged) {
@@ -335,15 +480,20 @@ class G02idActivationService
      */
     public function activate(OltDevice $oltDevice, Customer $customer, string $sn, string $genieAcsDeviceId, ?int $requestedBy = null): array
     {
-        $radcheck = $this->writeRadcheck($customer);
+        // pushNetworkPolicy me-resolve kredensial dari sumber BENAR + menulis
+        // radcheck sendiri bila perlu (jalur c, pelanggan baru) + GUARD username
+        // wajib ada di radcheck. Jadi TIDAK ada lagi writeRadcheck terpisah di sini
+        // — mencegah double-write & double-identity {cid}@... vs nomor-telepon
+        // untuk pelanggan termigrasi (insiden 2026-10-25). Username final (yang
+        // benar-benar dipush) dipakai untuk poll radacct.
         $policy = $this->pushNetworkPolicy($customer, $genieAcsDeviceId, $requestedBy);
-        $poll = $this->pollRadacctConnected($radcheck['username']);
+        $poll = $this->pollRadacctConnected($policy['username']);
 
         if ($poll['connected'] !== true) {
             return [
                 'ok' => false,
                 'stage' => 'poll_radacct',
-                'radcheck' => $radcheck,
+                'username' => $policy['username'],
                 'policy' => $policy,
                 'poll' => $poll,
                 'bridge_present' => null,
@@ -361,7 +511,7 @@ class G02idActivationService
         return [
             'ok' => true,
             'stage' => 'done',
-            'radcheck' => $radcheck,
+            'username' => $policy['username'],
             'policy' => $policy,
             'poll' => $poll,
             'bridge_present' => $bridgePresent,

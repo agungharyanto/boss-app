@@ -1,7 +1,14 @@
 name: boss-app
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   boss-nginx:
+    logging: *default-logging
     image: nginx:1.27-alpine
     container_name: boss-nginx
     restart: unless-stopped
@@ -44,6 +51,7 @@ services:
   # entrypoint itself, since certonly's own interactive-first-run shape
   # doesn't fit a long-lived container command.
   certbot:
+    logging: *default-logging
     image: certbot/certbot:v2.11.0
     container_name: boss-certbot
     restart: unless-stopped
@@ -55,6 +63,7 @@ services:
       - boss-network
 
   boss-app:
+    logging: *default-logging
     build:
       context: ./docker/php
     container_name: boss-app
@@ -123,6 +132,7 @@ services:
       - boss-network
 
   boss-worker:
+    logging: *default-logging
     build:
       context: ./docker/php
     container_name: boss-worker
@@ -150,6 +160,7 @@ services:
       - boss-network
 
   boss-whatsapp-worker:
+    logging: *default-logging
     build:
       context: ./docker/php
     container_name: boss-whatsapp-worker
@@ -190,6 +201,7 @@ services:
       - boss-network
 
   boss-scheduler:
+    logging: *default-logging
     build:
       context: ./docker/php
     container_name: boss-scheduler
@@ -254,6 +266,7 @@ services:
   # PROXY, not merely avoided by application-code discipline. No host port
   # published (BOSS-010), same posture as freeradius/genieacs-cwmp/nbi.
   docker-stats-proxy:
+    logging: *default-logging
     image: tecnativa/docker-socket-proxy:0.2
     container_name: docker-stats-proxy
     restart: unless-stopped
@@ -290,6 +303,7 @@ services:
   # why this is a genuinely separate sidecar rather than rsyslog living
   # inside the official librenms image.
   rsyslog-receiver:
+    logging: *default-logging
     build:
       context: ./docker/rsyslog
     container_name: rsyslog-receiver
@@ -320,6 +334,7 @@ services:
   # sampai). Lihat docs/whatsapp-gateway-api-surface.md dan CLAUDE.md untuk
   # kronologi migrasi lengkap.
   whatsapp-gateway:
+    logging: *default-logging
     build:
       context: ./whatsapp-gateway
     container_name: whatsapp-gateway
@@ -350,6 +365,7 @@ services:
     # no public HTTP surface at all.
 
   freeradius-db:
+    logging: *default-logging
     image: postgres:16-alpine
     container_name: freeradius-db
     restart: unless-stopped
@@ -384,6 +400,7 @@ services:
     # NOT exposed to host (BOSS-010).
 
   freeradius:
+    logging: *default-logging
     build:
       context: ./docker/freeradius
     container_name: freeradius
@@ -468,6 +485,7 @@ services:
   #     - freeradius
 
   openvpn:
+    logging: *default-logging
     build:
       context: ./docker/openvpn
     container_name: openvpn
@@ -509,6 +527,7 @@ services:
         condition: service_healthy
 
   wireguard:
+    logging: *default-logging
     build:
       context: ./docker/wireguard
     container_name: wireguard
@@ -599,6 +618,7 @@ services:
   # # racing to init the same empty volume at once could both "win" that
   # # check simultaneously.
   openvpn-node2:
+    logging: *default-logging
     build:
       context: ./docker/openvpn
     container_name: openvpn-node2
@@ -647,6 +667,7 @@ services:
         condition: service_started
 
   openvpn-node3:
+    logging: *default-logging
     build:
       context: ./docker/openvpn
     container_name: openvpn-node3
@@ -692,6 +713,7 @@ services:
   # first-boot keygen race on the shared volume (see wireguard's own
   # entrypoint.sh: `if [ ! -f server_private.key ]`).
   wireguard-node2:
+    logging: *default-logging
     build:
       context: ./docker/wireguard
     container_name: wireguard-node2
@@ -751,6 +773,7 @@ services:
   #     - wireguard-node2
 
   wireguard-node3:
+    logging: *default-logging
     build:
       context: ./docker/wireguard
     container_name: wireguard-node3
@@ -806,6 +829,7 @@ services:
   #     - wireguard-node3
 
   l2tp:
+    logging: *default-logging
     build:
       context: ./docker/l2tp
     container_name: l2tp
@@ -839,6 +863,7 @@ services:
   # image exists — see that Dockerfile's own comment). ---
 
   mongo:
+    logging: *default-logging
     image: mongo:8.0
     container_name: mongo
     restart: unless-stopped
@@ -865,6 +890,7 @@ services:
     # v0.1.0's own .env.example.
 
   genieacs-cwmp:
+    logging: *default-logging
     build:
       context: ./docker/genieacs
     container_name: genieacs-cwmp
@@ -939,6 +965,7 @@ services:
   #     - genieacs-cwmp
 
   genieacs-nbi:
+    logging: *default-logging
     build:
       context: ./docker/genieacs
     container_name: genieacs-nbi
@@ -1000,6 +1027,7 @@ services:
   #     - genieacs-nbi
 
   genieacs-fs:
+    logging: *default-logging
     build:
       context: ./docker/genieacs
     container_name: genieacs-fs
@@ -1026,6 +1054,7 @@ services:
     # yet" reason.
 
   genieacs-ui:
+    logging: *default-logging
     build:
       context: ./docker/genieacs
     container_name: genieacs-ui
@@ -1062,6 +1091,7 @@ services:
     # browser access to it.
 
   librenms-db:
+    logging: *default-logging
     image: mariadb:10
     container_name: librenms-db
     restart: unless-stopped
@@ -1089,6 +1119,7 @@ services:
     # deliberately NOT exposed to the host (RULE BOSS-010).
 
   librenms-redis:
+    logging: *default-logging
     image: redis:7.2-alpine
     container_name: librenms-redis
     restart: unless-stopped
@@ -1103,6 +1134,7 @@ services:
     # between the two completely different workloads. No host port.
 
   librenms:
+    logging: *default-logging
     image: librenms/librenms:latest
     container_name: librenms
     hostname: librenms
@@ -1192,6 +1224,7 @@ services:
   #     - librenms
 
   librenms-dispatcher:
+    logging: *default-logging
     image: librenms/librenms:latest
     container_name: librenms-dispatcher
     hostname: librenms-dispatcher
@@ -1271,6 +1304,7 @@ services:
   #     - librenms-dispatcher
 
   olt-sidecar:
+    logging: *default-logging
     build:
       context: ./olt-sidecar
     container_name: olt-sidecar
@@ -1304,6 +1338,7 @@ services:
     # docs/omci/sidecar-design.md.
 
   boss-postgresql:
+    logging: *default-logging
     image: postgres:16-alpine
     container_name: boss-postgresql
     restart: unless-stopped
@@ -1329,6 +1364,7 @@ services:
     # Port 5432 SENGAJA TIDAK di-expose ke host (RULE BOSS-010)
 
   boss-redis:
+    logging: *default-logging
     image: redis:7-alpine
     container_name: boss-redis
     restart: unless-stopped
@@ -1361,6 +1397,7 @@ services:
   # port, BOSS-010) — reached at http://osrm:5000 over boss-network,
   # same posture as librenms/genieacs/docker-stats-proxy.
   osrm:
+    logging: *default-logging
     build:
       context: ./docker/osrm
     container_name: boss-osrm
@@ -1386,7 +1423,20 @@ networks:
         # VPN_SUBNET_CIDR (the OpenVPN client pool, 172.23.194.0/24) to
         # avoid any address overlap between "containers on boss-network"
         # and "NAS clients tunneled in over OpenVPN".
+        #
+        # ip_range (2026-10-25, Opsi B) — DYNAMIC allocation pool constrained to
+        # 172.28.0.64/26 (.64-.127) so Docker never hands a dynamic (unpinned)
+        # container one of the STATIC ipv4_address pins, which live OUTSIDE this
+        # range: low .4/.5/.11 (wireguard node2/node3/node1) + high .221/.222
+        # (openvpn-node2/genieacs-ui) + .225-.231 (infra block: freeradius,
+        # genieacs-cwmp/nbi, librenms, librenms-dispatcher, rsyslog, olt-sidecar).
+        # Root cause of the recurring "Address already in use" IPAM-collision
+        # incident: without ip_range the dynamic pool spanned the whole /24 and
+        # collided with these pins after an unclean container death. Gateway .1
+        # stays implicit (first usable, outside the range). 62 usable >> ~19
+        # unpinned containers.
         - subnet: 172.28.0.0/24
+          ip_range: 172.28.0.64/26
 
 volumes:
   boss_postgres_data:

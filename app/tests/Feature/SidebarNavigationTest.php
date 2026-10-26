@@ -324,6 +324,53 @@ class SidebarNavigationTest extends TestCase
         $this->assertStringContainsString('Template Konfig CPE', $html);
     }
 
+    /**
+     * v0.23.8.6b — "Profil Provisioning" (ZTP) dipindah dari grup "Profil Paket"
+     * (Billing & Finance) ke grup "Remote CPE" (Network), tepat setelah
+     * "Konfig Remote" dan sebelum "Template Konfig CPE".
+     */
+    public function test_profil_provisioning_sits_in_the_remote_cpe_group_after_konfig_remote(): void
+    {
+        $user = $this->userWithRole('superadmin');
+        $html = $this->actingAs($user)->get('/invoices')->getContent();
+
+        $this->assertStringContainsString(route('web.provisioning-profiles.index'), $html);
+        $this->assertStringContainsString('Profil Provisioning', $html);
+
+        $konfig = strpos($html, 'Konfig Remote');
+        $profil = strpos($html, 'Profil Provisioning');
+        $template = strpos($html, 'Template Konfig CPE');
+        $this->assertNotFalse($konfig);
+        $this->assertNotFalse($profil);
+        $this->assertNotFalse($template);
+        $this->assertTrue(
+            $konfig < $profil && $profil < $template,
+            'Profil Provisioning harus berada antara Konfig Remote dan Template Konfig CPE di grup Remote CPE.'
+        );
+    }
+
+    public function test_remote_cpe_group_auto_opens_and_highlights_on_provisioning_profiles(): void
+    {
+        $user = $this->userWithRole('superadmin');
+        $html = $this->actingAs($user)->get('/provisioning-profiles')->getContent();
+
+        // Subgroup "Remote CPE" (id=remote) auto-open karena child aktif.
+        $this->assertStringContainsString(
+            "x-data=\"{ subOpen: true || localStorage.getItem('sidebar-subgroup-remote') === 'true' }\"",
+            $html
+        );
+        // Grup "Profil Paket" TIDAK ikut terbuka (entri sudah pindah).
+        $this->assertStringContainsString(
+            "x-data=\"{ subOpen: false || localStorage.getItem('sidebar-subgroup-profil-paket') === 'true' }\"",
+            $html
+        );
+        // Entri anak "Profil Provisioning" ter-highlight (bg-primary).
+        $this->assertMatchesRegularExpression(
+            '/href="[^"]*provisioning-profiles[^"]*"[^>]*class="[^"]*bg-primary/s',
+            $html
+        );
+    }
+
     public function test_noc_sees_konfig_remote_but_not_cpe_status_check(): void
     {
         // noc has remote_config.* + monitoring.* but not cpe_devices.view.

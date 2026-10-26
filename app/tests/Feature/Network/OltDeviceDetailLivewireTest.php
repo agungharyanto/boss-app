@@ -5,6 +5,8 @@ namespace Tests\Feature\Network;
 use App\Livewire\Network\OltDeviceDetail;
 use App\Models\Nas;
 use App\Models\OltDevice;
+use App\Models\OltManufacturer;
+use App\Models\OltModel;
 use App\Models\OltUplinkPort;
 use App\Models\Tenant;
 use App\Models\User;
@@ -51,7 +53,7 @@ class OltDeviceDetailLivewireTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_only_uplink_tab_is_enabled_and_is_the_default(): void
+    public function test_uplink_and_provisioning_tabs_are_enabled_uplink_default(): void
     {
         [$admin, $olt] = $this->adminAndOlt();
 
@@ -60,8 +62,9 @@ class OltDeviceDetailLivewireTest extends TestCase
 
         $tabs = collect($component->instance()->tabs());
         $this->assertTrue($tabs->firstWhere('key', 'uplink')['enabled']);
-        // Semua tab lain disabled.
-        $this->assertCount(1, $tabs->where('enabled', true));
+        $this->assertTrue($tabs->firstWhere('key', 'provisioning')['enabled']);
+        // Hanya uplink + provisioning yang enabled sprint ini.
+        $this->assertCount(2, $tabs->where('enabled', true));
     }
 
     public function test_cannot_switch_to_a_disabled_tab(): void
@@ -115,5 +118,93 @@ class OltDeviceDetailLivewireTest extends TestCase
         Livewire::actingAs($admin)->test(OltDeviceDetail::class, ['oltDevice' => $olt])
             ->call('refreshUplink')
             ->assertSet('refreshError', fn ($m) => str_contains((string) $m, 'tak terjangkau'));
+    }
+
+    // --- Tab Provisioning (v0.23.8.6a) ---
+
+    /** OLT dengan vendor yang mapped (sidecarVendorKey) + admin superadmin satu tenant. */
+    private function adminAndMappedOlt(string $manufacturerName, string $modelName): array
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
+        $admin->assignRole('superadmin');
+        $nas = Nas::factory()->create(['tenant_id' => $tenant->id]);
+        $mfr = OltManufacturer::factory()->create(['name' => $manufacturerName]);
+        $model = OltModel::factory()->create(['olt_manufacturer_id' => $mfr->id, 'name' => $modelName]);
+        $olt = OltDevice::factory()->create([
+            'nas_id' => $nas->id, 'tenant_id' => $tenant->id, 'olt_model_id' => $model->id,
+        ]);
+
+        return [$admin, $olt];
+    }
+
+    public function test_provisioning_saves_channel_and_bind_onu_toggles_on_ctcom_olt(): void
+    {
+        [$admin, $olt] = $this->adminAndMappedOlt('HSGQ', 'HSGQ-E04ID');  // bind-onu paradigm
+
+        Livewire::actingAs($admin)->test(OltDeviceDetail::class, ['oltDevice' => $olt])
+            ->assertSet('usesUncfgParadigm', false)
+            ->call('selectTab', 'provisioning')
+            ->assertSet('activeTab', 'provisioning')
+            ->assertSee('Mode admisi ONU')          // section blade benar-benar ter-render
+            ->assertSee('Channel provisioning')
+            ->set('requiresBindOnu', false)
+            ->set('omciChannelEnabled', false)
+            ->set('tr069ChannelEnabled', true)
+            ->call('saveProvisioning')
+            ->assertSet('provError', null)
+            ->assertSet('provNotice', fn ($m) => $m !== null);
+
+        $olt->refresh();
+        $this->assertFalse($olt->requires_bind_onu);
+        $this->assertFalse($olt->omci_channel_enabled);
+        $this->assertTrue($olt->tr069_channel_enabled);
+    }
+
+    public function test_zte_olt_requires_bind_onu_is_disabled_and_never_changes(): void
+    {
+        [$admin, $olt] = $this->adminAndMappedOlt('ZTE', 'C300');  // uncfg paradigm
+        $olt->forceFill(['requires_bind_onu' => null])->save();
+
+        Livewire::actingAs($admin)->test(OltDeviceDetail::class, ['oltDevice' => $olt])
+            ->assertSet('usesUncfgParadigm', true)
+            ->set('requiresBindOnu', true)   // coba ubah — harus diabaikan service
+            ->set('omciChannelEnabled', true)
+            ->set('tr069ChannelEnabled', true)
+            ->call('saveProvisioning')
+            ->assertSet('provError', null);
+
+        $olt->refresh();
+        $this->assertNull($olt->requires_bind_onu);  // tetap null (tak berlaku)
+    }
+
+    public function test_at_least_one_channel_must_stay_active(): void
+    {
+        [$admin, $olt] = $this->adminAndMappedOlt('HSGQ', 'HSGQ-E04ID');
+        $olt->forceFill(['omci_channel_enabled' => true, 'tr069_channel_enabled' => true])->save();
+
+        Livewire::actingAs($admin)->test(OltDeviceDetail::class, ['oltDevice' => $olt])
+            ->set('omciChannelEnabled', false)
+            ->set('tr069ChannelEnabled', false)
+            ->call('saveProvisioning')
+            ->assertSet('provError', fn ($m) => str_contains((string) $m, 'satu channel'));
+
+        $olt->refresh();
+        $this->assertTrue($olt->omci_channel_enabled);   // tak berubah (validasi gagal)
+        $this->assertTrue($olt->tr069_channel_enabled);
+    }
+
+    public function test_tenant_isolation_other_tenant_cannot_open_olt_detail_route(): void
+    {
+        [, $oltA] = $this->adminAndMappedOlt('HSGQ', 'HSGQ-E04ID');
+
+        $tenantB = Tenant::factory()->create();
+        $adminB = User::factory()->create(['tenant_id' => $tenantB->id]);
+        $adminB->assignRole('superadmin');  // permission global, TAPI OLT di tenant lain
+
+        // Route-model-binding + TenantScope → OLT tenant lain tak ter-resolve (404).
+        $this->actingAs($adminB)
+            ->get(route('web.olt-devices.show', $oltA))
+            ->assertNotFound();
     }
 }

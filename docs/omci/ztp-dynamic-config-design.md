@@ -628,3 +628,41 @@ data-model-nya = backlog). Nol ubah `cpe_devices.manufacturer`. Dry-check live #
 **Backlog teknis baru** (lihat ROADMAP + CLAUDE.md): (1) audit 29 device manufacturer "ZTE" → zte_generic —
 kemungkinan data-model-nya CT-COM (harusnya ctcom); (2) `cpe_devices.manufacturer` fleet = prefix serial,
 bukan nama vendor — pertimbangkan normalisasi sumbernya.
+
+### H9. v0.23.8.7 — Pensiun RemoteWanConfig/auto-WAN: DITUNDA (B-minus, 2026-10-26)
+
+Investigasi read-only Tahap 0 (search_graph + grep + fakta DB/GenieACS live, NOL write) → keputusan
+**pensiun DITUNDA**, hanya dijalankan **B-minus** (docs + satu catatan UI, nol perubahan perilaku).
+
+**Alasan tunda:**
+- Auto-WAN (`RemoteWanConfig` singleton → `SyncRemoteWanConfigToGenieAcsJob` → `GenieAcsPresetService::
+  syncAutoWanConfig` → preset `boss-auto-wan` + provision `default-wan.js`) saat ini hanya melayani
+  **1 modem uji**: `RemoteWanConfig.enabled=true`, `allSerialAllowlist()=["CMDCA21C01E7"]`, preset live
+  `precondition = DeviceID.SerialNumber = "CMDCA21C01E7"`. BUKAN fleet-wide (safe default = "provision
+  nobody" kalau allowlist kosong).
+- `cpe_devices`: 420 total, **1** ber-`provisioning_profile_id` (ZTP, #261), **419 tanpa ZTP**;
+  `wan_config_templates`=0; ProvisioningProfile=2. 419 device dapat WAN dari config on-device existing.
+- **Belum ada pengganti PASIF berbasis profil.** ZTP `provision()` butuh profil+OLT+brand eksplisit dan
+  dijalankan per-device (orkestrator), bukan preset GenieACS pasif yang otomatis kena "modem baru colok".
+  Menghapus auto-WAN sekarang = menghilangkan satu-satunya jalur WAN-otomatis-pasif tanpa pengganti.
+
+**Yang dikerjakan (B-minus, nol perubahan perilaku):** catatan UI di form `/remote-config`
+("Mekanisme fallback lama (saat ini hanya untuk satu modem uji). Provisioning per pelanggan memakai
+Profil Provisioning" + link `/provisioning-profiles`) + dokumentasi ini & ROADMAP. **TIDAK disentuh:**
+preset `boss-auto-wan`, `default-wan.js`, `GenieAcsPresetService`, `RemoteWanConfig`+singleton,
+`/remote-config`, `WanConfigPush`, `wan_config_templates`, policy `remote_config.*`.
+
+**Syarat pensiun PENUH (prasyarat, untuk sprint berikutnya):** bangun **fallback pasif berbasis profil**
+lebih dulu — ProvisioningProfile perlu tempat menyimpan **SN allowlist** + **argumen preset** (ekuivalen
+`RemoteWanConfig::toProvisionArgs()`, kontrak posisional `default-wan.js`), sehingga `GenieAcsPresetService`
+disumberkan dari profil (bukan singleton `remote_wan_configs`). Baru setelah itu singleton + halaman
+`/remote-config` + job aman dipensiunkan.
+
+**Keputusan TERPISAH (JANGAN dibundel ke pensiun auto-WAN):** nasib `wan_config_templates` + `WanConfigPush`.
+`WanConfigPushService::push()` (resolve `WanConfigTemplate` by `cpe_devices.modem_type_id`+`ppp_package_id`
+→ `GenieAcsClientService::sendTask()` 1 device) adalah fitur **AKTIF & independen** dari RemoteWanConfig —
+ter-hook ke `SubscriptionRenewalService::renew()` (best-effort) + tombol Detail CPE + section
+`WanConfigPushLookup` di `/remote-config`. `wan_config_templates`=0 baris → push resolve null (no-op)
+saat ini, tapi feature siap pakai. Menghapus tabel/feature ini = keputusan sendiri, bukan efek samping
+pensiun auto-WAN. Catatan: `/remote-config` menampung `RemoteConfigSettings` (auto-WAN) DAN
+`WanConfigPushLookup`; policy `remote_config.*` dipakai keduanya.

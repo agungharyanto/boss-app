@@ -9,6 +9,13 @@
         {{ __('Auto-WAN provisioning GenieACS — VLAN + kredensial default PPPoE yang dulu HARDCODED di script provision, sekarang diatur dari sini. Preset boss-auto-wan SELALU di-scope ke SN di allowlist (WAN1 + WAN2) — allowlist kosong = preset tidak dibuat, TIDAK PERNAH fleet-wide. Deteksi vendor (Huawei / CMCC / ZTE generic / CT-COM) dan guard idempoten dipertahankan dari script referensi.') }}
     </p>
 
+    {{-- Catatan status pensiun (v0.23.8.7 B-minus): auto-WAN = fallback lama,
+         pengganti per-pelanggan = Profil Provisioning (ZTP). Informasional saja. --}}
+    <p class="mb-6 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+        {{ __('Mekanisme fallback lama (saat ini hanya untuk satu modem uji). Provisioning per pelanggan memakai') }}
+        <a href="{{ route('web.provisioning-profiles.index') }}" class="font-medium underline hover:no-underline">{{ __('Profil Provisioning') }}</a>.
+    </p>
+
     @if ($flash)
         <p class="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2">{{ $flash }}</p>
     @endif

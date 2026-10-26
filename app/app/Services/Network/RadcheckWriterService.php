@@ -36,21 +36,29 @@ class RadcheckWriterService
      */
     public function write(string $username, string $password, string $framedPool): void
     {
-        DB::connection('radius')->table('radcheck')->where('username', $username)->delete();
-        DB::connection('radius')->table('radreply')->where('username', $username)->delete();
+        // v0.13.4.2.1 — bungkus 2 delete + 2 insert dalam SATU transaksi di
+        // koneksi 'radius' supaya atomik: tanpa ini, proses yang mati setelah
+        // delete tapi sebelum insert bisa meninggalkan username tanpa baris
+        // radcheck/radreply sama sekali. Transaksi ini HANYA di DB radius —
+        // tidak ikut transaksi DB utama pemanggil (dua koneksi terpisah,
+        // BOSS-009), jadi aman dipanggil dari dalam DB::transaction() utama.
+        DB::connection('radius')->transaction(function () use ($username, $password, $framedPool) {
+            DB::connection('radius')->table('radcheck')->where('username', $username)->delete();
+            DB::connection('radius')->table('radreply')->where('username', $username)->delete();
 
-        DB::connection('radius')->table('radcheck')->insert([
-            'username' => $username,
-            'attribute' => 'Cleartext-Password',
-            'op' => ':=',
-            'value' => $password,
-        ]);
+            DB::connection('radius')->table('radcheck')->insert([
+                'username' => $username,
+                'attribute' => 'Cleartext-Password',
+                'op' => ':=',
+                'value' => $password,
+            ]);
 
-        DB::connection('radius')->table('radreply')->insert([
-            ['username' => $username, 'attribute' => 'Service-Type', 'op' => '=', 'value' => 'Framed-User'],
-            ['username' => $username, 'attribute' => 'Framed-Protocol', 'op' => '=', 'value' => 'PPP'],
-            ['username' => $username, 'attribute' => 'Framed-Pool', 'op' => ':=', 'value' => $framedPool],
-        ]);
+            DB::connection('radius')->table('radreply')->insert([
+                ['username' => $username, 'attribute' => 'Service-Type', 'op' => '=', 'value' => 'Framed-User'],
+                ['username' => $username, 'attribute' => 'Framed-Protocol', 'op' => '=', 'value' => 'PPP'],
+                ['username' => $username, 'attribute' => 'Framed-Pool', 'op' => ':=', 'value' => $framedPool],
+            ]);
+        });
     }
 
     /**

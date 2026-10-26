@@ -3055,8 +3055,9 @@ untuk detail alur klaim/aktivasi/close WO). Kalau nanti mau dikembangkan, ini ke
 Ditemukan saat regresi penuh penutupan cluster v0.23.0; **keduanya gagal identik di `develop`** → bukan
 akibat v0.23, ditangani di sprint terpisah.
 
-- **`FrontendBuildTest` false positive `claimForm` — DIPERBAIKI di v0.13.4.1.1 (patch, test + docs saja;
-  konfirmasi akhir browser menunggu verifikasi manual Agung).** **Koreksi catatan lama (KELIRU)**:
+- **`FrontendBuildTest` false positive `claimForm` — SELESAI di v0.13.4.1.1 (patch test + docs saja;
+  verifikasi browser DIKONFIRMASI Agung 2026-10-26 — halaman klaim berfungsi, baris partner/alat/modem
+  bisa ditambah & dihapus, tanpa submit; merged `develop`→`main`, tagged `v0.13.4.1.1`).** **Koreksi catatan lama (KELIRU)**:
   `window.claimForm` **tidak pernah ada** di `resources/js/app.js` (bukan dihapus — `git log -S claimForm`
   menunjukkan `claimForm` hanya pernah muncul di commit `8a6ed72` v0.13.4.1 dan HANYA di
   `work-orders/claim.blade.php`, tidak pernah di `app.js`; `ae15a5a` BUKAN penyebab). Halaman
@@ -3072,7 +3073,7 @@ akibat v0.23, ditangani di sprint terpisah.
   inline di blade mana pun; + 2 test baru (jalur inline `claimForm` lulus, kasus negatif factory tak
   terdaftar di mana pun tetap gagal). TIDAK menyentuh `claim.blade.php`/`app.js`/bundle, TANPA
   `npm run build`. **Status v0.13.4.1 "Selesai" tidak berubah.** Konfirmasi akhir (buka signed-link klaim
-  WO di browser sungguhan) menunggu verifikasi manual Agung sebelum merge/tag v0.13.4.1.1.
+  WO di browser sungguhan) sudah dilakukan Agung 2026-10-26 — halaman klaim berfungsi penuh, tanpa submit.
 - **`WhatsappIncomingMessageWebhookTest > a message that matches nothing gets the generic fallback reply`**
   gagal (juga di `develop`): `whatsapp_message_logs` tidak mencatat `event_type=unrecognized_message_fallback`
   saat pesan masuk tak match apa pun (jalur fallback generik sesi "direct", v0.13.3). Perlu investigasi

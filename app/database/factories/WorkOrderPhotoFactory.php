@@ -21,7 +21,7 @@ class WorkOrderPhotoFactory extends Factory
     {
         return [
             'work_order_id' => WorkOrder::factory(),
-            'type' => WorkOrderPhotoType::Odp,
+            'type' => WorkOrderPhotoType::OdpPort,
             'file_path' => 'work-order-photos/test/'.$this->faker->uuid().'.jpg',
             'uploaded_at' => now(),
         ];

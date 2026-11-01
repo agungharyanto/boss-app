@@ -309,6 +309,22 @@ class WorkOrderService
     }
 
     /**
+     * v0.13.4.3.1 — set `technician_confirmed_at` untuk jalur FORM WEB tutup
+     * WO (signed-link). Di jalur web, otorisasi = signature signed-link +
+     * guard "ketik nama pelanggan" + tanda tangan pelanggan (ditangani
+     * WorkOrderCloseService), jadi OTP WhatsApp TIDAK dipakai di sini —
+     * jalur OTP API (requestConfirmation/confirmByTechnician) TIDAK diubah,
+     * tetap tersedia untuk jalur admin/API. Method terpisah supaya niatnya
+     * eksplisit, bukan menumpang confirmByTechnician().
+     */
+    public function confirmByWebClose(WorkOrder $workOrder): WorkOrder
+    {
+        $workOrder->update(['technician_confirmed_at' => now()]);
+
+        return $workOrder->fresh();
+    }
+
+    /**
      * Releases the reserved/used port back to available — a cancelled
      * installation shouldn't permanently lock up ODP capacity.
      */

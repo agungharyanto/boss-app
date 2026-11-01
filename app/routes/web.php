@@ -12,6 +12,7 @@ use App\Http\Controllers\FiberNodePhotoController;
 use App\Http\Controllers\VpnScriptDownloadController;
 use App\Http\Controllers\WorkOrderActivationController;
 use App\Http\Controllers\WorkOrderClaimController;
+use App\Http\Controllers\WorkOrderCloseController;
 use App\Http\Middleware\EnsureAdminPanelAccess;
 use App\Livewire\Auth\ChangePassword;
 use App\Livewire\Auth\ReferrerForgotPassword;
@@ -118,6 +119,13 @@ Route::middleware(['signed', 'throttle:20,1'])->group(function () {
         ->name('work-orders.activate.status');
     Route::post('/work-orders/claim/{work_order}/{technician}', [WorkOrderClaimController::class, 'submit'])
         ->name('work-orders.claim.submit');
+    // v0.13.4.3.1 — tutup WO (tahap-3 setelah klaim+aktivasi), signed-link per teknisi.
+    Route::get('/work-orders/close/{work_order}/{technician}', [WorkOrderCloseController::class, 'show'])
+        ->name('work-orders.close.show');
+    Route::post('/work-orders/close/{work_order}/{technician}', [WorkOrderCloseController::class, 'submit'])
+        ->name('work-orders.close.submit');
+    Route::get('/work-orders/close/{work_order}/{technician}/status', [WorkOrderCloseController::class, 'status'])
+        ->name('work-orders.close.status');
 });
 
 // Public — guests can switch language too, not just logged-in users.

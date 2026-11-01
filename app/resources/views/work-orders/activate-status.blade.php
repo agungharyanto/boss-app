@@ -42,6 +42,19 @@
             @if ($activation['pppoe_username'] !== null)
                 <p class="text-xs text-gray-500">Username PPPoE: <span class="font-mono text-gray-700">{{ $activation['pppoe_username'] }}</span></p>
             @endif
+
+            @if (($closeUrl ?? null) !== null)
+                <div class="mt-6 border-t border-gray-200 pt-4">
+                    <a href="{{ $closeUrl }}"
+                        class="block w-full text-center bg-primary text-white rounded-md py-2 text-sm font-semibold hover:opacity-90">
+                        Tutup Work Order
+                    </a>
+                    <p class="text-xs text-gray-500 mt-2 text-center">
+                        Lanjut ke form penutupan: upload 6 foto, konfirmasi nama pelanggan, dan tanda tangan pelanggan.
+                        Penutupan hanya bisa setelah ONU online &amp; WiFi terkirim.
+                    </p>
+                </div>
+            @endif
         </div>
 
         @livewireScripts

@@ -21,6 +21,34 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class WorkOrderDispatchSettings extends Model
 {
+    /**
+     * v0.13.4.3.1 — versi teks persyaratan penutupan WO. DRAFT; dinaikkan
+     * manual tiap teks diubah. Disalin ke work_order_signatures.terms_version.
+     */
+    public const DEFAULT_CLOSE_TERMS_VERSION = 'v1-draft';
+
+    /**
+     * v0.13.4.3.1 — teks persyaratan DEFAULT (DRAFT, BELUM disetujui final
+     * Agung) yang pelanggan baca+setujui sebelum tanda tangan di form tutup
+     * WO. Placeholder [..] SENGAJA dibiarkan — Agung isi lewat DB sebelum
+     * dipakai pelanggan nyata (ubah `work_order_dispatch_settings.close_terms_text`
+     * + naikkan `close_terms_version`). Bukan UI besar — edit baris pengaturan.
+     */
+    public const DEFAULT_CLOSE_TERMS = <<<'TERMS'
+        SYARAT DAN KETENTUAN PEMASANGAN LAYANAN INTERNET
+        Dengan menandatangani, saya selaku pelanggan menyatakan bahwa:
+        1. Data diri dan alamat pemasangan yang tercantum adalah benar, dan saya berhak menyetujui pemasangan di lokasi tersebut.
+        2. Pemasangan telah selesai dilakukan teknisi dan layanan berfungsi saat serah terima, termasuk hasil uji kecepatan yang ditunjukkan teknisi.
+        3. Perangkat (modem/ONT dan kabel) yang terpasang adalah [PILIH: milik perusahaan dan dipinjamkan selama berlangganan / milik pelanggan]. Saya akan menjaganya dan tidak membongkar, memindahkan, atau memperjualbelikannya.
+        4. Saya mengetahui paket layanan, biaya pemasangan, biaya berlangganan bulanan, dan tanggal jatuh tempo yang telah dijelaskan kepada saya, dan akan membayar tepat waktu. [PERIKSA/ISI]
+        5. Kecepatan pada paket adalah kecepatan maksimal ("hingga") dan dapat dipengaruhi kondisi jaringan, perangkat saya, serta WiFi di dalam rumah.
+        6. Saya tidak akan memakai layanan untuk kegiatan yang melanggar hukum, dan tidak membagikan atau menjualnya kepada pihak lain tanpa izin tertulis.
+        7. Gangguan layanan saya laporkan melalui kontak resmi [ISI KONTAK] dan akan ditangani sesuai prosedur perusahaan.
+        8. Nama dan kata sandi WiFi telah diserahkan kepada saya, dan saya bertanggung jawab menjaga kerahasiaannya.
+        9. Saya menyetujui teknisi mengambil foto dokumentasi pemasangan (perangkat, jalur kabel, ODP, dan tampak depan lokasi) yang dipakai dan dibagikan kepada tim internal perusahaan untuk keperluan operasional dan penanganan gangguan, serta data saya diproses untuk keperluan layanan sesuai ketentuan perlindungan data pribadi.
+        10. Tanda tangan ini adalah persetujuan saya atas seluruh poin di atas.
+        TERMS;
+
     protected $fillable = [
         'tenant_id',
         'dispatch_offset_minutes',
@@ -28,6 +56,8 @@ class WorkOrderDispatchSettings extends Model
         'command_interval_minutes',
         'wa_group_name',
         'wa_group_jid',
+        'close_terms_text',
+        'close_terms_version',
         'last_dispatch_run_at',
     ];
 
@@ -63,6 +93,8 @@ class WorkOrderDispatchSettings extends Model
                 'command_interval_minutes' => 15,
                 'wa_group_name' => null,
                 'wa_group_jid' => null,
+                'close_terms_text' => self::DEFAULT_CLOSE_TERMS,
+                'close_terms_version' => self::DEFAULT_CLOSE_TERMS_VERSION,
                 'last_dispatch_run_at' => null,
             ]
         );

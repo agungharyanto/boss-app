@@ -81,10 +81,22 @@ class WorkOrderActivationController extends Controller
 
     private function statusView(WorkOrder $workOrder, Technician $claimer): View
     {
+        // v0.13.4.3.1 — tombol "Tutup Work Order" muncul di halaman status saat
+        // WO sudah InProgress (teraktivasi). Signed-link tutup WO (2 hari, pola
+        // sama), hanya untuk teknisi pengklaim.
+        $closeUrl = $workOrder->status === WorkOrderStatus::InProgress
+            ? URL::temporarySignedRoute(
+                'work-orders.close.show',
+                now()->addDays(2),
+                ['work_order' => $workOrder->id, 'technician' => $claimer->id],
+            )
+            : null;
+
         return view('work-orders.activate-status', [
             'workOrder' => $workOrder,
             'claimingTechnician' => $claimer,
             'activation' => app(WorkOrderActivationService::class)->statusFor($workOrder),
+            'closeUrl' => $closeUrl,
         ]);
     }
 

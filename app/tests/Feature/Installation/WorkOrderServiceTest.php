@@ -201,8 +201,8 @@ class WorkOrderServiceTest extends TestCase
         $workOrder = $service->assignTechnician($workOrder, $technician);
         $workOrder = $service->start($workOrder);
 
-        // Only 1 of 4 required photo types, plus a device — still incomplete.
-        WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType(WorkOrderPhotoType::Odp)->create();
+        // Only 1 of 6 required photo types, plus a device — still incomplete.
+        WorkOrderPhoto::factory()->forWorkOrder($workOrder)->ofType(WorkOrderPhotoType::OdpPort)->create();
         $service->addDevice($workOrder, WorkOrderDeviceType::Ont, '00:11:22:33:44:55', 'SN12345');
 
         $this->expectException(IncompleteWorkOrderException::class);

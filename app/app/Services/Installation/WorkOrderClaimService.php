@@ -10,7 +10,9 @@ use App\Models\WorkOrderClaimPartner;
 use App\Models\WorkOrderModemUnit;
 use App\Models\WorkOrderToolUsage;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use Throwable;
 
 /**
  * v0.13.4.1 — Klaim WO via signed-link (public, tanpa login). Satu-satunya
@@ -36,6 +38,8 @@ use InvalidArgumentException;
  */
 class WorkOrderClaimService
 {
+    public function __construct(private readonly WorkOrderDispatchService $dispatch) {}
+
     /**
      * @param  array<int, int>  $partnerTechnicianIds
      * @param  array<int, array{tool_type_id: int, quantity: int, technician_id: int}>  $toolUsages
@@ -135,5 +139,17 @@ class WorkOrderClaimService
                 'claimed_by_technician_id' => $claimingTechnician->id,
             ]);
         });
+
+        // v0.13.4.2.2 — klaim sukses (transaksi commit tanpa exception) -> kirim
+        // WA berisi link AKTIVASI ke teknisi pengklaim. Di LUAR transaksi: klaim
+        // yang ter-rollback / ditolak (WorkOrderAlreadyClaimedException dilempar
+        // di dalam closure) tidak pernah sampai sini, jadi tidak menotifikasi.
+        // Kegagalan kirim WA TIDAK menggagalkan klaim — hanya di-log, bukan
+        // ditelan diam-diam. Satu pesan per klaim sukses (submit dipanggil sekali).
+        try {
+            $this->dispatch->notifyActivationReady($workOrder->fresh(), $claimingTechnician);
+        } catch (Throwable $e) {
+            Log::warning("WorkOrderClaimService: gagal kirim WA WorkOrderActivationReady untuk WO #{$workOrder->id} — {$e->getMessage()}");
+        }
     }
 }

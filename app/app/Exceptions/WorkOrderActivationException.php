@@ -25,6 +25,16 @@ class WorkOrderActivationException extends RuntimeException
         return new self('Pelanggan belum punya CID — tidak bisa membentuk username PPPoE. Lengkapi CID pelanggan dulu.');
     }
 
+    public static function customerNameMismatch(): self
+    {
+        return new self('Nama pelanggan yang diketik tidak cocok dengan data Work Order ini. Periksa kembali ejaan nama pelanggan.');
+    }
+
+    public static function wifiPasswordTooShort(): self
+    {
+        return new self('Password WiFi minimal 8 karakter.');
+    }
+
     public static function conflictingRadcheckUsername(string $existingUsername): self
     {
         return new self(

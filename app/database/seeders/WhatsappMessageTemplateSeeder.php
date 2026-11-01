@@ -41,6 +41,11 @@ class WhatsappMessageTemplateSeeder extends Seeder
             // menyebut {claim_link} sama sekali — link klaim sudah tidak
             // relevan untuk WO yang sudah diklaim.
             WhatsappEventType::WorkOrderClaimedReminder->value => 'Halo {technician_name}, REMINDER — WO #{work_order_id} yang sudah Anda klaim ({claimed_by_name}) untuk {customer_name} belum selesai, mohon segera ditindaklanjuti.'.PHP_EOL.'Alamat: {customer_address}'.PHP_EOL.'Layanan: {service_type}'.PHP_EOL.'Diklaim sejak: {claimed_at}'.PHP_EOL.'— {company_name}.',
+
+            // v0.13.4.2.2 — dikirim ke teknisi pengklaim setelah klaim sukses,
+            // membawa link lanjut ke form AKTIVASI pelanggan. HANYA 4 variabel
+            // (lihat docblock WhatsappEventType::WorkOrderActivationReady).
+            WhatsappEventType::WorkOrderActivationReady->value => 'Halo {technician_name}, WO #{work_order_id} untuk {customer_name} siap DIAKTIVASI.'.PHP_EOL.'Buka link berikut untuk mengaktifkan layanan pelanggan:'.PHP_EOL.'{activation_link}',
         ];
 
         Tenant::all()->each(function (Tenant $tenant) use ($defaults) {

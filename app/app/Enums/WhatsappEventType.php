@@ -133,6 +133,17 @@ enum WhatsappEventType: string
      */
     case WorkOrderClaimedReminder = 'work_order_claimed_reminder';
 
+    /**
+     * v0.13.4.2.2 (disetujui Agung 2026-10-26) — dikirim ke teknisi PENGKLAIM
+     * segera setelah klaim WO sukses (`WorkOrderClaimService::submit()`),
+     * membawa `{activation_link}` (signed-link `work-orders.activate.show`,
+     * unik per teknisi, berlaku 2 hari) untuk lanjut ke form AKTIVASI
+     * pelanggan. Variabel: `{technician_name}` `{customer_name}`
+     * `{work_order_id}` `{activation_link}`. Kegagalan kirim WA TIDAK pernah
+     * menggagalkan klaim (hanya di-log). Satu pesan per klaim sukses.
+     */
+    case WorkOrderActivationReady = 'work_order_activation_ready';
+
     public function label(): string
     {
         return match ($this) {
@@ -148,6 +159,7 @@ enum WhatsappEventType: string
             self::StaffInitialPasswordValue => 'Password Awal Staff — Nilai Password',
             self::WorkOrderDispatched => 'Work Order Dispatch/Reminder Teknisi',
             self::WorkOrderClaimedReminder => 'Work Order Reminder (Sudah Diklaim)',
+            self::WorkOrderActivationReady => 'Work Order Siap Aktivasi (Link Aktivasi)',
         };
     }
 }

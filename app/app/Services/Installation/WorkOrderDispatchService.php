@@ -261,6 +261,36 @@ class WorkOrderDispatchService
      * sini). Grup WA (kalau dikonfigurasi) tetap ikut diberi tahu, sama
      * pola notifyGroupIfConfigured().
      */
+    /**
+     * v0.13.4.2.2 — dikirim ke teknisi PENGKLAIM segera setelah klaim sukses,
+     * membawa signed-link lanjut ke form AKTIVASI pelanggan (unik per teknisi,
+     * berlaku 2 hari, pola identik `claim_link` di sendTo()). Kegagalan kirim
+     * WA TIDAK pernah menggagalkan klaim — pemanggil (WorkOrderClaimService)
+     * membungkus pemanggilan ini dengan try/catch + Log, bukan ditelan diam.
+     */
+    public function notifyActivationReady(WorkOrder $workOrder, Technician $claimer): void
+    {
+        $activationLink = URL::temporarySignedRoute(
+            'work-orders.activate.show',
+            now()->addDays(2),
+            ['work_order' => $workOrder->id, 'technician' => $claimer->id],
+        );
+
+        $this->whatsapp->buildAndQueueForRecipient(
+            WhatsappEventType::WorkOrderActivationReady,
+            $workOrder->tenant_id,
+            $claimer->phone,
+            [
+                'technician_name' => $claimer->name,
+                'customer_name' => $workOrder->customer?->name,
+                'work_order_id' => $workOrder->id,
+                'activation_link' => $activationLink,
+            ],
+            $workOrder->customer,
+            $workOrder->reseller_id,
+        );
+    }
+
     private function notifyClaimedReminder(WorkOrder $workOrder, ?string $groupJid): void
     {
         $claimer = $workOrder->claimedByTechnician;

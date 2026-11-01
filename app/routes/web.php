@@ -10,6 +10,7 @@ use App\Http\Controllers\Billing\InvoicePrintController;
 use App\Http\Controllers\CommissionPaymentProofController;
 use App\Http\Controllers\FiberNodePhotoController;
 use App\Http\Controllers\VpnScriptDownloadController;
+use App\Http\Controllers\WorkOrderActivationController;
 use App\Http\Controllers\WorkOrderClaimController;
 use App\Http\Middleware\EnsureAdminPanelAccess;
 use App\Livewire\Auth\ChangePassword;
@@ -109,6 +110,12 @@ Route::get('/vpn-script-generator/download/{token}.rsc', [VpnScriptDownloadContr
 Route::middleware(['signed', 'throttle:20,1'])->group(function () {
     Route::get('/work-orders/claim/{work_order}/{technician}', [WorkOrderClaimController::class, 'show'])
         ->name('work-orders.claim.show');
+    Route::get('/work-orders/activate/{work_order}/{technician}', [WorkOrderActivationController::class, 'show'])
+        ->name('work-orders.activate.show');
+    Route::post('/work-orders/activate/{work_order}/{technician}', [WorkOrderActivationController::class, 'submit'])
+        ->name('work-orders.activate.submit');
+    Route::get('/work-orders/activate/{work_order}/{technician}/status', [WorkOrderActivationController::class, 'status'])
+        ->name('work-orders.activate.status');
     Route::post('/work-orders/claim/{work_order}/{technician}', [WorkOrderClaimController::class, 'submit'])
         ->name('work-orders.claim.submit');
 });

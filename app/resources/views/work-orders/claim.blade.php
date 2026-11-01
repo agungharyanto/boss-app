@@ -97,11 +97,27 @@
                         @endif
                     </div>
                 </div>
+                @isset($activationUrl)
+                    @if ($activationUrl)
+                        <a href="{{ $activationUrl }}"
+                            class="mt-4 block w-full text-center bg-primary text-white rounded-md py-2 text-sm font-semibold hover:opacity-90">
+                            Lanjut Aktivasi Pelanggan
+                        </a>
+                    @endif
+                @endisset
             @elseif ($submitted)
                 <div class="border border-green-200 bg-green-50 text-green-800 rounded-md p-4 text-sm">
                     Klaim berhasil dicatat. Terima kasih — informasi partner kerja dan alat yang dibawa
                     sudah tersimpan untuk Work Order ini.
                 </div>
+                @isset($activationUrl)
+                    @if ($activationUrl)
+                        <a href="{{ $activationUrl }}"
+                            class="mt-4 block w-full text-center bg-primary text-white rounded-md py-2 text-sm font-semibold hover:opacity-90">
+                            Lanjut Aktivasi Pelanggan
+                        </a>
+                    @endif
+                @endisset
             @else
                 @isset($submitError)
                     <div class="border border-red-200 bg-red-50 text-red-800 rounded-md p-3 mb-4 text-sm">

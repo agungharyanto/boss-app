@@ -2,13 +2,16 @@
 
 namespace App\Services\Installation;
 
+use App\Enums\CpeActionStatus;
 use App\Enums\WorkOrderDeviceType;
 use App\Enums\WorkOrderStatus;
 use App\Exceptions\WorkOrderActivationException;
+use App\Models\CpeDevice;
 use App\Models\Customer;
 use App\Models\Technician;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
+use App\Services\Network\CpeActionService;
 use App\Services\Network\CpeBindingService;
 use App\Services\Network\RadcheckWriterService;
 use App\Services\Network\TestCredentialSyncService;
@@ -40,7 +43,18 @@ class WorkOrderActivationService
         private readonly RadcheckWriterService $radcheck,
         private readonly TestCredentialSyncService $credentials,
         private readonly WorkOrderService $workOrders,
+        private readonly CpeActionService $cpeAction,
     ) {}
+
+    /**
+     * Normalisasi nama untuk guard "ketik nama pelanggan": trim + rapikan
+     * spasi ganda jadi satu + case-insensitive. Perbandingan PERSIS (bukan
+     * "mengandung").
+     */
+    public static function normalizeName(string $name): string
+    {
+        return mb_strtolower(preg_replace('/\s+/', ' ', trim($name)) ?? '');
+    }
 
     /**
      * Jalankan aktivasi dasar untuk $workOrder atas nama teknisi $claimer.
@@ -158,5 +172,105 @@ class WorkOrderActivationService
                 'modem_unit_count' => $workOrder->modemUnits()->count(),
             ];
         });
+    }
+
+    /**
+     * v0.13.4.2.2 — alur dari form aktivasi signed-link. Guard nama pelanggan
+     * (WAJIB di server, Alpine cuma UX) + panjang password WiFi, lalu
+     * prepare() (salin modem + bind + radcheck + InProgress), lalu simpan
+     * ssid/wifi_password ke work_order_devices (kolom wifi_password cast
+     * 'encrypted' — TIDAK pernah plaintext di DB/log/response), lalu PUSH WiFi
+     * lewat jalur yang SUDAH ADA:
+     *   - ONU sudah online (cpe_devices.genieacs_device_id terisi) ->
+     *     CpeActionService::setWifiCredentials() sekarang;
+     *   - ONU belum online -> DITUNDA; ReconcileCpeDevices::reconcilePending()
+     *     nanti memanggil provisionWifiIfPending() yang membaca ssid/
+     *     wifi_password dari work_order_devices ini (dikonfirmasi B0 — nol
+     *     mekanisme baru).
+     *
+     * @return array<string, mixed> ringkasan prepare() + wifi_pushed/wifi_deferred.
+     *
+     * @throws WorkOrderActivationException
+     */
+    public function activateFromForm(
+        WorkOrder $workOrder,
+        Technician $claimer,
+        string $customerNameInput,
+        string $ssid,
+        string $wifiPassword,
+    ): array {
+        $customer = Customer::withoutGlobalScopes()->findOrFail($workOrder->customer_id);
+
+        if (self::normalizeName($customerNameInput) !== self::normalizeName((string) $customer->name)) {
+            throw WorkOrderActivationException::customerNameMismatch();
+        }
+
+        if (mb_strlen($wifiPassword) < 8) {
+            throw WorkOrderActivationException::wifiPasswordTooShort();
+        }
+
+        $result = $this->prepare($workOrder, $claimer);
+
+        // Simpan SSID/password WiFi ke baris ONT work_order_devices hasil prepare().
+        $device = WorkOrderDevice::findOrFail($result['work_order_device_id']);
+        $device->update(['ssid' => $ssid, 'wifi_password' => $wifiPassword]);
+
+        $cpe = CpeDevice::withoutGlobalScopes()->findOrFail($result['cpe_device_id']);
+        $result['wifi_pushed'] = false;
+        $result['wifi_deferred'] = true;
+
+        if ($cpe->genieacs_device_id !== null) {
+            $log = $this->cpeAction->setWifiCredentials($cpe, $ssid, $wifiPassword, null, triggeredBy: 'activation_form');
+            if ($log->status === CpeActionStatus::Delivered) {
+                $cpe->update(['wifi_provisioned_at' => now()]);
+                $result['wifi_pushed'] = true;
+                $result['wifi_deferred'] = false;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * v0.13.4.2.2 — status aktivasi untuk halaman async (read-only, nol sentuh
+     * device). Semua dari DB: modem terdaftar (work_order_devices ont), akun
+     * PPPoE dibuat (radcheck {cid}@ppp), ONU online (cpe_devices.
+     * genieacs_device_id), WiFi terkirim (cpe_devices.wifi_provisioned_at).
+     *
+     * @return array<string, mixed>
+     */
+    public function statusFor(WorkOrder $workOrder): array
+    {
+        $customer = Customer::withoutGlobalScopes()->find($workOrder->customer_id);
+        $pppoeUsername = ($customer && $customer->cid) ? "{$customer->cid}@ppp.bajastu.id" : null;
+
+        $device = WorkOrderDevice::where('work_order_id', $workOrder->id)
+            ->where('device_type', WorkOrderDeviceType::Ont)
+            ->orderBy('id')
+            ->first();
+
+        $cpe = $device !== null
+            ? CpeDevice::withoutGlobalScopes()->where('work_order_device_id', $device->id)->first()
+            : null;
+
+        $modemRegistered = $device !== null;
+        $pppoeCreated = $pppoeUsername !== null
+            && DB::connection('radius')->table('radcheck')->where('username', $pppoeUsername)->exists();
+        $onuOnline = $cpe !== null && $cpe->genieacs_device_id !== null;
+        $wifiSent = $cpe !== null && $cpe->wifi_provisioned_at !== null;
+
+        return [
+            'work_order_id' => $workOrder->id,
+            'status' => $workOrder->status->value,
+            'activated' => $workOrder->status === WorkOrderStatus::InProgress,
+            'pppoe_username' => $pppoeUsername,
+            'stages' => [
+                ['key' => 'modem', 'label' => 'Modem terdaftar', 'done' => $modemRegistered],
+                ['key' => 'pppoe', 'label' => 'Akun PPPoE dibuat', 'done' => $pppoeCreated],
+                ['key' => 'onu', 'label' => 'ONU online di sistem', 'done' => $onuOnline],
+                ['key' => 'wifi', 'label' => 'WiFi terkirim ke perangkat', 'done' => $wifiSent],
+            ],
+            'all_done' => $modemRegistered && $pppoeCreated && $onuOnline && $wifiSent,
+        ];
     }
 }

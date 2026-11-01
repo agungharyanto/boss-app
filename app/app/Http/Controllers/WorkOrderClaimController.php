@@ -10,6 +10,7 @@ use App\Models\WorkOrder;
 use App\Services\Installation\WorkOrderClaimService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\URL;
 use Illuminate\View\View;
 use InvalidArgumentException;
 
@@ -114,7 +115,25 @@ class WorkOrderClaimController extends Controller
             'toolTypes' => $toolTypes,
             'submitted' => true,
             'alreadyClaimed' => false,
+            // v0.13.4.2.2 — tombol lanjut AKTIVASI di halaman sukses klaim.
+            // Teknisi yang baru sukses klaim PASTI pengklaim, jadi link selalu
+            // relevan di sini.
+            'activationUrl' => $this->activationUrlFor($workOrder, $claimingTechnician),
         ]);
+    }
+
+    /**
+     * v0.13.4.2.2 — signed-link lanjut ke form AKTIVASI (unik per teknisi, 2
+     * hari, pola identik claim link). Pola sama `WorkOrderDispatchService::
+     * notifyActivationReady()`.
+     */
+    private function activationUrlFor(WorkOrder $workOrder, Technician $technician): string
+    {
+        return URL::temporarySignedRoute(
+            'work-orders.activate.show',
+            now()->addDays(2),
+            ['work_order' => $workOrder->id, 'technician' => $technician->id],
+        );
     }
 
     /**
@@ -135,6 +154,12 @@ class WorkOrderClaimController extends Controller
             'claimingTechnician' => $claimingTechnician,
             'submitted' => false,
             'alreadyClaimed' => true,
+            // v0.13.4.2.2 — tombol AKTIVASI di halaman read-only HANYA kalau
+            // teknisi yang membuka link ini genuinely pengklaim WO (bukan
+            // teknisi lain yang link-nya tiba belakangan).
+            'activationUrl' => (int) $workOrder->claimed_by_technician_id === (int) $claimingTechnician->id
+                ? $this->activationUrlFor($workOrder, $claimingTechnician)
+                : null,
         ];
     }
 

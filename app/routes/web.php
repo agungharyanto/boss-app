@@ -9,6 +9,7 @@ use App\Http\Controllers\Auth\ReferrerLoginController;
 use App\Http\Controllers\Billing\InvoicePrintController;
 use App\Http\Controllers\CommissionPaymentProofController;
 use App\Http\Controllers\FiberNodePhotoController;
+use App\Http\Controllers\Settings\CompanyLogoController;
 use App\Http\Controllers\VpnScriptDownloadController;
 use App\Http\Controllers\WorkOrderActivationController;
 use App\Http\Controllers\WorkOrderClaimController;
@@ -60,6 +61,8 @@ use App\Livewire\Referrers\ReferrerIndex;
 use App\Livewire\Resellers\PackagePricingIndex;
 use App\Livewire\Resellers\ResellerIndex;
 use App\Livewire\Resellers\ResellerShow;
+use App\Livewire\Settings\CompanyProfileSettings;
+use App\Livewire\Settings\InstallationTermsSettings;
 use App\Livewire\Settings\PaymentGatewaySettings;
 use App\Livewire\Settings\ThemeSettings;
 use App\Livewire\Settings\WorkOrderDispatchSettings;
@@ -381,6 +384,11 @@ Route::middleware(['auth', 'admin.panel', 'password.changed'])->name('web.')->gr
     // v0.26.2 — "Komunikasi > Konfig WA Gateway", settings timing
     // dispatch/reminder Work Order per tenant.
     Route::get('/settings/work-order-dispatch', WorkOrderDispatchSettings::class)->name('settings.work-order-dispatch');
+    // v0.19.1 — Pengaturan Perusahaan (profil per tenant + logo privat) &
+    // editor Syarat & Ketentuan Pemasangan (versi insert-only).
+    Route::get('/settings/company-profile', CompanyProfileSettings::class)->name('settings.company-profile');
+    Route::get('/settings/company-profile/logo', [CompanyLogoController::class, 'show'])->name('settings.company-logo');
+    Route::get('/settings/installation-terms', InstallationTermsSettings::class)->name('settings.installation-terms');
     Route::get('/staff', StaffIndex::class)->name('staff.index');
     Route::get('/cpe-parameter-maps', CpeParameterMapIndex::class)->name('cpe-parameter-maps.index');
 

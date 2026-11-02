@@ -9180,8 +9180,10 @@ perlu dipakai lagi.)
 ## WhatsApp Kirim Media — gambar + PDF (v0.13.5.1)
 
 Kemampuan kirim media generik (gambar caption + dokumen PDF) ke nomor pribadi DAN grup. Dipakai nanti oleh
-v0.13.4.3.2 (grup "WO selesai" + 6 foto) dan v0.13.5.2 (PDF invoice). **Belum aktif di produksi sampai
-gateway di-rebuild** (lihat prosedur rilis di bawah).
+v0.13.4.3.2 (grup "WO selesai" + 6 foto) dan v0.13.5.2 (PDF invoice). **DIRILIS 2026-11-03 dini hari WIB**
+(gateway di-rebuild, worker/PHP di-recreate) — uji nyata ke nomor Agung: PNG kecil + PDF kecil TERKIRIM via
+sesi "direct". **JPEG/foto kamera nyata BELUM diuji** (tidak ada JPEG <100 KB yang bisa dibuat tanpa GD saat
+uji) — akan teruji di v0.13.4.3.2.
 
 **Transport = base64-in-JSON (keputusan terkunci Agung), BUKAN multipart/signed-URL.** Mempertahankan
 kontrak HMAC PERSIS (`"{timestamp}.{raw_body}"` atas string JSON) tanpa skema signing baru; disk privat tak
@@ -9222,6 +9224,13 @@ media_http_timeout`.
    recreate PHP containers — **retry_after (150) HARUS > job $timeout (115) > media_http_timeout (100) >
    gateway mediaTimeout (75)** supaya tidak ada pemrosesan ganda. Default `config/queue.php` sudah 150.
 3. Migrasi `whatsapp_message_logs.attachment` sudah di-`migrate` di DB dev (aditif, nol efek ke baris lama).
+
+**⚠️ PERINGATAN rilis (terbukti saat 2026-11-03):** menambah/mengubah kunci di root `.env` MEMICU
+`docker compose up -d` me-recreate `boss-postgresql` juga (lewat `env_file` bersama) — DB putus
+**~41 detik** lalu kembali `healthy` (data di volume aman). **Jadwalkan + umumkan** sebelum menyentuh
+`.env` di jendela rilis, jangan kaget. Juga: sesi reseller `key=1` berstatus **`logged_out`** (pra-existing,
+tanpa creds) — `RestoreAll()` tidak menyambungnya (wajar), jangan dikira regresi; hanya sesi `direct` yang
+wajib kembali `connected`.
 
 **Uji nyata pasca-rebuild (dengan persetujuan Agung):** kirim 1 gambar kecil + 1 PDF kecil ke
 `6287884374939` via sesi "direct" (mis. lewat tinker memanggil `queueMediaBatchForGroup`/builder dengan

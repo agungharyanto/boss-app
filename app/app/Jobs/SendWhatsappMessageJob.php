@@ -3,9 +3,11 @@
 namespace App\Jobs;
 
 use App\Enums\WhatsappMessageStatus;
+use App\Exceptions\WhatsappAttachmentException;
 use App\Models\WhatsappGatewaySettings;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappSession;
+use App\Support\Whatsapp\WhatsappAttachment;
 use App\Support\WhatsappHmac;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -29,6 +31,13 @@ class SendWhatsappMessageJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
+
+    // v0.13.5.1 — timeout job dinaikkan untuk jalur media (Upload ke server
+    // WhatsApp lebih lama dari teks). Teks selesai jauh di bawah ini. HARUS
+    // < worker --timeout DAN < queue retry_after (lihat catatan rilis di
+    // CLAUDE.md: worker --timeout=120 + REDIS_QUEUE_RETRY_AFTER=150 pada
+    // jendela rebuild) agar job tidak diproses ganda.
+    public int $timeout = 115;
 
     public function __construct(public readonly int $logId) {}
 
@@ -62,6 +71,13 @@ class SendWhatsappMessageJob implements ShouldQueue
             }
 
             $this->recordFailure($log, "HTTP {$response->status()}: {$response->body()}");
+        } catch (WhatsappAttachmentException $e) {
+            // Lampiran tidak valid (file hilang/MIME salah/ukuran) = gagal
+            // PERMANEN — retry tidak akan membuat file muncul. Tidak release.
+            $log->update([
+                'status' => WhatsappMessageStatus::Failed,
+                'failed_reason' => $e->getMessage(),
+            ]);
         } catch (Throwable $e) {
             $this->recordFailure($log, $e->getMessage());
         }
@@ -88,6 +104,10 @@ class SendWhatsappMessageJob implements ShouldQueue
         $sessionKey = WhatsappSession::sessionKeyFor($log->reseller_id);
         $baseUrl = config('services.whatsapp_gateway.url');
 
+        if ($log->attachment !== null) {
+            return $this->sendMediaToGateway($hmac, $log, $sessionKey, (string) $baseUrl);
+        }
+
         $body = json_encode([
             'phone_number' => $log->phone_number,
             'message' => $log->rendered_content,
@@ -109,6 +129,37 @@ class SendWhatsappMessageJob implements ShouldQueue
             // beri marginnya.
             ->timeout(35)
             ->post(rtrim((string) $baseUrl, '/')."/sessions/{$sessionKey}/send");
+    }
+
+    /**
+     * v0.13.5.1 — kirim media (1 lampiran). Re-validasi saat kirim (file ada,
+     * MIME dari ISI file via finfo, ukuran <= cap) — gagal = throw
+     * WhatsappAttachmentException (ditangani permanen di handle()). base64
+     * TIDAK pernah masuk log. Timeout HTTP media lebih panjang dari teks.
+     */
+    private function sendMediaToGateway(WhatsappHmac $hmac, WhatsappMessageLog $log, string $sessionKey, string $baseUrl)
+    {
+        $attachment = WhatsappAttachment::fromArray((array) $log->attachment);
+        $mime = $attachment->assertValidForSend(); // throws kalau tidak valid
+
+        $body = json_encode([
+            'phone_number' => $log->phone_number,
+            'caption' => $log->rendered_content,
+            'mime' => $mime,
+            'filename' => $attachment->filename,
+            'base64' => $attachment->base64(),
+        ], JSON_THROW_ON_ERROR);
+
+        $timestamp = time();
+        $signature = $hmac->sign($body, $timestamp);
+
+        return Http::withBody($body, 'application/json')
+            ->withHeaders([
+                'X-Whatsapp-Timestamp' => (string) $timestamp,
+                'X-Whatsapp-Signature' => $signature,
+            ])
+            ->timeout((int) config('services.whatsapp_gateway.media_http_timeout', 100))
+            ->post(rtrim($baseUrl, '/')."/sessions/{$sessionKey}/send-media");
     }
 
     /**

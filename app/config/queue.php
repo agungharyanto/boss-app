@@ -68,7 +68,10 @@ return [
             'driver' => 'redis',
             'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
             'queue' => env('REDIS_QUEUE', 'default'),
-            'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 90),
+            // v0.13.5.1 — default dinaikkan 90→150: job media WA bisa berjalan
+            // s/d ~120s (worker --timeout media), retry_after HARUS > durasi job
+            // agar tidak di-reserve ulang (diproses ganda) saat masih jalan.
+            'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 150),
             'block_for' => null,
             'after_commit' => false,
         ],

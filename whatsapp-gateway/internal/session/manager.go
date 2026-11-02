@@ -119,10 +119,16 @@ type Manager struct {
 	// Map<Promise> Node ke Go (yang butuh mutex+map+channel manual) — poin
 	// yang wajib dilaporkan balik sesuai instruksi checkpoint.
 	connectGroup singleflight.Group
+
+	// mediaSem — semafor pembatas konkurensi Upload+Send media (v0.13.5.1),
+	// agar banyak media di-antre sekaligus tidak meledakkan memori (tiap
+	// Upload memegang byte file di memori). Buffered channel, kapasitas
+	// mediaConcurrency. Jalur teks TIDAK lewat sini (tidak buffer file).
+	mediaSem chan struct{}
 }
 
 func NewManager(ctx context.Context, store *sqlstore.Container, db *sql.DB, log waLog.Logger, notifier *webhook.Notifier) (*Manager, error) {
-	m := &Manager{ctx: ctx, store: store, db: db, log: log, notifier: notifier}
+	m := &Manager{ctx: ctx, store: store, db: db, log: log, notifier: notifier, mediaSem: make(chan struct{}, mediaConcurrency)}
 
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS boss_session_keys (
@@ -607,6 +613,45 @@ func parseGroupJID(groupJIDString string) (types.JID, error) {
 	}
 
 	return jid, nil
+}
+
+// SendMedia — v0.13.5.1. Kirim satu lampiran (gambar/dokumen) ke nomor
+// individu. Validasi sesi sama persis SendMessage (resolveSendableEntry).
+// Normalisasi nomor identik jalur teks. Semafor mediaSem membatasi
+// konkurensi Upload.
+func (m *Manager) SendMedia(key, phoneNumber, caption, mimetype, filename string, data []byte) error {
+	e, err := m.resolveSendableEntry(key)
+	if err != nil {
+		return err
+	}
+
+	m.mediaSem <- struct{}{}
+	defer func() { <-m.mediaSem }()
+
+	normalized := jidnorm.NormalizeIndonesian(phoneNumber)
+	jid := jidnorm.BuildJID(normalized)
+
+	return sendMediaToJID(m.ctx, e.client, jid, mediaTimeout, isImageMime(mimetype), caption, mimetype, filename, data)
+}
+
+// SendGroupMedia — v0.13.5.1. Kembaran SendMedia untuk JID GRUP. Guard
+// genuinely-grup (parseGroupJID, Server="g.us") sama persis SendGroupMessage;
+// kegagalan permanen tetap terdeteksi IsPermanentGroupSendError di pemanggil.
+func (m *Manager) SendGroupMedia(key, groupJIDString, caption, mimetype, filename string, data []byte) error {
+	e, err := m.resolveSendableEntry(key)
+	if err != nil {
+		return err
+	}
+
+	jid, err := parseGroupJID(groupJIDString)
+	if err != nil {
+		return err
+	}
+
+	m.mediaSem <- struct{}{}
+	defer func() { <-m.mediaSem }()
+
+	return sendMediaToJID(m.ctx, e.client, jid, mediaTimeout, isImageMime(mimetype), caption, mimetype, filename, data)
 }
 
 // IsPermanentGroupSendError — v0.26.4. True kalau err menandakan kegagalan

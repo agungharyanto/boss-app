@@ -303,7 +303,16 @@ enforced automatically via an Eloquent global scope (not separate databases/sche
 
 - `tenants` table (`app/database/migrations/..._create_tenants_table.php`) is intentionally minimal for
   now: `id`, `uuid`, `name`, `slug` (unique), `is_active`. Branding/settings/licensed-modules columns are
-  deferred to their own future sprint — don't add them speculatively.
+  deferred to their own future sprint — don't add them speculatively. **Update (v0.19.1): the branding
+  sprint is now running** — profil perusahaan per tenant hidup di tabel TERSENDIRI `company_profiles`
+  (legal_name/brand_name/alamat/NPWP/CS/email/jam operasional/rekening/`logo_path` privat + `updated_by`),
+  BUKAN kolom baru di `tenants` (tetap minimal). `CompanyProfileService` me-resolve dengan fallback jelas,
+  env `INVOICE_COMPANY_*` tetap fallback terakhir. `installation_terms` (INSERT-ONLY) menyimpan Syarat &
+  Ketentuan Pemasangan ber-versi. **Reseller HANYA boleh override NOMOR CS** (`resellers.cs_whatsapp`/
+  `cs_phone`, diedit admin di halaman detail reseller — bukan hak reseller); brand/logo/legal/NPWP/
+  rekening/alamat tetap milik tenant. v0.19.1 sengaja TIDAK menyentuh form tutup WO/`WorkOrderCloseService`/
+  `work_order_signatures`/variabel WA — penyambungan persyaratan dinamis dilakukan saat lanjutan
+  `v0.13.4.3.1` (branch `v0.13.4.3.1-tutup-wo-web` DITAHAN menunggu v0.19.1).
 - `App\Models\Concerns\BelongsToTenant` trait: apply it to any model that belongs to a tenant. It (1)
   registers `App\Models\Scopes\TenantScope` as a global scope, which filters every query by
   `Auth::user()->tenant_id` whenever a user is authenticated, and (2) auto-fills `tenant_id` on

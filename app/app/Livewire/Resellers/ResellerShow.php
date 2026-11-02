@@ -22,11 +22,39 @@ class ResellerShow extends Component
     #[Validate('required|in:owner,staff')]
     public string $staffRole = 'staff';
 
+    // v0.19.1 — override nomor CS reseller (diedit admin lewat UI reseller
+    // yang sudah ada; reseller TIDAK diberi hak baru). Brand/logo/legal
+    // tetap milik tenant.
+    #[Validate('nullable|string|max:30')]
+    public string $csWhatsapp = '';
+
+    #[Validate('nullable|string|max:30')]
+    public string $csPhone = '';
+
     public function mount(Reseller $reseller): void
     {
         $this->authorize('manageUsers', $reseller);
 
         $this->reseller = $reseller;
+        $this->csWhatsapp = (string) ($reseller->cs_whatsapp ?? '');
+        $this->csPhone = (string) ($reseller->cs_phone ?? '');
+    }
+
+    public function saveCsOverride(): void
+    {
+        $this->authorize('update', $this->reseller);
+
+        $this->validate([
+            'csWhatsapp' => 'nullable|string|max:30',
+            'csPhone' => 'nullable|string|max:30',
+        ]);
+
+        $this->reseller->update([
+            'cs_whatsapp' => $this->csWhatsapp ?: null,
+            'cs_phone' => $this->csPhone ?: null,
+        ]);
+
+        session()->flash('cs-status', __('Nomor CS reseller berhasil disimpan.'));
     }
 
     public function attachStaff(ResellerService $service): void

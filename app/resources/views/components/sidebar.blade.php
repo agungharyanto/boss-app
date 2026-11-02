@@ -305,6 +305,14 @@
                 auth()->user()->can('view', \App\Models\PaymentGatewaySettings::class)
                     ? ['route' => 'web.settings.payment-gateway', 'label' => __('Payment Gateway')]
                     : null,
+                // v0.19.1 — Profil Perusahaan + Syarat & Ketentuan Pemasangan,
+                // tier-admin saja (permission company_profile.view).
+                auth()->user()->can('company_profile.view')
+                    ? ['route' => 'web.settings.company-profile', 'label' => __('Profil Perusahaan')]
+                    : null,
+                auth()->user()->can('company_profile.view')
+                    ? ['route' => 'web.settings.installation-terms', 'label' => __('Syarat & Ketentuan Pemasangan')]
+                    : null,
                 // v0.22.1 — CRUD Staff (Manajemen User). Gate viewAny UserPolicy.
                 auth()->user()->can('viewAny', \App\Models\User::class)
                     ? ['route' => 'web.staff.index', 'label' => __('Manajemen Staff')]

@@ -5,6 +5,33 @@
         <p class="text-sm text-gray-500">{{ $reseller->email ?? '—' }} &middot; {{ $reseller->phone ?? '—' }}</p>
     </div>
 
+    {{-- v0.19.1 — override Nomor CS (admin). Brand/logo/legal/NPWP/rekening
+         tetap milik tenant; reseller cuma boleh beda nomor CS. --}}
+    <div class="mb-8">
+        <h2 class="text-lg font-semibold text-gray-800 mb-3">{{ __('Override Nomor CS') }}</h2>
+        @if (session('cs-status'))
+            <div class="mb-3 text-sm text-green-600">{{ session('cs-status') }}</div>
+        @endif
+        <form wire:submit="saveCsOverride" class="p-4 border border-gray-200 rounded-md bg-gray-50 flex gap-3 items-end flex-wrap">
+            <div class="flex-1 min-w-[180px]">
+                <label class="block text-sm font-medium text-gray-700">{{ __('Nomor CS (WhatsApp)') }}</label>
+                <input type="text" wire:model="csWhatsapp" placeholder="{{ __('Kosong = pakai CS tenant') }}"
+                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                @error('csWhatsapp') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+            </div>
+            <div class="flex-1 min-w-[180px]">
+                <label class="block text-sm font-medium text-gray-700">{{ __('Nomor CS (Telepon)') }}</label>
+                <input type="text" wire:model="csPhone" placeholder="{{ __('Kosong = pakai CS tenant') }}"
+                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm">
+                @error('csPhone') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+            </div>
+            <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">
+                {{ __('Simpan') }}
+            </button>
+        </form>
+        <p class="mt-1 text-xs text-gray-400">{{ __('Dikosongkan → otomatis memakai nomor CS tenant.') }}</p>
+    </div>
+
     <div class="mb-8">
         <h2 class="text-lg font-semibold text-gray-800 mb-3">{{ __('Staff Reseller') }}</h2>
 

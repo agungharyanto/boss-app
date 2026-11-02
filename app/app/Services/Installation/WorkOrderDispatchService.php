@@ -276,6 +276,15 @@ class WorkOrderDispatchService
             ['work_order' => $workOrder->id, 'technician' => $claimer->id],
         );
 
+        // v0.13.4.3.1 — sertakan link tutup WO (tahap-3). Tetap event type yang
+        // SAMA (WorkOrderActivationReady), hanya variabel template baru {close_link};
+        // TIDAK membuat event type baru.
+        $closeLink = URL::temporarySignedRoute(
+            'work-orders.close.show',
+            now()->addDays(2),
+            ['work_order' => $workOrder->id, 'technician' => $claimer->id],
+        );
+
         $this->whatsapp->buildAndQueueForRecipient(
             WhatsappEventType::WorkOrderActivationReady,
             $workOrder->tenant_id,
@@ -285,6 +294,7 @@ class WorkOrderDispatchService
                 'customer_name' => $workOrder->customer?->name,
                 'work_order_id' => $workOrder->id,
                 'activation_link' => $activationLink,
+                'close_link' => $closeLink,
             ],
             $workOrder->customer,
             $workOrder->reseller_id,

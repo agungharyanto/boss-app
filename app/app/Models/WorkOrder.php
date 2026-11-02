@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class WorkOrder extends Model
 {
@@ -102,6 +103,15 @@ class WorkOrder extends Model
     public function photos(): HasMany
     {
         return $this->hasMany(WorkOrderPhoto::class);
+    }
+
+    /**
+     * v0.13.4.3.1 — tanda tangan pelanggan saat penutupan WO via form web
+     * teknisi (satu per WO).
+     */
+    public function signature(): HasOne
+    {
+        return $this->hasOne(WorkOrderSignature::class);
     }
 
     /**

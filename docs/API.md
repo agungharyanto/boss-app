@@ -1267,11 +1267,16 @@ Transisi ke `in_progress`.
 
 ### `POST /work-orders/{work_order}/photos`
 
-Multipart: `type` (`odp`/`ont_device`/`signal_strength`/`house_front`) +
-`file` (image, max 10MB). Satu foto per jenis per work order — upload ulang
-jenis yang sama mengganti file lama (dihapus dari disk), bukan menambah
-baris baru. Disimpan di disk `local` (private, `storage/app/private/` di
-Laravel 12 — bukan `storage/app/public`, tidak bisa diakses publik).
+Multipart: `type` + `file` (image `jpg,jpeg,png,webp`, max 10MB). Satu foto
+per jenis per work order — upload ulang jenis yang sama mengganti file lama
+(dihapus dari disk), bukan menambah baris baru. Disimpan di disk `local`
+(private, `storage/app/private/` di Laravel 12 — bukan `storage/app/public`,
+tidak bisa diakses publik).
+
+**6 jenis wajib (v0.13.4.3.1, menggantikan 4 jenis lama)** — `complete()`
+mewajibkan keenam jenis ada sebelum WO bisa ditutup:
+`speedtest`, `modem_location`, `cable_route_ikr`, `odp_port`, `odp_box`,
+`customer_front`.
 
 ### `POST /work-orders/{work_order}/devices`
 

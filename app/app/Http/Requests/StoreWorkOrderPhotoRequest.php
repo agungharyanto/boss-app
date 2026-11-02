@@ -21,7 +21,10 @@ class StoreWorkOrderPhotoRequest extends FormRequest
     {
         return [
             'type' => ['required', Rule::enum(WorkOrderPhotoType::class)],
-            'file' => ['required', 'image', 'max:10240'],
+            // v0.13.4.3.1 hardening: `image` saja mengizinkan SVG (vektor XSS);
+            // batasi eksplisit ke raster jpg/jpeg/png/webp. `mimes` memeriksa
+            // ekstensi tebakan dari ISI file (MIME), bukan nama asli client.
+            'file' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
         ];
     }
 }

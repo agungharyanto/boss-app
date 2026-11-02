@@ -9177,6 +9177,56 @@ sudah punya kode pengisi `{close_link}`, jadi tidak ada lagi risiko baris mengga
 penahanan: `/opt/boss-backups/whatsapp_activation_ready_v0.13.4.3.1_body_backup_2026-11-02.json` — arsip, tidak
 perlu dipakai lagi.)
 
+## WhatsApp Kirim Media — gambar + PDF (v0.13.5.1)
+
+Kemampuan kirim media generik (gambar caption + dokumen PDF) ke nomor pribadi DAN grup. Dipakai nanti oleh
+v0.13.4.3.2 (grup "WO selesai" + 6 foto) dan v0.13.5.2 (PDF invoice). **Belum aktif di produksi sampai
+gateway di-rebuild** (lihat prosedur rilis di bawah).
+
+**Transport = base64-in-JSON (keputusan terkunci Agung), BUKAN multipart/signed-URL.** Mempertahankan
+kontrak HMAC PERSIS (`"{timestamp}.{raw_body}"` atas string JSON) tanpa skema signing baru; disk privat tak
+pernah jadi URL (menolak SSRF). SATU lampiran per request/log/job.
+
+**Endpoint Go baru** (`whatsapp-gateway/internal/httpapi/httpapi.go`): `POST /sessions/{key}/send-media`
+(`{phone_number, caption?, mime, filename, base64}`) + `POST /sessions/{key}/send-group-media`
+(`{group_jid, ...}`). HMAC lewat `withHMACMaxBytes` (batas body 24 MB KHUSUS rute media via
+`http.MaxBytesReader` → 413; rute teks lama tak berubah). Validasi: MIME whitelist
+`image/jpeg|image/png|application/pdf`, base64 valid, ukuran ter-decode ≤16 MB, filename disanitasi
+(`filepath.Base`, tolak pemisah path), caption ≤1024 rune. `session.SendMedia`/`SendGroupMedia` →
+`sendMediaToJID` (`internal/session/media.go`): `cli.Upload` (MediaImage/MediaDocument) → Image/Document
+Message → `cli.SendMessage`, timeout media konfigurabel `WA_MEDIA_TIMEOUT_SECONDS` (default 75s, > sendTimeout
+teks 20s), semafor `WA_MEDIA_CONCURRENCY` (default 3) membatasi memori. Thumbnail JPEG untuk gambar dibuat
+pustaka STANDAR Go (`image`+`image/jpeg`, downscale nearest-neighbor ≤72px); gagal → kirim tanpa thumbnail
+(JANGAN gagalkan pengiriman). Klien di-abstraksi `mediaClient` (interface Upload+SendMessage) agar bisa
+di-stub test (`media_test.go`). **JANGAN log base64/isi file** — hanya mime/ukuran/nama.
+
+**Laravel.** Kolom aditif `whatsapp_message_logs.attachment` (json nullable, objek tunggal
+`{disk,path,mime,filename,caption}`). DTO `App\Support\Whatsapp\WhatsappAttachment` — dibangun HANYA oleh
+kode tepercaya (`fromWorkOrderPhoto($photo, $expectedTenantId)` dengan **hook ownership tenant**: tenant WO
+induk wajib cocok, else `WhatsappAttachmentException`), path dari request mentah TIDAK PERNAH dipakai. Guard
+path (saat konstruksi DAN saat kirim): wajib di bawah `ALLOWED_PREFIXES` (`work-order-photos/`,
+`invoice-pdfs/`), tanpa `..`/absolut/NUL. `assertValidForSend()` (di job): file ada, MIME dari **ISI file**
+(`finfo`) ∈ whitelist, ukuran ≤ cap → gagal = **permanen** (tidak retry). Jobs (`SendWhatsappMessageJob`/
+`SendWhatsappGroupMessageJob`): bila `attachment` ada → endpoint media, base64 encode, timeout HTTP
+`services.whatsapp_gateway.media_http_timeout` (100s), `$timeout` job 115s; base64 tak pernah masuk log.
+Builder: `buildAndQueueForRecipient/ForGroup` terima `?WhatsappAttachment` opsional; `queueMediaBatchForGroup`
+= N lampiran → N log BERURUTAN (FIFO per queue `whatsapp-{session_key}` + satu worker), caption hanya di
+lampiran pertama. Config satu tempat: `config/services.php` `whatsapp_gateway.media_max_bytes/media_mimes/
+media_http_timeout`.
+
+**⚠️ PROSEDUR RILIS (butuh jendela yang disetujui Agung — perubahan gateway Go + worker):**
+1. `docker compose up -d --build whatsapp-gateway` — sesi WA nyata putus beberapa detik; `RestoreAll()`
+   menyambung ulang semua sesi otomatis (terbukti). Pilih jam trafik rendah.
+2. Recreate `boss-whatsapp-worker` agar entrypoint baru (`queue:work --timeout=120`, sudah di
+   docker-compose.yml) terbaca, DAN set `REDIS_QUEUE_RETRY_AFTER=150` di root `.env` (gitignored) lalu
+   recreate PHP containers — **retry_after (150) HARUS > job $timeout (115) > media_http_timeout (100) >
+   gateway mediaTimeout (75)** supaya tidak ada pemrosesan ganda. Default `config/queue.php` sudah 150.
+3. Migrasi `whatsapp_message_logs.attachment` sudah di-`migrate` di DB dev (aditif, nol efek ke baris lama).
+
+**Uji nyata pasca-rebuild (dengan persetujuan Agung):** kirim 1 gambar kecil + 1 PDF kecil ke
+`6287884374939` via sesi "direct" (mis. lewat tinker memanggil `queueMediaBatchForGroup`/builder dengan
+`WhatsappAttachment` dari file uji di `work-order-photos/`), pantau `whatsapp_message_logs.status` → `sent`.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

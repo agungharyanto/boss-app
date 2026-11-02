@@ -12,6 +12,7 @@ use App\Models\Referrer;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappSession;
 use App\Services\Payment\PaymentService;
+use App\Support\Whatsapp\WhatsappAttachment;
 use App\Support\WhatsappPhone;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -106,6 +107,7 @@ class WhatsappGatewayService
         array $variables,
         ?Customer $relatedCustomer = null,
         ?int $resellerId = null,
+        ?WhatsappAttachment $attachment = null,
     ): ?WhatsappMessageLog {
         $template = $this->templateService->resolve($eventType, $tenantId, $resellerId);
 
@@ -126,6 +128,7 @@ class WhatsappGatewayService
             'event_type' => $eventType,
             'template_id' => $template->id,
             'rendered_content' => $rendered,
+            'attachment' => $attachment?->toArray(),
             'status' => WhatsappMessageStatus::Queued,
             'queued_at' => now(),
         ]);
@@ -163,6 +166,7 @@ class WhatsappGatewayService
         string $groupJid,
         array $variables,
         ?int $resellerId = null,
+        ?WhatsappAttachment $attachment = null,
     ): ?WhatsappMessageLog {
         $template = $this->templateService->resolve($eventType, $tenantId, $resellerId);
 
@@ -183,6 +187,7 @@ class WhatsappGatewayService
             'event_type' => $eventType,
             'template_id' => $template->id,
             'rendered_content' => $rendered,
+            'attachment' => $attachment?->toArray(),
             'status' => WhatsappMessageStatus::Queued,
             'queued_at' => now(),
         ]);
@@ -192,6 +197,62 @@ class WhatsappGatewayService
         SendWhatsappGroupMessageJob::dispatch($log->id)->onQueue('whatsapp-'.$sessionKey);
 
         return $log;
+    }
+
+    /**
+     * v0.13.5.1 — N lampiran = N log BERURUTAN ke satu grup (satu pesan =
+     * satu lampiran = satu job). Caption (teks template ter-render) hanya
+     * pada lampiran PERTAMA; sisanya rendered_content kosong (pola "6 foto,
+     * teks di foto pertama" untuk .3.2). FIFO dijaga oleh queue
+     * whatsapp-{session_key} + satu worker (dispatch berurutan).
+     *
+     * @param  list<WhatsappAttachment>  $attachments
+     * @return list<WhatsappMessageLog>
+     */
+    public function queueMediaBatchForGroup(
+        WhatsappEventType $eventType,
+        int $tenantId,
+        string $groupJid,
+        array $variables,
+        array $attachments,
+        ?int $resellerId = null,
+    ): array {
+        if ($attachments === []) {
+            return [];
+        }
+
+        $template = $this->templateService->resolve($eventType, $tenantId, $resellerId);
+        if ($template === null) {
+            Log::warning("WhatsappGatewayService: no active template resolved for {$eventType->value} (tenant_id={$tenantId}, group media batch) — skipping.");
+
+            return [];
+        }
+
+        $caption = $this->templateService->render($template->content, $variables);
+        $sessionKey = WhatsappSession::sessionKeyFor($resellerId);
+        $logs = [];
+
+        foreach (array_values($attachments) as $i => $attachment) {
+            $log = WhatsappMessageLog::create([
+                'tenant_id' => $tenantId,
+                'reseller_id' => $resellerId,
+                'customer_id' => null,
+                'invoice_id' => null,
+                'phone_number' => $groupJid,
+                'event_type' => $eventType,
+                'template_id' => $template->id,
+                // Caption hanya di lampiran pertama.
+                'rendered_content' => $i === 0 ? $caption : '',
+                'attachment' => $attachment->toArray(),
+                'status' => WhatsappMessageStatus::Queued,
+                'queued_at' => now(),
+            ]);
+
+            SendWhatsappGroupMessageJob::dispatch($log->id)->onQueue('whatsapp-'.$sessionKey);
+            $logs[] = $log;
+        }
+
+        return $logs;
     }
 
     /**

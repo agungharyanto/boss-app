@@ -74,6 +74,19 @@ return [
         // v0.13.4 untuk kronologi kenapa toggle ini dibuat & cara menyalakan
         // lagi.
         'unrecognized_fallback_enabled' => env('WHATSAPP_UNRECOGNIZED_FALLBACK_ENABLED', true),
+
+        // v0.13.5.1 — kirim media. Satu tempat untuk cap ukuran, whitelist
+        // MIME, dan timeout HTTP media (HARUS identik dengan konstanta sisi
+        // Go: mediaMaxDecodedBytes 16 MB + whitelist di httpapi.go, dan
+        // WA_MEDIA_TIMEOUT_SECONDS gateway). media_http_timeout > gateway
+        // mediaTimeout (75s default) supaya error gateway yang propagate,
+        // bukan cURL timeout opaque; job $timeout (115s) > media_http_timeout
+        // > gateway; dan retry_after queue harus > job $timeout (lihat
+        // catatan rilis di CLAUDE.md: worker --timeout + REDIS_QUEUE_RETRY_AFTER
+        // dinaikkan pada jendela rebuild).
+        'media_max_bytes' => (int) env('WHATSAPP_MEDIA_MAX_BYTES', 16 * 1024 * 1024),
+        'media_mimes' => ['image/jpeg', 'image/png', 'application/pdf'],
+        'media_http_timeout' => (int) env('WHATSAPP_MEDIA_HTTP_TIMEOUT', 100),
     ],
 
     // v0.23.3 OLT Sidecar — internal HTTP API ke container Python

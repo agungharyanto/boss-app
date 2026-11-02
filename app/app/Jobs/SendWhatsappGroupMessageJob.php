@@ -3,9 +3,11 @@
 namespace App\Jobs;
 
 use App\Enums\WhatsappMessageStatus;
+use App\Exceptions\WhatsappAttachmentException;
 use App\Models\WhatsappGatewaySettings;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappSession;
+use App\Support\Whatsapp\WhatsappAttachment;
 use App\Support\WhatsappHmac;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -41,6 +43,10 @@ class SendWhatsappGroupMessageJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
+
+    // v0.13.5.1 — sama alasan SendWhatsappMessageJob: timeout dinaikkan untuk
+    // jalur media; < worker --timeout & < retry_after (catatan rilis CLAUDE.md).
+    public int $timeout = 115;
 
     public function __construct(public readonly int $logId) {}
 
@@ -82,6 +88,10 @@ class SendWhatsappGroupMessageJob implements ShouldQueue
             }
 
             $this->recordFailure($log, $reason);
+        } catch (WhatsappAttachmentException $e) {
+            // Lampiran tidak valid = gagal PERMANEN (sama posture jalur
+            // individu + kegagalan permanen grup).
+            $this->recordPermanentFailure($log, $e->getMessage());
         } catch (Throwable $e) {
             $this->recordFailure($log, $e->getMessage());
         }
@@ -108,6 +118,10 @@ class SendWhatsappGroupMessageJob implements ShouldQueue
         $sessionKey = WhatsappSession::sessionKeyFor($log->reseller_id);
         $baseUrl = config('services.whatsapp_gateway.url');
 
+        if ($log->attachment !== null) {
+            return $this->sendMediaToGateway($hmac, $log, $sessionKey, (string) $baseUrl);
+        }
+
         $body = json_encode([
             // phone_number berisi JID grup mentah untuk baris jenis ini —
             // lihat docblock WhatsappMessageLog model. Field HTTP tujuan
@@ -129,6 +143,37 @@ class SendWhatsappGroupMessageJob implements ShouldQueue
             // gateway's own sendTimeout (20 detik).
             ->timeout(35)
             ->post(rtrim((string) $baseUrl, '/')."/sessions/{$sessionKey}/send-group");
+    }
+
+    /**
+     * v0.13.5.1 — kirim media grup (1 lampiran). Re-validasi saat kirim;
+     * base64 tidak pernah masuk log; endpoint /send-group-media; timeout
+     * media lebih panjang. Kegagalan "permanent" grup tetap dibedakan di
+     * handle() dari respons gateway.
+     */
+    private function sendMediaToGateway(WhatsappHmac $hmac, WhatsappMessageLog $log, string $sessionKey, string $baseUrl)
+    {
+        $attachment = WhatsappAttachment::fromArray((array) $log->attachment);
+        $mime = $attachment->assertValidForSend(); // throws kalau tidak valid
+
+        $body = json_encode([
+            'group_jid' => $log->phone_number,
+            'caption' => $log->rendered_content,
+            'mime' => $mime,
+            'filename' => $attachment->filename,
+            'base64' => $attachment->base64(),
+        ], JSON_THROW_ON_ERROR);
+
+        $timestamp = time();
+        $signature = $hmac->sign($body, $timestamp);
+
+        return Http::withBody($body, 'application/json')
+            ->withHeaders([
+                'X-Whatsapp-Timestamp' => (string) $timestamp,
+                'X-Whatsapp-Signature' => $signature,
+            ])
+            ->timeout((int) config('services.whatsapp_gateway.media_http_timeout', 100))
+            ->post(rtrim($baseUrl, '/')."/sessions/{$sessionKey}/send-group-media");
     }
 
     /**

@@ -179,7 +179,11 @@ services:
     # shared /tmp self-healing script explicitly rather than getting it
     # automatically the way boss-app/boss-worker do. See that script's
     # own docblock for why this matters.
-    entrypoint: ["/entrypoint.sh", "sh", "-c", "while true; do php artisan queue:work --queue=$(php artisan whatsapp:queue-names) --sleep=3 --tries=3 --max-time=300; done"]
+    # v0.13.5.1 — --timeout=120 dinaikkan dari default 60 agar job media
+    # (Upload ke server WhatsApp) tidak dibunuh worker di tengah kirim. HARUS
+    # > job $timeout (115) dan < queue retry_after (150, lihat config/queue.php)
+    # supaya tidak ada pemrosesan ganda. Diterapkan pada jendela rebuild gateway.
+    entrypoint: ["/entrypoint.sh", "sh", "-c", "while true; do php artisan queue:work --queue=$(php artisan whatsapp:queue-names) --sleep=3 --tries=3 --timeout=120 --max-time=300; done"]
     volumes:
       - ./app:/var/www/html
       # v0.16.0 Langkah 6 — raises upload_max_filesize/post_max_size off

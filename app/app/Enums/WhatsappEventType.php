@@ -144,6 +144,17 @@ enum WhatsappEventType: string
      */
     case WorkOrderActivationReady = 'work_order_activation_ready';
 
+    /**
+     * v0.13.4.3.2 — dikirim ke GRUP WA teknisi saat Work Order berstatus
+     * Completed: 1 pesan teks ringkasan lalu 6 foto berurutan (via pipeline
+     * media v0.13.5.1). Variabel teks: `{technician_name}` `{customer_name}`
+     * `{customer_cid}` `{work_order_id}` `{ssid}` `{service_type}` + baris
+     * "Password WiFi: ****" LITERAL (password TIDAK PERNAH dikirim/di-log).
+     * Best-effort: kegagalan WA tidak pernah memblokir penutupan WO
+     * (dipicu lewat DB::afterCommit + try/catch di WorkOrderService::complete()).
+     */
+    case WorkOrderCompleted = 'work_order_completed';
+
     public function label(): string
     {
         return match ($this) {
@@ -160,6 +171,7 @@ enum WhatsappEventType: string
             self::WorkOrderDispatched => 'Work Order Dispatch/Reminder Teknisi',
             self::WorkOrderClaimedReminder => 'Work Order Reminder (Sudah Diklaim)',
             self::WorkOrderActivationReady => 'Work Order Siap Aktivasi (Link Aktivasi)',
+            self::WorkOrderCompleted => 'Work Order Selesai (Grup + Foto)',
         };
     }
 }

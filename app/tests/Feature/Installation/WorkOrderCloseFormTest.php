@@ -236,6 +236,22 @@ class WorkOrderCloseFormTest extends TestCase
         $this->assertSame(WorkOrderStatus::InProgress, $wo->fresh()->status);
     }
 
+    public function test_webp_photo_is_rejected(): void
+    {
+        // v0.13.4.3.2 — WebP tidak lagi diterima (gagal di whitelist media WA).
+        [$wo, $tech] = $this->makeWorkOrder();
+        $photos = $this->sixPhotos();
+        $photos[WorkOrderPhotoType::Speedtest->value] = UploadedFile::fake()->create('foto.webp', 50, 'image/webp');
+
+        $this->post($this->showUrl($wo, $tech), [
+            'customer_name' => 'Budi Santoso',
+            'signature' => $this->signatureDataUri(),
+            'photos' => $photos,
+        ])->assertSessionHasErrors('photos.'.WorkOrderPhotoType::Speedtest->value);
+
+        $this->assertSame(WorkOrderStatus::InProgress, $wo->fresh()->status);
+    }
+
     public function test_svg_photo_is_rejected(): void
     {
         [$wo, $tech] = $this->makeWorkOrder();
@@ -257,7 +273,7 @@ class WorkOrderCloseFormTest extends TestCase
     {
         [$wo, $tech] = $this->makeWorkOrder();
         $photos = $this->sixPhotos();
-        // File non-gambar (ekstensi di luar mimes:jpg,jpeg,png,webp) ditolak.
+        // File non-gambar (ekstensi di luar mimes:jpg,jpeg,png) ditolak.
         // Catatan: UploadedFile::fake() menebak MIME dari EKSTENSI (bukan isi),
         // jadi kasus ".png berisi teks" diuji di jalur produksi (finfo konten),
         // bukan di sini — di sini cukup buktikan ekstensi/tipe non-gambar ditolak.

@@ -241,8 +241,11 @@ class WhatsappGatewayService
                 'phone_number' => $groupJid,
                 'event_type' => $eventType,
                 'template_id' => $template->id,
-                // Caption hanya di lampiran pertama.
-                'rendered_content' => $i === 0 ? $caption : '',
+                // v0.13.4.3.2 — caption PER-ITEM bila lampiran membawanya
+                // sendiri (mis. label "1/6 Speedtest · WO #..."); fallback
+                // pola lama (caption template hanya di lampiran pertama)
+                // kalau attachment->caption null — menjaga perilaku v0.13.5.1.
+                'rendered_content' => $attachment->caption ?? ($i === 0 ? $caption : ''),
                 'attachment' => $attachment->toArray(),
                 'status' => WhatsappMessageStatus::Queued,
                 'queued_at' => now(),

@@ -9169,14 +9169,13 @@ nomor CS reseller bila pelanggan berreseller; profil kosong → fallback jelas, 
 kolom `work_order_dispatch_settings.close_terms_text`/`close_terms_version` = DEPRECATED** — dibiarkan, tidak
 di-drop.
 
-**⚠️ ATURAN KEAMANAN TEMPLATE WA `work_order_activation_ready` (branch .3.1):** di DB, 19 baris default
-template ini SUDAH DIPULIHKAN ke body .3.1 yang memuat `{close_link}` (dari backup
-`/opt/boss-backups/whatsapp_activation_ready_v0.13.4.3.1_body_backup_2026-11-02.json`). `{close_link}` HANYA
-diisi oleh kode di branch ini (`v0.13.4.3.1-tutup-wo-web`). **Server HARUS tetap pada branch .3.1 sampai
-di-merge.** Kalau karena suatu hal checkout kembali ke `develop`/`main` TANPA merge .3.1, template WAJIB
-dikembalikan lagi ke body pra-.3.1 (hapus kalimat "tutup Work Order lewat link berikut:" + `{close_link}`)
-supaya teknisi tidak menerima baris menggantung — renderer WA men-strip `{close_link}` yang tak terisi jadi
-baris kosong. Pulihkan-ulang ke .3.1 saat branch .3.1 di-checkout lagi.
+**Template WA `work_order_activation_ready` memuat `{close_link}` = KONDISI NORMAL (pasca-merge v0.13.4.3.1).**
+19 baris default template ini di DB memuat `{close_link}`, diisi oleh kode `WorkOrderDispatchService::
+notifyActivationReady()`/jalur tutup WO yang kini sudah ter-merge ke `develop`/`main`. **Aturan lama "kembalikan
+template ke pra-.3.1 bila checkout ke develop" TIDAK LAGI BERLAKU** — begitu v0.13.4.3.1 di-merge, develop/main
+sudah punya kode pengisi `{close_link}`, jadi tidak ada lagi risiko baris menggantung. (Backup body selama masa
+penahanan: `/opt/boss-backups/whatsapp_activation_ready_v0.13.4.3.1_body_backup_2026-11-02.json` — arsip, tidak
+perlu dipakai lagi.)
 
 ## Architecture
 

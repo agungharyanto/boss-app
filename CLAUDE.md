@@ -9131,6 +9131,52 @@ Regresi penuh branch `v0.23.8-ztp-dynamic-config` (27 commit sejak `main`, NOL m
 (session.upload_progress) keduanya `-` terhadap HEAD (patch-equivalent, sudah ada di branch ini) — saat
 branch infra di-merge ke `main`, keduanya duplikat/no-op, bukan konflik.
 
+## Form Web Tutup WO — validasi tanda tangan tanpa GD/Imagick (v0.13.4.3.1, branch `v0.13.4.3.1-tutup-wo-web`, menunggu verifikasi manual Agung)
+
+Form publik signed-link `work-orders.close.*` (`WorkOrderCloseController`/`WorkOrderCloseService`) — teknisi
+pengklaim menutup WO lewat link WA (var `{close_link}` di template `WorkOrderActivationReady` yang ada, BUKAN
+event type baru). **GERBANG KERAS hanya di jalur web** (`cpe_devices.status=Online` DAN
+`work_order_devices.wifi_provisioned_at!=null`) — jalur API `complete()` lama TIDAK digerbang (sengaja).
+`confirmByWebClose()` set `technician_confirmed_at` tanpa OTP (jalur OTP API utuh). 6 foto wajib menggantikan
+4 lama (`WorkOrderPhotoType` ditulis ulang). Tanda tangan pelanggan + snapshot persyaratan ke
+`work_order_signatures`.
+
+**Gotcha reusable (bukan sekali-pakai):**
+- **GD DAN Imagick dua-duanya absen di `boss-app`** (dikonfirmasi langsung, bukan diasumsikan). Jadi validasi
+  PNG tanda tangan TIDAK bisa pakai `imagecreatefromstring()`. Dipakai `getimagesizefromstring()` (independen
+  GD — baca tipe/dimensi dari header) + cek magic byte PNG + heuristik ukuran byte minimum untuk "tidak
+  kosong". Strip EXIF server-side mustahil tanpa GD/Imagick — ditangani di sisi klien (canvas `toDataURL`
+  meng-encode ulang → EXIF hilang dengan sendirinya). Jangan "perbaiki" ini ke `imagecreatefromstring()`
+  tanpa memasang ekstensi dulu.
+- **`UploadedFile::fake()` menebak MIME dari EKSTENSI, bukan isi** (batasan test harness Laravel) — jadi
+  mustahil menulis test ".png berisi teks" untuk menguji penolakan konten non-gambar. Test penolakan pakai
+  ekstensi non-gambar (`.txt`) saja. Catatan ini sudah menggigit sekali saat menulis `WorkOrderCloseFormTest`
+  (test `fake_extension_photo` awalnya lolos padahal seharusnya ditolak).
+- **`workOrderCloseForm` = factory Alpine inline** (`Alpine.data()` di `close.blade.php`, bukan `window.X` di
+  `app.js`) — persis pola yang di-toleransi amendment `FrontendBuildTest` v0.13.4.1.1 di atas. Lolos guard
+  tanpa perlu entri di `app.js`.
+
+**Sambungan v0.19.1 — persyaratan DINAMIS (lanjutan .3.1, branch ini di atas merge `develop`).** Teks
+persyaratan di form tutup WO DAN `work_order_signatures.terms_snapshot` kini DI-RENDER dari versi aktif
+`installation_terms` tenant (bukan lagi `WorkOrderDispatchSettings::DEFAULT_CLOSE_TERMS`/`close_terms_text`).
+`WorkOrderCloseService::renderedTerms(WO)` (dipakai controller untuk TAMPILAN + `closeFromForm` untuk SNAPSHOT
+— supaya teks yang ditandatangani = yang ditampilkan): `InstallationTermsService::activeOrSeedDefault()`
+(seed v1 idempoten bila tenant belum punya versi — TIDAK memblokir teknisi) + `TermsRenderer::render()`
+dengan konteks `CompanyProfileService::resolveFor(tenant, customer.reseller_id)` (nama PT/alamat/CS, override
+nomor CS reseller bila pelanggan berreseller; profil kosong → fallback jelas, tidak memblokir),
+`{biaya_bulanan}` = snapshot `ppp_packages.sell_price` (TANPA promo_price), `{nama_paket}`, pelanggan,
+`{tanggal}`. `terms_version` = nomor versi `installation_terms` aktif (string). **`DEFAULT_CLOSE_TERMS` +
+kolom `work_order_dispatch_settings.close_terms_text`/`close_terms_version` = DEPRECATED** — dibiarkan, tidak
+di-drop.
+
+**Template WA `work_order_activation_ready` memuat `{close_link}` = KONDISI NORMAL (pasca-merge v0.13.4.3.1).**
+19 baris default template ini di DB memuat `{close_link}`, diisi oleh kode `WorkOrderDispatchService::
+notifyActivationReady()`/jalur tutup WO yang kini sudah ter-merge ke `develop`/`main`. **Aturan lama "kembalikan
+template ke pra-.3.1 bila checkout ke develop" TIDAK LAGI BERLAKU** — begitu v0.13.4.3.1 di-merge, develop/main
+sudah punya kode pengisi `{close_link}`, jadi tidak ada lagi risiko baris menggantung. (Backup body selama masa
+penahanan: `/opt/boss-backups/whatsapp_activation_ready_v0.13.4.3.1_body_backup_2026-11-02.json` — arsip, tidak
+perlu dipakai lagi.)
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

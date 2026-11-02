@@ -30,7 +30,11 @@ class WorkOrderPhotoService
             Storage::disk('local')->delete($existing->file_path);
         }
 
-        $extension = $file->getClientOriginalExtension() ?: $file->extension();
+        // v0.13.4.3.1 hardening — ekstensi diturunkan dari MIME hasil tebakan
+        // ISI file (UploadedFile::guessExtension), BUKAN getClientOriginalExtension()
+        // yang dikcontrol client. Fallback 'jpg' kalau tebakan gagal. Validasi
+        // mimes:jpg,jpeg,png,webp sudah menjamin bukan SVG/non-raster sebelum sampai sini.
+        $extension = $file->guessExtension() ?: 'jpg';
 
         $storedPath = Storage::disk('local')->putFileAs(
             "work-order-photos/{$workOrder->id}",

@@ -9156,6 +9156,28 @@ event type baru). **GERBANG KERAS hanya di jalur web** (`cpe_devices.status=Onli
   `app.js`) — persis pola yang di-toleransi amendment `FrontendBuildTest` v0.13.4.1.1 di atas. Lolos guard
   tanpa perlu entri di `app.js`.
 
+**Sambungan v0.19.1 — persyaratan DINAMIS (lanjutan .3.1, branch ini di atas merge `develop`).** Teks
+persyaratan di form tutup WO DAN `work_order_signatures.terms_snapshot` kini DI-RENDER dari versi aktif
+`installation_terms` tenant (bukan lagi `WorkOrderDispatchSettings::DEFAULT_CLOSE_TERMS`/`close_terms_text`).
+`WorkOrderCloseService::renderedTerms(WO)` (dipakai controller untuk TAMPILAN + `closeFromForm` untuk SNAPSHOT
+— supaya teks yang ditandatangani = yang ditampilkan): `InstallationTermsService::activeOrSeedDefault()`
+(seed v1 idempoten bila tenant belum punya versi — TIDAK memblokir teknisi) + `TermsRenderer::render()`
+dengan konteks `CompanyProfileService::resolveFor(tenant, customer.reseller_id)` (nama PT/alamat/CS, override
+nomor CS reseller bila pelanggan berreseller; profil kosong → fallback jelas, tidak memblokir),
+`{biaya_bulanan}` = snapshot `ppp_packages.sell_price` (TANPA promo_price), `{nama_paket}`, pelanggan,
+`{tanggal}`. `terms_version` = nomor versi `installation_terms` aktif (string). **`DEFAULT_CLOSE_TERMS` +
+kolom `work_order_dispatch_settings.close_terms_text`/`close_terms_version` = DEPRECATED** — dibiarkan, tidak
+di-drop.
+
+**⚠️ ATURAN KEAMANAN TEMPLATE WA `work_order_activation_ready` (branch .3.1):** di DB, 19 baris default
+template ini SUDAH DIPULIHKAN ke body .3.1 yang memuat `{close_link}` (dari backup
+`/opt/boss-backups/whatsapp_activation_ready_v0.13.4.3.1_body_backup_2026-11-02.json`). `{close_link}` HANYA
+diisi oleh kode di branch ini (`v0.13.4.3.1-tutup-wo-web`). **Server HARUS tetap pada branch .3.1 sampai
+di-merge.** Kalau karena suatu hal checkout kembali ke `develop`/`main` TANPA merge .3.1, template WAJIB
+dikembalikan lagi ke body pra-.3.1 (hapus kalimat "tutup Work Order lewat link berikut:" + `{close_link}`)
+supaya teknisi tidak menerima baris menggantung — renderer WA men-strip `{close_link}` yang tak terisi jadi
+baris kosong. Pulihkan-ulang ke .3.1 saat branch .3.1 di-checkout lagi.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

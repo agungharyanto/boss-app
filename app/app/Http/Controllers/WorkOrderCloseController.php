@@ -11,7 +11,6 @@ use App\Models\Customer;
 use App\Models\Technician;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
-use App\Models\WorkOrderDispatchSettings;
 use App\Services\Installation\WorkOrderCloseService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -98,8 +97,11 @@ class WorkOrderCloseController extends Controller
     private function formViewData(WorkOrder $workOrder, Technician $claimer, ?string $submitError = null, ?string $oldName = null): array
     {
         $customer = Customer::withoutGlobalScopes()->find($workOrder->customer_id);
-        $gate = app(WorkOrderCloseService::class)->gateState($workOrder);
-        $settings = WorkOrderDispatchSettings::forTenant($workOrder->tenant_id);
+        $closeService = app(WorkOrderCloseService::class);
+        $gate = $closeService->gateState($workOrder);
+        // v0.19.1 wiring: teks persyaratan DINAMIS ter-render (sama dengan
+        // yang akan di-snapshot saat tanda tangan).
+        $rendered = $closeService->renderedTerms($workOrder);
 
         $ont = WorkOrderDevice::where('work_order_id', $workOrder->id)
             ->where('device_type', WorkOrderDeviceType::Ont)
@@ -112,8 +114,8 @@ class WorkOrderCloseController extends Controller
             'customer' => $customer,
             'gate' => $gate,
             'ssid' => $ont?->ssid,
-            'termsText' => $settings->close_terms_text ?? WorkOrderDispatchSettings::DEFAULT_CLOSE_TERMS,
-            'termsVersion' => $settings->close_terms_version ?? WorkOrderDispatchSettings::DEFAULT_CLOSE_TERMS_VERSION,
+            'termsText' => $rendered['text'],
+            'termsVersion' => $rendered['version'],
             'photoTypes' => WorkOrderPhotoType::cases(),
             'submitError' => $submitError,
             'oldName' => $oldName,

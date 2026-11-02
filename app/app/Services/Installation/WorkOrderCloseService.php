@@ -9,11 +9,14 @@ use App\Enums\WorkOrderStatus;
 use App\Exceptions\WorkOrderCloseException;
 use App\Models\CpeDevice;
 use App\Models\Customer;
+use App\Models\PppPackage;
 use App\Models\Technician;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
-use App\Models\WorkOrderDispatchSettings;
 use App\Models\WorkOrderSignature;
+use App\Services\Company\CompanyProfileService;
+use App\Services\Company\InstallationTermsService;
+use App\Services\Company\TermsRenderer;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -53,7 +56,61 @@ class WorkOrderCloseService
     public function __construct(
         private readonly WorkOrderService $workOrders,
         private readonly WorkOrderPhotoService $photos,
+        private readonly InstallationTermsService $installationTerms,
+        private readonly TermsRenderer $termsRenderer,
+        private readonly CompanyProfileService $companyProfiles,
     ) {}
+
+    /**
+     * v0.19.1 wiring — teks persyaratan DINAMIS: versi aktif
+     * `installation_terms` tenant (seed v1 idempoten bila belum ada, tidak
+     * memblokir) di-render dengan konteks nyata (Profil Perusahaan + nominal
+     * paket + pelanggan + tanggal). Dipakai halaman form (tampilan) DAN
+     * snapshot tanda tangan — supaya teks yang ditandatangani = teks yang
+     * ditampilkan.
+     *
+     * @return array{version: string, text: string}
+     */
+    public function renderedTerms(WorkOrder $workOrder): array
+    {
+        $customer = Customer::withoutGlobalScopes()->findOrFail($workOrder->customer_id);
+        $terms = $this->installationTerms->activeOrSeedDefault($workOrder->tenant_id);
+
+        return [
+            'version' => (string) $terms->version,
+            'text' => $this->termsRenderer->render($terms->body, $this->buildTermsContext($workOrder, $customer)),
+        ];
+    }
+
+    /**
+     * Konteks render. {biaya_bulanan} = SNAPSHOT `ppp_packages.sell_price`
+     * saat ini (TANPA promo_price). Nomor CS pakai override reseller bila
+     * pelanggan berreseller (CompanyProfileService::resolveFor). Profil
+     * kosong → fallback jelas (tidak melempar, tidak memblokir).
+     *
+     * @return array<string, string>
+     */
+    private function buildTermsContext(WorkOrder $workOrder, Customer $customer): array
+    {
+        $company = $this->companyProfiles->resolveFor($workOrder->tenant_id, $customer->reseller_id);
+
+        $package = $customer->ppp_package_id !== null
+            ? PppPackage::withoutGlobalScopes()->find($customer->ppp_package_id)
+            : null;
+
+        $monthly = $package?->sell_price;
+
+        return [
+            'nama_perusahaan' => $company['legal_name'],
+            'alamat_perusahaan' => $company['address'],
+            'nomor_cs' => $company['cs'],
+            'nama_pelanggan' => (string) ($customer->name ?? ''),
+            'alamat_pelanggan' => (string) ($customer->address ?? ''),
+            'nama_paket' => (string) ($package?->name ?? ''),
+            'biaya_bulanan' => $monthly !== null ? number_format((float) $monthly, 0, ',', '.') : '',
+            'tanggal' => now()->translatedFormat('d F Y'),
+        ];
+    }
 
     /**
      * State gerbang untuk halaman form (ONU online + WiFi terkirim).
@@ -157,7 +214,12 @@ class WorkOrderCloseService
             }
 
             // Simpan tanda tangan + snapshot persyaratan yang disetujui.
-            $settings = WorkOrderDispatchSettings::forTenant($locked->tenant_id);
+            // v0.19.1 wiring: snapshot = TEKS TER-RENDER (nama PT, nominal, CS
+            // saat ini), terms_version = nomor versi installation_terms aktif.
+            // Kolom lama work_order_dispatch_settings.close_terms_* +
+            // DEFAULT_CLOSE_TERMS TIDAK dipakai lagi (deprecated, kolom
+            // dibiarkan).
+            $rendered = $this->renderedTerms($locked);
             $signaturePath = "work-order-signatures/{$locked->id}.png";
             Storage::disk('local')->put($signaturePath, $signaturePng);
 
@@ -166,8 +228,8 @@ class WorkOrderCloseService
                 [
                     'file_path' => $signaturePath,
                     'signed_at' => now(),
-                    'terms_version' => $settings->close_terms_version ?? WorkOrderDispatchSettings::DEFAULT_CLOSE_TERMS_VERSION,
-                    'terms_snapshot' => $settings->close_terms_text ?? WorkOrderDispatchSettings::DEFAULT_CLOSE_TERMS,
+                    'terms_version' => $rendered['version'],
+                    'terms_snapshot' => $rendered['text'],
                     'signed_ip' => $ip,
                     'user_agent' => $userAgent !== null ? mb_substr($userAgent, 0, 512) : null,
                 ],

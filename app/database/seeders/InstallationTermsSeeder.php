@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\InstallationTerms;
 use App\Models\Tenant;
+use App\Services\Company\InstallationTermsService;
 use Illuminate\Database\Seeder;
 
 /**
@@ -21,21 +22,9 @@ class InstallationTermsSeeder extends Seeder
 {
     public function run(): void
     {
-        // DRAFT v1 — 10 pasal, variabel whitelist terisi.
-        $body = <<<'TERMS'
-            SYARAT DAN KETENTUAN PEMASANGAN LAYANAN INTERNET
-            Dengan menandatangani, saya ({nama_pelanggan}, beralamat di {alamat_pelanggan}) selaku pelanggan menyatakan bahwa:
-            1. Data diri dan alamat pemasangan yang tercantum adalah benar, dan saya berhak menyetujui pemasangan di lokasi tersebut.
-            2. Pemasangan telah selesai dilakukan teknisi dan layanan berfungsi saat serah terima, termasuk hasil uji kecepatan yang ditunjukkan teknisi.
-            3. Perangkat (modem/ONT dan kabel) yang terpasang adalah milik {nama_perusahaan} dan dipinjamkan selama saya berlangganan. Saya akan menjaganya dan tidak membongkar, memindahkan, atau memperjualbelikannya.
-            4. Saya mengetahui paket layanan {nama_paket}. Biaya pemasangan dan biaya perangkat adalah sesuai yang disepakati pada pendaftaran. Biaya berlangganan adalah Rp {biaya_bulanan} per bulan, dan saya akan membayar tepat waktu sesuai tanggal jatuh tempo pada tagihan.
-            5. Kecepatan pada paket adalah kecepatan maksimal ("hingga") dan dapat dipengaruhi kondisi jaringan, perangkat saya, serta WiFi di dalam rumah.
-            6. Saya tidak akan memakai layanan untuk kegiatan yang melanggar hukum, dan tidak membagikan atau menjualnya kepada pihak lain tanpa izin tertulis.
-            7. Gangguan layanan saya laporkan melalui Customer Service {nama_perusahaan} di {nomor_cs}, dan akan ditangani sesuai prosedur perusahaan.
-            8. Nama dan kata sandi WiFi telah diserahkan kepada saya, dan saya bertanggung jawab menjaga kerahasiaannya.
-            9. Saya menyetujui teknisi mengambil foto dokumentasi pemasangan (perangkat, jalur kabel, ODP, dan tampak depan lokasi) yang dipakai dan dibagikan kepada tim internal perusahaan untuk keperluan operasional dan penanganan gangguan, serta data saya diproses untuk keperluan layanan sesuai ketentuan perlindungan data pribadi.
-            10. Tanda tangan ini pada tanggal {tanggal} adalah persetujuan saya atas seluruh poin di atas.
-            TERMS;
+        // DRAFT v1 — body tunggal dari InstallationTermsService (dipakai juga
+        // oleh activeOrSeedDefault() di jalur tutup WO).
+        $body = InstallationTermsService::DEFAULT_V1_BODY;
 
         Tenant::all()->each(function (Tenant $tenant) use ($body) {
             InstallationTerms::query()->firstOrCreate(

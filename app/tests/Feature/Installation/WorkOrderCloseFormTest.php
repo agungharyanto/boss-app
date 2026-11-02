@@ -289,8 +289,13 @@ class WorkOrderCloseFormTest extends TestCase
 
         $sig = WorkOrderSignature::where('work_order_id', $wo->id)->first();
         $this->assertNotNull($sig);
-        $this->assertSame('v1-draft', $sig->terms_version);
+        // v0.19.1 wiring: terms_version = nomor versi installation_terms
+        // aktif (seed v1 idempoten), snapshot = TEKS TER-RENDER (bukan
+        // DEFAULT_CLOSE_TERMS), tanpa placeholder {..} mentah.
+        $this->assertSame('1', $sig->terms_version);
         $this->assertNotEmpty($sig->terms_snapshot);
+        $this->assertStringContainsString('SYARAT DAN KETENTUAN', $sig->terms_snapshot);
+        $this->assertDoesNotMatchRegularExpression('/\{[a-zA-Z0-9_]+\}/', $sig->terms_snapshot);
         Storage::disk('local')->assertExists($sig->file_path);
         // Tanda tangan di disk privat, bukan path publik.
         $this->assertStringStartsWith('work-order-signatures/', $sig->file_path);

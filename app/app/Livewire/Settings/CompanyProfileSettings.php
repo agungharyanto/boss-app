@@ -179,7 +179,9 @@ class CompanyProfileSettings extends Component
         $this->csWhatsapp = (string) ($profile->cs_whatsapp ?? '');
         $this->csPhone = (string) ($profile->cs_phone ?? '');
         $this->email = (string) ($profile->email ?? '');
-        $this->operatingHours = (string) ($profile->operating_hours ?? '');
+        // Profil baru / operating_hours kosong → nilai awal "24 Jam"
+        // (default yang sama dipakai CompanyProfileService::resolveFor).
+        $this->operatingHours = $profile->operating_hours ?: CompanyProfileService::DEFAULT_OPERATING_HOURS;
         $this->bankName = (string) ($profile->bank_name ?? '');
         $this->bankAccountNumber = (string) ($profile->bank_account_number ?? '');
         $this->bankAccountHolder = (string) ($profile->bank_account_holder ?? '');

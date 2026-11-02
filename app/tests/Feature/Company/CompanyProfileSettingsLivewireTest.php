@@ -67,6 +67,25 @@ class CompanyProfileSettingsLivewireTest extends TestCase
             ->assertViewHas('missing', fn ($missing) => in_array('Nomor Customer Service', $missing, true));
     }
 
+    public function test_new_profile_form_defaults_operating_hours_to_24_jam(): void
+    {
+        $admin = $this->admin();
+
+        Livewire::actingAs($admin)
+            ->test(CompanyProfileSettings::class)
+            ->assertSet('operatingHours', '24 Jam');
+    }
+
+    public function test_existing_operating_hours_is_not_overwritten_by_default(): void
+    {
+        $admin = $this->admin();
+        CompanyProfile::create(['tenant_id' => $admin->tenant_id, 'operating_hours' => '08.00–22.00']);
+
+        Livewire::actingAs($admin)
+            ->test(CompanyProfileSettings::class)
+            ->assertSet('operatingHours', '08.00–22.00');
+    }
+
     public function test_png_logo_is_accepted_and_stored_on_private_disk(): void
     {
         Storage::fake('local');

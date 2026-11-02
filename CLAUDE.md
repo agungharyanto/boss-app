@@ -312,7 +312,13 @@ enforced automatically via an Eloquent global scope (not separate databases/sche
   `cs_phone`, diedit admin di halaman detail reseller — bukan hak reseller); brand/logo/legal/NPWP/
   rekening/alamat tetap milik tenant. v0.19.1 sengaja TIDAK menyentuh form tutup WO/`WorkOrderCloseService`/
   `work_order_signatures`/variabel WA — penyambungan persyaratan dinamis dilakukan saat lanjutan
-  `v0.13.4.3.1` (branch `v0.13.4.3.1-tutup-wo-web` DITAHAN menunggu v0.19.1).
+  `v0.13.4.3.1` (branch `v0.13.4.3.1-tutup-wo-web` DITAHAN menunggu v0.19.1). Jam Operasional default
+  `"24 Jam"` (`CompanyProfileService::DEFAULT_OPERATING_HOURS`) — fallback saat kosong + nilai awal form.
+  **v0.19.1 Selesai** (merged `develop`→`main`, tag `v0.19.1`, verifikasi HP Agung 2026-11-02). Saat
+  penutupan, template WA `work_order_activation_ready` di DB (19 baris, hasil update .3.1 yang memuat
+  `{close_link}` menggantung tanpa kode pengisi di develop) **dipulihkan ke body pra-.3.1** — body .3.1
+  di-backup ke `/opt/boss-backups/whatsapp_activation_ready_v0.13.4.3.1_body_backup_2026-11-02.json` untuk
+  dipulihkan saat lanjutan v0.13.4.3.1 (yang akan memulihkan `{close_link}` + kode pengisinya).
 - `App\Models\Concerns\BelongsToTenant` trait: apply it to any model that belongs to a tenant. It (1)
   registers `App\Models\Scopes\TenantScope` as a global scope, which filters every query by
   `Auth::user()->tenant_id` whenever a user is authenticated, and (2) auto-fills `tenant_id` on

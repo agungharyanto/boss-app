@@ -101,6 +101,18 @@ class CompanyProfileServiceTest extends TestCase
         $this->assertSame('Alamat Env', $resolved['address']);
     }
 
+    public function test_operating_hours_falls_back_to_24_jam_when_empty_but_keeps_set_value(): void
+    {
+        $tenant = Tenant::factory()->create();
+
+        // Kosong → "24 Jam".
+        $this->assertSame('24 Jam', $this->service()->resolveFor($tenant->id)['operating_hours']);
+
+        // Terisi → nilai itu dipertahankan.
+        CompanyProfile::create(['tenant_id' => $tenant->id, 'operating_hours' => 'Senin–Jumat 09.00–17.00']);
+        $this->assertSame('Senin–Jumat 09.00–17.00', $this->service()->resolveFor($tenant->id)['operating_hours']);
+    }
+
     public function test_missing_lists_unset_critical_fields(): void
     {
         config(['invoice.company_name' => '', 'invoice.company_phone' => '', 'invoice.company_address' => '']);

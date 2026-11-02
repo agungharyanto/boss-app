@@ -26,6 +26,8 @@ class CompanyProfileService
 {
     public const CS_UNSET_PLACEHOLDER = '[kontak belum diatur]';
 
+    public const DEFAULT_OPERATING_HOURS = '24 Jam';
+
     /**
      * Baris profil per tenant (dibuat minimal kalau belum ada) — dipakai
      * halaman pengaturan untuk diedit. firstOrCreate di sini aman karena
@@ -74,7 +76,7 @@ class CompanyProfileService
             'postal_code' => (string) ($profile?->postal_code ?? ''),
             'npwp' => (string) ($profile?->npwp ?? ''),
             'email' => $email,
-            'operating_hours' => (string) ($profile?->operating_hours ?? ''),
+            'operating_hours' => $this->firstNonEmpty([$profile?->operating_hours], self::DEFAULT_OPERATING_HOURS),
             'bank_name' => (string) ($profile?->bank_name ?? ''),
             'bank_account_number' => (string) ($profile?->bank_account_number ?? ''),
             'bank_account_holder' => (string) ($profile?->bank_account_holder ?? ''),

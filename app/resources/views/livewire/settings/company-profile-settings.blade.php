@@ -97,7 +97,7 @@
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Jam Operasional</label>
-                    <input type="text" wire:model="operatingHours" placeholder="Senin–Sabtu, 08.00–17.00"
+                    <input type="text" wire:model="operatingHours" placeholder="24 Jam"
                         class="block w-full rounded-md border-gray-300 bg-white shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
                     @error('operatingHours') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
                 </div>

@@ -229,7 +229,15 @@
                         <tr class="border-b border-gray-100">
                             <td class="py-2 pr-4">{{ $log->created_at->format('d/m/Y H:i') }}</td>
                             <td class="py-2 pr-4">{{ $log->phone_number }}</td>
-                            <td class="py-2 pr-4">{{ $log->event_type->label() }}</td>
+                            <td class="py-2 pr-4">
+                                {{ $log->event_type->label() }}
+                                @if ($log->attachment)
+                                    <span class="block text-xs text-gray-500" title="Lampiran">
+                                        📎 {{ ($log->attachment['mime'] ?? '') === 'application/pdf' ? 'PDF' : 'Gambar' }}
+                                        — {{ $log->attachment['filename'] ?? 'lampiran' }}
+                                    </span>
+                                @endif
+                            </td>
                             <td class="py-2 pr-4 {{ $log->status->value === 'failed' ? 'text-red-600' : ($log->status->value === 'sent' ? 'text-green-600' : 'text-gray-500') }}">
                                 {{ $log->status->label() }}
                                 @if ($log->failed_reason)

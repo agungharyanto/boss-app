@@ -8,14 +8,36 @@ package httpapi
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
+	"strings"
+	"unicode/utf8"
 
 	"whatsapp-gateway/internal/hmacsig"
 	"whatsapp-gateway/internal/session"
 )
+
+const (
+	// mediaMaxDecodedBytes — batas ukuran file SETELAH di-decode base64
+	// (16 MB, keputusan terkunci Agung). mediaMaxBodyBytes — batas ukuran
+	// BODY HTTP khusus rute media (base64 ~+33% dari 16 MB + overhead JSON);
+	// 24 MB memberi margin. Rute lain (teks) TIDAK memakai batas ini.
+	mediaMaxDecodedBytes = 16 << 20
+	mediaMaxBodyBytes    = 24 << 20
+
+	mediaMaxCaptionChars = 1024
+)
+
+// mediaMimeWhitelist — satu-satunya MIME yang diterima (keputusan terkunci).
+var mediaMimeWhitelist = map[string]bool{
+	"image/jpeg":      true,
+	"image/png":       true,
+	"application/pdf": true,
+}
 
 type Server struct {
 	manager    *session.Manager
@@ -37,6 +59,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /sessions/{sessionKey}/send", s.withHMAC(s.handleSend))
 	mux.HandleFunc("GET /sessions/{sessionKey}/groups", s.withHMAC(s.handleListGroups))
 	mux.HandleFunc("POST /sessions/{sessionKey}/send-group", s.withHMAC(s.handleSendGroup))
+	// v0.13.5.1 — kirim media (1 lampiran per request, base64-in-JSON). Batas
+	// body KHUSUS rute ini; HMAC verifikasi sama persis.
+	mux.HandleFunc("POST /sessions/{sessionKey}/send-media", s.withHMACMaxBytes(mediaMaxBodyBytes, s.handleSendMedia))
+	mux.HandleFunc("POST /sessions/{sessionKey}/send-group-media", s.withHMACMaxBytes(mediaMaxBodyBytes, s.handleSendGroupMedia))
 
 	return mux
 }
@@ -91,6 +117,153 @@ func (s *Server) withHMAC(next http.HandlerFunc) http.HandlerFunc {
 
 		next(w, r)
 	}
+}
+
+// withHMACMaxBytes — sama seperti withHMAC TAPI membatasi ukuran body lebih
+// dulu (http.MaxBytesReader). Khusus rute media; rute lain tetap pakai
+// withHMAC tanpa batas eksplisit (perilaku lama tidak berubah).
+func (s *Server) withHMACMaxBytes(limit int64, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+
+		rawBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			// MaxBytesReader mengembalikan error saat melebihi batas.
+			writeEnvelope(w, http.StatusRequestEntityTooLarge, false, "Request body too large", nil)
+
+			return
+		}
+		r.Body.Close()
+
+		signature := r.Header.Get("X-Whatsapp-Signature")
+		timestamp := r.Header.Get("X-Whatsapp-Timestamp")
+
+		if !hmacsig.Verify(s.hmacSecret, string(rawBody), signature, timestamp) {
+			slog.Warn("rejected media request with invalid/missing HMAC signature", "path", r.URL.Path)
+			writeEnvelope(w, http.StatusUnauthorized, false, "Invalid signature", nil)
+
+			return
+		}
+
+		r.Body = io.NopCloser(bytes.NewReader(rawBody))
+
+		next(w, r)
+	}
+}
+
+type sendMediaRequest struct {
+	PhoneNumber string `json:"phone_number"`
+	GroupJID    string `json:"group_jid"`
+	Caption     string `json:"caption"`
+	Mime        string `json:"mime"`
+	Filename    string `json:"filename"`
+	Base64      string `json:"base64"`
+}
+
+// validateMedia — validasi bersama kedua handler media. Mengembalikan byte
+// ter-decode + filename tersanitasi + pesan error (string kosong = lolos).
+// JANGAN pernah memasukkan isi file/base64 ke log atau pesan error.
+func validateMedia(req sendMediaRequest) (data []byte, filename string, errMsg string) {
+	if !mediaMimeWhitelist[req.Mime] {
+		return nil, "", "mime not allowed"
+	}
+
+	if req.Base64 == "" {
+		return nil, "", "base64 is required"
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(req.Base64)
+	if err != nil {
+		return nil, "", "base64 is invalid"
+	}
+
+	if len(decoded) == 0 {
+		return nil, "", "decoded file is empty"
+	}
+
+	if len(decoded) > mediaMaxDecodedBytes {
+		return nil, "", "decoded file exceeds size limit"
+	}
+
+	if utf8.RuneCountInString(req.Caption) > mediaMaxCaptionChars {
+		return nil, "", "caption too long"
+	}
+
+	// Sanitasi filename: HANYA nama file, tanpa komponen path. Tolak kalau
+	// mengandung pemisah path atau menjadi "."/".."/"" setelah Base.
+	name := req.Filename
+	if name == "" {
+		name = "file"
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return nil, "", "filename must not contain a path"
+	}
+	base := filepath.Base(name)
+	if base == "." || base == ".." || base == "" {
+		return nil, "", "filename is invalid"
+	}
+
+	return decoded, base, ""
+}
+
+func (s *Server) handleSendMedia(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("sessionKey")
+
+	var req sendMediaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PhoneNumber == "" {
+		writeEnvelope(w, http.StatusUnprocessableEntity, false, "phone_number, mime and base64 are required", nil)
+
+		return
+	}
+
+	data, filename, errMsg := validateMedia(req)
+	if errMsg != "" {
+		writeEnvelope(w, http.StatusUnprocessableEntity, false, errMsg, nil)
+
+		return
+	}
+
+	if err := s.manager.SendMedia(key, req.PhoneNumber, req.Caption, req.Mime, filename, data); err != nil {
+		slog.Error("failed to send media", "sessionKey", key, "mime", req.Mime, "bytes", len(data), "err", err)
+		writeEnvelope(w, http.StatusBadGateway, false, err.Error(), nil)
+
+		return
+	}
+
+	writeEnvelope(w, http.StatusOK, true, "Sent", nil)
+}
+
+func (s *Server) handleSendGroupMedia(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("sessionKey")
+
+	var req sendMediaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.GroupJID == "" {
+		writeEnvelope(w, http.StatusUnprocessableEntity, false, "group_jid, mime and base64 are required", nil)
+
+		return
+	}
+
+	data, filename, errMsg := validateMedia(req)
+	if errMsg != "" {
+		writeEnvelope(w, http.StatusUnprocessableEntity, false, errMsg, nil)
+
+		return
+	}
+
+	if err := s.manager.SendGroupMedia(key, req.GroupJID, req.Caption, req.Mime, filename, data); err != nil {
+		slog.Error("failed to send group media", "sessionKey", key, "groupJid", req.GroupJID, "mime", req.Mime, "bytes", len(data), "err", err)
+
+		extra := map[string]interface{}{}
+		if session.IsPermanentGroupSendError(err) {
+			extra["permanent"] = true
+		}
+
+		writeEnvelope(w, http.StatusBadGateway, false, err.Error(), extra)
+
+		return
+	}
+
+	writeEnvelope(w, http.StatusOK, true, "Sent", nil)
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {

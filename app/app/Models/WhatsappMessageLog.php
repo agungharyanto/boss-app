@@ -38,6 +38,7 @@ class WhatsappMessageLog extends Model
         'event_type',
         'template_id',
         'rendered_content',
+        'attachment',
         'status',
         'failed_reason',
         'attempts',
@@ -50,6 +51,7 @@ class WhatsappMessageLog extends Model
         return [
             'event_type' => WhatsappEventType::class,
             'status' => WhatsappMessageStatus::class,
+            'attachment' => 'array',
             'queued_at' => 'datetime',
             'sent_at' => 'datetime',
         ];

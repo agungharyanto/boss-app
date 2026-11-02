@@ -51,6 +51,7 @@ class RolesAndPermissionsSeeder extends Seeder
         $this->seedTaxEnginePermissions();
         $this->seedInvoicingPermissions();
         $this->seedPaymentGatewaySettingsPermissions();
+        $this->seedCompanyProfilePermissions();
         $this->seedWhatsappGatewayPermissions();
         $this->seedInstallationPermissions();
         $this->seedNetworkPermissions();
@@ -212,6 +213,22 @@ class RolesAndPermissionsSeeder extends Seeder
     private function seedPaymentGatewaySettingsPermissions(): void
     {
         $permissions = ['payment_gateway_settings.view', 'payment_gateway_settings.manage'];
+
+        foreach ($permissions as $permission) {
+            Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);
+        }
+
+        $this->giveToAdminTier($permissions);
+    }
+
+    /**
+     * Permission modul Profil Perusahaan + Syarat & Ketentuan Pemasangan
+     * (v0.19.1). Tier-admin saja, sama posture payment_gateway_settings.* —
+     * satu pasang izin untuk KEDUA halaman (profil + editor S&K).
+     */
+    private function seedCompanyProfilePermissions(): void
+    {
+        $permissions = ['company_profile.view', 'company_profile.manage'];
 
         foreach ($permissions as $permission) {
             Permission::firstOrCreate(['name' => $permission, 'guard_name' => 'web']);

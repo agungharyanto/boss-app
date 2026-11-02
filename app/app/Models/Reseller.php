@@ -26,6 +26,11 @@ class Reseller extends Model
         'invoice_code',
         'email',
         'phone',
+        // v0.19.1 — override nomor CS (satu-satunya identitas yang boleh
+        // berbeda dari tenant). Brand/logo/legal/NPWP/rekening/alamat tetap
+        // milik tenant (lihat company_profiles). Lihat CompanyProfileService.
+        'cs_whatsapp',
+        'cs_phone',
         'address',
         'status',
         'notes',

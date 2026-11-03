@@ -106,6 +106,14 @@
                             </div>
                             @error('groupLabels.'.$group->id) <span class="text-xs text-red-600">{{ $message }}</span> @enderror
                             <p class="text-xs text-gray-400 mt-1 font-mono truncate">{{ $group->jid }}</p>
+                            <p class="text-xs text-gray-400 truncate">
+                                {{ __('Nama di WhatsApp:') }}
+                                @if (array_key_exists($group->jid, $botGroupNamesByJid))
+                                    {{ $botGroupNamesByJid[$group->jid] }}
+                                @else
+                                    <span class="italic">{{ __('(tidak ada di daftar grup bot — muat ulang)') }}</span>
+                                @endif
+                            </p>
                         </div>
                         <div class="flex items-center gap-3 shrink-0">
                             @if ($group->is_default)

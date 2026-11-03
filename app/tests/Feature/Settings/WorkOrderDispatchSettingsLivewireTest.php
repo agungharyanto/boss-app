@@ -526,6 +526,63 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
             ->assertSee('Pilih grup dari dropdown dulu.');
     }
 
+    // ── Poles label grup (v0.13.4.4) ─────────────────────────────────────
+
+    public function test_selecting_a_group_prefills_the_label_with_its_real_name(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->directSession($tenant->id);
+        $this->fakeGroups([['jid' => '1203aaa@g.us', 'name' => 'Grup Teknisi Asli']]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('newGroupJid', '1203aaa@g.us')
+            ->assertSet('newGroupLabel', 'Grup Teknisi Asli');
+    }
+
+    public function test_a_manually_typed_label_is_not_overwritten_when_changing_the_group(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->directSession($tenant->id);
+        $this->fakeGroups([
+            ['jid' => '1203aaa@g.us', 'name' => 'Grup A'],
+            ['jid' => '1203bbb@g.us', 'name' => 'Grup B'],
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('newGroupJid', '1203aaa@g.us')
+            ->assertSet('newGroupLabel', 'Grup A')
+            ->set('newGroupLabel', 'Label Ketik Manual')
+            ->set('newGroupJid', '1203bbb@g.us')
+            ->assertSet('newGroupLabel', 'Label Ketik Manual');
+    }
+
+    public function test_group_row_shows_the_real_whatsapp_name(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->directSession($tenant->id);
+        $this->group($tenant->id, ['jid' => '1203real@g.us', 'label' => 'Label Berbeda', 'is_default' => true]);
+        $this->fakeGroups([['jid' => '1203real@g.us', 'name' => 'Nama Asli WA']]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->assertSee('Nama di WhatsApp:')
+            ->assertSee('Nama Asli WA');
+    }
+
+    public function test_group_row_shows_fallback_when_jid_not_in_bot_list(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->directSession($tenant->id);
+        $this->group($tenant->id, ['jid' => '1203gone@g.us', 'is_default' => true]);
+        $this->fakeGroups([['jid' => '1203other@g.us', 'name' => 'Lain']]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->assertSee('(tidak ada di daftar grup bot — muat ulang)');
+    }
+
     public function test_deleting_a_group_nulls_routes_pointing_to_it(): void
     {
         $tenant = Tenant::factory()->create();

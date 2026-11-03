@@ -50,6 +50,9 @@ class WorkOrderDispatchSettings extends Component
 
     public ?string $newGroupLabel = null;
 
+    /** Nilai label yang terakhir kali DIISI-OTOMATIS (bukan diketik admin). */
+    public ?string $autoFilledLabel = null;
+
     /** Label per grup (editable inline), keyed by group id. */
     public array $groupLabels = [];
 
@@ -97,14 +100,28 @@ class WorkOrderDispatchSettings extends Component
     public function updatedNewGroupJid(): void
     {
         if ($this->newGroupJid === '' || $this->newGroupJid === null) {
-            $this->newGroupLabel = null;
+            // Reset label HANYA bila masih hasil auto-fill — jangan hapus
+            // yang sudah diketik admin.
+            if ($this->newGroupLabel === null || $this->newGroupLabel === $this->autoFilledLabel) {
+                $this->newGroupLabel = null;
+            }
+            $this->autoFilledLabel = null;
 
             return;
         }
 
-        // Prefill label dari nama grup bot yang dipilih (boleh diubah).
-        $match = collect($this->groupOptions())->firstWhere('jid', $this->newGroupJid);
-        $this->newGroupLabel = $match['name'] ?? $this->newGroupLabel;
+        // Nama ASLI grup dari daftar bot (cache), cocokkan by JID.
+        $realName = collect($this->groupOptions())->firstWhere('jid', $this->newGroupJid)['name'] ?? null;
+        if ($realName === null) {
+            return;
+        }
+
+        // Prefill nama asli, KECUALI admin sudah mengetik label manual
+        // (label sekarang tidak kosong DAN bukan hasil auto-fill terakhir).
+        if (trim((string) $this->newGroupLabel) === '' || $this->newGroupLabel === $this->autoFilledLabel) {
+            $this->newGroupLabel = $realName;
+            $this->autoFilledLabel = $realName;
+        }
     }
 
     public function addGroup(): void
@@ -330,6 +347,11 @@ class WorkOrderDispatchSettings extends Component
             'notificationGroups' => $this->notificationGroups(),
             'categoryLabels' => WhatsappGroupCategory::labels(),
             'routingDirty' => $this->routingDirty(),
+            // Nama asli grup WA per-JID (dari cache daftar bot) untuk teks
+            // informatif "Nama di WhatsApp: …" di tiap baris.
+            'botGroupNamesByJid' => collect($this->sessionConnected ? $this->groupOptions() : [])
+                ->pluck('name', 'jid')
+                ->all(),
         ]);
     }
 

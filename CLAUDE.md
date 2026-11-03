@@ -9296,6 +9296,47 @@ untuk template `work_order_completed` (dari v0.13.4.3.2). **TANPA rebuild gatewa
 `/send-group-media`, `/groups` sudah ada). Test scoped (`WorkOrder|Whatsapp|Settings`) hijau — 1 kegagalan
 lama `WhatsappIncomingMessageWebhookTest` (fallback toggle, pre-existing, tak terkait).
 
+## Grup WA "WO Selesai" + 6 Foto saat Completed (v0.13.4.3.2 — SELESAI, merged `develop`→`main`, tag `v0.13.4.3.2`)
+
+**Konsumen pertama kemampuan kirim media (v0.13.5.1).** Saat WO ditutup (jadi `Completed`),
+`WorkOrderService::complete()` memicu `WorkOrderDispatchService::notifyWorkOrderCompleted($wo)` lewat
+**`DB::afterCommit`** (closeFromForm membungkus `complete()` dalam transaksi — job WA tak boleh dispatch
+sebelum baris log ter-commit; di jalur API tanpa transaksi, afterCommit jalan langsung) **dibungkus
+try/catch** → penutupan WO **TIDAK PERNAH** terblokir/gagal gara-gara WA. Fires **tepat sekali** per WO
+(transisi ke Completed hanya terjadi di `complete()` dan `canTransitionTo` menolak complete ulang).
+
+**Isi notifikasi** (resolver kategori `work_order_completed` → grup, lihat seksi Multi-Grup v0.13.4.4):
+1. **1 teks ringkasan** dulu (`buildAndQueueForGroup`) — nama teknisi/pelanggan/CID/layanan + SSID +
+   **`Password WiFi: ****`** (literal; password WiFi nyata TIDAK PERNAH diambil/dirender/dikirim).
+2. lalu **6 foto berurutan** (`queueMediaBatchForGroup`, N job independen FIFO best-effort di queue
+   `whatsapp-{session_key}`), caption BERLABEL per item `"n/6 <jenis> · WO #id"` (1/6 Speedtest … 6/6
+   Tampak depan pelanggan). Tipe foto yang belum ada dilewati.
+
+**Upload foto close-WO dibatasi JPG/PNG maks 10 MB** (WorkOrderCloseController) — WebP di-drop karena
+gagal whitelist media WA (`image/jpeg|image/png|application/pdf`) saat dikirim ke grup.
+
+**Uji nyata end-to-end 2026-11-03 (WO #10, data uji, dibersihkan tuntas):** 7 pesan terkirim ke **grup uji**
+dalam ~59 dtk (pacing 6–12 dtk), **JPEG kamera asli pertama kali teruji** (75–283 KB), urutan benar (teks →
+foto 1..6), caption berlabel benar, **nol kebocoran password** (rendered+attachment), **nol pesan ke grup
+produksi**, queue bersih, tanpa exception. **Belum teruji:** foto mendekati batas 10 MB (ditolak di form
+sebagai pengaman — backlog v0.13.4.4 butir (d)).
+
+**Langkah rilis:** `php artisan db:seed --class=WhatsappMessageTemplateSeeder` agar template
+`work_order_completed` ada (idempoten `firstOrCreate`; **sudah dijalankan di server 2026-11-03**). **TANPA
+rebuild gateway** — endpoint `/send-group-media` sudah ada sejak v0.13.5.1.
+
+**POLA UJI AMAN (governance, dipakai di uji WO #10 — pakai ulang untuk uji WO/WA berikutnya):**
+- **WO uji `scheduled_at` = +1 tahun** → lolos cron dispatch/reminder (tidak ikut terpicu).
+- **Teknisi throwaway TANPA role Spatie** (ingat `technicians.user_id` NOT NULL → buat User throwaway,
+  `users.phone` juga NOT NULL).
+- **Grup uji KHUSUS** (JID berbeda) — **JANGAN** arahkan routing/Default ke grup produksi; label grup di
+  BOSS hanyalah penamaan internal, JID yang menentukan tujuan.
+- **Gerbang tutup (ONU online + WiFi terkirim) dipenuhi dengan DATA UJI** (`cpe_devices.status=online` +
+  `wifi_provisioned_at`), `genieacs_device_id` boleh null → gerbang tak butuh itu; serial fake → bind/push
+  best-effort tidak menyentuh device/GenieACS nyata.
+- **Backup `pg_dump` SEBELUM migrasi/cleanup**; bersihkan data uji lewat FK (anak dulu) dalam **satu
+  transaksi** (gagal = rollback), lalu hapus file disk privat milik WO itu saja.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

@@ -158,6 +158,11 @@ class WhatsappGatewayService
      * customer tertentu untuk keperluan tampilan Antrian WA, beda dari
      * `buildAndQueueForRecipient()` yang punya kasus 1-customer-1-pesan.
      *
+     * v0.13.4.4 — param `$sessionKey` (dulu `?int $resellerId`): sesi milik
+     * grup ('direct' | reseller_id string), dari WhatsappNotificationGroup.
+     * Antre di queue `whatsapp-{session_key}` itu, reseller_id log/template
+     * override diturunkan dari situ.
+     *
      * @param  array<string, string|int|null>  $variables
      */
     public function buildAndQueueForGroup(
@@ -165,9 +170,15 @@ class WhatsappGatewayService
         int $tenantId,
         string $groupJid,
         array $variables,
-        ?int $resellerId = null,
+        string $sessionKey = 'direct',
         ?WhatsappAttachment $attachment = null,
     ): ?WhatsappMessageLog {
+        // v0.13.4.4 — kirim grup SELALU lewat sesi milik grup (session_key),
+        // bukan reseller_id WO. reseller_id (untuk log + resolve template
+        // override) diturunkan DARI session_key: 'direct' -> null, numerik ->
+        // reseller_id. Menutup bug laten "grup direct di-antre lewat sesi
+        // reseller yang belum tentu anggota grup".
+        $resellerId = $sessionKey === 'direct' ? null : (int) $sessionKey;
         $template = $this->templateService->resolve($eventType, $tenantId, $resellerId);
 
         if ($template === null) {
@@ -192,8 +203,6 @@ class WhatsappGatewayService
             'queued_at' => now(),
         ]);
 
-        $sessionKey = WhatsappSession::sessionKeyFor($resellerId);
-
         SendWhatsappGroupMessageJob::dispatch($log->id)->onQueue('whatsapp-'.$sessionKey);
 
         return $log;
@@ -215,12 +224,14 @@ class WhatsappGatewayService
         string $groupJid,
         array $variables,
         array $attachments,
-        ?int $resellerId = null,
+        string $sessionKey = 'direct',
     ): array {
         if ($attachments === []) {
             return [];
         }
 
+        // v0.13.4.4 — lihat buildAndQueueForGroup(): session_key grup, bukan reseller_id WO.
+        $resellerId = $sessionKey === 'direct' ? null : (int) $sessionKey;
         $template = $this->templateService->resolve($eventType, $tenantId, $resellerId);
         if ($template === null) {
             Log::warning("WhatsappGatewayService: no active template resolved for {$eventType->value} (tenant_id={$tenantId}, group media batch) — skipping.");
@@ -229,7 +240,6 @@ class WhatsappGatewayService
         }
 
         $caption = $this->templateService->render($template->content, $variables);
-        $sessionKey = WhatsappSession::sessionKeyFor($resellerId);
         $logs = [];
 
         foreach (array_values($attachments) as $i => $attachment) {

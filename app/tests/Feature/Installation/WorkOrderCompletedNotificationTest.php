@@ -12,9 +12,9 @@ use App\Models\Technician;
 use App\Models\User;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
+use App\Models\WhatsappNotificationGroup;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
-use App\Models\WorkOrderDispatchSettings;
 use App\Models\WorkOrderPhoto;
 use App\Services\Installation\WorkOrderDispatchService;
 use App\Services\Installation\WorkOrderService;
@@ -72,8 +72,18 @@ class WorkOrderCompletedNotificationTest extends TestCase
             ]);
         }
 
-        $settings = WorkOrderDispatchSettings::forTenant($wo->tenant_id);
-        $settings->update(['wa_group_jid' => $groupJid]);
+        // v0.13.4.4 — grup tujuan di-resolve via WhatsappGroupRouter;
+        // notify memakai grup DEFAULT sesi 'direct' (tanpa routing khusus).
+        if ($groupJid !== null) {
+            WhatsappNotificationGroup::create([
+                'tenant_id' => $wo->tenant_id,
+                'session_key' => 'direct',
+                'jid' => $groupJid,
+                'label' => 'Grup Utama',
+                'is_default' => true,
+                'is_active' => true,
+            ]);
+        }
 
         if ($withTemplate) {
             WhatsappMessageTemplate::withoutGlobalScopes()->create([

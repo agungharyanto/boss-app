@@ -9236,7 +9236,7 @@ wajib kembali `connected`.
 `6287884374939` via sesi "direct" (mis. lewat tinker memanggil `queueMediaBatchForGroup`/builder dengan
 `WhatsappAttachment` dari file uji di `work-order-photos/`), pantau `whatsapp_message_logs.status` → `sent`.
 
-## Multi-Grup Notifikasi WA + Routing per Kategori (v0.13.4.4, branch `v0.13.4.4-multi-grup-notif` di atas `v0.13.4.3.2-grup-wo-selesai`, belum merge/tag)
+## Multi-Grup Notifikasi WA + Routing per Kategori (v0.13.4.4 — SELESAI, merged `develop`→`main`, tag `v0.13.4.4`)
 
 **Menggantikan grup WA TUNGGAL per tenant (`work_order_dispatch_settings.wa_group_jid`/`wa_group_name`,
 kini DEPRECATED — kolom DIBIARKAN, jangan di-drop) dengan beberapa grup + routing per kategori.** Dua
@@ -9295,6 +9295,22 @@ default = **perilaku identik dengan sebelum migrasi**.
 untuk template `work_order_completed` (dari v0.13.4.3.2). **TANPA rebuild gateway** (endpoint `/send-group`,
 `/send-group-media`, `/groups` sudah ada). Test scoped (`WorkOrder|Whatsapp|Settings`) hijau — 1 kegagalan
 lama `WhatsappIncomingMessageWebhookTest` (fallback toggle, pre-existing, tak terkait).
+
+**UI poles (v0.13.4.4, 2 commit poles di atas commit inti):** Routing **TIDAK auto-save** — dropdown
+`wire:model.live` hanya ubah state lokal + penanda reaktif "ada perubahan belum disimpan"; persist lewat
+tombol **"Simpan Routing"** (`saveRouting()`, validasi grup tujuan aktif+milik-tenant, kosong=Default).
+Daftar Grup tetap aksi langsung per klik, tiap aksi beri flash jelas (Grup ditambahkan / Label disimpan /
+Default diubah ke X / Grup diaktifkan|dinonaktifkan / Grup dihapus / Daftar grup dimuat ulang). Pilih grup
+di "Tambah Grup" → Label auto-isi **nama asli** grup (guard `autoFilledLabel` — label yang sudah diketik
+admin manual tidak ditimpa). Tiap baris menampilkan "Nama di WhatsApp: <nama asli>" (cocok by JID dari
+cache bot; fallback "(tidak ada di daftar grup bot — muat ulang)").
+
+**PELAJARAN (uji nyata 2026-11-03):** **label grup di BOSS hanyalah penamaan internal — JID yang
+menentukan tujuan pesan.** Admin sempat mengetik label "BOSS Uji Notif" untuk grup yang nama WhatsApp
+aslinya "Bajastu - Tester Group"; pesan tetap masuk ke JID yang benar. Karena itu UI kini **menampilkan
+nama asli grup** di tiap baris + saat memilih grup, supaya label internal tidak menyesatkan. Uji nyata WO
+#10: 7 pesan (1 teks + 6 foto JPEG kamera) ke grup uji dalam ~59 dtk, nol kebocoran password, **nol pesan
+ke grup produksi**; data uji dibersihkan tuntas (backup `/opt/boss-backups/pre-v13444-test-cleanup-2026-11-03.sql`).
 
 ## Grup WA "WO Selesai" + 6 Foto saat Completed (v0.13.4.3.2 — SELESAI, merged `develop`→`main`, tag `v0.13.4.3.2`)
 

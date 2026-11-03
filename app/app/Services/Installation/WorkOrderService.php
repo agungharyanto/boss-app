@@ -269,6 +269,21 @@ class WorkOrderService
             }
         }
 
+        // v0.13.4.3.2 — notifikasi grup WA "WO selesai" + 6 foto. SETELAH
+        // COMMIT (closeFromForm membungkus complete() dalam DB::transaction —
+        // job WA tidak boleh di-dispatch sebelum baris log ter-commit; di
+        // jalur API tanpa transaksi, afterCommit jalan langsung). Fires TEPAT
+        // SEKALI per WO (transisi ke Completed hanya terjadi di sini, dan
+        // canTransitionTo menolak complete ulang). BEST-EFFORT: kegagalan WA
+        // TIDAK PERNAH memblokir/menggagalkan penutupan WO.
+        DB::afterCommit(function () use ($workOrder) {
+            try {
+                app(WorkOrderDispatchService::class)->notifyWorkOrderCompleted($workOrder);
+            } catch (Throwable $e) {
+                Log::warning("WorkOrderService: notifikasi grup 'WO selesai' gagal untuk work order #{$workOrder->id} — {$e->getMessage()}");
+            }
+        });
+
         return $workOrder->fresh();
     }
 

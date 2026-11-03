@@ -3,11 +3,16 @@
 namespace App\Services\Installation;
 
 use App\Enums\WhatsappEventType;
+use App\Enums\WorkOrderDeviceType;
+use App\Enums\WorkOrderPhotoType;
 use App\Enums\WorkOrderStatus;
 use App\Models\Technician;
 use App\Models\WorkOrder;
+use App\Models\WorkOrderDevice;
 use App\Models\WorkOrderDispatchSettings;
+use App\Models\WorkOrderPhoto;
 use App\Services\Whatsapp\WhatsappGatewayService;
+use App\Support\Whatsapp\WhatsappAttachment;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
@@ -299,6 +304,99 @@ class WorkOrderDispatchService
             $workOrder->customer,
             $workOrder->reseller_id,
         );
+    }
+
+    /**
+     * v0.13.4.3.2 — notifikasi grup WA saat WO Completed: 1 pesan teks
+     * ringkasan (event WorkOrderCompleted) lalu 6 foto berurutan via pipeline
+     * media v0.13.5.1 (queue whatsapp-{session_key} + satu worker = FIFO, teks
+     * lebih dulu). `wa_group_jid` null/'' → skip DIAM-DIAM. BEST-EFFORT —
+     * dipanggil dari DB::afterCommit + try/catch di WorkOrderService::complete();
+     * kegagalan WA tidak pernah memblokir penutupan WO. Foto yang belum ada
+     * (jalur API ungated) dilewati tanpa error.
+     */
+    public function notifyWorkOrderCompleted(WorkOrder $workOrder): void
+    {
+        $settings = WorkOrderDispatchSettings::forTenant($workOrder->tenant_id);
+        $groupJid = $settings->wa_group_jid;
+
+        if ($groupJid === null || $groupJid === '') {
+            return;
+        }
+
+        // 1) Teks ringkasan — didispatch DULU (FIFO di queue yang sama).
+        $this->whatsapp->buildAndQueueForGroup(
+            WhatsappEventType::WorkOrderCompleted,
+            $workOrder->tenant_id,
+            $groupJid,
+            $this->completedVariablesFor($workOrder),
+            $workOrder->reseller_id,
+        );
+
+        // 2) 6 foto berurutan, caption BERLABEL per-item; lewati tipe yang belum ada.
+        $labels = [
+            WorkOrderPhotoType::Speedtest->value => '1/6 Speedtest',
+            WorkOrderPhotoType::ModemLocation->value => '2/6 Lokasi modem',
+            WorkOrderPhotoType::CableRouteIkr->value => '3/6 Jalur kabel IKR',
+            WorkOrderPhotoType::OdpPort->value => '4/6 Port ODP',
+            WorkOrderPhotoType::OdpBox->value => '5/6 Box ODP',
+            WorkOrderPhotoType::CustomerFront->value => '6/6 Tampak depan pelanggan',
+        ];
+
+        $attachments = [];
+        foreach ($labels as $typeValue => $label) {
+            $photo = WorkOrderPhoto::where('work_order_id', $workOrder->id)
+                ->where('type', $typeValue)
+                ->first();
+
+            if ($photo === null) {
+                continue;
+            }
+
+            $attachments[] = WhatsappAttachment::fromWorkOrderPhoto(
+                $photo,
+                $workOrder->tenant_id,
+                $label.' · WO #'.$workOrder->id,
+            );
+        }
+
+        if ($attachments !== []) {
+            $this->whatsapp->queueMediaBatchForGroup(
+                WhatsappEventType::WorkOrderCompleted,
+                $workOrder->tenant_id,
+                $groupJid,
+                [],
+                $attachments,
+                $workOrder->reseller_id,
+            );
+        }
+    }
+
+    /**
+     * Variabel teks WO-selesai. SSID dari WorkOrderDevice (ONT) — PASSWORD
+     * tidak pernah diambil/dikirim (template memakai literal "****").
+     *
+     * @return array<string, string|int|null>
+     */
+    private function completedVariablesFor(WorkOrder $workOrder): array
+    {
+        $ont = WorkOrderDevice::where('work_order_id', $workOrder->id)
+            ->where('device_type', WorkOrderDeviceType::Ont)
+            ->orderBy('id')
+            ->first();
+
+        $technician = $workOrder->claimed_by_technician_id !== null
+            ? Technician::withoutGlobalScopes()->find($workOrder->claimed_by_technician_id)
+            : null;
+
+        return [
+            'technician_name' => $technician?->name ?? 'Tim Teknisi',
+            'customer_name' => $workOrder->customer?->name,
+            'customer_cid' => $workOrder->customer?->cid,
+            'work_order_id' => $workOrder->id,
+            'ssid' => $ont?->ssid ?? '-',
+            'service_type' => $workOrder->subscription?->name,
+        ];
     }
 
     private function notifyClaimedReminder(WorkOrder $workOrder, ?string $groupJid): void

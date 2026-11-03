@@ -46,15 +46,23 @@ class WorkOrderCloseController extends Controller
             return $this->statusView($workOrder, $claimer);
         }
 
+        // v0.13.4.3.2 — hanya JPG/PNG (WebP di-drop: gagal di whitelist media
+        // WA saat dikirim ke grup "WO selesai"). max 10 MB tetap.
         $photoRules = [];
+        $photoMessages = [];
         foreach (WorkOrderPhotoType::cases() as $type) {
-            $photoRules["photos.{$type->value}"] = ['required', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'];
+            $key = "photos.{$type->value}";
+            $photoRules[$key] = ['required', 'file', 'image', 'mimes:jpg,jpeg,png', 'max:10240'];
+            $photoMessages["{$key}.mimes"] = 'Foto :attribute harus JPG atau PNG (WebP tidak didukung).';
+            $photoMessages["{$key}.max"] = 'Foto :attribute maksimal 10 MB.';
+            $photoMessages["{$key}.image"] = 'File :attribute harus berupa gambar JPG/PNG.';
+            $photoMessages["{$key}.required"] = 'Foto '.$type->label().' wajib diunggah.';
         }
 
         $validated = $request->validate(array_merge([
             'customer_name' => ['required', 'string', 'max:255'],
             'signature' => ['required', 'string'],
-        ], $photoRules));
+        ], $photoRules), $photoMessages);
 
         try {
             app(WorkOrderCloseService::class)->closeFromForm(

@@ -46,6 +46,12 @@ class WhatsappMessageTemplateSeeder extends Seeder
             // membawa link lanjut ke form AKTIVASI pelanggan. HANYA 4 variabel
             // (lihat docblock WhatsappEventType::WorkOrderActivationReady).
             WhatsappEventType::WorkOrderActivationReady->value => 'Halo {technician_name}, WO #{work_order_id} untuk {customer_name} siap DIAKTIVASI.'.PHP_EOL.'Buka link berikut untuk mengaktifkan layanan pelanggan:'.PHP_EOL.'{activation_link}'.PHP_EOL.PHP_EOL.'Setelah instalasi & uji coba selesai, tutup Work Order lewat link berikut:'.PHP_EOL.'{close_link}',
+
+            // v0.13.4.3.2 — pesan RINGKASAN ke grup WA teknisi saat WO selesai,
+            // diikuti 6 foto berurutan (pesan terpisah, lihat
+            // WorkOrderDispatchService::notifyWorkOrderCompleted). Baris
+            // "Password WiFi: ****" LITERAL — password tidak pernah dikirim.
+            WhatsappEventType::WorkOrderCompleted->value => 'Work Order #{work_order_id} SELESAI.'.PHP_EOL.'Teknisi: {technician_name}'.PHP_EOL.'Pelanggan: {customer_name} (CID {customer_cid})'.PHP_EOL.'Layanan: {service_type}'.PHP_EOL.'SSID WiFi: {ssid}'.PHP_EOL.'Password WiFi: ****'.PHP_EOL.'Foto dokumentasi menyusul di bawah.',
         ];
 
         Tenant::all()->each(function (Tenant $tenant) use ($defaults) {

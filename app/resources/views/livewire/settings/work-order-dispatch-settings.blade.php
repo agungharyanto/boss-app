@@ -61,8 +61,11 @@
                 {{ __('Muat Ulang Daftar Grup') }}
             </button>
         </div>
-        <p class="text-xs text-gray-500 mb-4">
+        <p class="text-xs text-gray-500 mb-1">
             {{ __('Grup WhatsApp tempat notifikasi WO dikirim. Satu grup ditandai Default sebagai tujuan untuk kategori yang belum diatur. Grup Default tidak bisa dihapus/dinonaktifkan selama ada grup lain.') }}
+        </p>
+        <p class="text-xs text-gray-400 italic mb-4">
+            {{ __('Aksi di bagian ini (Tambah, Simpan label, Jadikan Default, Aktif/Nonaktif, Hapus) langsung tersimpan saat diklik — tidak perlu tombol simpan terpisah.') }}
         </p>
 
         {{-- Tambah grup baru dari daftar grup bot (sesi 'direct'). --}}
@@ -129,22 +132,38 @@
     {{-- ── Routing Notifikasi ──────────────────────────────────────── --}}
     <div class="bg-white border border-gray-200 rounded-md p-6">
         <h2 class="text-lg font-semibold text-gray-800 mb-1">{{ __('Routing Notifikasi') }}</h2>
-        <p class="text-xs text-gray-500 mb-4">
+        <p class="text-xs text-gray-500 mb-1">
             {{ __('Pilih grup tujuan untuk tiap kategori. Kosongkan (— Default —) untuk memakai grup Default.') }}
+        </p>
+        <p class="text-xs text-gray-400 italic mb-4">
+            {{ __('Perubahan di sini BELUM tersimpan sampai Anda klik tombol "Simpan Routing" di bawah.') }}
         </p>
 
         <div class="divide-y divide-gray-100">
             @foreach ($categoryLabels as $category => $label)
                 <div class="py-3 flex flex-col sm:flex-row sm:items-center gap-2" wire:key="route-{{ $category }}">
                     <div class="flex-1 text-sm text-gray-700">{{ $label }}</div>
-                    <select wire:model.live="routeGroupId.{{ $category }}" class="block w-full sm:w-64 rounded-md border-gray-300 shadow-sm text-sm">
-                        <option value="">{{ __('— Default —') }}</option>
-                        @foreach ($activeGroups as $group)
-                            <option value="{{ $group->id }}">{{ $group->label }}</option>
-                        @endforeach
-                    </select>
+                    <div class="w-full sm:w-64">
+                        <select wire:model.live="routeGroupId.{{ $category }}" class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                            <option value="">{{ __('— Default —') }}</option>
+                            @foreach ($activeGroups as $group)
+                                <option value="{{ $group->id }}">{{ $group->label }}</option>
+                            @endforeach
+                        </select>
+                        @error('routeGroupId.'.$category) <span class="text-xs text-red-600">{{ $message }}</span> @enderror
+                    </div>
                 </div>
             @endforeach
+        </div>
+
+        <div class="mt-4 flex items-center gap-3">
+            <button type="button" wire:click="saveRouting" @disabled(! $routingDirty)
+                class="px-4 py-2 bg-primary text-white rounded-md text-sm hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed">
+                {{ __('Simpan Routing') }}
+            </button>
+            @if ($routingDirty)
+                <span class="text-xs text-amber-600">{{ __('• Ada perubahan belum disimpan.') }}</span>
+            @endif
         </div>
     </div>
 </div>

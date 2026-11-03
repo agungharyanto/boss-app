@@ -359,43 +359,171 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
         $this->assertNotNull($foreign->fresh(), 'grup tenant lain tidak boleh terhapus');
     }
 
-    // ── Routing ──────────────────────────────────────────────────────────
+    // ── Routing (tidak auto-save; butuh tombol "Simpan Routing") ─────────
 
-    public function test_routing_a_category_persists_the_selection(): void
+    public function test_changing_the_dropdown_does_not_save_routing(): void
     {
         $tenant = Tenant::factory()->create();
         $group = $this->group($tenant->id, ['is_default' => true]);
+        $cat = WhatsappEventType::WorkOrderCompleted->value;
 
-        Livewire::actingAs($this->admin($tenant))
+        $component = Livewire::actingAs($this->admin($tenant))
             ->test(WorkOrderDispatchSettings::class)
-            ->set('routeGroupId.'.WhatsappEventType::WorkOrderCompleted->value, (string) $group->id);
+            ->set('routeGroupId.'.$cat, (string) $group->id);
+
+        // Dropdown hanya mengubah state lokal — DB belum tersentuh.
+        $this->assertDatabaseMissing('whatsapp_group_routes', [
+            'tenant_id' => $tenant->id,
+            'category' => $cat,
+        ]);
+        $this->assertTrue($component->instance()->routingDirty());
+    }
+
+    public function test_save_routing_persists_the_selection_and_clears_dirty(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $group = $this->group($tenant->id, ['is_default' => true]);
+        $cat = WhatsappEventType::WorkOrderCompleted->value;
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('routeGroupId.'.$cat, (string) $group->id)
+            ->call('saveRouting')
+            ->assertHasNoErrors()
+            ->assertSee('Routing disimpan.');
 
         $this->assertDatabaseHas('whatsapp_group_routes', [
             'tenant_id' => $tenant->id,
-            'category' => WhatsappEventType::WorkOrderCompleted->value,
+            'category' => $cat,
             'group_id' => $group->id,
+        ]);
+        $this->assertFalse($component->instance()->routingDirty());
+    }
+
+    public function test_save_routing_with_empty_selection_stores_null_group(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $group = $this->group($tenant->id, ['is_default' => true]);
+        $cat = WhatsappEventType::WorkOrderCompleted->value;
+        WhatsappGroupRoute::create([
+            'tenant_id' => $tenant->id,
+            'category' => $cat,
+            'group_id' => $group->id,
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('routeGroupId.'.$cat, '')
+            ->call('saveRouting')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseHas('whatsapp_group_routes', [
+            'tenant_id' => $tenant->id,
+            'category' => $cat,
+            'group_id' => null,
         ]);
     }
 
-    public function test_clearing_a_route_stores_null_group(): void
+    public function test_save_routing_rejects_an_inactive_group(): void
     {
         $tenant = Tenant::factory()->create();
-        $group = $this->group($tenant->id, ['is_default' => true]);
-        WhatsappGroupRoute::create([
-            'tenant_id' => $tenant->id,
-            'category' => WhatsappEventType::WorkOrderCompleted->value,
-            'group_id' => $group->id,
-        ]);
+        $this->group($tenant->id, ['is_default' => true]);
+        $inactive = $this->group($tenant->id, ['is_active' => false]);
+        $cat = WhatsappEventType::WorkOrderCompleted->value;
 
         Livewire::actingAs($this->admin($tenant))
             ->test(WorkOrderDispatchSettings::class)
-            ->set('routeGroupId.'.WhatsappEventType::WorkOrderCompleted->value, '');
+            ->set('routeGroupId.'.$cat, (string) $inactive->id)
+            ->call('saveRouting')
+            ->assertHasErrors('routeGroupId.'.$cat);
 
-        $this->assertDatabaseHas('whatsapp_group_routes', [
+        $this->assertDatabaseMissing('whatsapp_group_routes', [
             'tenant_id' => $tenant->id,
-            'category' => WhatsappEventType::WorkOrderCompleted->value,
-            'group_id' => null,
+            'category' => $cat,
         ]);
+    }
+
+    public function test_save_routing_rejects_a_group_from_another_tenant(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $otherTenant = Tenant::factory()->create();
+        $foreign = $this->group($otherTenant->id, ['is_default' => true]);
+        $cat = WhatsappEventType::WorkOrderCompleted->value;
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('routeGroupId.'.$cat, (string) $foreign->id)
+            ->call('saveRouting')
+            ->assertHasErrors('routeGroupId.'.$cat);
+
+        $this->assertDatabaseMissing('whatsapp_group_routes', [
+            'tenant_id' => $tenant->id,
+            'category' => $cat,
+            'group_id' => $foreign->id,
+        ]);
+    }
+
+    // ── Flash konfirmasi & pesan galat ───────────────────────────────────
+
+    public function test_add_and_save_label_flash_confirmations(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->directSession($tenant->id);
+        $this->fakeGroups([['jid' => '1203aaa@g.us', 'name' => 'Grup A']]);
+
+        $component = Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('newGroupJid', '1203aaa@g.us')
+            ->set('newGroupLabel', 'Grup A')
+            ->call('addGroup')
+            ->assertSee('Grup ditambahkan.');
+
+        $g = WhatsappNotificationGroup::where('tenant_id', $tenant->id)->firstOrFail();
+
+        $component->set("groupLabels.{$g->id}", 'Grup A Baru')
+            ->call('saveLabel', $g->id)
+            ->assertSee('Label disimpan.');
+    }
+
+    public function test_toggle_active_flashes_specific_messages(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->group($tenant->id, ['is_default' => true]);
+        $other = $this->group($tenant->id, ['is_active' => true]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->call('toggleActive', $other->id)
+            ->assertSee('Grup dinonaktifkan.')
+            ->call('toggleActive', $other->id)
+            ->assertSee('Grup diaktifkan.');
+    }
+
+    public function test_set_default_flashes_the_new_default_label(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->group($tenant->id, ['is_default' => true]);
+        $b = $this->group($tenant->id, ['label' => 'Grup Baru']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->call('setDefault', $b->id)
+            ->assertSee('Default diubah ke "Grup Baru".');
+    }
+
+    public function test_adding_without_selecting_a_group_shows_the_new_message(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->directSession($tenant->id);
+        $this->fakeGroups([['jid' => '1203aaa@g.us', 'name' => 'Grup A']]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('newGroupJid', '')
+            ->set('newGroupLabel', '')
+            ->call('addGroup')
+            ->assertHasErrors('newGroupJid')
+            ->assertSee('Pilih grup dari dropdown dulu.');
     }
 
     public function test_deleting_a_group_nulls_routes_pointing_to_it(): void

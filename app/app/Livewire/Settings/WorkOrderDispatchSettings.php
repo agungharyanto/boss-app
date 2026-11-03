@@ -114,7 +114,9 @@ class WorkOrderDispatchSettings extends Component
         $this->validate([
             'newGroupJid' => ['required', 'string', 'max:255'],
             'newGroupLabel' => ['required', 'string', 'max:255'],
-        ], [], ['newGroupJid' => 'grup', 'newGroupLabel' => 'label']);
+        ], [
+            'newGroupJid.required' => 'Pilih grup dari dropdown dulu.',
+        ], ['newGroupJid' => 'grup', 'newGroupLabel' => 'label']);
 
         // JID yang ditambah HARUS ada di daftar grup bot saat ini.
         $jids = array_column($this->groupOptions(), 'jid');
@@ -155,7 +157,7 @@ class WorkOrderDispatchSettings extends Component
         $this->newGroupLabel = null;
         $this->syncGroupLabels();
 
-        session()->flash('status', 'Grup notifikasi ditambahkan.');
+        session()->flash('status', 'Grup ditambahkan.');
     }
 
     public function saveLabel(int $groupId): void
@@ -175,7 +177,7 @@ class WorkOrderDispatchSettings extends Component
         }
 
         $group->update(['label' => $label]);
-        session()->flash('status', 'Label grup diperbarui.');
+        session()->flash('status', 'Label disimpan.');
     }
 
     public function setDefault(int $groupId): void
@@ -199,7 +201,7 @@ class WorkOrderDispatchSettings extends Component
             $group->update(['is_default' => true, 'is_active' => true]);
         });
 
-        session()->flash('status', "Grup \"{$group->label}\" dijadikan Default.");
+        session()->flash('status', "Default diubah ke \"{$group->label}\".");
     }
 
     public function toggleActive(int $groupId): void
@@ -217,8 +219,9 @@ class WorkOrderDispatchSettings extends Component
             return;
         }
 
-        $group->update(['is_active' => ! $group->is_active]);
-        session()->flash('status', 'Status grup diperbarui.');
+        $nowActive = ! $group->is_active;
+        $group->update(['is_active' => $nowActive]);
+        session()->flash('status', $nowActive ? 'Grup diaktifkan.' : 'Grup dinonaktifkan.');
     }
 
     public function deleteGroup(int $groupId): void
@@ -242,34 +245,69 @@ class WorkOrderDispatchSettings extends Component
         $this->syncGroupLabels();
         $this->loadRoutes();
 
-        session()->flash('status', 'Grup notifikasi dihapus.');
+        session()->flash('status', 'Grup dihapus.');
     }
 
     // ── Routing Notifikasi ─────────────────────────────────────────────
 
-    public function updatedRouteGroupId(mixed $value, string $category): void
+    /**
+     * Routing TIDAK auto-save. Dropdown pakai `wire:model.live` hanya agar
+     * penanda "ada perubahan belum disimpan" + tombol Simpan ikut reaktif
+     * (roundtrip me-render ulang, BUKAN menyimpan ke DB). Persist hanya lewat
+     * tombol "Simpan Routing" → `saveRouting()`. Tidak ada hook `updated*`
+     * yang menulis ke DB (sengaja — supaya perubahan dropdown tidak tersimpan
+     * diam-diam).
+     */
+    public function saveRouting(): void
     {
         $this->authorize('work_orders.manage');
 
-        if (! array_key_exists($category, WhatsappGroupCategory::labels())) {
-            return;
+        $tenantId = $this->tenantId();
+        $labels = WhatsappGroupCategory::labels();
+
+        // Validasi: grup tujuan harus grup aktif milik tenant ini (sesi
+        // direct); kosong = Default (null).
+        foreach ($this->routeGroupId as $category => $value) {
+            if (! array_key_exists($category, $labels)) {
+                continue;
+            }
+            if ($value === '' || $value === null) {
+                continue;
+            }
+
+            $group = $this->ownGroup((int) $value);
+            if ($group === null || ! $group->is_active) {
+                $this->addError('routeGroupId.'.$category, 'Grup tujuan harus grup aktif milik Anda.');
+
+                return;
+            }
         }
 
-        $groupId = ($value === '' || $value === null) ? null : (int) $value;
+        DB::transaction(function () use ($tenantId, $labels) {
+            foreach (array_keys($labels) as $category) {
+                $value = $this->routeGroupId[$category] ?? '';
+                $groupId = ($value === '' || $value === null) ? null : (int) $value;
 
-        // Defense-in-depth: group_id harus milik tenant ini (sesi direct) &
-        // benar-benar ada; kalau tidak, anggap Default (null).
-        if ($groupId !== null && $this->ownGroup($groupId) === null) {
-            $groupId = null;
-            $this->routeGroupId[$category] = '';
-        }
+                WhatsappGroupRoute::updateOrCreate(
+                    ['tenant_id' => $tenantId, 'category' => $category],
+                    ['group_id' => $groupId],
+                );
+            }
+        });
 
-        WhatsappGroupRoute::updateOrCreate(
-            ['tenant_id' => $this->tenantId(), 'category' => $category],
-            ['group_id' => $groupId],
-        );
+        // Normalisasi state lokal ke hasil DB → penanda "belum disimpan" hilang.
+        $this->loadRoutes();
 
-        session()->flash('status', 'Routing notifikasi diperbarui.');
+        session()->flash('status', 'Routing disimpan.');
+    }
+
+    /**
+     * True bila pilihan routing lokal berbeda dari yang tersimpan di DB —
+     * dipakai untuk mengaktifkan tombol Simpan Routing + penanda perubahan.
+     */
+    public function routingDirty(): bool
+    {
+        return $this->routeGroupId != $this->savedRoutes();
     }
 
     public function reloadGroups(): void
@@ -278,6 +316,8 @@ class WorkOrderDispatchSettings extends Component
 
         Cache::forget($this->groupsCacheKey());
         $this->loadGroupState();
+
+        session()->flash('status', 'Daftar grup dimuat ulang.');
     }
 
     public function render()
@@ -289,6 +329,7 @@ class WorkOrderDispatchSettings extends Component
             'groupOptions' => $this->sessionConnected ? $this->groupOptions() : [],
             'notificationGroups' => $this->notificationGroups(),
             'categoryLabels' => WhatsappGroupCategory::labels(),
+            'routingDirty' => $this->routingDirty(),
         ]);
     }
 
@@ -346,6 +387,17 @@ class WorkOrderDispatchSettings extends Component
 
     private function loadRoutes(): void
     {
+        $this->routeGroupId = $this->savedRoutes();
+    }
+
+    /**
+     * Pilihan routing yang TERSIMPAN di DB, dalam bentuk yang sama dengan
+     * `$routeGroupId` ('' = Default), per kategori.
+     *
+     * @return array<string, string>
+     */
+    private function savedRoutes(): array
+    {
         $existing = WhatsappGroupRoute::query()
             ->where('tenant_id', $this->tenantId())
             ->pluck('group_id', 'category');
@@ -356,7 +408,7 @@ class WorkOrderDispatchSettings extends Component
             $routes[$category] = $groupId === null ? '' : (string) $groupId;
         }
 
-        $this->routeGroupId = $routes;
+        return $routes;
     }
 
     /**

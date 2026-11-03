@@ -33,7 +33,7 @@ class WorkOrderPhotoService
         // v0.13.4.3.1 hardening — ekstensi diturunkan dari MIME hasil tebakan
         // ISI file (UploadedFile::guessExtension), BUKAN getClientOriginalExtension()
         // yang dikcontrol client. Fallback 'jpg' kalau tebakan gagal. Validasi
-        // mimes:jpg,jpeg,png,webp sudah menjamin bukan SVG/non-raster sebelum sampai sini.
+        // mimes:jpg,jpeg,png sudah menjamin bukan SVG/non-raster sebelum sampai sini.
         $extension = $file->guessExtension() ?: 'jpg';
 
         $storedPath = Storage::disk('local')->putFileAs(

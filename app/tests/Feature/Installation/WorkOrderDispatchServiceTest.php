@@ -5,11 +5,13 @@ namespace Tests\Feature\Installation;
 use App\Enums\WhatsappEventType;
 use App\Enums\WorkOrderStatus;
 use App\Models\Customer;
+use App\Models\Reseller;
 use App\Models\Subscription;
 use App\Models\Technician;
 use App\Models\Tenant;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
+use App\Models\WhatsappNotificationGroup;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDispatchSettings;
 use App\Services\Installation\WorkOrderDispatchService;
@@ -40,6 +42,22 @@ class WorkOrderDispatchServiceTest extends TestCase
         parent::setUp();
 
         Bus::fake();
+    }
+
+    /**
+     * v0.13.4.4 — grup DEFAULT sesi 'direct' (menggantikan setup
+     * wa_group_jid lama; grup di-resolve via WhatsappGroupRouter).
+     */
+    private function defaultGroup(Tenant $tenant, string $jid): WhatsappNotificationGroup
+    {
+        return WhatsappNotificationGroup::create([
+            'tenant_id' => $tenant->id,
+            'session_key' => 'direct',
+            'jid' => $jid,
+            'label' => 'Grup Utama',
+            'is_default' => true,
+            'is_active' => true,
+        ]);
     }
 
     private function seedTemplate(Tenant $tenant): void
@@ -382,7 +400,7 @@ class WorkOrderDispatchServiceTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $this->seedTemplate($tenant);
-        WorkOrderDispatchSettings::forTenant($tenant->id)->update(['wa_group_jid' => '1203group@g.us']);
+        $this->defaultGroup($tenant, '1203group@g.us');
         $technician = Technician::factory()->create(['tenant_id' => $tenant->id]);
         $workOrder = WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'dispatched_at' => null]);
 
@@ -399,6 +417,33 @@ class WorkOrderDispatchServiceTest extends TestCase
             'phone_number' => '1203group@g.us',
             'event_type' => WhatsappEventType::WorkOrderDispatched->value,
         ]);
+    }
+
+    public function test_group_message_goes_via_the_groups_own_session_not_the_work_order_reseller(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedTemplate($tenant);
+        $reseller = Reseller::factory()->create(['tenant_id' => $tenant->id]);
+        // Grup DEFAULT sesi 'direct'. WO milik reseller — dulu (bug laten)
+        // pesan grup di-antre lewat sesi reseller yang belum tentu anggota
+        // grup. Sekarang SELALU lewat sesi milik grup ('direct' → reseller_id
+        // log null), bukan reseller_id WO.
+        $this->defaultGroup($tenant, '1203group@g.us');
+        Technician::factory()->create(['tenant_id' => $tenant->id]);
+        $workOrder = WorkOrder::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => $reseller->id,
+            'dispatched_at' => null,
+        ]);
+
+        app(WorkOrderDispatchService::class)->dispatchImmediately($workOrder);
+
+        $groupLog = WhatsappMessageLog::withoutGlobalScopes()
+            ->where('phone_number', '1203group@g.us')
+            ->where('event_type', WhatsappEventType::WorkOrderDispatched->value)
+            ->firstOrFail();
+
+        $this->assertNull($groupLog->reseller_id, 'grup direct → reseller_id log null, bukan reseller WO');
     }
 
     public function test_dispatch_without_a_configured_group_does_not_create_a_group_log(): void
@@ -421,7 +466,7 @@ class WorkOrderDispatchServiceTest extends TestCase
         $tenant = Tenant::factory()->create();
         $this->seedTemplate($tenant);
         $settings = WorkOrderDispatchSettings::forTenant($tenant->id);
-        $settings->update(['wa_group_jid' => '1203group@g.us']);
+        $this->defaultGroup($tenant, '1203group@g.us');
         Technician::factory()->create(['tenant_id' => $tenant->id]);
         WorkOrder::factory()->create(['tenant_id' => $tenant->id, 'scheduled_at' => null, 'dispatched_at' => null]);
 
@@ -441,8 +486,8 @@ class WorkOrderDispatchServiceTest extends TestCase
         $settings->update([
             'reminder_time' => now()->format('H:i'),
             'command_interval_minutes' => 15,
-            'wa_group_jid' => '1203group@g.us',
         ]);
+        $this->defaultGroup($tenant, '1203group@g.us');
         Technician::factory()->create(['tenant_id' => $tenant->id]);
         WorkOrder::factory()->create([
             'tenant_id' => $tenant->id,
@@ -602,7 +647,7 @@ class WorkOrderDispatchServiceTest extends TestCase
             'content' => 'LINK:[{claim_link}]',
             'is_active' => true,
         ]);
-        WorkOrderDispatchSettings::forTenant($tenant->id)->update(['wa_group_jid' => '628123456789-group@g.us']);
+        $this->defaultGroup($tenant, '628123456789-group@g.us');
         Technician::factory()->create(['tenant_id' => $tenant->id]);
         $customer = Customer::factory()->create(['tenant_id' => $tenant->id]);
         $workOrder = $this->workOrderForCustomer($tenant, $customer);
@@ -703,8 +748,8 @@ class WorkOrderDispatchServiceTest extends TestCase
         $settings->update([
             'reminder_time' => now()->format('H:i'),
             'command_interval_minutes' => 15,
-            'wa_group_jid' => '628111-group@g.us',
         ]);
+        $this->defaultGroup($tenant, '628111-group@g.us');
         $this->seedClaimedReminderTemplate($tenant);
         $claimer = Technician::factory()->create(['tenant_id' => $tenant->id]);
         $workOrder = WorkOrder::factory()->assigned()->create([

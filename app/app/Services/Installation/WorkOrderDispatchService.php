@@ -12,6 +12,7 @@ use App\Models\WorkOrderDevice;
 use App\Models\WorkOrderDispatchSettings;
 use App\Models\WorkOrderPhoto;
 use App\Services\Whatsapp\WhatsappGatewayService;
+use App\Services\Whatsapp\WhatsappGroupRouter;
 use App\Support\Whatsapp\WhatsappAttachment;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Log;
@@ -54,7 +55,10 @@ use Illuminate\Support\Facades\URL;
  */
 class WorkOrderDispatchService
 {
-    public function __construct(private readonly WhatsappGatewayService $whatsapp) {}
+    public function __construct(
+        private readonly WhatsappGatewayService $whatsapp,
+        private readonly WhatsappGroupRouter $groupRouter,
+    ) {}
 
     /**
      * Dipanggil `WorkOrderService::createFromSubscription()` — WO tanpa
@@ -71,7 +75,7 @@ class WorkOrderDispatchService
         $settings = WorkOrderDispatchSettings::forTenant($workOrder->tenant_id);
 
         $this->notifyTechnicians($workOrder, isReminder: false);
-        $this->notifyGroupIfConfigured($workOrder, $settings->wa_group_jid, isReminder: false);
+        $this->notifyGroupIfConfigured($workOrder, isReminder: false);
 
         Log::info("WorkOrderDispatchService: WO #{$workOrder->id} dispatched segera saat create (tanpa janji spesifik).");
     }
@@ -104,7 +108,7 @@ class WorkOrderDispatchService
             $workOrder->update(['dispatched_at' => $now]);
 
             $this->notifyTechnicians($workOrder, isReminder: false);
-            $this->notifyGroupIfConfigured($workOrder, $settings->wa_group_jid, isReminder: false);
+            $this->notifyGroupIfConfigured($workOrder, isReminder: false);
 
             Log::info("WorkOrderDispatchService: WO #{$workOrder->id} dispatched (window offset {$settings->dispatch_offset_minutes} menit sebelum janji tercapai).");
             $dispatched++;
@@ -126,7 +130,7 @@ class WorkOrderDispatchService
             $workOrder->update(['dispatched_at' => $now]);
 
             $this->notifyTechnicians($workOrder, isReminder: false);
-            $this->notifyGroupIfConfigured($workOrder, $settings->wa_group_jid, isReminder: false);
+            $this->notifyGroupIfConfigured($workOrder, isReminder: false);
 
             Log::info("WorkOrderDispatchService: WO #{$workOrder->id} dispatched segera oleh command (safety-net, tanpa janji spesifik).");
             $dispatched++;
@@ -177,7 +181,7 @@ class WorkOrderDispatchService
             // assignment admin yang terpisah) sudah tidak relevan lagi di
             // sini, WO ini bukan "up for grabs".
             if ($workOrder->claimed_at !== null) {
-                $this->notifyClaimedReminder($workOrder, $settings->wa_group_jid);
+                $this->notifyClaimedReminder($workOrder);
 
                 Log::info("WorkOrderDispatchService: reminder (sudah diklaim) untuk WO #{$workOrder->id} — klaimer teknisi #{$workOrder->claimed_by_technician_id}.");
                 $reminded++;
@@ -191,7 +195,7 @@ class WorkOrderDispatchService
                 $this->notifyTechnicians($workOrder, isReminder: true);
             }
 
-            $this->notifyGroupIfConfigured($workOrder, $settings->wa_group_jid, isReminder: true);
+            $this->notifyGroupIfConfigured($workOrder, isReminder: true);
 
             Log::info("WorkOrderDispatchService: reminder H+ untuk WO #{$workOrder->id} (status masih {$workOrder->status->value}, belum Completed sejak dispatch).");
             $reminded++;
@@ -310,17 +314,19 @@ class WorkOrderDispatchService
      * v0.13.4.3.2 — notifikasi grup WA saat WO Completed: 1 pesan teks
      * ringkasan (event WorkOrderCompleted) lalu 6 foto berurutan via pipeline
      * media v0.13.5.1 (queue whatsapp-{session_key} + satu worker = FIFO, teks
-     * lebih dulu). `wa_group_jid` null/'' → skip DIAM-DIAM. BEST-EFFORT —
-     * dipanggil dari DB::afterCommit + try/catch di WorkOrderService::complete();
-     * kegagalan WA tidak pernah memblokir penutupan WO. Foto yang belum ada
-     * (jalur API ungated) dilewati tanpa error.
+     * lebih dulu). v0.13.4.4 — grup di-resolve via WhatsappGroupRouter
+     * (routing kategori 'work_order_completed' → grup, atau default); null →
+     * skip DIAM-DIAM. Dikirim lewat sesi MILIK GRUP (`group->session_key`),
+     * bukan reseller_id WO. BEST-EFFORT — dipanggil dari DB::afterCommit +
+     * try/catch di WorkOrderService::complete(); kegagalan WA tidak pernah
+     * memblokir penutupan WO. Foto yang belum ada (jalur API ungated)
+     * dilewati tanpa error.
      */
     public function notifyWorkOrderCompleted(WorkOrder $workOrder): void
     {
-        $settings = WorkOrderDispatchSettings::forTenant($workOrder->tenant_id);
-        $groupJid = $settings->wa_group_jid;
+        $group = $this->groupRouter->resolve($workOrder->tenant_id, WhatsappEventType::WorkOrderCompleted->value);
 
-        if ($groupJid === null || $groupJid === '') {
+        if ($group === null) {
             return;
         }
 
@@ -328,9 +334,9 @@ class WorkOrderDispatchService
         $this->whatsapp->buildAndQueueForGroup(
             WhatsappEventType::WorkOrderCompleted,
             $workOrder->tenant_id,
-            $groupJid,
+            $group->jid,
             $this->completedVariablesFor($workOrder),
-            $workOrder->reseller_id,
+            $group->session_key,
         );
 
         // 2) 6 foto berurutan, caption BERLABEL per-item; lewati tipe yang belum ada.
@@ -364,10 +370,10 @@ class WorkOrderDispatchService
             $this->whatsapp->queueMediaBatchForGroup(
                 WhatsappEventType::WorkOrderCompleted,
                 $workOrder->tenant_id,
-                $groupJid,
+                $group->jid,
                 [],
                 $attachments,
-                $workOrder->reseller_id,
+                $group->session_key,
             );
         }
     }
@@ -399,7 +405,7 @@ class WorkOrderDispatchService
         ];
     }
 
-    private function notifyClaimedReminder(WorkOrder $workOrder, ?string $groupJid): void
+    private function notifyClaimedReminder(WorkOrder $workOrder): void
     {
         $claimer = $workOrder->claimedByTechnician;
 
@@ -416,16 +422,20 @@ class WorkOrderDispatchService
             );
         }
 
-        if ($groupJid === null || $groupJid === '') {
+        // v0.13.4.4 — grup via router (kategori 'work_order_claimed_reminder'
+        // → grup/default); null → skip DIAM-DIAM. Lewat sesi milik grup.
+        $group = $this->groupRouter->resolve($workOrder->tenant_id, WhatsappEventType::WorkOrderClaimedReminder->value);
+
+        if ($group === null) {
             return;
         }
 
         $this->whatsapp->buildAndQueueForGroup(
             WhatsappEventType::WorkOrderClaimedReminder,
             $workOrder->tenant_id,
-            $groupJid,
+            $group->jid,
             $this->messageVariablesForClaimedReminder($workOrder, 'Tim Teknisi'),
-            $workOrder->reseller_id,
+            $group->session_key,
         );
     }
 
@@ -464,24 +474,29 @@ class WorkOrderDispatchService
     }
 
     /**
-     * v0.26.4 — kirim JUGA ke grup WA, KONDISIONAL: hanya kalau tenant ini
-     * sudah setup `wa_group_jid` (null = belum setup, skip diam-diam, TIDAK
-     * error — bukan prasyarat). Isi pesan REUSE PERSIS
+     * v0.26.4 — kirim JUGA ke grup WA, KONDISIONAL. v0.13.4.4 — grup
+     * di-resolve via WhatsappGroupRouter (kategori 'work_order_dispatched'
+     * → grup/default); null (belum ada grup/default) = skip DIAM-DIAM, TIDAK
+     * error — bukan prasyarat. Dikirim lewat sesi MILIK GRUP
+     * (`group->session_key`), bukan reseller_id WO (menutup bug laten di
+     * mana grup direct di-antre lewat sesi reseller). Isi pesan REUSE PERSIS
      * `messageVariablesFor()` yang sama dengan japri individu, `technician_name`
      * diisi "Tim Teknisi" (grup tidak punya 1 teknisi spesifik yang disapa).
      */
-    private function notifyGroupIfConfigured(WorkOrder $workOrder, ?string $groupJid, bool $isReminder): void
+    private function notifyGroupIfConfigured(WorkOrder $workOrder, bool $isReminder): void
     {
-        if ($groupJid === null || $groupJid === '') {
+        $group = $this->groupRouter->resolve($workOrder->tenant_id, WhatsappEventType::WorkOrderDispatched->value);
+
+        if ($group === null) {
             return;
         }
 
         $this->whatsapp->buildAndQueueForGroup(
             WhatsappEventType::WorkOrderDispatched,
             $workOrder->tenant_id,
-            $groupJid,
+            $group->jid,
             $this->messageVariablesFor($workOrder, 'Tim Teknisi', $isReminder),
-            $workOrder->reseller_id,
+            $group->session_key,
         );
     }
 

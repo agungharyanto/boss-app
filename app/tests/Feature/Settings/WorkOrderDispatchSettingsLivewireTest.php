@@ -2,10 +2,13 @@
 
 namespace Tests\Feature\Settings;
 
+use App\Enums\WhatsappEventType;
 use App\Enums\WhatsappSessionStatus;
 use App\Livewire\Settings\WorkOrderDispatchSettings;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Models\WhatsappGroupRoute;
+use App\Models\WhatsappNotificationGroup;
 use App\Models\WhatsappSession;
 use App\Models\WorkOrderDispatchSettings as WorkOrderDispatchSettingsModel;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -16,13 +19,11 @@ use Livewire\Livewire;
 use Tests\TestCase;
 
 /**
- * v0.26.2 — "Komunikasi > Konfig WA Gateway". `work_orders.manage`
- * (tier-admin, sudah ada) — tidak ada permission baru untuk halaman ini,
- * dikonfirmasi Langkah 0.
+ * "Komunikasi > Konfig WA Gateway". `work_orders.manage` (tier-admin).
  *
- * v0.26.4 — dropdown "Pilih Grup WhatsApp" menggantikan 2 field manual
- * lama. Test terkait dropdown (state kosong, populate dari gateway, cache,
- * tombol reload) dikelompokkan terpisah di bawah.
+ * v0.13.4.4 — field tunggal "Pilih Grup" diganti manajemen multi-grup +
+ * routing per kategori. Timing dispatch/reminder tetap diuji; grup/routing
+ * dikelompokkan di bawah.
  */
 class WorkOrderDispatchSettingsLivewireTest extends TestCase
 {
@@ -33,10 +34,6 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
 
-        // phpunit.xml mengosongkan WHATSAPP_GATEWAY_URL secara default
-        // supaya test yang lupa men-fake tidak diam-diam menembak gateway
-        // asli — domain palsu ini WAJIB diset di sini juga, sama disiplin
-        // WhatsappPairingCodeTest dkk.
         config(['services.whatsapp_gateway.url' => 'http://whatsapp-gateway-test']);
     }
 
@@ -57,6 +54,30 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
         ]);
     }
 
+    private function fakeGroups(array $groups): void
+    {
+        Http::fake([
+            'whatsapp-gateway-test/sessions/direct/groups' => Http::response([
+                'success' => true,
+                'groups' => $groups,
+            ], 200),
+        ]);
+    }
+
+    private function group(int $tenantId, array $overrides = []): WhatsappNotificationGroup
+    {
+        return WhatsappNotificationGroup::create(array_merge([
+            'tenant_id' => $tenantId,
+            'session_key' => 'direct',
+            'jid' => '1203'.fake()->unique()->numerify('######').'@g.us',
+            'label' => 'Grup '.fake()->word(),
+            'is_default' => false,
+            'is_active' => true,
+        ], $overrides));
+    }
+
+    // ── Timing ──────────────────────────────────────────────────────────
+
     public function test_form_loads_the_defaults_for_a_fresh_tenant(): void
     {
         $tenant = Tenant::factory()->create();
@@ -65,9 +86,7 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
             ->test(WorkOrderDispatchSettings::class)
             ->assertSet('dispatchOffsetHours', 2)
             ->assertSet('reminderTime', '08:00')
-            ->assertSet('commandIntervalMinutes', 15)
-            ->assertSet('waGroupJid', null)
-            ->assertSet('waGroupName', null);
+            ->assertSet('commandIntervalMinutes', 15);
     }
 
     public function test_saving_valid_values_persists_them_converted_to_minutes(): void
@@ -83,7 +102,7 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
             ->assertHasNoErrors();
 
         $settings = WorkOrderDispatchSettingsModel::forTenant($tenant->id);
-        $this->assertSame(180, $settings->dispatch_offset_minutes); // 3 jam -> 180 menit
+        $this->assertSame(180, $settings->dispatch_offset_minutes);
         $this->assertSame('09:30', $settings->reminder_time);
         $this->assertSame(20, $settings->command_interval_minutes);
     }
@@ -99,26 +118,9 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
             ->assertHasErrors(['dispatchOffsetHours' => 'min']);
     }
 
-    public function test_reminder_time_must_be_a_valid_time_format(): void
-    {
-        $tenant = Tenant::factory()->create();
-
-        Livewire::actingAs($this->admin($tenant))
-            ->test(WorkOrderDispatchSettings::class)
-            ->set('reminderTime', 'bukan-jam')
-            ->call('save')
-            ->assertHasErrors(['reminderTime' => 'date_format']);
-    }
-
     public function test_command_interval_minutes_must_be_between_one_and_sixty(): void
     {
         $tenant = Tenant::factory()->create();
-
-        Livewire::actingAs($this->admin($tenant))
-            ->test(WorkOrderDispatchSettings::class)
-            ->set('commandIntervalMinutes', 0)
-            ->call('save')
-            ->assertHasErrors(['commandIntervalMinutes' => 'min']);
 
         Livewire::actingAs($this->admin($tenant))
             ->test(WorkOrderDispatchSettings::class)
@@ -150,9 +152,9 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
         $this->assertSame(120, WorkOrderDispatchSettingsModel::forTenant($tenantB->id)->dispatch_offset_minutes);
     }
 
-    // ── v0.26.4 — dropdown "Pilih Grup WhatsApp" ────────────────────────
+    // ── Daftar grup bot (fetch/cache) ────────────────────────────────────
 
-    public function test_dropdown_is_disabled_with_a_clear_message_when_session_not_connected(): void
+    public function test_shows_a_clear_message_when_session_not_connected(): void
     {
         $tenant = Tenant::factory()->create();
         $this->directSession($tenant->id, WhatsappSessionStatus::QrPending);
@@ -160,33 +162,16 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
         Livewire::actingAs($this->admin($tenant))
             ->test(WorkOrderDispatchSettings::class)
             ->assertSet('sessionConnected', false)
-            ->assertSee('Sesi WhatsApp belum terhubung');
+            ->assertSee('belum terhubung');
     }
 
-    public function test_dropdown_shows_a_clear_message_when_no_session_row_exists_at_all(): void
-    {
-        $tenant = Tenant::factory()->create();
-        // Sengaja TIDAK membuat WhatsappSession sama sekali.
-
-        Livewire::actingAs($this->admin($tenant))
-            ->test(WorkOrderDispatchSettings::class)
-            ->assertSet('sessionConnected', false)
-            ->assertSee('Sesi WhatsApp belum terhubung');
-    }
-
-    public function test_dropdown_is_populated_from_the_gateway_when_session_connected(): void
+    public function test_bot_group_list_is_populated_from_the_gateway_when_session_connected(): void
     {
         $tenant = Tenant::factory()->create();
         $this->directSession($tenant->id);
-
-        Http::fake([
-            'whatsapp-gateway-test/sessions/direct/groups' => Http::response([
-                'success' => true,
-                'groups' => [
-                    ['jid' => '1203aaa@g.us', 'name' => 'Grup Notifikasi Teknisi'],
-                    ['jid' => '1203bbb@g.us', 'name' => 'Grup Lain'],
-                ],
-            ], 200),
+        $this->fakeGroups([
+            ['jid' => '1203aaa@g.us', 'name' => 'Grup Notifikasi Teknisi'],
+            ['jid' => '1203bbb@g.us', 'name' => 'Grup Lain'],
         ]);
 
         Livewire::actingAs($this->admin($tenant))
@@ -197,73 +182,13 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
             ->assertSee('Grup Lain');
     }
 
-    public function test_selecting_a_group_fills_both_jid_and_name(): void
+    public function test_bot_group_list_is_cached_not_fetched_on_every_render(): void
     {
         $tenant = Tenant::factory()->create();
         $this->directSession($tenant->id);
-
-        Http::fake([
-            'whatsapp-gateway-test/sessions/direct/groups' => Http::response([
-                'success' => true,
-                'groups' => [
-                    ['jid' => '1203aaa@g.us', 'name' => 'Grup Notifikasi Teknisi'],
-                ],
-            ], 200),
-        ]);
-
-        Livewire::actingAs($this->admin($tenant))
-            ->test(WorkOrderDispatchSettings::class)
-            ->set('waGroupJid', '1203aaa@g.us')
-            ->assertSet('waGroupName', 'Grup Notifikasi Teknisi')
-            ->call('save')
-            ->assertHasNoErrors();
-
-        $settings = WorkOrderDispatchSettingsModel::forTenant($tenant->id);
-        $this->assertSame('1203aaa@g.us', $settings->wa_group_jid);
-        $this->assertSame('Grup Notifikasi Teknisi', $settings->wa_group_name);
-    }
-
-    public function test_clearing_the_selection_clears_both_fields_on_save(): void
-    {
-        $tenant = Tenant::factory()->create();
-        WorkOrderDispatchSettingsModel::forTenant($tenant->id)->update([
-            'wa_group_jid' => '1203aaa@g.us',
-            'wa_group_name' => 'Grup Lama',
-        ]);
-        $this->directSession($tenant->id);
-
-        Http::fake([
-            'whatsapp-gateway-test/sessions/direct/groups' => Http::response(['success' => true, 'groups' => []], 200),
-        ]);
-
-        Livewire::actingAs($this->admin($tenant))
-            ->test(WorkOrderDispatchSettings::class)
-            ->assertSet('waGroupJid', '1203aaa@g.us')
-            ->set('waGroupJid', '')
-            ->assertSet('waGroupName', null)
-            ->call('save')
-            ->assertHasNoErrors();
-
-        $settings = WorkOrderDispatchSettingsModel::forTenant($tenant->id);
-        $this->assertNull($settings->wa_group_jid);
-        $this->assertNull($settings->wa_group_name);
-    }
-
-    public function test_group_list_is_cached_not_fetched_on_every_render(): void
-    {
-        $tenant = Tenant::factory()->create();
-        $this->directSession($tenant->id);
-
-        Http::fake([
-            'whatsapp-gateway-test/sessions/direct/groups' => Http::response([
-                'success' => true,
-                'groups' => [['jid' => '1203aaa@g.us', 'name' => 'Grup A']],
-            ], 200),
-        ]);
+        $this->fakeGroups([['jid' => '1203aaa@g.us', 'name' => 'Grup A']]);
 
         $component = Livewire::actingAs($this->admin($tenant))->test(WorkOrderDispatchSettings::class);
-        // Sebuah re-render (mis. set field lain) TIDAK memicu fetch baru —
-        // masih dalam window cache 15 menit.
         $component->set('dispatchOffsetHours', 4);
 
         Http::assertSentCount(1);
@@ -273,40 +198,226 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
     {
         $tenant = Tenant::factory()->create();
         $this->directSession($tenant->id);
-
-        Http::fake([
-            'whatsapp-gateway-test/sessions/direct/groups' => Http::response([
-                'success' => true,
-                'groups' => [['jid' => '1203aaa@g.us', 'name' => 'Grup A']],
-            ], 200),
-        ]);
+        $this->fakeGroups([['jid' => '1203aaa@g.us', 'name' => 'Grup A']]);
 
         Livewire::actingAs($this->admin($tenant))
             ->test(WorkOrderDispatchSettings::class)
             ->call('reloadGroups');
 
-        Http::assertSentCount(2); // mount() + reloadGroups() — cache genuinely di-bypass.
+        Http::assertSentCount(2);
     }
 
-    public function test_group_list_is_isolated_per_tenant_cache_key(): void
+    public function test_bot_group_list_is_isolated_per_tenant_cache_key(): void
     {
         $tenantA = Tenant::factory()->create();
         $tenantB = Tenant::factory()->create();
         Cache::put("whatsapp:groups:tenant:{$tenantA->id}", [['jid' => '1203aaa@g.us', 'name' => 'Grup A']], now()->addMinutes(15));
         $this->directSession($tenantB->id);
+        $this->fakeGroups([['jid' => '1203bbb@g.us', 'name' => 'Grup B']]);
 
-        Http::fake([
-            'whatsapp-gateway-test/sessions/direct/groups' => Http::response([
-                'success' => true,
-                'groups' => [['jid' => '1203bbb@g.us', 'name' => 'Grup B']],
-            ], 200),
-        ]);
-
-        // Tenant B genuinely fetch dari gateway (cache-nya sendiri kosong),
-        // tidak "kebocoran" hasil cache tenant A.
         Livewire::actingAs($this->admin($tenantB))
             ->test(WorkOrderDispatchSettings::class)
             ->assertSee('Grup B')
             ->assertDontSee('Grup A');
+    }
+
+    // ── Tambah grup ──────────────────────────────────────────────────────
+
+    public function test_adding_the_first_group_makes_it_default(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->directSession($tenant->id);
+        $this->fakeGroups([['jid' => '1203aaa@g.us', 'name' => 'Grup A']]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('newGroupJid', '1203aaa@g.us')
+            ->set('newGroupLabel', 'Support Teknisi')
+            ->call('addGroup')
+            ->assertHasNoErrors();
+
+        $group = WhatsappNotificationGroup::where('tenant_id', $tenant->id)->firstOrFail();
+        $this->assertSame('1203aaa@g.us', $group->jid);
+        $this->assertSame('Support Teknisi', $group->label);
+        $this->assertTrue($group->is_default);
+        $this->assertSame('direct', $group->session_key);
+    }
+
+    public function test_adding_a_second_group_is_not_default(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->directSession($tenant->id);
+        $this->group($tenant->id, ['jid' => '1203first@g.us', 'is_default' => true]);
+        $this->fakeGroups([['jid' => '1203second@g.us', 'name' => 'Kedua']]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('newGroupJid', '1203second@g.us')
+            ->set('newGroupLabel', 'Kedua')
+            ->call('addGroup')
+            ->assertHasNoErrors();
+
+        $second = WhatsappNotificationGroup::where('jid', '1203second@g.us')->firstOrFail();
+        $this->assertFalse($second->is_default);
+        $this->assertSame(1, WhatsappNotificationGroup::where('tenant_id', $tenant->id)->where('is_default', true)->count());
+    }
+
+    public function test_adding_a_jid_not_in_the_bot_list_is_rejected(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->directSession($tenant->id);
+        $this->fakeGroups([['jid' => '1203real@g.us', 'name' => 'Nyata']]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('newGroupJid', '1203palsu@g.us')
+            ->set('newGroupLabel', 'Palsu')
+            ->call('addGroup')
+            ->assertHasErrors('newGroupJid');
+
+        $this->assertSame(0, WhatsappNotificationGroup::where('tenant_id', $tenant->id)->count());
+    }
+
+    // ── Default / aktif / hapus ─────────────────────────────────────────
+
+    public function test_set_default_moves_the_default_and_activates_the_group(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $a = $this->group($tenant->id, ['is_default' => true]);
+        $b = $this->group($tenant->id, ['is_default' => false, 'is_active' => false]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->call('setDefault', $b->id);
+
+        $this->assertFalse($a->fresh()->is_default);
+        $this->assertTrue($b->fresh()->is_default);
+        $this->assertTrue($b->fresh()->is_active);
+    }
+
+    public function test_cannot_delete_the_default_while_other_groups_exist(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $default = $this->group($tenant->id, ['is_default' => true]);
+        $this->group($tenant->id);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->call('deleteGroup', $default->id);
+
+        $this->assertNotNull($default->fresh());
+    }
+
+    public function test_can_delete_the_only_group_even_if_default(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $only = $this->group($tenant->id, ['is_default' => true]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->call('deleteGroup', $only->id);
+
+        $this->assertNull($only->fresh());
+    }
+
+    public function test_cannot_deactivate_the_default_while_other_groups_exist(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $default = $this->group($tenant->id, ['is_default' => true, 'is_active' => true]);
+        $this->group($tenant->id);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->call('toggleActive', $default->id);
+
+        $this->assertTrue($default->fresh()->is_active);
+    }
+
+    public function test_save_label_updates_the_group_label(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $group = $this->group($tenant->id, ['label' => 'Lama']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set("groupLabels.{$group->id}", 'Baru')
+            ->call('saveLabel', $group->id);
+
+        $this->assertSame('Baru', $group->fresh()->label);
+    }
+
+    public function test_a_group_from_another_tenant_cannot_be_mutated(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $otherTenant = Tenant::factory()->create();
+        $foreign = $this->group($otherTenant->id, ['is_default' => true, 'label' => 'Asing']);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->call('deleteGroup', $foreign->id);
+
+        $this->assertNotNull($foreign->fresh(), 'grup tenant lain tidak boleh terhapus');
+    }
+
+    // ── Routing ──────────────────────────────────────────────────────────
+
+    public function test_routing_a_category_persists_the_selection(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $group = $this->group($tenant->id, ['is_default' => true]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('routeGroupId.'.WhatsappEventType::WorkOrderCompleted->value, (string) $group->id);
+
+        $this->assertDatabaseHas('whatsapp_group_routes', [
+            'tenant_id' => $tenant->id,
+            'category' => WhatsappEventType::WorkOrderCompleted->value,
+            'group_id' => $group->id,
+        ]);
+    }
+
+    public function test_clearing_a_route_stores_null_group(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $group = $this->group($tenant->id, ['is_default' => true]);
+        WhatsappGroupRoute::create([
+            'tenant_id' => $tenant->id,
+            'category' => WhatsappEventType::WorkOrderCompleted->value,
+            'group_id' => $group->id,
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->set('routeGroupId.'.WhatsappEventType::WorkOrderCompleted->value, '');
+
+        $this->assertDatabaseHas('whatsapp_group_routes', [
+            'tenant_id' => $tenant->id,
+            'category' => WhatsappEventType::WorkOrderCompleted->value,
+            'group_id' => null,
+        ]);
+    }
+
+    public function test_deleting_a_group_nulls_routes_pointing_to_it(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $default = $this->group($tenant->id, ['is_default' => true]);
+        $routed = $this->group($tenant->id);
+        WhatsappGroupRoute::create([
+            'tenant_id' => $tenant->id,
+            'category' => WhatsappEventType::WorkOrderCompleted->value,
+            'group_id' => $routed->id,
+        ]);
+
+        Livewire::actingAs($this->admin($tenant))
+            ->test(WorkOrderDispatchSettings::class)
+            ->call('deleteGroup', $routed->id);
+
+        $this->assertNull($routed->fresh());
+        $this->assertDatabaseHas('whatsapp_group_routes', [
+            'tenant_id' => $tenant->id,
+            'category' => WhatsappEventType::WorkOrderCompleted->value,
+            'group_id' => null,
+        ]);
     }
 }

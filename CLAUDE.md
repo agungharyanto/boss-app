@@ -9236,6 +9236,66 @@ wajib kembali `connected`.
 `6287884374939` via sesi "direct" (mis. lewat tinker memanggil `queueMediaBatchForGroup`/builder dengan
 `WhatsappAttachment` dari file uji di `work-order-photos/`), pantau `whatsapp_message_logs.status` → `sent`.
 
+## Multi-Grup Notifikasi WA + Routing per Kategori (v0.13.4.4, branch `v0.13.4.4-multi-grup-notif` di atas `v0.13.4.3.2-grup-wo-selesai`, belum merge/tag)
+
+**Menggantikan grup WA TUNGGAL per tenant (`work_order_dispatch_settings.wa_group_jid`/`wa_group_name`,
+kini DEPRECATED — kolom DIBIARKAN, jangan di-drop) dengan beberapa grup + routing per kategori.** Dua
+tabel baru:
+- **`whatsapp_notification_groups`** (`App\Models\WhatsappNotificationGroup`): grup per tenant, terikat
+  `session_key` ('direct' | reseller_id string — konvensi sama `WhatsappSession::sessionKeyFor()`), `jid`,
+  `label`, `is_default`, `is_active`. `unique(tenant_id, jid)` + **partial unique index** "1 default per
+  (tenant_id, session_key)" (`WHERE is_default` Postgres / `WHERE is_default = 1` SQLite — driver-conditional
+  di migration, pola partial-unique yang sudah ada di codebase).
+- **`whatsapp_group_routes`** (`App\Models\WhatsappGroupRoute`): `unique(tenant_id, category)`, `group_id`
+  nullable FK `nullOnDelete`. `category` = nilai `WhatsappEventType` (string bebas). Hapus grup → route
+  group_id jadi null → jatuh ke default.
+
+**Kedua model SENGAJA TIDAK pakai `BelongsToTenant`** — resolver dipanggil dari command/queue/afterCommit
+tanpa Auth, semua query `tenant_id` eksplisit (pola sama `WorkOrderDispatchSettings`/`StaffService`).
+
+**Kategori = `App\Support\Whatsapp\WhatsappGroupCategory::labels()`** (map event_type value → label
+Indonesia). Saat ini 3, SEMUA event grup WO: `work_order_dispatched`, `work_order_claimed_reminder`,
+`work_order_completed`. **Menambah kategori = tambah 1 baris di `labels()` (dengan event type yang genuinely
+dikirim ke grup), TANPA migrasi** (kolom `category` string bebas). Event type lain (invoice/payment/OTP)
+japri ke pelanggan/teknisi, bukan grup — tidak didaftar.
+
+**`App\Services\Whatsapp\WhatsappGroupRouter::resolve(int $tenantId, string $category): ?WhatsappNotificationGroup`**
+— satu-satunya sumber kebenaran routing grup; menggantikan pembacaan `wa_group_jid` langsung di
+`WorkOrderDispatchService` (`notifyGroupIfConfigured`/`notifyClaimedReminder`/`notifyWorkOrderCompleted`).
+Aturan: routing aktif → grup yang dituju BILA `is_active`; else grup DEFAULT aktif sesi 'direct'; else
+**null → pemanggil SKIP DIAM-DIAM** (tidak pernah throw). Route menunjuk grup nonaktif → jatuh ke default.
+
+**ATURAN KUNCI session_key — kirim grup SELALU lewat sesi MILIK GRUP (`group->session_key`), BUKAN
+`reseller_id` WO.** `WhatsappGatewayService::buildAndQueueForGroup()`/`queueMediaBatchForGroup()` param
+ke-5 kini `string $sessionKey = 'direct'` (dulu `?int $resellerId = null`); `reseller_id` untuk log +
+resolve template override DITURUNKAN dari situ ('direct' → null, numerik → reseller_id). **Menutup bug
+laten** (Poin 4 audit): dulu pesan grup di-antre di queue `whatsapp-{reseller_id}` WO padahal JID grup
+milik sesi 'direct' — sesi reseller belum tentu anggota grup → kirim gagal. Japri teknisi/pelanggan TETAP
+lewat `reseller_id` WO (tak berubah) — hanya jalur GRUP yang pindah ke session_key grup.
+
+**Alur 2-arah (pesan masuk) TIDAK terpengaruh** — `WhatsappIncomingMessageService` tidak pernah membaca
+JID grup untuk menerima/menyaring (routing by `sender_phone`/state/auth teknisi), dan sisi Go memfilter
+`IsGroup` (pesan grup tak pernah masuk webhook). Perubahan ini murni sisi OUTBOUND.
+
+**UI "Konfig WA Gateway"** (`App\Livewire\Settings\WorkOrderDispatchSettings`, permission tetap
+`work_orders.manage`): bagian "Daftar Grup Notifikasi" (tambah dari daftar grup bot sesi 'direct' via
+`listGroups()` cache 15 menit + "Muat Ulang"; ubah label; set Default; aktif/nonaktif; hapus) + "Routing
+Notifikasi" (kategori → dropdown grup aktif, kosong = Default). Aturan: **grup Default tidak bisa
+dihapus/dinonaktifkan selama ada grup lain** (pilih Default baru dulu — pesan jelas); JID yang ditambah
+WAJIB ada di daftar grup bot; grup pertama otomatis Default; isolasi tenant (semua aksi via `ownGroup()`
+yang memfilter tenant+session 'direct'). **UI hanya mengelola grup sesi 'direct'** — grup per-reseller
+(session_key reseller) didukung model/resolver tapi **belum ada UI-nya (BACKLOG, lihat ROADMAP)**.
+
+**Migrasi data IDEMPOTEN** (`2026_11_03_110100_...`): `wa_group_jid` lama terisi → 1 grup default
+(session_key 'direct', label = `wa_group_name` atau "Grup Utama"). Idempoten: skip bila JID sudah punya
+grup atau tenant sudah punya default 'direct'. Routing kosong pasca-migrasi → semua kategori jatuh ke
+default = **perilaku identik dengan sebelum migrasi**.
+
+**Langkah rilis**: `php artisan migrate` WAJIB (2 tabel + data migration). `db:seed --class=WhatsappMessageTemplateSeeder`
+untuk template `work_order_completed` (dari v0.13.4.3.2). **TANPA rebuild gateway** (endpoint `/send-group`,
+`/send-group-media`, `/groups` sudah ada). Test scoped (`WorkOrder|Whatsapp|Settings`) hijau — 1 kegagalan
+lama `WhatsappIncomingMessageWebhookTest` (fallback toggle, pre-existing, tak terkait).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

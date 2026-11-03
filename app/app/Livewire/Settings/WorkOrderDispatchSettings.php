@@ -3,37 +3,35 @@
 namespace App\Livewire\Settings;
 
 use App\Enums\WhatsappSessionStatus;
+use App\Models\WhatsappGroupRoute;
+use App\Models\WhatsappNotificationGroup;
 use App\Models\WhatsappSession;
 use App\Models\WorkOrderDispatchSettings as WorkOrderDispatchSettingsModel;
 use App\Services\Whatsapp\WhatsappSessionService;
+use App\Support\Whatsapp\WhatsappGroupCategory;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Livewire\Component;
 
 /**
- * v0.26.2 — "Komunikasi > Konfig WA Gateway" (nama halaman sesuai kickoff,
- * meski isinya settings timing dispatch/reminder Work Order, BUKAN
- * pengaturan gateway WA itu sendiri — lihat docblock
- * `WorkOrderDispatchSettings` model untuk kenapa tabelnya sengaja bukan
- * `wa_gateway_settings`). Per-tenant — `auth()->user()->tenant_id`, bukan
- * platform-level singleton seperti `PaymentGatewaySettings`.
+ * "Komunikasi > Konfig WA Gateway". Permission: `work_orders.manage`
+ * (tier-admin). Per-tenant.
  *
- * Permission: `work_orders.manage` (tier-admin, sudah ada sejak v0.5.0) —
- * dikonfirmasi Langkah 0, TIDAK ada permission baru dibuat untuk halaman
- * ini.
+ * v0.13.4.4 — field tunggal "Pilih Grup WhatsApp" lama (`waGroupJid`/
+ * `waGroupName`, kolom deprecated) DIGANTI dua bagian:
+ *   - "Daftar Grup Notifikasi": beberapa grup (dari daftar grup bot sesi
+ *     'direct'), tambah/ubah label/set default/aktif-nonaktif/hapus.
+ *   - "Routing Notifikasi": kategori (WhatsappGroupCategory) → grup; kosong
+ *     = pakai Default.
+ * Grup default TIDAK bisa dihapus/dinonaktifkan selama ada grup lain (pilih
+ * default baru dulu). UI ini hanya mengelola grup sesi 'direct'
+ * (session_key='direct'); grup per-reseller = backlog.
  *
- * v0.26.4 — dropdown "Pilih Grup WhatsApp" MENGGANTIKAN 2 field manual
- * lama (`waGroupName` input teks bebas, `waGroupJid` disabled placeholder).
- * Hasil fetch `WhatsappSessionService::listGroups()` (sesi "direct" tenant
- * ini — settings ini per-tenant, bukan per-reseller, sama posture kolom
- * `wa_group_jid`/`wa_group_name` itu sendiri) di-cache 15 menit
- * (`Cache::remember`) — daftar grup jarang berubah (bot masuk/keluar grup
- * adalah aksi manusia manual, bukan event rutin), tombol "Muat Ulang"
- * bypass cache eksplisit lewat `Cache::forget()`. Memilih dropdown mengisi
- * KEDUA `waGroupJid` (value fungsional yang genuinely disimpan & dipakai
- * kirim) DAN `waGroupName` (cache nama untuk ditampilkan tanpa fetch ulang
- * — TETAP kolom terpisah di DB, bukan dihapus, cuma sekarang di-auto-fill
- * dari dropdown alih-alih diketik manual).
+ * Daftar grup bot tetap via `WhatsappSessionService::listGroups()` di-cache
+ * 15 menit; "Muat Ulang" bypass cache. Timing dispatch/reminder tetap di
+ * `save()`.
  */
 class WorkOrderDispatchSettings extends Component
 {
@@ -47,14 +45,17 @@ class WorkOrderDispatchSettings extends Component
 
     public int $commandIntervalMinutes = 15;
 
-    public ?string $waGroupName = null;
+    /** Form "Tambah Grup". */
+    public ?string $newGroupJid = null;
 
-    public ?string $waGroupJid = null;
+    public ?string $newGroupLabel = null;
 
-    /**
-     * State kosong eksplisit — dropdown grup TIDAK pernah silently kosong
-     * tanpa penjelasan (lihat blade view: pesan beda untuk masing-masing).
-     */
+    /** Label per grup (editable inline), keyed by group id. */
+    public array $groupLabels = [];
+
+    /** Routing kategori → group_id ('' = Default), keyed by category string. */
+    public array $routeGroupId = [];
+
     public bool $sessionConnected = false;
 
     public bool $groupsLoadFailed = false;
@@ -63,8 +64,10 @@ class WorkOrderDispatchSettings extends Component
     {
         $this->authorize('work_orders.manage');
 
-        $this->refreshFromSettings(WorkOrderDispatchSettingsModel::forTenant(auth()->user()->tenant_id));
+        $this->refreshFromSettings(WorkOrderDispatchSettingsModel::forTenant($this->tenantId()));
         $this->loadGroupState();
+        $this->syncGroupLabels();
+        $this->loadRoutes();
     }
 
     public function save(): void
@@ -75,50 +78,204 @@ class WorkOrderDispatchSettings extends Component
             'dispatchOffsetHours' => ['required', 'integer', 'min:1'],
             'reminderTime' => ['required', 'date_format:H:i'],
             'commandIntervalMinutes' => ['required', 'integer', 'min:1', 'max:60'],
-            'waGroupJid' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $settings = WorkOrderDispatchSettingsModel::forTenant(auth()->user()->tenant_id);
+        $settings = WorkOrderDispatchSettingsModel::forTenant($this->tenantId());
         $settings->update([
             'dispatch_offset_minutes' => $this->dispatchOffsetHours * 60,
             'reminder_time' => $this->reminderTime,
             'command_interval_minutes' => $this->commandIntervalMinutes,
-            'wa_group_jid' => $this->waGroupJid !== '' ? $this->waGroupJid : null,
-            // wa_group_name = cache nama untuk ditampilkan — dropdown
-            // sendiri yang menjaga kedua field ini sinkron lewat
-            // updatedWaGroupJid(), kosong kalau waGroupJid juga kosong.
-            'wa_group_name' => $this->waGroupJid !== '' ? $this->waGroupName : null,
         ]);
 
         $this->refreshFromSettings($settings->fresh());
 
-        session()->flash('status', 'Pengaturan Konfig WA Gateway berhasil disimpan.');
+        session()->flash('status', 'Pengaturan timing dispatch/reminder berhasil disimpan.');
     }
 
-    /**
-     * Dropdown dipilih — isi waGroupName dari opsi grup yang cocok
-     * (cache nama tampilan), TIDAK fetch ulang API. Kalau JID yang dipilih
-     * entah bagaimana tidak lagi ada di daftar saat ini (jarang — cache
-     * basi antara render awal dan klik), waGroupName dikosongkan supaya
-     * tidak menampilkan nama basi untuk JID yang mungkin sudah beda.
-     */
-    public function updatedWaGroupJid(): void
+    // ── Daftar Grup Notifikasi ─────────────────────────────────────────
+
+    public function updatedNewGroupJid(): void
     {
-        if ($this->waGroupJid === '' || $this->waGroupJid === null) {
-            $this->waGroupName = null;
+        if ($this->newGroupJid === '' || $this->newGroupJid === null) {
+            $this->newGroupLabel = null;
 
             return;
         }
 
-        $match = collect($this->groupOptions())->firstWhere('jid', $this->waGroupJid);
-        $this->waGroupName = $match['name'] ?? null;
+        // Prefill label dari nama grup bot yang dipilih (boleh diubah).
+        $match = collect($this->groupOptions())->firstWhere('jid', $this->newGroupJid);
+        $this->newGroupLabel = $match['name'] ?? $this->newGroupLabel;
     }
 
-    /**
-     * Tombol "Muat Ulang Daftar Grup" — bypass cache eksplisit.
-     */
+    public function addGroup(): void
+    {
+        $this->authorize('work_orders.manage');
+
+        $this->validate([
+            'newGroupJid' => ['required', 'string', 'max:255'],
+            'newGroupLabel' => ['required', 'string', 'max:255'],
+        ], [], ['newGroupJid' => 'grup', 'newGroupLabel' => 'label']);
+
+        // JID yang ditambah HARUS ada di daftar grup bot saat ini.
+        $jids = array_column($this->groupOptions(), 'jid');
+        if (! in_array($this->newGroupJid, $jids, true)) {
+            $this->addError('newGroupJid', 'Grup itu tidak ada di daftar grup bot. Muat Ulang daftar grup lalu coba lagi.');
+
+            return;
+        }
+
+        $tenantId = $this->tenantId();
+
+        $already = WhatsappNotificationGroup::query()
+            ->where('tenant_id', $tenantId)
+            ->where('jid', $this->newGroupJid)
+            ->exists();
+        if ($already) {
+            $this->addError('newGroupJid', 'Grup itu sudah ada di daftar grup notifikasi.');
+
+            return;
+        }
+
+        // Grup pertama tenant ini (sesi direct) otomatis jadi default.
+        $isFirst = ! WhatsappNotificationGroup::query()
+            ->where('tenant_id', $tenantId)
+            ->where('session_key', 'direct')
+            ->exists();
+
+        WhatsappNotificationGroup::create([
+            'tenant_id' => $tenantId,
+            'session_key' => 'direct',
+            'jid' => $this->newGroupJid,
+            'label' => $this->newGroupLabel,
+            'is_default' => $isFirst,
+            'is_active' => true,
+        ]);
+
+        $this->newGroupJid = null;
+        $this->newGroupLabel = null;
+        $this->syncGroupLabels();
+
+        session()->flash('status', 'Grup notifikasi ditambahkan.');
+    }
+
+    public function saveLabel(int $groupId): void
+    {
+        $this->authorize('work_orders.manage');
+
+        $group = $this->ownGroup($groupId);
+        if ($group === null) {
+            return;
+        }
+
+        $label = trim((string) ($this->groupLabels[$groupId] ?? ''));
+        if ($label === '') {
+            $this->addError('groupLabels.'.$groupId, 'Label tidak boleh kosong.');
+
+            return;
+        }
+
+        $group->update(['label' => $label]);
+        session()->flash('status', 'Label grup diperbarui.');
+    }
+
+    public function setDefault(int $groupId): void
+    {
+        $this->authorize('work_orders.manage');
+
+        $group = $this->ownGroup($groupId);
+        if ($group === null) {
+            return;
+        }
+
+        // Unset default lama DULU (partial unique index one-default), lalu set
+        // yang ini. Default wajib aktif.
+        DB::transaction(function () use ($group) {
+            WhatsappNotificationGroup::query()
+                ->where('tenant_id', $group->tenant_id)
+                ->where('session_key', 'direct')
+                ->where('id', '!=', $group->id)
+                ->update(['is_default' => false]);
+
+            $group->update(['is_default' => true, 'is_active' => true]);
+        });
+
+        session()->flash('status', "Grup \"{$group->label}\" dijadikan Default.");
+    }
+
+    public function toggleActive(int $groupId): void
+    {
+        $this->authorize('work_orders.manage');
+
+        $group = $this->ownGroup($groupId);
+        if ($group === null) {
+            return;
+        }
+
+        if ($group->is_active && $group->is_default && $this->otherGroupsExist($group)) {
+            session()->flash('error', 'Grup Default tidak bisa dinonaktifkan selama ada grup lain. Pilih Default baru dulu.');
+
+            return;
+        }
+
+        $group->update(['is_active' => ! $group->is_active]);
+        session()->flash('status', 'Status grup diperbarui.');
+    }
+
+    public function deleteGroup(int $groupId): void
+    {
+        $this->authorize('work_orders.manage');
+
+        $group = $this->ownGroup($groupId);
+        if ($group === null) {
+            return;
+        }
+
+        if ($group->is_default && $this->otherGroupsExist($group)) {
+            session()->flash('error', 'Grup Default tidak bisa dihapus selama ada grup lain. Pilih Default baru dulu.');
+
+            return;
+        }
+
+        // Routing yang menunjuk grup ini otomatis jadi null (nullOnDelete) →
+        // jatuh ke Default.
+        $group->delete();
+        $this->syncGroupLabels();
+        $this->loadRoutes();
+
+        session()->flash('status', 'Grup notifikasi dihapus.');
+    }
+
+    // ── Routing Notifikasi ─────────────────────────────────────────────
+
+    public function updatedRouteGroupId(mixed $value, string $category): void
+    {
+        $this->authorize('work_orders.manage');
+
+        if (! array_key_exists($category, WhatsappGroupCategory::labels())) {
+            return;
+        }
+
+        $groupId = ($value === '' || $value === null) ? null : (int) $value;
+
+        // Defense-in-depth: group_id harus milik tenant ini (sesi direct) &
+        // benar-benar ada; kalau tidak, anggap Default (null).
+        if ($groupId !== null && $this->ownGroup($groupId) === null) {
+            $groupId = null;
+            $this->routeGroupId[$category] = '';
+        }
+
+        WhatsappGroupRoute::updateOrCreate(
+            ['tenant_id' => $this->tenantId(), 'category' => $category],
+            ['group_id' => $groupId],
+        );
+
+        session()->flash('status', 'Routing notifikasi diperbarui.');
+    }
+
     public function reloadGroups(): void
     {
+        $this->authorize('work_orders.manage');
+
         Cache::forget($this->groupsCacheKey());
         $this->loadGroupState();
     }
@@ -126,13 +283,12 @@ class WorkOrderDispatchSettings extends Component
     public function render()
     {
         return view('livewire.settings.work-order-dispatch-settings', [
-            // Fetch/cache CUMA dipanggil kalau sesi genuinely connected —
-            // bug nyata ditemukan test (v0.26.4): versi awal method ini
-            // selalu memanggil groupOptions() tanpa syarat, jadi tetap
-            // menembak gateway (dan gagal dengan koneksi error) untuk
-            // tenant yang sesinya belum connected sama sekali, walau
-            // Blade view sendiri sudah benar tidak MENAMPILKAN hasilnya.
+            // Fetch/cache daftar grup bot CUMA kalau sesi connected (sama
+            // alasan v0.26.4 — hindari menembak gateway untuk sesi belum
+            // connected).
             'groupOptions' => $this->sessionConnected ? $this->groupOptions() : [],
+            'notificationGroups' => $this->notificationGroups(),
+            'categoryLabels' => WhatsappGroupCategory::labels(),
         ]);
     }
 
@@ -141,8 +297,66 @@ class WorkOrderDispatchSettings extends Component
         $this->dispatchOffsetHours = intdiv($settings->dispatch_offset_minutes, 60);
         $this->reminderTime = $settings->reminder_time;
         $this->commandIntervalMinutes = $settings->command_interval_minutes;
-        $this->waGroupName = $settings->wa_group_name;
-        $this->waGroupJid = $settings->wa_group_jid;
+    }
+
+    private function tenantId(): int
+    {
+        return auth()->user()->tenant_id;
+    }
+
+    /**
+     * Grup sesi 'direct' milik tenant ini — default dulu, lalu label.
+     *
+     * @return Collection<int, WhatsappNotificationGroup>
+     */
+    private function notificationGroups()
+    {
+        return WhatsappNotificationGroup::query()
+            ->where('tenant_id', $this->tenantId())
+            ->where('session_key', 'direct')
+            ->orderByDesc('is_default')
+            ->orderBy('label')
+            ->get();
+    }
+
+    private function ownGroup(int $groupId): ?WhatsappNotificationGroup
+    {
+        return WhatsappNotificationGroup::query()
+            ->where('tenant_id', $this->tenantId())
+            ->where('session_key', 'direct')
+            ->whereKey($groupId)
+            ->first();
+    }
+
+    private function otherGroupsExist(WhatsappNotificationGroup $group): bool
+    {
+        return WhatsappNotificationGroup::query()
+            ->where('tenant_id', $group->tenant_id)
+            ->where('session_key', 'direct')
+            ->where('id', '!=', $group->id)
+            ->exists();
+    }
+
+    private function syncGroupLabels(): void
+    {
+        $this->groupLabels = $this->notificationGroups()
+            ->mapWithKeys(fn (WhatsappNotificationGroup $g) => [$g->id => $g->label])
+            ->all();
+    }
+
+    private function loadRoutes(): void
+    {
+        $existing = WhatsappGroupRoute::query()
+            ->where('tenant_id', $this->tenantId())
+            ->pluck('group_id', 'category');
+
+        $routes = [];
+        foreach (array_keys(WhatsappGroupCategory::labels()) as $category) {
+            $groupId = $existing[$category] ?? null;
+            $routes[$category] = $groupId === null ? '' : (string) $groupId;
+        }
+
+        $this->routeGroupId = $routes;
     }
 
     /**
@@ -159,23 +373,12 @@ class WorkOrderDispatchSettings extends Component
 
     private function groupsCacheKey(): string
     {
-        return 'whatsapp:groups:tenant:'.auth()->user()->tenant_id;
+        return 'whatsapp:groups:tenant:'.$this->tenantId();
     }
 
-    /**
-     * Sesi "direct" tenant ini — settings ini per-tenant (bukan
-     * per-reseller), sama posture kolom wa_group_jid/wa_group_name sendiri.
-     * Set sessionConnected/groupsLoadFailed di sini (bukan properti hasil
-     * closure Cache::remember() — flag status TIDAK ikut ter-cache, harus
-     * selalu mencerminkan kondisi NYATA saat render ini, bukan status dari
-     * 15 menit lalu).
-     */
     private function loadGroupState(): void
     {
-        $session = WhatsappSession::withoutGlobalScopes()
-            ->where('tenant_id', auth()->user()->tenant_id)
-            ->whereNull('reseller_id')
-            ->first();
+        $session = $this->directSession();
 
         $this->sessionConnected = $session !== null && $session->status === WhatsappSessionStatus::Connected;
 
@@ -185,8 +388,7 @@ class WorkOrderDispatchSettings extends Component
             return;
         }
 
-        $groups = $this->groupOptions();
-        $this->groupsLoadFailed = $groups === [];
+        $this->groupsLoadFailed = $this->groupOptions() === [];
     }
 
     /**
@@ -194,15 +396,20 @@ class WorkOrderDispatchSettings extends Component
      */
     private function fetchGroupsFromGateway(): array
     {
-        $session = WhatsappSession::withoutGlobalScopes()
-            ->where('tenant_id', auth()->user()->tenant_id)
-            ->whereNull('reseller_id')
-            ->first();
+        $session = $this->directSession();
 
         if ($session === null) {
             return [];
         }
 
         return app(WhatsappSessionService::class)->listGroups($session);
+    }
+
+    private function directSession(): ?WhatsappSession
+    {
+        return WhatsappSession::withoutGlobalScopes()
+            ->where('tenant_id', $this->tenantId())
+            ->whereNull('reseller_id')
+            ->first();
     }
 }

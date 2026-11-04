@@ -3,7 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Enums\TechnicianStatus;
+use App\Enums\WorkOrderStatus;
 use App\Exceptions\WorkOrderAlreadyClaimedException;
+use App\Exceptions\WorkOrderNotClaimableException;
+use App\Http\Controllers\Concerns\BuildsWorkOrderStatusCards;
 use App\Models\Technician;
 use App\Models\ToolType;
 use App\Models\WorkOrder;
@@ -26,48 +29,50 @@ use InvalidArgumentException;
  * Lookup manual (bukan implicit route-model-binding) — supaya 404 untuk
  * WO/teknisi yang tidak ada memberi pesan jelas, terpisah dari 403 generik
  * middleware 'signed' untuk signature kedaluwarsa/tidak valid.
+ *
+ * v0.13.4.5 — halaman sadar status: WO terminal (SELESAI/DIBATALKAN) atau
+ * sudah diambil teknisi lain menampilkan KARTU status (bukan form); WO yang
+ * sudah diklaim teknisi INI menampilkan identitas + tombol lanjut aktivasi.
  */
 class WorkOrderClaimController extends Controller
 {
+    use BuildsWorkOrderStatusCards;
+
+    private const PAGE_TITLE = 'Klaim Work Order';
+
     public function show(Request $request, int $work_order, int $technician): View
     {
         [$workOrder, $claimingTechnician] = $this->resolveOrAbort($work_order, $technician);
 
-        if ($workOrder->claimed_at !== null) {
-            return view('work-orders.claim', $this->alreadyClaimedViewData($workOrder, $claimingTechnician));
+        if ($card = $this->statusCardForClaim($workOrder, $claimingTechnician)) {
+            return $card;
         }
 
-        return view('work-orders.claim', [
-            'workOrder' => $workOrder,
-            'claimingTechnician' => $claimingTechnician,
-            'partnerOptions' => $this->partnerOptions($workOrder, $claimingTechnician),
-            'toolTypes' => ToolType::query()
-                ->where('tenant_id', $workOrder->tenant_id)
-                ->where('is_active', true)
-                ->orderBy('name')
-                ->get(),
-            'submitted' => false,
-            'alreadyClaimed' => false,
-        ]);
+        if ($workOrder->claimed_at !== null) {
+            // Sudah diklaim oleh teknisi INI (claimed-by-other sudah ditangani
+            // di statusCardForClaim di atas) — tampilkan identitas + tombol
+            // lanjut aktivasi, bukan form kosong lagi.
+            return view('work-orders.claim', $this->claimedByMeViewData($workOrder, $claimingTechnician));
+        }
+
+        return view('work-orders.claim', $this->availableViewData($workOrder, $claimingTechnician));
     }
 
     public function submit(Request $request, int $work_order, int $technician): View
     {
         [$workOrder, $claimingTechnician] = $this->resolveOrAbort($work_order, $technician);
 
-        // Link lama (atau link baru dari reminder) yang masih valid tapi
-        // WO-nya sudah diklaim orang lain lebih dulu — tampilkan read-only,
-        // JANGAN proses form (data tidak pernah disentuh untuk kasus ini).
-        if ($workOrder->claimed_at !== null) {
-            return view('work-orders.claim', $this->alreadyClaimedViewData($workOrder, $claimingTechnician));
+        // Defense in depth: WO terminal / diambil orang lain tidak pernah
+        // diproses — tampilkan kartu status, bukan menyentuh data.
+        if ($card = $this->statusCardForClaim($workOrder, $claimingTechnician)) {
+            return $card;
         }
 
-        $partnerOptions = $this->partnerOptions($workOrder, $claimingTechnician);
-        $toolTypes = ToolType::query()
-            ->where('tenant_id', $workOrder->tenant_id)
-            ->where('is_active', true)
-            ->orderBy('name')
-            ->get();
+        if ($workOrder->claimed_at !== null) {
+            // Sudah diklaim teknisi INI (mis. buka ulang/double submit) —
+            // read-only identitas + aktivasi, bukan proses ulang.
+            return view('work-orders.claim', $this->claimedByMeViewData($workOrder, $claimingTechnician));
+        }
 
         $validated = $request->validate([
             'partner_ids' => ['array'],
@@ -90,36 +95,57 @@ class WorkOrderClaimController extends Controller
                 $validated['tools'] ?? [],
                 $validated['modems'] ?? [],
             );
+        } catch (WorkOrderNotClaimableException) {
+            // Race: WO jadi terminal (Completed/Cancelled) antara GET dan POST.
+            $workOrder->refresh();
+
+            return $workOrder->status === WorkOrderStatus::Cancelled
+                ? $this->cancelledCard($workOrder, self::PAGE_TITLE)
+                : $this->completedCard($workOrder, self::PAGE_TITLE);
         } catch (WorkOrderAlreadyClaimedException) {
-            // Race condition: request lain berhasil klaim duluan di antara
-            // GET form ditampilkan dan POST submit ini diproses — service
-            // sudah menolaknya lewat row lock, tampilkan read-only, bukan
-            // pesan error generik (data request ini tidak pernah tersimpan).
-            return view('work-orders.claim', $this->alreadyClaimedViewData($workOrder, $claimingTechnician));
+            // Race: teknisi lain berhasil klaim duluan di antara GET form dan
+            // POST ini — tampilkan kartu "sudah diambil", data tidak pernah
+            // tersimpan (row lock di service menolaknya).
+            return $this->claimedByOtherCard($workOrder->refresh(), self::PAGE_TITLE);
         } catch (InvalidArgumentException $e) {
-            return view('work-orders.claim', [
-                'workOrder' => $workOrder,
-                'claimingTechnician' => $claimingTechnician,
-                'partnerOptions' => $partnerOptions,
-                'toolTypes' => $toolTypes,
-                'submitted' => false,
-                'alreadyClaimed' => false,
-                'submitError' => $e->getMessage(),
-            ]);
+            $data = $this->availableViewData($workOrder, $claimingTechnician);
+            $data['submitError'] = $e->getMessage();
+
+            return view('work-orders.claim', $data);
         }
 
         return view('work-orders.claim', [
+            'state' => 'submitted',
             'workOrder' => $workOrder,
             'claimingTechnician' => $claimingTechnician,
-            'partnerOptions' => $partnerOptions,
-            'toolTypes' => $toolTypes,
-            'submitted' => true,
-            'alreadyClaimed' => false,
             // v0.13.4.2.2 — tombol lanjut AKTIVASI di halaman sukses klaim.
-            // Teknisi yang baru sukses klaim PASTI pengklaim, jadi link selalu
-            // relevan di sini.
+            // Teknisi yang baru sukses klaim PASTI pengklaim.
             'activationUrl' => $this->activationUrlFor($workOrder, $claimingTechnician),
         ]);
+    }
+
+    /**
+     * Kartu status untuk state yang BUKAN form/claimed-by-me: terminal
+     * (SELESAI/DIBATALKAN) atau sudah diambil teknisi LAIN. null = lanjut ke
+     * form / claimed-by-me. Terminal didahulukan (Completed selalu juga
+     * ter-claim, tapi harus tampil "SELESAI" bukan "sudah diambil").
+     */
+    private function statusCardForClaim(WorkOrder $workOrder, Technician $claimingTechnician): ?View
+    {
+        if ($workOrder->status === WorkOrderStatus::Completed) {
+            return $this->completedCard($workOrder, self::PAGE_TITLE);
+        }
+
+        if ($workOrder->status === WorkOrderStatus::Cancelled) {
+            return $this->cancelledCard($workOrder, self::PAGE_TITLE);
+        }
+
+        if ($workOrder->claimed_at !== null
+            && (int) $workOrder->claimed_by_technician_id !== (int) $claimingTechnician->id) {
+            return $this->claimedByOtherCard($workOrder, self::PAGE_TITLE);
+        }
+
+        return null;
     }
 
     /**
@@ -139,10 +165,27 @@ class WorkOrderClaimController extends Controller
     /**
      * @return array<string, mixed>
      */
-    private function alreadyClaimedViewData(WorkOrder $workOrder, Technician $claimingTechnician): array
+    private function availableViewData(WorkOrder $workOrder, Technician $claimingTechnician): array
+    {
+        return [
+            'state' => 'available',
+            'workOrder' => $workOrder,
+            'claimingTechnician' => $claimingTechnician,
+            'partnerOptions' => $this->partnerOptions($workOrder, $claimingTechnician),
+            'toolTypes' => ToolType::query()
+                ->where('tenant_id', $workOrder->tenant_id)
+                ->where('is_active', true)
+                ->orderBy('name')
+                ->get(),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function claimedByMeViewData(WorkOrder $workOrder, Technician $claimingTechnician): array
     {
         $workOrder->loadMissing([
-            'claimedByTechnician',
             'claimPartners',
             'toolUsages.toolType',
             'toolUsages.technician',
@@ -150,16 +193,10 @@ class WorkOrderClaimController extends Controller
         ]);
 
         return [
+            'state' => 'claimed_by_me',
             'workOrder' => $workOrder,
             'claimingTechnician' => $claimingTechnician,
-            'submitted' => false,
-            'alreadyClaimed' => true,
-            // v0.13.4.2.2 — tombol AKTIVASI di halaman read-only HANYA kalau
-            // teknisi yang membuka link ini genuinely pengklaim WO (bukan
-            // teknisi lain yang link-nya tiba belakangan).
-            'activationUrl' => (int) $workOrder->claimed_by_technician_id === (int) $claimingTechnician->id
-                ? $this->activationUrlFor($workOrder, $claimingTechnician)
-                : null,
+            'activationUrl' => $this->activationUrlFor($workOrder, $claimingTechnician),
         ];
     }
 

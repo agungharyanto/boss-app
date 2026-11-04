@@ -2,7 +2,9 @@
 
 namespace App\Services\Installation;
 
+use App\Enums\WorkOrderStatus;
 use App\Exceptions\WorkOrderAlreadyClaimedException;
+use App\Exceptions\WorkOrderNotClaimableException;
 use App\Models\Technician;
 use App\Models\ToolType;
 use App\Models\WorkOrder;
@@ -101,6 +103,16 @@ class WorkOrderClaimService
 
             if ($locked === null) {
                 throw new InvalidArgumentException('Work Order tidak ditemukan.');
+            }
+
+            // v0.13.4.5 — tutup celah: WO terminal (Completed/Cancelled) tidak
+            // boleh diklaim via web, samakan dengan jalur API
+            // WorkOrderService::claim(). Dicek di dalam lock yang sama (bukan
+            // hanya di controller) agar race-safe. Didahulukan sebelum cek
+            // claimed_at supaya Completed menampilkan kartu "SELESAI", bukan
+            // "sudah diambil".
+            if (in_array($locked->status, [WorkOrderStatus::Completed, WorkOrderStatus::Cancelled], true)) {
+                throw new WorkOrderNotClaimableException($locked->status);
             }
 
             if ($locked->claimed_at !== null) {

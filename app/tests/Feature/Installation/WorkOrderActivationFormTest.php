@@ -98,12 +98,45 @@ class WorkOrderActivationFormTest extends TestCase
             ->assertSee('name="wifi_password"', false);
     }
 
-    public function test_a_non_claimer_technician_is_rejected(): void
+    public function test_a_non_claimer_technician_sees_a_claimed_by_other_card_not_the_form(): void
     {
+        // v0.13.4.5 — teknisi lain (punya signed-link valid sendiri, tapi
+        // bukan pengklaim) melihat kartu "sudah diambil", BUKAN 403 kosong
+        // dan BUKAN form aktivasi.
         [$wo] = $this->claimedWorkOrder();
         $other = Technician::factory()->create(['tenant_id' => $wo->tenant_id]);
 
-        $this->get($this->showUrl($wo, $other))->assertForbidden();
+        $this->get($this->showUrl($wo, $other))
+            ->assertOk()
+            ->assertSee('sudah diambil')
+            ->assertDontSee('name="ssid"', false);
+    }
+
+    public function test_tampered_signature_for_another_technician_stays_403(): void
+    {
+        // v0.13.4.5 — otorisasi TIDAK dilonggarkan: mengganti technician_id di
+        // URL tanpa regen signature tetap ditolak middleware 'signed' (403).
+        [$wo, $tech] = $this->claimedWorkOrder();
+        $other = Technician::factory()->create(['tenant_id' => $wo->tenant_id]);
+
+        $tampered = str_replace("/{$tech->id}", "/{$other->id}", $this->showUrl($wo, $tech));
+
+        $this->get($tampered)->assertForbidden();
+    }
+
+    public function test_submit_by_a_non_claimer_is_rejected_server_side(): void
+    {
+        // Defense in depth: POST oleh teknisi lain (link valid sendiri) tidak
+        // pernah mengaktivasi — kartu "sudah diambil", status WO tak berubah.
+        $this->fakeTier();
+        [$wo] = $this->claimedWorkOrder();
+        $other = Technician::factory()->create(['tenant_id' => $wo->tenant_id]);
+
+        $this->post($this->showUrl($wo, $other), [
+            'customer_name' => 'Budi Santoso', 'ssid' => 'RUMAH', 'wifi_password' => 'rahasia123',
+        ])->assertOk()->assertSee('sudah diambil');
+
+        $this->assertSame(WorkOrderStatus::Ready, $wo->fresh()->status);
     }
 
     public function test_submit_with_matching_name_activates_and_defers_wifi_when_onu_offline(): void

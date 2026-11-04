@@ -7,6 +7,7 @@ use App\Enums\WorkOrderPhotoType;
 use App\Enums\WorkOrderStatus;
 use App\Exceptions\InvalidWorkOrderStatusTransitionException;
 use App\Exceptions\WorkOrderCloseException;
+use App\Http\Controllers\Concerns\BuildsWorkOrderStatusCards;
 use App\Models\Customer;
 use App\Models\Technician;
 use App\Models\WorkOrder;
@@ -20,18 +21,36 @@ use Illuminate\View\View;
 /**
  * v0.13.4.3.1 — Tutup WO via signed-link (tahap-3 setelah klaim+aktivasi).
  * Route public-facing TANPA login (middleware 'signed'+'throttle:20,1' di
- * routes/web.php) — signature = otorisasi, HANYA teknisi PENGKLAIM. Gerbang
- * keras ONU online + WiFi terkirim + guard nama + tanda tangan ada di
- * WorkOrderCloseService (BOSS-005); controller tipis.
+ * routes/web.php) — signature = otorisasi. Gerbang keras ONU online + WiFi
+ * terkirim + guard nama + tanda tangan ada di WorkOrderCloseService
+ * (BOSS-005); controller tipis.
+ *
+ * v0.13.4.5 — halaman sadar status. Otorisasi TIDAK dilonggarkan: signature
+ * di-tamper tetap 403 (middleware), teknisi tak dikenal 404. Yang BERUBAH: WO
+ * terminal (SELESAI/DIBATALKAN), belum diklaim, diklaim teknisi LAIN, atau
+ * belum diaktivasi (belum InProgress) kini menampilkan KARTU status yang jelas
+ * alih-alih 403/form. Submit pada status tak valid tetap ditolak di server:
+ * terminal/belum-diklaim/diklaim-lain lewat kartu guard, dan "belum InProgress"
+ * tetap ditolak gerbang WorkOrderCloseService ("tidak bisa ditutup").
  */
 class WorkOrderCloseController extends Controller
 {
+    use BuildsWorkOrderStatusCards;
+
+    private const PAGE_TITLE = 'Penutupan Work Order';
+
     public function show(Request $request, int $work_order, int $technician): View|RedirectResponse
     {
         [$workOrder, $claimer] = $this->resolveOrAbort($work_order, $technician);
 
-        if ($workOrder->status === WorkOrderStatus::Completed) {
-            return $this->statusView($workOrder, $claimer);
+        if ($card = $this->closeGuardCard($workOrder, $claimer)) {
+            return $card;
+        }
+
+        // Diklaim teknisi INI, non-terminal, tapi belum diaktivasi -> kartu
+        // "belum bisa ditutup" + tombol lanjut aktivasi (hanya pengklaim).
+        if ($workOrder->status !== WorkOrderStatus::InProgress) {
+            return $this->notActivatedCard($workOrder, self::PAGE_TITLE, $this->activationUrlFor($workOrder, $claimer));
         }
 
         return view('work-orders.close', $this->formViewData($workOrder, $claimer));
@@ -41,9 +60,13 @@ class WorkOrderCloseController extends Controller
     {
         [$workOrder, $claimer] = $this->resolveOrAbort($work_order, $technician);
 
-        // Idempoten: sudah ditutup -> halaman status, bukan proses ulang/error.
-        if ($workOrder->status === WorkOrderStatus::Completed) {
-            return $this->statusView($workOrder, $claimer);
+        // Defense in depth: terminal / belum diklaim / diklaim teknisi lain
+        // ditolak lewat kartu guard (termasuk idempoten Completed -> kartu
+        // SELESAI). "Belum InProgress" sengaja TIDAK dicegat di sini —
+        // dibiarkan jatuh ke gerbang WorkOrderCloseService yang menolaknya
+        // ("tidak bisa ditutup"), tetap ditolak di server.
+        if ($card = $this->closeGuardCard($workOrder, $claimer)) {
+            return $card;
         }
 
         // v0.13.4.3.2 — hanya JPG/PNG (WebP di-drop: gagal di whitelist media
@@ -90,13 +113,59 @@ class WorkOrderCloseController extends Controller
         return $this->statusView($workOrder, $claimer);
     }
 
+    /**
+     * Kartu status untuk state yang bukan form: terminal (SELESAI/DIBATALKAN),
+     * belum diklaim, atau diklaim teknisi LAIN. null = diklaim teknisi INI &
+     * non-terminal (lanjut ke form / kartu "belum diaktivasi").
+     */
+    private function closeGuardCard(WorkOrder $workOrder, Technician $claimer): ?View
+    {
+        if ($workOrder->status === WorkOrderStatus::Completed) {
+            return $this->completedCard($workOrder, self::PAGE_TITLE);
+        }
+
+        if ($workOrder->status === WorkOrderStatus::Cancelled) {
+            return $this->cancelledCard($workOrder, self::PAGE_TITLE);
+        }
+
+        if ($workOrder->claimed_at === null) {
+            return $this->notClaimedCard(
+                $workOrder,
+                self::PAGE_TITLE,
+                "WO #{$workOrder->id} belum diambil teknisi mana pun — penutupan hanya tersedia setelah WO diklaim & diaktivasi.",
+            );
+        }
+
+        if ((int) $workOrder->claimed_by_technician_id !== (int) $claimer->id) {
+            return $this->claimedByOtherCard($workOrder, self::PAGE_TITLE);
+        }
+
+        return null;
+    }
+
     private function statusView(WorkOrder $workOrder, Technician $claimer): View
     {
+        if ($workOrder->status === WorkOrderStatus::Completed) {
+            return $this->completedCard($workOrder, self::PAGE_TITLE);
+        }
+
+        if ($workOrder->status === WorkOrderStatus::Cancelled) {
+            return $this->cancelledCard($workOrder, self::PAGE_TITLE);
+        }
+
         return view('work-orders.close-status', [
             'workOrder' => $workOrder,
             'claimingTechnician' => $claimer,
-            'completed' => $workOrder->status === WorkOrderStatus::Completed,
         ]);
+    }
+
+    private function activationUrlFor(WorkOrder $workOrder, Technician $claimer): string
+    {
+        return URL::temporarySignedRoute(
+            'work-orders.activate.show',
+            now()->addDays(2),
+            ['work_order' => $workOrder->id, 'technician' => $claimer->id],
+        );
     }
 
     /**
@@ -141,6 +210,10 @@ class WorkOrderCloseController extends Controller
     }
 
     /**
+     * Resolve WO + teknisi; abort 404 kalau tidak ada. Cek klaim/pengklaim
+     * TIDAK lagi abort 403 di sini — dipindah ke closeGuardCard sebagai kartu
+     * status (v0.13.4.5). Otorisasi inti (signature) tetap di middleware.
+     *
      * @return array{0: WorkOrder, 1: Technician}
      */
     private function resolveOrAbort(int $workOrderId, int $technicianId): array
@@ -153,13 +226,6 @@ class WorkOrderCloseController extends Controller
             ->where('tenant_id', $workOrder->tenant_id)
             ->first();
         abort_if($technician === null, 404, 'Teknisi tidak ditemukan untuk Work Order ini.');
-
-        abort_if($workOrder->claimed_at === null, 403, 'Work Order ini belum diklaim.');
-        abort_if(
-            (int) $workOrder->claimed_by_technician_id !== (int) $technician->id,
-            403,
-            'Penutupan hanya boleh dilakukan oleh teknisi yang mengklaim Work Order ini.'
-        );
 
         return [$workOrder, $technician];
     }

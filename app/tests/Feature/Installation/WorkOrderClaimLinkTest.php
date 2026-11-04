@@ -213,10 +213,13 @@ class WorkOrderClaimLinkTest extends TestCase
 
         // Submit KEDUA ke link yang SAMA (masih valid secara signature,
         // belum expired) — harus ditolak, TIDAK menghasilkan row kedua.
+        // v0.13.4.5 — submit kedua oleh teknisi yang SAMA menampilkan state
+        // "sudah Anda klaim" (identitas + lanjut aktivasi), read-only; data
+        // tidak diproses ulang (tool usage tetap 1).
         $response = $this->post($url, $payload);
         $response->assertOk();
         $response->assertDontSee('Klaim berhasil dicatat');
-        $response->assertSee('sudah diklaim');
+        $response->assertSee('sudah Anda klaim');
 
         $this->assertSame(1, WorkOrderToolUsage::where('work_order_id', $wo->id)->count());
     }
@@ -241,10 +244,11 @@ class WorkOrderClaimLinkTest extends TestCase
         // form kosong yang seolah masih bisa diisi.
         $response = $this->get($this->signedClaimUrl($wo, $secondTechnician));
 
+        // v0.13.4.5 — kartu status "sudah diambil oleh X", bukan form.
         $response->assertOk();
-        $response->assertSee('sudah diklaim');
+        $response->assertSee('sudah diambil');
         $response->assertSee('Teknisi Pertama');
-        $response->assertDontSee('Kirim Klaim');
+        $response->assertDontSee('Ambil WO ini');
     }
 
     public function test_get_after_claimed_shows_partners_tools_and_modems_already_recorded(): void

@@ -117,12 +117,29 @@ class WorkOrderCloseFormTest extends TestCase
             ['work_order' => $wo->id, 'technician' => $tech->id]);
     }
 
-    public function test_non_claimer_technician_is_rejected(): void
+    public function test_a_non_claimer_technician_sees_a_claimed_by_other_card_not_the_form(): void
     {
+        // v0.13.4.5 — teknisi lain (signed-link valid sendiri, bukan
+        // pengklaim) melihat kartu "sudah diambil", BUKAN 403 dan BUKAN form.
         [$wo] = $this->makeWorkOrder();
         $other = Technician::factory()->create(['tenant_id' => $wo->tenant_id]);
 
-        $this->get($this->showUrl($wo, $other))->assertForbidden();
+        $this->get($this->showUrl($wo, $other))
+            ->assertOk()
+            ->assertSee('sudah diambil')
+            ->assertDontSee('name="signature"', false);
+    }
+
+    public function test_tampered_signature_for_another_technician_stays_403(): void
+    {
+        // v0.13.4.5 — otorisasi inti tetap di middleware 'signed': mengubah
+        // technician_id tanpa regen signature tetap 403.
+        [$wo, $tech] = $this->makeWorkOrder();
+        $other = Technician::factory()->create(['tenant_id' => $wo->tenant_id]);
+
+        $tampered = str_replace("/{$tech->id}", "/{$other->id}", $this->showUrl($wo, $tech));
+
+        $this->get($tampered)->assertForbidden();
     }
 
     public function test_gate_blocks_server_side_when_onu_not_ready(): void
@@ -328,12 +345,13 @@ class WorkOrderCloseFormTest extends TestCase
         ])->assertRedirect();
         $this->assertSame(WorkOrderStatus::Completed, $wo->fresh()->status);
 
-        // Submit kedua -> halaman status (Completed), bukan error/500.
+        // Submit kedua -> kartu status SELESAI (seragam v0.13.4.5), bukan
+        // error/500 dan bukan proses ulang.
         $this->post($this->showUrl($wo, $tech), [
             'customer_name' => 'Budi Santoso',
             'signature' => $this->signatureDataUri(),
             'photos' => $this->sixPhotos(),
-        ])->assertOk()->assertSee('sudah ditutup');
+        ])->assertOk()->assertSee('Work Order Selesai');
 
         $this->assertSame(1, WorkOrderSignature::where('work_order_id', $wo->id)->count());
     }

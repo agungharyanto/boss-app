@@ -9353,6 +9353,70 @@ rebuild gateway** — endpoint `/send-group-media` sudah ada sejak v0.13.5.1.
 - **Backup `pg_dump` SEBELUM migrasi/cleanup**; bersihkan data uji lewat FK (anak dulu) dalam **satu
   transaksi** (gagal = rollback), lalu hapus file disk privat milik WO itu saja.
 
+## Halaman Klaim/Aktivasi/Tutup WO Sadar Status (v0.13.4.5 — SELESAI, merged `develop`→`main`, tag `v0.13.4.5`)
+
+Halaman signed-link publik WO (klaim/aktivasi/tutup) jadi SADAR STATUS: status terminal / tak-workable
+menampilkan **kartu status** yang jelas, bukan form yang menyesatkan atau 403 kosong.
+
+**Satu sumber kebenaran kartu** = trait `App\Http\Controllers\Concerns\BuildsWorkOrderStatusCards`
+(`completedCard`/`cancelledCard`/`claimedByOtherCard`/`notClaimedCard`/`notActivatedCard`), semua render
+`view('work-orders.status-page')` → partial `work-orders/partials/wo-status-card`. Layout publik bersama
+`layouts/wo-public` (doctype+vite+`@livewireScripts`, `@stack('head')`/`@stack('scripts')`) dipakai claim +
+activate-status + close-status + status-page (form `activate.blade`/`close.blade` SENGAJA tidak dimigrasi —
+hanya header/kartu). Header identitas state "tersedia" = `work-orders/partials/wo-identity-header` (nomor WO,
+jadwal `->locale('id')->translatedFormat(...)` zona app Asia/Jakarta, nama pelanggan BESAR, alamat, paket —
+**TANPA telepon pelanggan & username PPPoE**, dijaga test `assertDontSee(phone)` di semua halaman).
+
+**Matriks status × link (terimplementasi):**
+
+| Status | claim.show | activate.show | close.show |
+|---|---|---|---|
+| pending/ready/assigned, belum diklaim | **form** ("Ambil WO ini") | kartu "belum diambil" | kartu "belum diambil" |
+| diklaim teknisi LAIN | kartu "sudah diambil oleh X, jam" | kartu "sudah diambil" | kartu "sudah diambil" |
+| diklaim teknisi INI, belum InProgress | identitas + "Lanjut Aktivasi Pelanggan" | **form aktivasi** | kartu "Belum Bisa Ditutup" + tombol ke aktivasi |
+| in_progress (diklaim INI) | identitas + lanjut aktivasi | halaman status aktivasi | **form tutup** |
+| completed | kartu "Work Order Selesai" oleh X, jam | kartu SELESAI | kartu SELESAI (seragam) |
+| cancelled | kartu "Work Order Dibatalkan" | kartu DIBATALKAN | kartu DIBATALKAN |
+
+**ATURAN KUNCI — otorisasi TIDAK dilonggarkan.** Signature tidak sah / di-tamper tetap **403** (middleware
+`signed`), teknisi tak dikenal di tenant tetap **404** (`resolveOrAbort`, kini HANYA 404). Yang pindah dari
+`abort 403`→kartu: "belum diklaim" & "diklaim teknisi lain" — keduanya pemegang signed-link VALID untuk
+dirinya, kartu read-only bukan celah. **Status terminal (Completed/Cancelled) selalu kartu, tidak pernah
+form.** **Submit pada status tak valid tetap ditolak di server** (defense in depth): terminal/belum-diklaim/
+diklaim-lain lewat kartu guard; "belum InProgress" pada close dibiarkan jatuh ke gerbang
+`WorkOrderCloseService` (tetap menolak "tidak bisa ditutup").
+
+**Celah klaim WO terminal ditutup:** `WorkOrderClaimService::submit()` (jalur WEB) kini menolak
+Completed/Cancelled **di dalam transaksi yang sama dengan `lockForUpdate`** (race-safe, didahulukan sebelum
+cek `claimed_at` agar Completed→kartu SELESAI bukan "sudah diambil") → `WorkOrderNotClaimableException`
+(ditangkap controller, bukan endpoint JSON). Sebelumnya jalur web hanya cek `claimed_at`, beda dari API
+`WorkOrderService::claim()` yang sudah menolak terminal.
+
+**Pengaman "ketik nama pelanggan persis" di aktivasi & tutup TETAP** (regression test wajib). Alpine factory
+`claimForm` tetap inline di `claim.blade` (`FrontendBuildTest` lulus via jalur inline-register, lihat
+amendment v0.13.4.1.1). Tombol submit klaim kini berlabel "Ambil WO ini" (dulu "Kirim Klaim"). Tanpa migrasi/
+`.env`/rebuild gateway. Test: `WorkOrderStatusAwarePagesTest` (matriks penuh + telepon-tak-bocor + penolakan
+service web + tamper 403), plus update `WorkOrderClaimLinkTest`/`WorkOrderActivationFormTest`/
+`WorkOrderCloseFormTest` (403→kartu, teks kartu baru).
+
+**PELAJARAN pola uji (v0.13.4.5, 2026-11-04 — berlaku untuk uji WO/WA berikutnya):**
+- **Jangan membuat TENANT baru untuk uji tanpa diminta.** Uji v0.13.4.5 membuat tenant uji terisolasi
+  (`TEST - Uji v0.13.4.5`, id 53) — berhasil & aman, TAPI membuat tenant menyeret turunan tak terduga:
+  selain customer/subscription/WO/teknisi, muncul juga 1 baris `work_order_dispatch_settings` (auto per
+  tenant oleh command `work-orders:dispatch`) dan 1 `customer_timeline_entries` (observer Customer). Bila
+  memang perlu tenant baru, **catat di instruksi** dan **bersihkan SEMUA turunannya** — petakan lewat
+  `information_schema` (semua tabel ber-`tenant_id`) + tabel anak WO/customer/subscription, JANGAN hanya
+  hapus baris yang sengaja dibuat. Cleanup dilakukan dalam SATU transaksi FK-ordered (anak dulu), dengan
+  hitung baris sebelum/sesudah + guard `whatsapp_message_logs` tidak berubah & data nyata (571/572/573) utuh.
+- **Buktikan filter dispatch/reminder SEBELUM membuat WO uji berstatus diklaim.** `scheduled_at = now+1
+  tahun` + `dispatched_at = NULL` adalah invarian kunci: `runDispatchCycle` Kasus 1 butuh `scheduled_at <=
+  now+offset` (offset 120 mnt ≪ 525.600 mnt), Kasus 2 butuh `scheduled_at NULL`; `runReminderCycle` butuh
+  `dispatched_at NOT NULL`. Jalankan QUERY filter itu (bukan command) dan buktikan 0 match sebelum lanjut —
+  supaya WO uji tidak pernah memicu WA ke grup produksi (yang saat ini Default untuk semua kategori).
+- **Verifikasi halaman publik sadar-status via GET read-only** (12 link signed `URL::temporarySignedRoute`
+  2 hari, curl HTTP 200) — GET claim/activate/close tidak menulis apa pun (satu-satunya potensi tulis,
+  `renderedTerms→activeOrSeedDefault` di close, hanya pada path form InProgress yang tak tersentuh state uji).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

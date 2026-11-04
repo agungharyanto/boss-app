@@ -9353,7 +9353,7 @@ rebuild gateway** — endpoint `/send-group-media` sudah ada sejak v0.13.5.1.
 - **Backup `pg_dump` SEBELUM migrasi/cleanup**; bersihkan data uji lewat FK (anak dulu) dalam **satu
   transaksi** (gagal = rollback), lalu hapus file disk privat milik WO itu saja.
 
-## Halaman Klaim/Aktivasi/Tutup WO Sadar Status (v0.13.4.5 — branch `v0.13.4.5-klaim-sadar-status`, belum merge/tag)
+## Halaman Klaim/Aktivasi/Tutup WO Sadar Status (v0.13.4.5 — SELESAI, merged `develop`→`main`, tag `v0.13.4.5`)
 
 Halaman signed-link publik WO (klaim/aktivasi/tutup) jadi SADAR STATUS: status terminal / tak-workable
 menampilkan **kartu status** yang jelas, bukan form yang menyesatkan atau 403 kosong.
@@ -9398,6 +9398,24 @@ amendment v0.13.4.1.1). Tombol submit klaim kini berlabel "Ambil WO ini" (dulu "
 `.env`/rebuild gateway. Test: `WorkOrderStatusAwarePagesTest` (matriks penuh + telepon-tak-bocor + penolakan
 service web + tamper 403), plus update `WorkOrderClaimLinkTest`/`WorkOrderActivationFormTest`/
 `WorkOrderCloseFormTest` (403→kartu, teks kartu baru).
+
+**PELAJARAN pola uji (v0.13.4.5, 2026-11-04 — berlaku untuk uji WO/WA berikutnya):**
+- **Jangan membuat TENANT baru untuk uji tanpa diminta.** Uji v0.13.4.5 membuat tenant uji terisolasi
+  (`TEST - Uji v0.13.4.5`, id 53) — berhasil & aman, TAPI membuat tenant menyeret turunan tak terduga:
+  selain customer/subscription/WO/teknisi, muncul juga 1 baris `work_order_dispatch_settings` (auto per
+  tenant oleh command `work-orders:dispatch`) dan 1 `customer_timeline_entries` (observer Customer). Bila
+  memang perlu tenant baru, **catat di instruksi** dan **bersihkan SEMUA turunannya** — petakan lewat
+  `information_schema` (semua tabel ber-`tenant_id`) + tabel anak WO/customer/subscription, JANGAN hanya
+  hapus baris yang sengaja dibuat. Cleanup dilakukan dalam SATU transaksi FK-ordered (anak dulu), dengan
+  hitung baris sebelum/sesudah + guard `whatsapp_message_logs` tidak berubah & data nyata (571/572/573) utuh.
+- **Buktikan filter dispatch/reminder SEBELUM membuat WO uji berstatus diklaim.** `scheduled_at = now+1
+  tahun` + `dispatched_at = NULL` adalah invarian kunci: `runDispatchCycle` Kasus 1 butuh `scheduled_at <=
+  now+offset` (offset 120 mnt ≪ 525.600 mnt), Kasus 2 butuh `scheduled_at NULL`; `runReminderCycle` butuh
+  `dispatched_at NOT NULL`. Jalankan QUERY filter itu (bukan command) dan buktikan 0 match sebelum lanjut —
+  supaya WO uji tidak pernah memicu WA ke grup produksi (yang saat ini Default untuk semua kategori).
+- **Verifikasi halaman publik sadar-status via GET read-only** (12 link signed `URL::temporarySignedRoute`
+  2 hari, curl HTTP 200) — GET claim/activate/close tidak menulis apa pun (satu-satunya potensi tulis,
+  `renderedTerms→activeOrSeedDefault` di close, hanya pada path form InProgress yang tak tersentuh state uji).
 
 ## Architecture
 

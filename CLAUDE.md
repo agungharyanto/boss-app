@@ -9450,6 +9450,47 @@ berbagi `docker/php` — pola zero-downtime 2 bagian, pakai ulang untuk perubaha
 Mitigasi: recreate di jam trafik rendah, jeda sekecil mungkin, restart nginx segera. Nol WA keluar akibat
 rilis itu sendiri (rilis tidak mengirim WA).
 
+## Saklar "Notifikasi Otomatis ke Pelanggan" (per-tenant) (v0.13.5.1.2 — branch `v0.13.5.1.2-saklar-notif-pelanggan`)
+
+Latar: pelanggan hasil migrasi sebagian dari MixRadius menerima notifikasi DOBEL (MixRadius + BOSS). Agung
+ingin BOSS berhenti mengirim notifikasi WA OTOMATIS ke PELANGGAN sementara, **TANPA logout WhatsApp** (sesi
+yang sama dipakai OTP referrer, notifikasi teknisi, grup WO, dan 2-arah — semua HARUS tetap jalan).
+
+**Kolom** `work_order_dispatch_settings.customer_auto_notify_enabled` (boolean NOT NULL default TRUE,
+per-tenant, aditif). Default ON = pertahankan perilaku; **tenant 1 di-set OFF lewat langkah rilis (UI/tinker),
+bukan data migration.**
+
+**TITIK PENEGAKAN TUNGGAL = `WhatsappGatewayService::buildAndQueue()`.** Keempat event PELANGGAN
+(`invoice_due_reminder`, `payment_received`, `customer_registered`, `customer_suspended_reminder`) melewati
+method ini dan HANYA method ini (dipanggil tepat 4×: `SendWhatsappDueReminders`, `InvoiceService::markPaid`,
+`RegistrationService::register`, `SendWhatsappSuspendedReminders`). Guard paling awal: baca read-only baris
+settings tenant milik `$customer` (TIDAK membuat baris — tak ada baris = dianggap ON); bila ada & OFF →
+`Log::info('…dilewati — saklar notifikasi pelanggan mati', {event, tenant})` + `return null` **tanpa
+exception & tanpa membuat `WhatsappMessageLog`** → pemanggil memperlakukan null = tidak terkirim; pembayaran/
+registrasi TIDAK pernah gagal; command tidak menandai "terkirim" (idempotensinya lewat keberadaan log, jadi
+skip = tidak ada log = tidak ada state palsu).
+
+**Kelompok (B) TIDAK terpengaruh** — `referrer_action_otp`, `work_order_*`, `staff_*`,
+`technician_feature_pending`, `unrecognized_message_fallback`, `duplicate_session_attempt`, `work_order_completed`
+memakai `buildAndQueueForRecipient`/`ForReferrer`/`ForGroup`/`queueRawForRecipient`/`queueMediaBatchForGroup`
+yang **tidak** memeriksa saklar ini (by construction, bukan kebetulan).
+
+**Early-exit per-tenant** di `SendWhatsappDueReminders` & `SendWhatsappSuspendedReminders`: query
+`WorkOrderDispatchSettings::where('customer_auto_notify_enabled', false)->pluck('tenant_id')` lalu
+`whereNotIn('tenant_id', …)` pada query invoice/customer + 1 baris `Log::info` per run (hemat query, tak banjir
+log). Guard di `buildAndQueue()` tetap otoritatif (defense in depth).
+
+**UI** kartu "Notifikasi Otomatis ke Pelanggan" di Konfig WA Gateway (`Settings\WorkOrderDispatchSettings`,
+permission `work_orders.manage`): toggle + badge AKTIF/MATI + tombol "Simpan" (`saveCustomerAutoNotify()`) +
+flash + teks bantuan menyebut 4 jenis pesan & menegaskan (B) tak terpengaruh.
+
+**Catatan operasional:** mekanisme lama "nonaktifkan template per-event di Template WA" (`is_active=false` →
+`WhatsappTemplateService::resolve()` null → `buildAndQueue` skip diam-diam) MASIH ADA dan masih berfungsi,
+tapi **saklar per-tenant ini adalah cara RESMI** mematikan notifikasi pelanggan (1 toggle, 4 event, makna
+jelas, template tetap aktif/bisa diedit). **Langkah rilis:** `php artisan migrate` (1 migrasi aditif) +
+`optimize:clear` + `queue:restart`; set tenant 1 OFF via UI/tinker; NOL `.env`/seed/rebuild/logout. Verifikasi
+efektif: `whatsapp_message_logs` event (A) baru = 0 di window cron berikutnya.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

@@ -9417,6 +9417,39 @@ service web + tamper 403), plus update `WorkOrderClaimLinkTest`/`WorkOrderActiva
   2 hari, curl HTTP 200) — GET claim/activate/close tidak menulis apa pun (satu-satunya potensi tulis,
   `renderedTerms→activeOrSeedDefault` di close, hanya pada path form InProgress yang tak tersentuh state uji).
 
+## Ekstensi GD di image boss-app (v0.13.5.1.1 — SELESAI, merged `develop`→`main`, tag `v0.13.5.1.1`)
+
+**GD terpasang** di `docker/php/Dockerfile` (layer setelah compile `ext-sockets`, cache-locality sama
+wireguard-tools/rrdtool): `apk add libjpeg-turbo-dev libpng-dev libwebp-dev freetype-dev` →
+`docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp` → `docker-php-ext-install -j"$(nproc)" gd`.
+Dikonfirmasi: `gd` + JPEG/PNG/WebP/FreeType semua true di keempat container PHP. **Imagick TETAP TIDAK
+dipasang** — jadi kode yang tak boleh bergantung Imagick (mis. validasi tanda tangan close-WO via
+`getimagesizefromstring` tanpa GD, v0.13.4.3.1) tetap berlaku; GD kini tersedia untuk logo PDF invoice
+(v0.13.5.2) + EXIF stripping. Image boss-app +2.1 MB (319.8→321.9 MB).
+
+**Prosedur rebuild image PHP (4 service `boss-app`/`boss-worker`/`boss-whatsapp-worker`/`boss-scheduler`
+berbagi `docker/php` — pola zero-downtime 2 bagian, pakai ulang untuk perubahan Dockerfile PHP ke depan):**
+1. **Build dulu, tanpa `up`:** `docker compose build boss-app boss-worker boss-whatsapp-worker boss-scheduler`
+   — container lama tetap jalan dengan image lama (nol downtime). Uji image baru TERPISAH
+   (`docker run --rm --network none --entrypoint php <image> ...`): `gd_info()`, round-trip JPEG, `php -m`
+   diff (hanya ekstensi baru, nol hilang). Tag rollback: `docker image tag "$(docker inspect -f '{{.Image}}' boss-app)" boss-app:pre-<fitur>-<tgl>`.
+2. **Recreate di jendela trafik rendah:** `queue:restart` (drain graceful; queue biasanya kosong) →
+   `docker compose up -d boss-worker boss-whatsapp-worker boss-scheduler` → `docker compose up -d boss-app`
+   → **WAJIB `docker compose restart boss-nginx`** (aturan stale FastCGI upstream IP saat boss-app ganti IP).
+   **GOTCHA terbukti 2026-11-05:** `up -d boss-worker ...` **ikut me-recreate `boss-app`** karena ketiga
+   worker `depends_on: boss-app` + image boss-app berubah — jadi boss-app ter-recreate di langkah worker,
+   bukan langkah terpisah; restart nginx HARUS segera menyusul. Jeda web nyata ~beberapa detik.
+3. **`.env` TIDAK disentuh → boss-postgresql/boss-redis TIDAK ter-recreate** (keduanya pakai `environment:
+   ${...}`, bukan `env_file`; health-check "Healthy" saat `up -d boss-app` ≠ recreate — dikonfirmasi
+   `StartedAt`/`RestartCount` tak berubah). gateway Go juga tak tersentuh.
+
+**⚠️ PERINGATAN saat downtime recreate — webhook WA masuk HILANG tanpa retry.** Gateway Go
+(`whatsapp-gateway/internal/webhook/webhook.go`) mem-POST `session-status` & `incoming-message` ke Laravel
+**fire-and-forget, TANPA retry**. Selama jeda web (boss-app recreate + nginx restart, ~beberapa detik),
+`incoming-message` yang tiba **hilang** (tak ada retry); `session-status` pulih sendiri lewat reconcile.
+Mitigasi: recreate di jam trafik rendah, jeda sekecil mungkin, restart nginx segera. Nol WA keluar akibat
+rilis itu sendiri (rilis tidak mengirim WA).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

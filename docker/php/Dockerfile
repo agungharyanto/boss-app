@@ -71,6 +71,21 @@ RUN apk add --no-cache wireguard-tools
 # cache.
 RUN apk add --no-cache rrdtool
 
+# GD: v0.13.5.1.1 — dibutuhkan untuk logo di PDF invoice (v0.13.5.2), dan
+# nanti EXIF stripping + validasi tanda tangan close-WO. Imagick TIDAK dipakai.
+# Layer sendiri setelah compile ext-sockets (cache-locality, pola sama
+# wireguard-tools/rrdtool di atas). Paket -dev membawa header + runtime lib
+# (libjpeg-turbo/libwebp belum ada; freetype/libpng runtime sudah ada tapi
+# header-nya belum), dipertahankan (tidak di-strip) — konsisten gaya Dockerfile
+# ini. gd dikonfigurasi dengan freetype + jpeg + webp.
+RUN apk add --no-cache \
+    libjpeg-turbo-dev \
+    libpng-dev \
+    libwebp-dev \
+    freetype-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
+    && docker-php-ext-install -j"$(nproc)" gd
+
 # Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 

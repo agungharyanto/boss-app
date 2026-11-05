@@ -45,6 +45,14 @@ class WorkOrderDispatchSettings extends Component
 
     public int $commandIntervalMinutes = 15;
 
+    /**
+     * v0.13.5.1.2 — saklar per-tenant "Notifikasi Otomatis ke Pelanggan"
+     * (4 event: invoice_due_reminder/payment_received/customer_registered/
+     * customer_suspended_reminder). TIDAK memengaruhi OTP referrer, notifikasi
+     * teknisi/WO, grup WO, atau balasan 2-arah. Default ON.
+     */
+    public bool $customerAutoNotifyEnabled = true;
+
     /** Form "Tambah Grup". */
     public ?string $newGroupJid = null;
 
@@ -93,6 +101,22 @@ class WorkOrderDispatchSettings extends Component
         $this->refreshFromSettings($settings->fresh());
 
         session()->flash('status', 'Pengaturan timing dispatch/reminder berhasil disimpan.');
+    }
+
+    /**
+     * v0.13.5.1.2 — simpan saklar "Notifikasi Otomatis ke Pelanggan"
+     * (per-tenant). Tombol "Simpan" terpisah dari timing dispatch di atas.
+     */
+    public function saveCustomerAutoNotify(): void
+    {
+        $this->authorize('work_orders.manage');
+
+        $settings = WorkOrderDispatchSettingsModel::forTenant($this->tenantId());
+        $settings->update(['customer_auto_notify_enabled' => $this->customerAutoNotifyEnabled]);
+
+        $this->refreshFromSettings($settings->fresh());
+
+        session()->flash('status', 'Pengaturan notifikasi otomatis ke pelanggan disimpan.');
     }
 
     // ── Daftar Grup Notifikasi ─────────────────────────────────────────
@@ -360,6 +384,7 @@ class WorkOrderDispatchSettings extends Component
         $this->dispatchOffsetHours = intdiv($settings->dispatch_offset_minutes, 60);
         $this->reminderTime = $settings->reminder_time;
         $this->commandIntervalMinutes = $settings->command_interval_minutes;
+        $this->customerAutoNotifyEnabled = (bool) $settings->customer_auto_notify_enabled;
     }
 
     private function tenantId(): int

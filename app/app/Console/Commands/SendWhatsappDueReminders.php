@@ -7,8 +7,10 @@ use App\Enums\WhatsappEventType;
 use App\Models\Invoice;
 use App\Models\WhatsappGatewaySettings;
 use App\Models\WhatsappMessageLog;
+use App\Models\WorkOrderDispatchSettings;
 use App\Services\Whatsapp\WhatsappGatewayService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Scheduled ->everyMinute() (see routes/console.php) but only actually does
@@ -29,6 +31,23 @@ class SendWhatsappDueReminders extends Command
             return self::SUCCESS;
         }
 
+        // v0.13.5.1.2 — early-exit per tenant: lewati tenant yang saklar
+        // "Notifikasi Otomatis ke Pelanggan"-nya OFF SEBELUM mengiterasi
+        // invoice (hemat query + tak ada banjir log tiap menit). Guard
+        // otoritatif tetap di WhatsappGatewayService::buildAndQueue();
+        // ini optimasi + log ringkas (maks 1 baris per run, cuma saat run
+        // berada dalam jendela kirim).
+        $disabledTenantIds = WorkOrderDispatchSettings::query()
+            ->where('customer_auto_notify_enabled', false)
+            ->pluck('tenant_id')
+            ->all();
+
+        if ($disabledTenantIds !== []) {
+            Log::info('SendWhatsappDueReminders: lewati tenant dengan saklar notifikasi pelanggan mati', [
+                'tenants' => $disabledTenantIds,
+            ]);
+        }
+
         // status=Pending only (not Overdue) is what makes "no reminder past
         // H-0" true almost by construction: MarkOverdueInvoices only flips
         // an invoice to Overdue the day AFTER due_date passes, so a
@@ -39,6 +58,7 @@ class SendWhatsappDueReminders extends Command
                 $query->whereDate('due_date', now()->toDateString())
                     ->orWhereDate('due_date', now()->copy()->addDays(5)->toDateString());
             })
+            ->when($disabledTenantIds !== [], fn ($query) => $query->whereNotIn('tenant_id', $disabledTenantIds))
             ->with(['customer', 'subscription'])
             ->get();
 

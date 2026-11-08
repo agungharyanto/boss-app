@@ -9500,7 +9500,7 @@ event pelanggan di tenant 1 juga sebagian dinonaktifkan manual (`invoice_due_rem
 = is_active 0) — **boleh diaktifkan lagi** kapan pun; saklar per-tenant adalah penegak utama, template
 is_active hanya lapisan kedua. Keduanya harus ON agar notifikasi pelanggan jalan lagi.
 
-## PDF Invoice server-side (v0.13.5.2 — branch `v0.13.5.2-pdf-invoice`)
+## PDF Invoice server-side (v0.13.5.2 — SELESAI, merged `develop`→`main`, tag `v0.13.5.2`)
 
 **Render invoice jadi PDF server-side via dompdf (`barryvdh/laravel-dompdf ^3.1`) — untuk DIUNDUH/DILIHAT
 admin, NOL kirim WA.** Kirim otomatis adalah sub-versi TERPISAH (v0.13.5.3, menunggu keputusan event type).
@@ -9531,6 +9531,19 @@ admin, NOL kirim WA.** Kirim otomatis adalah sub-versi TERPISAH (v0.13.5.3, menu
   **BUKAN** `--build`/recreate. (composer 2.10.2 ada di container; packagist terjangkau.)
 - **Ukuran/waktu**: render warm ~170 ms/invoice, PDF ~24 KB (cold-first ~3 dtk membangun cache font dompdf di
   `storage/fonts` sekali).
+- **CACHE FONT — catatan operasional (gotcha nyata rilis 2026-11-08):** `config('dompdf.options.font_cache')`
+  dan `font_dir` = `storage/fonts`. Dir ini **TIDAK dibuat otomatis** oleh paket; WAJIB ada & writable oleh
+  pengguna php-fpm (**`www-data`**). **Buat sbg www-data** (`docker compose exec -u www-data boss-app mkdir -p
+  storage/fonts`) dan warm-up render pertama JUGA sbg www-data — **JANGAN** warm-up sbg root (akan
+  meninggalkan file cache milik root yang memblokir render www-data berikutnya, kelas bug yang sama berulang
+  di file ini untuk volume lain). Karena DejaVu Sans sudah bundled, dir boleh tetap kosong (cache tak selalu
+  ditulis) — yang wajib adalah pemilik www-data + writable. Warm render pertama ~335–359 ms (bangun cache
+  sekali), berikutnya lebih cepat.
+- **Uji nyata rilis (2026-11-08, develop @ branch topik, render ke memori sbg www-data, Agung verifikasi
+  tampilan 3 PDF nyata OK):** LUNAS #540 335 ms / peak 72.5 MB / 38.440 B; BELUM #1230 261 ms / 82.5 MB /
+  37.225 B; item-terbanyak #29 238 ms / 82.5 MB / 38.015 B. **Peak 72.5–82.5 MB ≪ `memory_limit` 256M**
+  (sisa >170 MB). Seluruh DB: invoice maks 1 item, nol invoice ber-pajak (tax engine belum dikonfigurasi).
+  `composer install` di server 13 dtk (nol downtime), `whatsapp_message_logs` tetap (nol WA), nol exception.
 
 **LARANGAN (rujuk v0.13.5.1.2):** jalur KIRIM PDF ke pelanggan (v0.13.5.3) HARUS tunduk saklar
 `customer_auto_notify_enabled` — ditegakkan di jalur pelanggan ber-guard (`buildAndQueue`), BUKAN

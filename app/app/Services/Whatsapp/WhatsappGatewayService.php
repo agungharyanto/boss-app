@@ -11,6 +11,7 @@ use App\Models\Invoice;
 use App\Models\Referrer;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappSession;
+use App\Models\WorkOrderDispatchSettings;
 use App\Services\Payment\PaymentService;
 use App\Support\Whatsapp\WhatsappAttachment;
 use App\Support\WhatsappPhone;
@@ -39,6 +40,30 @@ class WhatsappGatewayService
      */
     public function buildAndQueue(WhatsappEventType $eventType, Customer $customer, ?Invoice $invoice = null): ?WhatsappMessageLog
     {
+        // v0.13.5.1.2 — saklar per-tenant "Notifikasi Otomatis ke Pelanggan".
+        // TITIK PENEGAKAN TUNGGAL: keempat event pelanggan (invoice_due_reminder,
+        // payment_received, customer_registered, customer_suspended_reminder)
+        // melewati method ini dan HANYA method ini — jadi guard di sini
+        // menghentikan semuanya tanpa menyentuh kelompok (B) (referrer OTP,
+        // teknisi/WO, staff, grup, balasan 2-arah) yang pakai
+        // buildAndQueueForRecipient/ForReferrer/ForGroup. Baca read-only (tanpa
+        // membuat baris): tak ada baris settings => dianggap ON (pertahankan
+        // perilaku). Skip = Log::info + return null, TANPA exception & TANPA
+        // membuat WhatsappMessageLog (pemanggil memperlakukan null = tidak
+        // terkirim; pembayaran/registrasi tidak pernah gagal karenanya).
+        $settings = WorkOrderDispatchSettings::query()
+            ->where('tenant_id', $customer->tenant_id)
+            ->first();
+
+        if ($settings !== null && ! $settings->customer_auto_notify_enabled) {
+            Log::info('WhatsappGatewayService: dilewati — saklar notifikasi pelanggan mati', [
+                'event' => $eventType->value,
+                'tenant' => $customer->tenant_id,
+            ]);
+
+            return null;
+        }
+
         $template = $this->templateService->resolve($eventType, $customer->tenant_id, $customer->reseller_id);
 
         if ($template === null) {

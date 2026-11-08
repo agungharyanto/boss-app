@@ -59,12 +59,14 @@ class WorkOrderDispatchSettings extends Model
         'close_terms_text',
         'close_terms_version',
         'last_dispatch_run_at',
+        'customer_auto_notify_enabled',
     ];
 
     protected function casts(): array
     {
         return [
             'last_dispatch_run_at' => 'datetime',
+            'customer_auto_notify_enabled' => 'boolean',
         ];
     }
 
@@ -96,6 +98,9 @@ class WorkOrderDispatchSettings extends Model
                 'close_terms_text' => self::DEFAULT_CLOSE_TERMS,
                 'close_terms_version' => self::DEFAULT_CLOSE_TERMS_VERSION,
                 'last_dispatch_run_at' => null,
+                // v0.13.5.1.2 — default ON (pertahankan perilaku); tenant 1
+                // di-set OFF lewat langkah rilis, bukan di sini.
+                'customer_auto_notify_enabled' => true,
             ]
         );
     }

@@ -53,6 +53,33 @@
         </button>
     </form>
 
+    {{-- ── Notifikasi Otomatis ke Pelanggan (v0.13.5.1.2) ───────────── --}}
+    <div class="bg-white border border-gray-200 rounded-md p-6 mb-6">
+        <div class="flex items-center justify-between mb-1">
+            <h2 class="text-lg font-semibold text-gray-800">{{ __('Notifikasi Otomatis ke Pelanggan') }}</h2>
+            @if ($customerAutoNotifyEnabled)
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">{{ __('AKTIF') }}</span>
+            @else
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">{{ __('MATI') }}</span>
+            @endif
+        </div>
+        <p class="text-xs text-gray-500 mb-1">
+            {{ __('Mengatur pesan WhatsApp OTOMATIS ke PELANGGAN: pengingat jatuh tempo invoice, pembayaran diterima, pelanggan terdaftar, dan pengingat suspend.') }}
+        </p>
+        <p class="text-xs text-gray-400 italic mb-4">
+            {{ __('TIDAK memengaruhi: OTP referrer, notifikasi teknisi & Work Order, grup WO, serta balasan chat 2 arah — semuanya tetap jalan. Sesi WhatsApp tidak di-logout.') }}
+        </p>
+
+        <label class="flex items-center gap-2 text-sm text-gray-700 mb-4">
+            <input type="checkbox" wire:model="customerAutoNotifyEnabled" class="rounded border-gray-300">
+            <span>{{ __('Kirim notifikasi otomatis ke pelanggan') }}</span>
+        </label>
+
+        <button type="button" wire:click="saveCustomerAutoNotify" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">
+            {{ __('Simpan') }}
+        </button>
+    </div>
+
     {{-- ── Daftar Grup Notifikasi ──────────────────────────────────── --}}
     <div class="bg-white border border-gray-200 rounded-md p-6 mb-6">
         <div class="flex items-center justify-between mb-1">

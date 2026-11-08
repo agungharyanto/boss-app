@@ -215,6 +215,8 @@ Route::middleware(['auth', 'admin.panel', 'password.changed'])->name('web.')->gr
         Route::get('/subscriptions', SubscriptionIndex::class)->name('subscriptions.index');
         Route::get('/invoices', InvoiceIndex::class)->name('invoices.index');
         Route::get('/invoices/{invoice}/print', [InvoicePrintController::class, 'show'])->name('invoices.print');
+        // v0.13.5.2 — unduh PDF server-side (aturan akses sama dengan print).
+        Route::get('/invoices/{invoice}/pdf', [InvoicePrintController::class, 'downloadPdf'])->name('invoices.pdf');
         Route::get('/payment-reconciliation', ReconciliationReport::class)->name('payment-reconciliation.index');
         Route::get('/whatsapp-gateway', WhatsappGatewayIndex::class)->name('whatsapp-gateway.index');
         Route::get('/nas', NasIndex::class)->name('nas.index');

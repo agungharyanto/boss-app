@@ -9500,6 +9500,56 @@ event pelanggan di tenant 1 juga sebagian dinonaktifkan manual (`invoice_due_rem
 = is_active 0) — **boleh diaktifkan lagi** kapan pun; saklar per-tenant adalah penegak utama, template
 is_active hanya lapisan kedua. Keduanya harus ON agar notifikasi pelanggan jalan lagi.
 
+## PDF Invoice server-side (v0.13.5.2 — SELESAI, merged `develop`→`main`, tag `v0.13.5.2`)
+
+**Render invoice jadi PDF server-side via dompdf (`barryvdh/laravel-dompdf ^3.1`) — untuk DIUNDUH/DILIHAT
+admin, NOL kirim WA.** Kirim otomatis adalah sub-versi TERPISAH (v0.13.5.3, menunggu keputusan event type).
+
+- **`App\Services\Billing\InvoicePdfService`**: `render(Invoice): string` (bytes PDF) + `store(Invoice): string`
+  (menyimpan ke disk PRIVAT `invoice-pdfs/{tenant_id}/{invoice_id}.pdf`, idempoten/overwrite — prefix yang
+  sudah direservasi `WhatsappAttachment`; **DIPAKAI v0.13.5.3 kirim, TIDAK dipanggil dari jalur mengirim di
+  versi ini**). dompdf opsi: `isRemoteEnabled=false`, `chroot=storage/app`, `defaultFont='DejaVu Sans'`
+  (karakter Indonesia aman), HTML dari Blade (data user di-escape `{{ }}`). Logo dari
+  `CompanyProfile.logo_path` (disk privat) dinormalisasi via **GD** (resize lebar maks 240px, PNG/JPEG/WebP;
+  gagal/rusak/tak ada logo = render TANPA logo, tak pernah error) lalu di-embed base64 data-URI.
+- **Kop perusahaan** dari `CompanyProfileService::resolveFor` (fallback env `INVOICE_COMPANY_*` terakhir di
+  service) — browser-print lama TETAP pakai `config('invoice.*')` (tak diubah).
+- **SATU sumber angka** dengan browser-print: line items + totals + helper `$rp`/`$taxRate` diekstrak ke
+  partial bersama **`billing/partials/invoice-items-totals.blade.php`**, di-`@include` oleh
+  `invoice-print-standard` DAN `invoice-pdf` (ekstraksi verbatim → output print tak berubah). View PD
+  (`billing/invoice-pdf.blade.php`) memakai **tata letak TABEL** (bukan flexbox — dukungan flexbox dompdf
+  lemah).
+- **Rute** `GET /invoices/{invoice}/pdf` (`web.invoices.pdf`, `InvoicePrintController::downloadPdf`) — aturan
+  akses **SAMA** dengan print: `authorize('view', $invoice)` (tenant lain → 404 via TenantScope route-binding;
+  tanpa `invoices.view`/bukan reseller pemilik → 403). Respons `application/pdf` + `Content-Disposition:
+  attachment; filename=invoice-{nomor}.pdf` + `no-store`/`nosniff`. Tombol "Unduh PDF" di dropdown cetak
+  (`/invoices` + Detail Pelanggan); tombol cetak lama TETAP.
+- **Prosedur pemasangan dompdf di server (TANPA rebuild/recreate — nol downtime):** `app/` di-bind-mount
+  (`./app:/var/www/html`), jadi `vendor/` ada di host. Rilis = commit `composer.json`+`composer.lock` di
+  branch → di server checkout branch (atau merge ke develop) → `docker compose exec boss-app composer install`
+  (membaca lock, menulis ke vendor host, php-fpm autoload kelas baru di request berikutnya) → `optimize:clear`.
+  **BUKAN** `--build`/recreate. (composer 2.10.2 ada di container; packagist terjangkau.)
+- **Ukuran/waktu**: render warm ~170 ms/invoice, PDF ~24 KB (cold-first ~3 dtk membangun cache font dompdf di
+  `storage/fonts` sekali).
+- **CACHE FONT — catatan operasional (gotcha nyata rilis 2026-11-08):** `config('dompdf.options.font_cache')`
+  dan `font_dir` = `storage/fonts`. Dir ini **TIDAK dibuat otomatis** oleh paket; WAJIB ada & writable oleh
+  pengguna php-fpm (**`www-data`**). **Buat sbg www-data** (`docker compose exec -u www-data boss-app mkdir -p
+  storage/fonts`) dan warm-up render pertama JUGA sbg www-data — **JANGAN** warm-up sbg root (akan
+  meninggalkan file cache milik root yang memblokir render www-data berikutnya, kelas bug yang sama berulang
+  di file ini untuk volume lain). Karena DejaVu Sans sudah bundled, dir boleh tetap kosong (cache tak selalu
+  ditulis) — yang wajib adalah pemilik www-data + writable. Warm render pertama ~335–359 ms (bangun cache
+  sekali), berikutnya lebih cepat.
+- **Uji nyata rilis (2026-11-08, develop @ branch topik, render ke memori sbg www-data, Agung verifikasi
+  tampilan 3 PDF nyata OK):** LUNAS #540 335 ms / peak 72.5 MB / 38.440 B; BELUM #1230 261 ms / 82.5 MB /
+  37.225 B; item-terbanyak #29 238 ms / 82.5 MB / 38.015 B. **Peak 72.5–82.5 MB ≪ `memory_limit` 256M**
+  (sisa >170 MB). Seluruh DB: invoice maks 1 item, nol invoice ber-pajak (tax engine belum dikonfigurasi).
+  `composer install` di server 13 dtk (nol downtime), `whatsapp_message_logs` tetap (nol WA), nol exception.
+
+**LARANGAN (rujuk v0.13.5.1.2):** jalur KIRIM PDF ke pelanggan (v0.13.5.3) HARUS tunduk saklar
+`customer_auto_notify_enabled` — ditegakkan di jalur pelanggan ber-guard (`buildAndQueue`), BUKAN
+`buildAndQueueForRecipient`/jalur media yang melewati saklar. `InvoicePdfService` sendiri tidak mengirim
+apa pun; jangan panggil dari jalur kirim tanpa saklar.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

@@ -5,8 +5,11 @@ namespace App\Http\Controllers\Billing;
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
 use App\Models\Tenant;
+use App\Services\Billing\InvoicePdfService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Sprint "perpanjang-invoice-asli-cetak" — cetak Invoice, DUA tipe:
@@ -50,6 +53,25 @@ class InvoicePrintController extends Controller
             'company' => $company,
             'thermalWidth' => $width,
             'autoPrint' => $request->query('autoprint', '1') !== '0',
+        ]);
+    }
+
+    /**
+     * v0.13.5.2 — unduh PDF server-side (dompdf). Aturan akses SAMA dengan
+     * show() (`view` policy — tenant/reseller/permission). NOL kirim WA.
+     */
+    public function downloadPdf(Invoice $invoice, InvoicePdfService $service): Response
+    {
+        $this->authorize('view', $invoice);
+
+        $pdf = $service->render($invoice);
+        $fileName = 'invoice-'.Str::slug((string) $invoice->invoice_number, '-').'.pdf';
+
+        return response($pdf, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.$fileName.'"',
+            'Cache-Control' => 'private, no-store, max-age=0',
+            'X-Content-Type-Options' => 'nosniff',
         ]);
     }
 }

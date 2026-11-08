@@ -94,6 +94,7 @@
                                     <a href="{{ route('web.invoices.print', $invoice) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Standar (A4)') }}</a>
                                     <a href="{{ route('web.invoices.print', ['invoice' => $invoice, 'format' => 'thermal', 'width' => '80']) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Thermal 80mm') }}</a>
                                     <a href="{{ route('web.invoices.print', ['invoice' => $invoice, 'format' => 'thermal', 'width' => '58']) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Thermal 58mm') }}</a>
+                                    <a href="{{ route('web.invoices.pdf', $invoice) }}" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 border-t border-gray-100">{{ __('Unduh PDF') }}</a>
                                 </div>
                             </span>
                             @if ($canManage)

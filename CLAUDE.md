@@ -9450,7 +9450,7 @@ berbagi `docker/php` — pola zero-downtime 2 bagian, pakai ulang untuk perubaha
 Mitigasi: recreate di jam trafik rendah, jeda sekecil mungkin, restart nginx segera. Nol WA keluar akibat
 rilis itu sendiri (rilis tidak mengirim WA).
 
-## Saklar "Notifikasi Otomatis ke Pelanggan" (per-tenant) (v0.13.5.1.2 — branch `v0.13.5.1.2-saklar-notif-pelanggan`)
+## Saklar "Notifikasi Otomatis ke Pelanggan" (per-tenant) (v0.13.5.1.2 — SELESAI, merged `develop`→`main`, tag `v0.13.5.1.2`)
 
 Latar: pelanggan hasil migrasi sebagian dari MixRadius menerima notifikasi DOBEL (MixRadius + BOSS). Agung
 ingin BOSS berhenti mengirim notifikasi WA OTOMATIS ke PELANGGAN sementara, **TANPA logout WhatsApp** (sesi
@@ -9490,6 +9490,15 @@ tapi **saklar per-tenant ini adalah cara RESMI** mematikan notifikasi pelanggan 
 jelas, template tetap aktif/bisa diedit). **Langkah rilis:** `php artisan migrate` (1 migrasi aditif) +
 `optimize:clear` + `queue:restart`; set tenant 1 OFF via UI/tinker; NOL `.env`/seed/rebuild/logout. Verifikasi
 efektif: `whatsapp_message_logs` event (A) baru = 0 di window cron berikutnya.
+
+**STATUS PRODUKSI (2026-11-05): tenant 1 `customer_auto_notify_enabled` = OFF** — BOSS BERHENTI mengirim
+notifikasi otomatis ke pelanggan karena duplikat dengan MixRadius (pelanggan menerima 2 pesan). Uji nyata
+LOLOS (ON→kirim, OFF→dilewati, OTP referrer grup B tetap jalan; semua hanya ke nomor Agung, sesi WA tidak
+di-logout). **Cara MENYALAKAN kembali:** toggle "Notifikasi Otomatis ke Pelanggan" di **Konfig WA Gateway**
+(atau `WorkOrderDispatchSettings::forTenant(1)->update(['customer_auto_notify_enabled'=>true])`). Template 4
+event pelanggan di tenant 1 juga sebagian dinonaktifkan manual (`invoice_due_reminder`/`customer_suspended_reminder`
+= is_active 0) — **boleh diaktifkan lagi** kapan pun; saklar per-tenant adalah penegak utama, template
+is_active hanya lapisan kedua. Keduanya harus ON agar notifikasi pelanggan jalan lagi.
 
 ## Architecture
 

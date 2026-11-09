@@ -3,9 +3,14 @@
 namespace App\Livewire\Billing;
 
 use App\Enums\InvoiceStatus;
+use App\Enums\WhatsappEventType;
 use App\Exceptions\InvalidInvoiceStatusTransitionException;
+use App\Exceptions\InvoicePdfSendException;
 use App\Models\Invoice;
+use App\Models\WhatsappMessageLog;
+use App\Services\Billing\InvoicePdfSendService;
 use App\Services\InvoiceService;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Carbon;
 use Livewire\Component;
@@ -27,9 +32,65 @@ class InvoiceIndex extends Component
 
     public ?string $transitionError = null;
 
+    // v0.13.5.3 — kirim PDF invoice via WhatsApp (modal konfirmasi).
+    public ?int $sendPdfInvoiceId = null;
+
+    /** @var array<string, mixed> */
+    public array $sendPdfPreview = [];
+
+    public ?string $sendPdfError = null;
+
     public function mount(): void
     {
         $this->authorize('viewAny', Invoice::class);
+    }
+
+    public function confirmSendPdf(int $id): void
+    {
+        $this->authorize('manage', Invoice::class);
+        $this->sendPdfError = null;
+
+        $invoice = Invoice::with('customer')->findOrFail($id);
+
+        $this->sendPdfInvoiceId = $invoice->id;
+        $this->sendPdfPreview = app(InvoicePdfSendService::class)->previewFor($invoice);
+    }
+
+    public function cancelSendPdf(): void
+    {
+        $this->sendPdfInvoiceId = null;
+        $this->sendPdfPreview = [];
+        $this->sendPdfError = null;
+    }
+
+    public function sendPdf(bool $resend, InvoicePdfSendService $service): void
+    {
+        $this->authorize('manage', Invoice::class);
+        $this->sendPdfError = null;
+
+        if ($this->sendPdfInvoiceId === null) {
+            return;
+        }
+
+        $invoice = Invoice::with('customer')->findOrFail($this->sendPdfInvoiceId);
+
+        try {
+            $log = $service->sendManually($invoice, auth()->user(), $resend);
+        } catch (AuthorizationException $e) {
+            $this->sendPdfError = 'Anda tidak punya izin mengirim invoice.';
+
+            return;
+        } catch (InvoicePdfSendException $e) {
+            $this->sendPdfError = $e->getMessage();
+
+            return;
+        }
+
+        $this->cancelSendPdf();
+
+        session()->flash('status', $log->is_test
+            ? 'Pesan UJI diantrekan ke nomor uji (pelanggan TIDAK menerima).'
+            : 'PDF invoice diantrekan untuk dikirim ke pelanggan.');
     }
 
     public function updatingStatusFilter(): void
@@ -138,6 +199,45 @@ class InvoiceIndex extends Component
             'invoices' => $invoices,
             'summary' => $this->summaryCards(),
             'canManage' => auth()->user()->can('manage', Invoice::class),
+            'sendMarkers' => $this->sendMarkersFor($invoices->getCollection()->pluck('id')->all()),
         ]);
+    }
+
+    /**
+     * v0.13.5.3 — penanda kirim PDF per invoice (baris terakhir event
+     * InvoiceIssued). "Terkirim ke pelanggan" HANYA dari baris NON-UJI;
+     * baris uji ditandai "Uji". Keyed by invoice_id.
+     *
+     * @param  list<int>  $invoiceIds
+     * @return array<int, array{status: string, is_test: bool, at: ?Carbon}>
+     */
+    private function sendMarkersFor(array $invoiceIds): array
+    {
+        if ($invoiceIds === []) {
+            return [];
+        }
+
+        $logs = WhatsappMessageLog::query()
+            ->whereIn('invoice_id', $invoiceIds)
+            ->where('event_type', WhatsappEventType::InvoiceIssued->value)
+            ->orderByDesc('created_at')
+            ->get(['invoice_id', 'status', 'is_test', 'sent_at', 'created_at']);
+
+        $markers = [];
+        foreach ($logs as $log) {
+            // orderByDesc created_at → baris pertama yang terlihat per invoice
+            // = yang terbaru; jangan ditimpa yang lebih lama.
+            if (isset($markers[$log->invoice_id])) {
+                continue;
+            }
+
+            $markers[$log->invoice_id] = [
+                'status' => $log->status->value,
+                'is_test' => (bool) $log->is_test,
+                'at' => $log->sent_at ?? $log->created_at,
+            ];
+        }
+
+        return $markers;
     }
 }

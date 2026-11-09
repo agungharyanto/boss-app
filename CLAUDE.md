@@ -9671,6 +9671,84 @@ disentuh; 571/572/573 utuh.
   beberapa `storage/framework/views/*.php` terkompilasi root. Fix tuntas = loop chown entrypoint (butuh
   rebuild).
 
+## Kirim PDF Invoice OTOMATIS + Saklar Kedua (v0.13.5.3.1 — implementasi di worktree, BELUM merge/tag)
+
+**Sweep terjadwal yang mengirim PDF invoice (event `invoice_issued`, template yang sudah ada) ke pelanggan
+untuk invoice yang BARU terbit — melanjutkan kirim MANUAL (v0.13.5.3).** Branch topik
+`v0.13.5.3.1-kirim-pdf-otomatis` dari develop (`0421ab5`), dikerjakan di git worktree (server tetap di
+develop). Belum di-migrate di server, belum merge/tag.
+
+**SAKLAR KEDUA — harus lolos BERSAMA `customer_auto_notify_enabled`.** Kolom aditif
+`work_order_dispatch_settings`: `invoice_pdf_auto_send_enabled` (bool default FALSE),
+`invoice_pdf_auto_send_enabled_at` (timestamp, diisi saat OFF→ON = batas bawah "hanya invoice baru"),
+`invoice_pdf_auto_send_from` (date nullable = "Mulai dari tanggal", override batas bawah),
+`invoice_pdf_auto_send_daily_cap` (unsignedSmallInteger default 80, UI 1..200).
+
+**`SendInvoicePdfAutomatically`** (`invoices:send-pdf-automatically`, `->everyFifteenMinutes()->withoutOverlapping()`).
+Urutan gate (semua early-exit): (1) **jam WIB [08:00,20:00)** — dihitung eksplisit `Asia/Jakarta`
+(`self::TIMEZONE`), **BUKAN `now()->hour` app-tz** (test harness bisa UTC → window salah; bug ini
+ditemukan & ditutup saat menulis test); (2) per tenant: `invoice_pdf_auto_send_enabled` AND
+`customer_auto_notify_enabled` AND NOT `invoice_pdf_test_mode_enabled` (**Mode Uji ON = BERHENTI TOTAL**);
+(3) cap harian per **sesi tujuan** (hitung log `invoice_issued` NON-UJI hari ini WIB per `reseller_id` —
+`whatsapp_message_logs` TIDAK punya kolom `session_key`, sesi diturunkan dari `reseller_id`, NULL=direct);
+(4) pilih invoice: `status=Pending` (re-cek), `generated_at >= batas bawah`, pelanggan `aktif` + nomor
+valid, sesi connected (bukan logged_out), **belum ada log `invoice_issued` non-uji**, limit = `cap -
+sent_today`, urut `generated_at` asc. Per invoice: `InvoicePdfService::store()` → `buildAndQueue(InvoiceIssued,
+customer, invoice, attachment, context: null)`. **JALUR OTOMATIS = `context: null`** → tetap ber-guard
+`customer_auto_notify_enabled` (jalur manual yang bypass via `InvoiceSendContext` tak disentuh; command
+baru ditambahkan ke `$automaticCallers` `WhatsappManualBypassArchitectureTest`). Tanpa `sleep()` — pacing
+oleh worker (`SendWhatsappMessageJob` jeda 5-10s/pesan + FIFO single-worker). Exception per invoice
+ditangkap (satu gagal tak menghentikan sisanya). `--dry-run` untuk test/pelaporan (tak antre). "Terakhir
+jalan" disimpan di **cache** (`SendInvoicePdfAutomatically::lastRunCacheKey($tenant)`), bukan dari log WA.
+
+**Anti kirim-ganda (D6) — partial unique index DI-SCOPE JALUR OTOMATIS SAJA (keputusan desain penting).**
+`wa_logs_invoice_issued_nontest_unique` = `UNIQUE (invoice_id) WHERE event_type='invoice_issued' AND
+is_test=false AND sent_by_user_id IS NULL AND invoice_id IS NOT NULL`. **`sent_by_user_id IS NULL` sengaja**
+ditambahkan ke predikat D6 asli: kirim MANUAL + "Kirim Ulang" (v0.13.5.3) memang boleh menghasilkan beberapa
+log non-uji untuk invoice sama (`sent_by_user_id` terisi) — index TIDAK boleh memblokirnya. Sweep otomatis
+selalu `sent_by_user_id=null` = persis jalur yang dijaga. Dedup di command tetap mengecek SEMUA log non-uji
+(termasuk manual) → sweep tak mengirim ulang invoice yang sudah dikirim admin manual. Migrasi punya
+**pre-check**: tolak + laporkan bila sudah ada duplikat (jalur otomatis) sebelum membuat index. Partial
+index jalan di PostgreSQL (produksi) dan SQLite (test).
+
+**D7 — log uji tidak memblokir kirim pertama.** `InvoicePdfSendService` gate "sudah pernah dikirim" diubah
+ke `lastSendFor($invoice, includeTest: false)` → hanya kiriman NON-UJI yang memblokir kirim pertama/butuh
+Kirim Ulang. Penanda "Terkirim ke pelanggan" (`previewFor`) sudah non-uji sejak awal (tak berubah).
+
+**UI** kartu "Kirim PDF Invoice Otomatis" di Konfig WA Gateway (di bawah "Notifikasi Otomatis ke Pelanggan",
+di atas "Mode Uji"): toggle + "Mulai dari tanggal" + "Batas harian" (1..200) + tombol Simpan
+(`saveInvoicePdfAutoSend`, set `enabled_at=now()` saat OFF→ON, dibiarkan saat re-save ON). Peringatan wajib
+(hanya invoice terbit setelah batas mulai; butuh saklar pelanggan AKTIF; maks N/hari 08:00-20:00; BERHENTI
+saat Mode Uji ON; matikan MixRadius dulu). Indikator: "Hari ini terkirim X dari N", "terakhir jalan: <jam>",
+status "Aktif" / "Berhenti: Mode Uji ON" / "Berhenti: saklar pelanggan OFF" / "Mati". Peringatan khusus bila
+"Mulai dari tanggal" lebih lama dari hari ini.
+
+**PROSEDUR GO-LIVE (URUT, di HARI SEPI — bukan dekat tgl jatuh tempo day-1):**
+1. **Matikan pengingat/tagihan MixRadius** untuk segmen pelanggan yang akan masuk auto-send (hindari
+   tagihan ganda — overlap MixRadius↔BOSS tak bisa dihitung dari `boss_db`, tak ada flag).
+2. **Mode Uji OFF** (`invoice_pdf_test_mode_enabled=false`) — selama ON, sweep BERHENTI TOTAL.
+3. **Saklar pelanggan ON** (`customer_auto_notify_enabled=true`) — penegak otomatis di `buildAndQueue`.
+4. **Saklar kirim otomatis ON** (`invoice_pdf_auto_send_enabled=true`) → `enabled_at=now()` → **0 backlog**
+   (hanya invoice terbit SETELAH saat ini; dibuktikan read-only 2026-11-09: enabling now = 0 eligible,
+   dari tertua = 53 Pending). Aktifkan di hari sepi; **JANGAN** nyalakan dekat run day-1 (burst ~308
+   `billing_cycle_day=1` → ~4 hari kuras @80/hari).
+Default semua MATI; template 4 event pelanggan otomatis saat ini nonaktif (tenant 1) — aktifkan
+`invoice_issued` tetap (manual sudah pakai) + saklar pelanggan sesuai kebutuhan saat go-live.
+
+**Cap, jendela, Mode Uji (ringkas):** cap default 80/hari/sesi (editable UI 1..200, kolom settings);
+jendela 08:00-20:00 WIB; Mode Uji ON → sweep berhenti total (bukan dry-run — benar-benar nol antre).
+
+**Rilis (aditif, NOL downtime, menunggu "go" Agung):** `php artisan migrate` (2 migrasi: 4 kolom + 1
+partial index dengan pre-check) + `optimize:clear` + `queue:restart`. NOL `.env`/rebuild/logout (endpoint
+`/send-media` + GD + dompdf sudah ada). Scheduler `->everyFifteenMinutes()` terbaca otomatis oleh loop
+`boss-scheduler`. **Uji nyata HANYA ke nomor Agung 6287884374939** lewat pelanggan/invoice TEST: Mode Uji
+ON dulu (dry-run membuktikan sweep berhenti), lalu Mode Uji OFF + pelanggan TEST bernomor Agung + invoice
+TEST baru (`generated_at > enabled_at`) → sweep antre 1 pesan ke Agung; invoice lama tak terpilih; backup
+`pg_dump` dulu, cleanup satu transaksi FK-ordered setelahnya; kembalikan Mode Uji ON.
+
+**Backlog**: opt-out pelanggan (belum ada mekanisme); fix durabilitas izin (`chown storage/app/private` di
+loop `docker/php/entrypoint.sh`, butuh rebuild) — lihat pelajaran (a) v0.13.5.3 di atas.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

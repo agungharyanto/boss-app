@@ -7128,6 +7128,16 @@ NON-titip) matang **tanpa satu baris logic komisi baru**, murni efek samping inv
 **`markPaid()` sekarang punya 3 caller** — lihat section "Payment gateway (Xendit)" di atas untuk daftar
 lengkapnya (ditambah `RenewalInvoiceService`).
 
+**⚠️ CATATAN INI KEDALUWARSA per v0.13.5.3 (2026-11-09) — `GenerateDueInvoices` kini AKTIF di produksi.**
+Benar pada saat v0.9.12 ditulis (0 subscription `Active`), TAPI `PppoeVlan10MigrationService` (Track A)
+kemudian membuat **527 subscription `Active`** (nama "Migrasi PPPoE VLAN10 (Track A)") di tenant 1 → job
+`->daily()` ini genuinely menerbitkan invoice tiap hari (saat ini ~453 invoice nyata: pending/overdue/paid).
+**Konsekuensi penting untuk kirim WA otomatis:** 308 dari 527 subscription ber-`billing_cycle_day = 1` →
+**burst ~308 invoice dalam SATU run** (sekitar tgl 24/25, H-7 sebelum due 1). JANGAN memasang hook kirim
+sinkron saat invoice terbit (lihat section "Kirim PDF Invoice MANUAL ... v0.13.5.3" di bawah). Sebagian
+besar invoice `reseller_id = NULL` (sesi "direct"). Paragraf di bawah ini dibiarkan sebagai jejak sejarah
+alur Perpanjang v0.9.12, bukan deskripsi state produksi sekarang.
+
 **`GenerateDueInvoices` (job recurring otomatis) TETAP OFF.** Ini pembuatan invoice ON-DEMAND, dipicu
 manual oleh aksi Perpanjang — bukan `subscriptions` yang "diaktifkan". `RenewalInvoiceService` memakai
 SATU baris `subscriptions` tersembunyi per pelanggan (`name = "Perpanjangan Manual (BOSS App)"`,
@@ -9545,10 +9555,121 @@ admin, NOL kirim WA.** Kirim otomatis adalah sub-versi TERPISAH (v0.13.5.3, menu
   (sisa >170 MB). Seluruh DB: invoice maks 1 item, nol invoice ber-pajak (tax engine belum dikonfigurasi).
   `composer install` di server 13 dtk (nol downtime), `whatsapp_message_logs` tetap (nol WA), nol exception.
 
-**LARANGAN (rujuk v0.13.5.1.2):** jalur KIRIM PDF ke pelanggan (v0.13.5.3) HARUS tunduk saklar
-`customer_auto_notify_enabled` — ditegakkan di jalur pelanggan ber-guard (`buildAndQueue`), BUKAN
-`buildAndQueueForRecipient`/jalur media yang melewati saklar. `InvoicePdfService` sendiri tidak mengirim
-apa pun; jangan panggil dari jalur kirim tanpa saklar.
+**LARANGAN (rujuk v0.13.5.1.2):** jalur KIRIM PDF OTOMATIS ke pelanggan (v0.13.5.3.1, belum dibangun) HARUS
+tunduk saklar `customer_auto_notify_enabled` — ditegakkan di jalur pelanggan ber-guard (`buildAndQueue`),
+BUKAN `buildAndQueueForRecipient`/jalur media yang melewati saklar. **Kirim MANUAL (v0.13.5.3) SENGAJA
+MELEWATI saklar** (lihat section di bawah) — bypass itu HANYA lewat `InvoiceSendContext`. `InvoicePdfService`
+sendiri tidak mengirim apa pun; jangan panggil dari jalur kirim OTOMATIS tanpa saklar.
+
+## Kirim PDF Invoice MANUAL ke Pelanggan + Mode Uji (v0.13.5.3 — SELESAI, merged `develop`→`main`, tag `v0.13.5.3`)
+
+**Admin mengirim PDF invoice ke pelanggan via WhatsApp lewat tombol MANUAL — SATU pesan (PDF + caption).
+Kirim OTOMATIS saat invoice terbit = v0.13.5.3.1 TERPISAH, BELUM dibangun.** Branch topik
+`v0.13.5.3-kirim-pdf-manual` dari develop (aa2074e), dikerjakan di git worktree (server tetap di develop).
+
+**ATURAN SAKLAR — OTOMATIS vs MANUAL (penting, jangan dikaburkan):**
+- Saklar `work_order_dispatch_settings.customer_auto_notify_enabled` HANYA mengatur kiriman OTOMATIS (4
+  event pelanggan lama + nanti kirim invoice otomatis). Kirim MANUAL oleh admin **sengaja MELEWATInya** —
+  admin menekan tombol secara sadar.
+- Bypass ditegakkan STRUKTURAL: `WhatsappGatewayService::buildAndQueue()` melewati guard saklar **hanya
+  bila** parameter `?InvoiceSendContext $context` diisi. `InvoiceSendContext` HANYA dibangun
+  `App\Services\Billing\InvoicePdfSendService` (satu-satunya jalur kirim manual) — dijaga
+  `WhatsappManualBypassArchitectureTest` (scan source: tidak ada pemanggil OTOMATIS yang menyebut
+  `InvoiceSendContext`). Semua pemanggil otomatis (4 event + command) memanggil `buildAndQueue()` TANPA
+  context → tetap ber-guard.
+
+**Jalur kirim:**
+- `WhatsappAttachment::fromInvoicePdf(Invoice, $expectedTenantId)` — prefix `invoice-pdfs/`, MIME pdf,
+  kepemilikan tenant lewat Invoice induk (tenant lain → `WhatsappAttachmentException`).
+- `WhatsappGatewayService::buildAndQueue()` diperluas 2 param: `?WhatsappAttachment $attachment` +
+  `?InvoiceSendContext $context` (recipientOverride/isTest/captionPrefix/sentByUserId). Satu pesan: PDF +
+  caption = teks template ter-render (dengan prefiks Mode Uji bila ada). `buildVariables` dapat `{cs_number}`
+  (`CompanyProfileService::resolveCs`) + `{period}` (bulan periode invoice).
+- `InvoicePdfSendService::sendManually(Invoice, User $actor, bool $resend=false)` — SEMUA penegakan di sini:
+  izin `invoices.manage` (Gate, else `AuthorizationException`); status **Pending/Overdue/Lunas** (bukan
+  Draft/Cancelled); nomor pelanggan valid (`WhatsappPhone::normalize`, ≥10 digit, awalan 62); template
+  `invoice_issued` AKTIF (nonaktif/belum ada = tolak jelas); **sesi tujuan (reseller_id pelanggan) connected**
+  — logged_out/qr_pending/disconnected → `InvoicePdfSendException`, TIDAK diantre; kirim ulang butuh
+  `resend=true` + jeda **10 menit** (`RESEND_COOLDOWN_MINUTES`) untuk invoice yang sama (anti-spam). Alur:
+  render fresh → `InvoicePdfService::store()` → `fromInvoicePdf` → `buildAndQueue` dengan context. Melempar
+  `InvoicePdfSendException` (bisnis, pesan Indonesia aman) / `AuthorizationException` — tidak pernah mengirim
+  WA sendiri, hanya mengantre.
+
+**Mode Uji per tenant** (`work_order_dispatch_settings.invoice_pdf_test_mode_enabled` bool default FALSE +
+`invoice_pdf_test_recipient` nullable, dinormalisasi 62...): bila AKTIF, **penerima DIGANTI ke nomor uji
+(pelanggan nyata TIDAK menerima apa pun)**, caption diawali `[UJI untuk: {nama} - {invoice}]`, log
+`whatsapp_message_logs.is_test=true`. **Penanda "terkirim ke pelanggan" di UI HANYA dari log non-uji**; log
+uji ditandai badge "Uji". Mode Uji aktif TANPA nomor uji valid = kirim ditolak. Penegakan di service, bukan
+hanya UI. Kolom aditif: `whatsapp_message_logs.sent_by_user_id` (pelaku manual, null=otomatis) + `is_test`.
+
+**JANGAN hook sinkron saat invoice terbit (burst tengah malam).** `GenerateDueInvoices` AKTIF dan
+menerbitkan ~308 invoice dalam SATU run bulanan (billing_cycle_day=1, sekitar tgl 24/25). Hook kirim sinkron
+di `markPending`/`GenerateDueInvoices` akan mengantre ratusan pesan tengah malam di luar jendela jam. Kirim
+OTOMATIS (v0.13.5.3.1) HARUS = **command sweep terjadwal terpisah** dengan: cap **80/hari per tenant**,
+jendela **08:00–20:00**, HANYA invoice baru terbit sejak saklar ON (BUKAN backlog ~287), guard sesi
+connected, dedup via `whatsapp_message_logs (invoice_id, event_type=invoice_issued)` — bukan hook sinkron.
+
+**UI:** tombol "Kirim PDF via WhatsApp" di dropdown Cetak `/invoices` + Detail Pelanggan (modal konfirmasi:
+nama, nomor tujuan lengkap, invoice, total, jatuh tempo, peringatan sudah-terkirim, **banner merah "MODE UJI:
+akan dikirim ke <nomor>, BUKAN ke pelanggan"**; tombol Kirim/Kirim Ulang/Batal) + penanda baris
+Terkirim/Uji/Gagal dari log. Partial bersama `billing/partials/send-invoice-pdf-modal.blade.php` (property/
+method identik di `InvoiceIndex` & `CustomerShow`). Kartu "Mode Uji Kirim Invoice" di Konfig WA Gateway
+(`Settings\WorkOrderDispatchSettings`, permission `work_orders.manage`, isolasi tenant).
+
+**Template default `invoice_issued`** (seeder, idempoten `firstOrCreate`, tak menimpa edit admin): caption
+"Halo {customer_name}, tagihan internet Anda sudah terbit." + Invoice/Paket/Total/Jatuh tempo + "Rincian
+lengkap ada pada file PDF terlampir." + "Bantuan: CS {cs_number}" + "{company_name}". **TANPA `{payment_link}`**
+(channel `XENDIT_INVOICE` disabled + Xendit sandbox → link tak berfungsi; template renderer tetap mengosongkan
+variabel tak terpakai tanpa memblokir).
+
+**Rilis (aditif, NOL downtime):** `php artisan migrate` (2 kolom whatsapp_message_logs + 2 kolom
+work_order_dispatch_settings) + `db:seed --class=WhatsappMessageTemplateSeeder` (idempoten, template baru) +
+`optimize:clear` + `queue:restart`. NOL `.env`/rebuild image/logout sesi WA (endpoint `/send-media` + MIME
+pdf + GD sudah ada sejak v0.13.5.1/.1.1). **Uji nyata HANYA ke nomor Agung 6287884374939** lewat pelanggan/
+invoice TEST + Mode Uji; penanda "terkirim ke pelanggan" tetap kosong untuk kiriman uji.
+
+**PENUTUPAN (2026-11-09) — RILIS KE SERVER + UJI NYATA + MERGE/TAG.** Dirilis ke server (checkout branch
+topik, `migrate` 4 kolom aditif, seed template idempoten, `optimize:clear`+`queue:restart`; NOL `.env`/
+rebuild/logout). Mode Uji tenant 1 diset ON ke `6287884374939`, `customer_auto_notify_enabled` tenant 1
+OFF, keempat template pelanggan otomatis (`invoice_due_reminder`/`payment_received`/`customer_registered`/
+`customer_suspended_reminder`) dinonaktifkan; template manual `invoice_issued` aktif. **Uji nyata via UI
+oleh Agung** (2 klik, invoice TEST 1238 + invoice nyata 1162): tiap klik = TEPAT SATU `whatsapp_message_logs`
+(`event=invoice_issued`, `is_test=true`, `sent_by_user_id` admin, `session=direct`, lampiran PDF + caption
+berprefiks `[UJI untuk: ...]`, `status=sent`) HANYA ke nomor Agung; penanda "Terkirim ke pelanggan" tetap
+kosong (hanya dihitung dari log `is_test=false`); invoice/kolom pelanggan tak berubah; nol pesan ke grup/
+nomor lain. Data uji (customer 581 TEST + invoice 1238 + subscription 1603 + 2 log uji + cache PDF 1238/
+1162) **dibersihkan tuntas** dalam satu transaksi FK-ordered (backup `pg_dump` →
+`/opt/boss-backups/pre-v13553-cleanup-2026-11-09.sql`); invoice 1162 & pelanggan 545 (data nyata) TIDAK
+disentuh; 571/572/573 utuh.
+
+**PELAJARAN (pakai ulang untuk uji rilis WA/invoice berikutnya):**
+- **(a) `invoice-pdfs` tertinggal `root` dari uji v0.13.5.2 → 500 pertama kali Kirim PDF.** `storage/app/
+  private/invoice-pdfs/` sempat dibuat `root:root 0700` oleh sesi `docker compose exec` root saat uji
+  v0.13.5.2, sehingga php-fpm (`www-data`) tak bisa menulis → `UnableToCreateDirectory` → 500. **Selalu uji
+  & warm-up jalur disk (render/store PDF) sebagai `www-data` (`docker compose exec -u www-data`), bukan
+  root.** Fix durabilitas (chown periodik `storage/app/private` di loop self-healing `docker/php/
+  entrypoint.sh`, sejajar guard `/tmp` & `storage/logs/*.log`) = **backlog** (butuh rebuild image).
+- **(b) Klaim "4 template pelanggan nonaktif" semula hanya 2.** Saat verifikasi pertama, hanya
+  `invoice_due_reminder`/`customer_suspended_reminder` yang nonaktif; `payment_received`/`customer_registered`
+  masih aktif — baru dinonaktifkan menyusul. Penegak utama tetap saklar per-tenant `customer_auto_notify_enabled`
+  OFF (di `buildAndQueue`), bukan `is_active` template. Saat menutup, pastikan keempatnya benar-benar OFF
+  bila itu yang diklaim.
+- **(c) Uji nyata sebut NOMOR invoice yang tampil di UI, bukan ID internal.** Instruksi uji sempat menyebut
+  "invoice 42" (maksud: `invoice_id` internal 42) tapi yang terklik invoice bernomor `INV/DIRECT/2026/10/
+  000042` = `invoice_id` 1162 — beda baris. Rujuk invoice dengan nomornya yang tampak di layar.
+- **(d) Log uji ikut memblokir kirim PERTAMA setelah go-live.** `lastSendFor()` menghitung log `is_test=true`
+  juga → setelah go-live, invoice yang sudah pernah diuji akan menolak kirim pertama ("sudah pernah
+  dikirim", butuh Kirim Ulang). Pertimbangkan mengecualikan log uji dari gerbang kirim-pertama =
+  **backlog v0.13.5.3.1**.
+- **(e) Mode Uji tenant 1 TETAP ON** sampai Agung memutuskan go-live (saat itu: matikan Mode Uji + nyalakan
+  saklar/aktifkan template sesuai kebutuhan). Kirim OTOMATIS saat invoice terbit = **v0.13.5.3.1** (command
+  sweep terjadwal, cap 80/hari/tenant, jendela 08:00–20:00, HANYA invoice baru, bukan hook sinkron — lihat
+  larangan burst tengah malam di atas).
+- **Backlog file `root` lain di `storage/`** (sisa sesi `exec` root, tak memblokir fitur PDF tapi bisa
+  menggigit fitur lain): `storage/app/ppp_secrets.json`, `storage/app/wan_baseline_snap.json`,
+  `storage/app/imports/*.csv`, `storage/app/private/fiber-node-photos/...`, `storage/framework/testing/*`,
+  beberapa `storage/framework/views/*.php` terkompilasi root. Fix tuntas = loop chown entrypoint (butuh
+  rebuild).
 
 ## Architecture
 

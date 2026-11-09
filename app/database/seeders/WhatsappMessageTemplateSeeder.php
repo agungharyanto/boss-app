@@ -52,6 +52,11 @@ class WhatsappMessageTemplateSeeder extends Seeder
             // WorkOrderDispatchService::notifyWorkOrderCompleted). Baris
             // "Password WiFi: ****" LITERAL — password tidak pernah dikirim.
             WhatsappEventType::WorkOrderCompleted->value => 'Work Order #{work_order_id} SELESAI.'.PHP_EOL.'Teknisi: {technician_name}'.PHP_EOL.'Pelanggan: {customer_name} (CID {customer_cid})'.PHP_EOL.'Layanan: {service_type}'.PHP_EOL.'SSID WiFi: {ssid}'.PHP_EOL.'Password WiFi: ****'.PHP_EOL.'Foto dokumentasi menyusul di bawah.',
+
+            // v0.13.5.3 — "Tagihan terbit" + lampiran PDF, dikirim MANUAL ke
+            // pelanggan. TANPA {payment_link} (Xendit mati/sandbox). Caption =
+            // teks ini; PDF menyusul sebagai lampiran pada pesan yang sama.
+            WhatsappEventType::InvoiceIssued->value => 'Halo {customer_name}, tagihan internet Anda sudah terbit.'.PHP_EOL.'Invoice: {invoice_number}'.PHP_EOL.'Paket: {package_name}'.PHP_EOL.'Total: {total_amount}'.PHP_EOL.'Jatuh tempo: {due_date}'.PHP_EOL.'Rincian lengkap ada pada file PDF terlampir.'.PHP_EOL.'Bantuan: CS {cs_number}'.PHP_EOL.'Terima kasih - {company_name}',
         ];
 
         Tenant::all()->each(function (Tenant $tenant) use ($defaults) {

@@ -3,9 +3,11 @@
 namespace App\Support\Whatsapp;
 
 use App\Exceptions\WhatsappAttachmentException;
+use App\Models\Invoice;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderPhoto;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 /**
  * v0.13.5.1 — value object lampiran media WA. Dibangun HANYA oleh kode
@@ -64,6 +66,35 @@ final class WhatsappAttachment
             path: $path,
             mime: self::guessMimeFromExtension($path),
             filename: basename($path),
+            caption: $caption,
+        );
+    }
+
+    /**
+     * v0.13.5.3 — factory tepercaya untuk PDF invoice. HOOK KEPEMILIKAN
+     * TENANT: `$expectedTenantId` WAJIB cocok dengan `invoice.tenant_id`
+     * (resolver ownership = Invoice induk) — melempar
+     * WhatsappAttachmentException kalau tidak cocok, mencegah lampiran tenant
+     * lain masuk ke log/antrian sejak AWAL. Path mengikuti konvensi
+     * `InvoicePdfService::store()` (`invoice-pdfs/{tenant}/{id}.pdf`, di bawah
+     * prefiks ALLOWED). File-nya sendiri harus sudah di-`store()` oleh
+     * pemanggil sebelum kirim; ISI & MIME divalidasi ulang saat kirim
+     * (assertValidForSend).
+     */
+    public static function fromInvoicePdf(Invoice $invoice, int $expectedTenantId, ?string $caption = null): self
+    {
+        if ((int) $invoice->tenant_id !== $expectedTenantId) {
+            throw new WhatsappAttachmentException('Lampiran bukan milik tenant ini.');
+        }
+
+        $path = "invoice-pdfs/{$invoice->tenant_id}/{$invoice->id}.pdf";
+        $fileName = 'invoice-'.Str::slug((string) $invoice->invoice_number, '-').'.pdf';
+
+        return new self(
+            disk: 'local',
+            path: $path,
+            mime: 'application/pdf',
+            filename: $fileName,
             caption: $caption,
         );
     }

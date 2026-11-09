@@ -235,8 +235,21 @@
                                             <a href="{{ route('web.invoices.print', ['invoice' => $inv, 'format' => 'thermal', 'width' => '80']) }}" target="_blank" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50">Print Thermal 80mm</a>
                                             <a href="{{ route('web.invoices.print', ['invoice' => $inv, 'format' => 'thermal', 'width' => '58']) }}" target="_blank" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50">Print Thermal 58mm</a>
                                             <a href="{{ route('web.invoices.pdf', $inv) }}" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 border-t border-gray-100">Unduh PDF</a>
+                                            @if ($canManageInvoices)
+                                                <button type="button" wire:click="confirmSendPdf({{ $inv->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-xs text-primary hover:bg-gray-50 border-t border-gray-100">Kirim PDF via WhatsApp</button>
+                                            @endif
                                         </div>
                                     </span>
+                                    @php($marker = $invoiceSendMarkers[$inv->id] ?? null)
+                                    @if ($marker !== null)
+                                        @if ($marker['is_test'])
+                                            <span class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700" title="Kiriman uji — pelanggan tidak menerima">Uji</span>
+                                        @elseif ($marker['status'] === 'failed')
+                                            <span class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-red-100 text-red-700">Gagal</span>
+                                        @else
+                                            <span class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-green-100 text-green-700" title="{{ $marker['at']?->translatedFormat('d M Y H:i') }}">Terkirim</span>
+                                        @endif
+                                    @endif
                                 </td>
                             </tr>
                         @endforeach
@@ -414,4 +427,6 @@
             {{ $timelineEntries->links() }}
         </div>
     </div>
+
+    @include('billing.partials.send-invoice-pdf-modal')
 </div>

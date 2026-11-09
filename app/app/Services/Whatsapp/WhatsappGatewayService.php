@@ -12,7 +12,9 @@ use App\Models\Referrer;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappSession;
 use App\Models\WorkOrderDispatchSettings;
+use App\Services\Company\CompanyProfileService;
 use App\Services\Payment\PaymentService;
+use App\Support\Whatsapp\InvoiceSendContext;
 use App\Support\Whatsapp\WhatsappAttachment;
 use App\Support\WhatsappPhone;
 use Illuminate\Support\Facades\Log;
@@ -32,36 +34,50 @@ class WhatsappGatewayService
     ) {}
 
     /**
-     * Resolve template + render + log + dispatch, for any of the four
-     * event_types this module fires. Returns null (no exception) when no
-     * template resolves at all — a seeding gap, not something that should
-     * ever fail the caller's own transaction (invoice markPaid, customer
-     * registration, etc).
+     * Resolve template + render + log + dispatch, lewat "jalur pelanggan".
+     * Returns null (no exception) when no template resolves at all — a seeding
+     * gap, not something that should ever fail the caller's own transaction
+     * (invoice markPaid, customer registration, etc).
+     *
+     * v0.13.5.3 — 2 parameter baru:
+     *  - $attachment: lampiran media (PDF invoice) — satu pesan = PDF +
+     *    caption (teks template ter-render). null = pesan teks biasa.
+     *  - $context: HANYA diisi `InvoicePdfSendService` (kirim MANUAL). Bila
+     *    diisi, panggilan ini MELEWATI saklar `customer_auto_notify_enabled`
+     *    (bypass yang disengaja admin) DAN boleh mengganti penerima (Mode
+     *    Uji), prefiks caption, tandai is_test, catat pelaku. SEMUA pemanggil
+     *    OTOMATIS (4 event pelanggan lama + command) memanggil TANPA $context
+     *    → tetap ber-guard. Dijaga `WhatsappManualBypassArchitectureTest`.
      */
-    public function buildAndQueue(WhatsappEventType $eventType, Customer $customer, ?Invoice $invoice = null): ?WhatsappMessageLog
-    {
+    public function buildAndQueue(
+        WhatsappEventType $eventType,
+        Customer $customer,
+        ?Invoice $invoice = null,
+        ?WhatsappAttachment $attachment = null,
+        ?InvoiceSendContext $context = null,
+    ): ?WhatsappMessageLog {
         // v0.13.5.1.2 — saklar per-tenant "Notifikasi Otomatis ke Pelanggan".
-        // TITIK PENEGAKAN TUNGGAL: keempat event pelanggan (invoice_due_reminder,
+        // TITIK PENEGAKAN: event pelanggan OTOMATIS (invoice_due_reminder,
         // payment_received, customer_registered, customer_suspended_reminder)
-        // melewati method ini dan HANYA method ini — jadi guard di sini
-        // menghentikan semuanya tanpa menyentuh kelompok (B) (referrer OTP,
-        // teknisi/WO, staff, grup, balasan 2-arah) yang pakai
-        // buildAndQueueForRecipient/ForReferrer/ForGroup. Baca read-only (tanpa
-        // membuat baris): tak ada baris settings => dianggap ON (pertahankan
-        // perilaku). Skip = Log::info + return null, TANPA exception & TANPA
-        // membuat WhatsappMessageLog (pemanggil memperlakukan null = tidak
-        // terkirim; pembayaran/registrasi tidak pernah gagal karenanya).
-        $settings = WorkOrderDispatchSettings::query()
-            ->where('tenant_id', $customer->tenant_id)
-            ->first();
+        // melewati method ini TANPA $context → guard di sini menghentikan
+        // semuanya tanpa menyentuh kelompok (B) (referrer OTP, teknisi/WO,
+        // staff, grup, balasan 2-arah) yang pakai buildAndQueueForRecipient/
+        // ForReferrer/ForGroup. $context != null = kirim MANUAL admin
+        // (InvoicePdfSendService) → sengaja MELEWATI saklar. Baca read-only
+        // (tanpa membuat baris): tak ada baris settings => dianggap ON.
+        if ($context === null) {
+            $settings = WorkOrderDispatchSettings::query()
+                ->where('tenant_id', $customer->tenant_id)
+                ->first();
 
-        if ($settings !== null && ! $settings->customer_auto_notify_enabled) {
-            Log::info('WhatsappGatewayService: dilewati — saklar notifikasi pelanggan mati', [
-                'event' => $eventType->value,
-                'tenant' => $customer->tenant_id,
-            ]);
+            if ($settings !== null && ! $settings->customer_auto_notify_enabled) {
+                Log::info('WhatsappGatewayService: dilewati — saklar notifikasi pelanggan mati', [
+                    'event' => $eventType->value,
+                    'tenant' => $customer->tenant_id,
+                ]);
 
-            return null;
+                return null;
+            }
         }
 
         $template = $this->templateService->resolve($eventType, $customer->tenant_id, $customer->reseller_id);
@@ -73,17 +89,25 @@ class WhatsappGatewayService
         }
 
         $variables = $this->buildVariables($eventType, $customer, $invoice);
-        $rendered = $this->templateService->render($template->content, $variables);
+        $rendered = ($context?->captionPrefix ?? '').$this->templateService->render($template->content, $variables);
+
+        // Mode Uji (v0.13.5.3) — penerima DIGANTI ke nomor uji; pelanggan asli
+        // TIDAK menerima apa pun. Default (tanpa context / tanpa override) =
+        // nomor pelanggan asli.
+        $recipientRaw = $context?->recipientOverride ?? $customer->phone_number;
 
         $log = WhatsappMessageLog::create([
             'tenant_id' => $customer->tenant_id,
             'reseller_id' => $customer->reseller_id,
             'customer_id' => $customer->id,
             'invoice_id' => $invoice?->id,
-            'phone_number' => WhatsappPhone::normalize($customer->phone_number),
+            'phone_number' => WhatsappPhone::normalize($recipientRaw),
             'event_type' => $eventType,
             'template_id' => $template->id,
+            'sent_by_user_id' => $context?->sentByUserId,
             'rendered_content' => $rendered,
+            'attachment' => $attachment?->toArray(),
+            'is_test' => $context?->isTest ?? false,
             'status' => WhatsappMessageStatus::Queued,
             'queued_at' => now(),
         ]);
@@ -378,6 +402,12 @@ class WhatsappGatewayService
             'package_name' => $invoice?->subscription?->name,
             'company_name' => $companyName,
             'payment_link' => null,
+            // v0.13.5.3 — {period} = bulan periode invoice; {cs_number} = nomor
+            // CS efektif (override reseller → CS tenant → env), dari
+            // CompanyProfileService::resolveCs.
+            'period' => $invoice?->period_start?->translatedFormat('F Y'),
+            'cs_number' => app(CompanyProfileService::class)
+                ->resolveCs(null, $customer->tenant_id, $customer->reseller_id),
         ];
 
         // Confirmed decision (v0.4.0): generate a fresh Xendit Invoice link

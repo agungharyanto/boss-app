@@ -95,8 +95,21 @@
                                     <a href="{{ route('web.invoices.print', ['invoice' => $invoice, 'format' => 'thermal', 'width' => '80']) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Thermal 80mm') }}</a>
                                     <a href="{{ route('web.invoices.print', ['invoice' => $invoice, 'format' => 'thermal', 'width' => '58']) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Thermal 58mm') }}</a>
                                     <a href="{{ route('web.invoices.pdf', $invoice) }}" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 border-t border-gray-100">{{ __('Unduh PDF') }}</a>
+                                    @if ($canManage)
+                                        <button type="button" wire:click="confirmSendPdf({{ $invoice->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-gray-50 border-t border-gray-100">{{ __('Kirim PDF via WhatsApp') }}</button>
+                                    @endif
                                 </div>
                             </span>
+                            @php($marker = $sendMarkers[$invoice->id] ?? null)
+                            @if ($marker !== null)
+                                @if ($marker['is_test'])
+                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700" title="{{ __('Kiriman uji — pelanggan tidak menerima') }}">{{ __('Uji') }}</span>
+                                @elseif ($marker['status'] === 'failed')
+                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-red-100 text-red-700">{{ __('Gagal kirim') }}</span>
+                                @else
+                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-green-100 text-green-700" title="{{ $marker['at']?->translatedFormat('d M Y H:i') }}">{{ __('Terkirim') }}</span>
+                                @endif
+                            @endif
                             @if ($canManage)
                                 @if ($invoice->status->canTransitionTo(\App\Enums\InvoiceStatus::Pending))
                                     <button wire:click="markPending({{ $invoice->id }})" class="text-primary hover:underline">{{ __('Issue') }}</button>
@@ -130,4 +143,6 @@
     <div class="mt-4">
         {{ $invoices->links() }}
     </div>
+
+    @include('billing.partials.send-invoice-pdf-modal')
 </div>

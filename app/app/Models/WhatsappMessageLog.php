@@ -37,9 +37,14 @@ class WhatsappMessageLog extends Model
         'phone_number',
         'event_type',
         'template_id',
+        // v0.13.5.3 — pelaku kirim MANUAL (admin); null = otomatis/sistem.
+        'sent_by_user_id',
         'rendered_content',
         'attachment',
         'status',
+        // v0.13.5.3 — baris hasil "Mode Uji" (dikirim ke nomor uji, bukan
+        // pelanggan). Penanda "terkirim ke pelanggan" hanya hitung non-uji.
+        'is_test',
         'failed_reason',
         'attempts',
         'queued_at',
@@ -52,6 +57,7 @@ class WhatsappMessageLog extends Model
             'event_type' => WhatsappEventType::class,
             'status' => WhatsappMessageStatus::class,
             'attachment' => 'array',
+            'is_test' => 'boolean',
             'queued_at' => 'datetime',
             'sent_at' => 'datetime',
         ];
@@ -94,5 +100,10 @@ class WhatsappMessageLog extends Model
     public function template(): BelongsTo
     {
         return $this->belongsTo(WhatsappMessageTemplate::class, 'template_id');
+    }
+
+    public function sentBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'sent_by_user_id');
     }
 }

@@ -9,6 +9,7 @@ use App\Models\WhatsappSession;
 use App\Models\WorkOrderDispatchSettings as WorkOrderDispatchSettingsModel;
 use App\Services\Whatsapp\WhatsappSessionService;
 use App\Support\Whatsapp\WhatsappGroupCategory;
+use App\Support\WhatsappPhone;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -52,6 +53,15 @@ class WorkOrderDispatchSettings extends Component
      * teknisi/WO, grup WO, atau balasan 2-arah. Default ON.
      */
     public bool $customerAutoNotifyEnabled = true;
+
+    /**
+     * v0.13.5.3 — "Mode Uji Kirim Invoice" per tenant. Bila AKTIF, kirim PDF
+     * invoice (manual) dialihkan ke nomor uji — pelanggan nyata TIDAK
+     * menerima apa pun. Default MATI.
+     */
+    public bool $invoicePdfTestModeEnabled = false;
+
+    public ?string $invoicePdfTestRecipient = null;
 
     /** Form "Tambah Grup". */
     public ?string $newGroupJid = null;
@@ -117,6 +127,33 @@ class WorkOrderDispatchSettings extends Component
         $this->refreshFromSettings($settings->fresh());
 
         session()->flash('status', 'Pengaturan notifikasi otomatis ke pelanggan disimpan.');
+    }
+
+    /**
+     * v0.13.5.3 — simpan "Mode Uji Kirim Invoice" (toggle + nomor uji).
+     * Nomor dinormalisasi ke 62...; Mode Uji aktif tanpa nomor valid ditolak.
+     */
+    public function saveInvoicePdfTestMode(): void
+    {
+        $this->authorize('work_orders.manage');
+
+        $normalized = WhatsappPhone::normalize($this->invoicePdfTestRecipient);
+
+        if ($this->invoicePdfTestModeEnabled && (strlen($normalized) < 10 || ! str_starts_with($normalized, '62'))) {
+            $this->addError('invoicePdfTestRecipient', 'Mode Uji aktif wajib nomor uji yang valid (mis. 6287884374939).');
+
+            return;
+        }
+
+        $settings = WorkOrderDispatchSettingsModel::forTenant($this->tenantId());
+        $settings->update([
+            'invoice_pdf_test_mode_enabled' => $this->invoicePdfTestModeEnabled,
+            'invoice_pdf_test_recipient' => $normalized === '' ? null : $normalized,
+        ]);
+
+        $this->refreshFromSettings($settings->fresh());
+
+        session()->flash('status', 'Pengaturan Mode Uji Kirim Invoice disimpan.');
     }
 
     // ── Daftar Grup Notifikasi ─────────────────────────────────────────
@@ -385,6 +422,8 @@ class WorkOrderDispatchSettings extends Component
         $this->reminderTime = $settings->reminder_time;
         $this->commandIntervalMinutes = $settings->command_interval_minutes;
         $this->customerAutoNotifyEnabled = (bool) $settings->customer_auto_notify_enabled;
+        $this->invoicePdfTestModeEnabled = (bool) $settings->invoice_pdf_test_mode_enabled;
+        $this->invoicePdfTestRecipient = $settings->invoice_pdf_test_recipient;
     }
 
     private function tenantId(): int

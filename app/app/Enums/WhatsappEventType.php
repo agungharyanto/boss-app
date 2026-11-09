@@ -155,6 +155,26 @@ enum WhatsappEventType: string
      */
     case WorkOrderCompleted = 'work_order_completed';
 
+    /**
+     * v0.13.5.3 — "Tagihan terbit" + LAMPIRAN PDF invoice, dikirim ke
+     * PELANGGAN. Pada sub-versi ini HANYA dipicu MANUAL oleh admin
+     * (InvoicePdfSendService::sendManually) — kirim OTOMATIS saat invoice
+     * terbit adalah v0.13.5.3.1 terpisah (belum dibangun; JANGAN tambah
+     * sweep/command/hook sinkron di sini — burst ~308 invoice tengah malam
+     * sekitar tgl 24/25, lihat CLAUDE.md).
+     *
+     * BEDA dari 4 event pelanggan lama: kirim manual SENGAJA MELEWATI saklar
+     * `customer_auto_notify_enabled` (saklar itu hanya untuk kiriman
+     * OTOMATIS). Bypass ditegakkan lewat `InvoiceSendContext` yang HANYA
+     * dibangun `InvoicePdfSendService` — semua pemanggil otomatis tetap
+     * ber-guard (lihat `WhatsappGatewayService::buildAndQueue()` + test
+     * arsitektur). Variabel teks: `{customer_name}` `{invoice_number}`
+     * `{package_name}` `{total_amount}` `{due_date}` `{period}`
+     * `{cs_number}` `{company_name}` (TANPA `{payment_link}` — Xendit
+     * mati/sandbox; kalau variabelnya ada, dirender kosong tanpa memblokir).
+     */
+    case InvoiceIssued = 'invoice_issued';
+
     public function label(): string
     {
         return match ($this) {
@@ -172,6 +192,7 @@ enum WhatsappEventType: string
             self::WorkOrderClaimedReminder => 'Work Order Reminder (Sudah Diklaim)',
             self::WorkOrderActivationReady => 'Work Order Siap Aktivasi (Link Aktivasi)',
             self::WorkOrderCompleted => 'Work Order Selesai (Grup + Foto)',
+            self::InvoiceIssued => 'Tagihan Terbit (PDF ke Pelanggan)',
         };
     }
 }

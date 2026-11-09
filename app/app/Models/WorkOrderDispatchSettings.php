@@ -60,6 +60,9 @@ class WorkOrderDispatchSettings extends Model
         'close_terms_version',
         'last_dispatch_run_at',
         'customer_auto_notify_enabled',
+        // v0.13.5.3 — "Mode Uji Kirim Invoice" per tenant.
+        'invoice_pdf_test_mode_enabled',
+        'invoice_pdf_test_recipient',
     ];
 
     protected function casts(): array
@@ -67,6 +70,7 @@ class WorkOrderDispatchSettings extends Model
         return [
             'last_dispatch_run_at' => 'datetime',
             'customer_auto_notify_enabled' => 'boolean',
+            'invoice_pdf_test_mode_enabled' => 'boolean',
         ];
     }
 
@@ -101,6 +105,10 @@ class WorkOrderDispatchSettings extends Model
                 // v0.13.5.1.2 — default ON (pertahankan perilaku); tenant 1
                 // di-set OFF lewat langkah rilis, bukan di sini.
                 'customer_auto_notify_enabled' => true,
+                // v0.13.5.3 — Mode Uji default MATI; nomor uji di-set lewat
+                // UI/langkah rilis, bukan di sini.
+                'invoice_pdf_test_mode_enabled' => false,
+                'invoice_pdf_test_recipient' => null,
             ]
         );
     }

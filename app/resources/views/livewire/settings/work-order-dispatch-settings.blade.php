@@ -80,6 +80,36 @@
         </button>
     </div>
 
+    {{-- ── Mode Uji Kirim Invoice (v0.13.5.3) ───────────────────────── --}}
+    <div class="bg-white border border-gray-200 rounded-md p-6 mb-6">
+        <div class="flex items-center justify-between mb-1">
+            <h2 class="text-lg font-semibold text-gray-800">{{ __('Mode Uji Kirim Invoice') }}</h2>
+            @if ($invoicePdfTestModeEnabled)
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">{{ __('AKTIF') }}</span>
+            @else
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{{ __('MATI') }}</span>
+            @endif
+        </div>
+        <p class="text-xs text-gray-500 mb-4">
+            {{ __('Saat AKTIF, semua "Kirim PDF via WhatsApp" dialihkan ke NOMOR UJI di bawah — pelanggan nyata TIDAK menerima apa pun. Caption diberi awalan "[UJI untuk: ...]" dan log ditandai "Uji". Matikan untuk mengirim ke pelanggan sungguhan.') }}
+        </p>
+
+        <label class="flex items-center gap-2 text-sm text-gray-700 mb-3">
+            <input type="checkbox" wire:model="invoicePdfTestModeEnabled" class="rounded border-gray-300">
+            <span>{{ __('Aktifkan Mode Uji (alihkan semua kiriman invoice ke nomor uji)') }}</span>
+        </label>
+
+        <label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Nomor WhatsApp Uji') }}</label>
+        <input type="text" wire:model="invoicePdfTestRecipient" placeholder="6287884374939"
+            class="block w-full sm:w-72 rounded-md border-gray-300 shadow-sm text-sm">
+        @error('invoicePdfTestRecipient') <p class="text-sm text-red-600 mt-1">{{ $message }}</p> @enderror
+        <p class="text-xs text-gray-400 mt-1 mb-4">{{ __('Otomatis dinormalisasi ke format 62... Contoh: 087884374939 menjadi 6287884374939.') }}</p>
+
+        <button type="button" wire:click="saveInvoicePdfTestMode" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">
+            {{ __('Simpan') }}
+        </button>
+    </div>
+
     {{-- ── Daftar Grup Notifikasi ──────────────────────────────────── --}}
     <div class="bg-white border border-gray-200 rounded-md p-6 mb-6">
         <div class="flex items-center justify-between mb-1">

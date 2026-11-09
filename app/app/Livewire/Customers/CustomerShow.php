@@ -8,6 +8,8 @@ use App\Actions\Customers\UpdateCustomerContactAction;
 use App\Actions\Customers\UpdateCustomerStatusAction;
 use App\Enums\ContactAccessLevel;
 use App\Enums\CustomerStatus;
+use App\Enums\WhatsappEventType;
+use App\Exceptions\InvoicePdfSendException;
 use App\Models\CommissionRate;
 use App\Models\CpeDevice;
 use App\Models\Customer;
@@ -15,10 +17,14 @@ use App\Models\CustomerContact;
 use App\Models\Invoice;
 use App\Models\PppPackage;
 use App\Models\Referrer;
+use App\Models\WhatsappMessageLog;
+use App\Services\Billing\InvoicePdfSendService;
 use App\Services\CommissionAttributionService;
 use App\Services\Network\CpeBindingService;
 use App\Services\Network\RadiusCredentialService;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Validate;
@@ -30,6 +36,15 @@ class CustomerShow extends Component
     use AuthorizesRequests;
 
     public Customer $customer;
+
+    // v0.13.5.3 — kirim PDF invoice via WhatsApp (modal konfirmasi, pola sama
+    // dengan InvoiceIndex — property/method identik agar partial modal reuse).
+    public ?int $sendPdfInvoiceId = null;
+
+    /** @var array<string, mixed> */
+    public array $sendPdfPreview = [];
+
+    public ?string $sendPdfError = null;
 
     public bool $editingProfile = false;
 
@@ -446,6 +461,94 @@ class CustomerShow extends Component
         $this->customer->refresh();
     }
 
+    public function confirmSendPdf(int $id): void
+    {
+        $this->authorize('manage', Invoice::class);
+        $this->sendPdfError = null;
+
+        $invoice = Invoice::with('customer')->findOrFail($id);
+        if ((int) $invoice->customer_id !== (int) $this->customer->id) {
+            abort(404);
+        }
+
+        $this->sendPdfInvoiceId = $invoice->id;
+        $this->sendPdfPreview = app(InvoicePdfSendService::class)->previewFor($invoice);
+    }
+
+    public function cancelSendPdf(): void
+    {
+        $this->sendPdfInvoiceId = null;
+        $this->sendPdfPreview = [];
+        $this->sendPdfError = null;
+    }
+
+    public function sendPdf(bool $resend, InvoicePdfSendService $service): void
+    {
+        $this->authorize('manage', Invoice::class);
+        $this->sendPdfError = null;
+
+        if ($this->sendPdfInvoiceId === null) {
+            return;
+        }
+
+        $invoice = Invoice::with('customer')->findOrFail($this->sendPdfInvoiceId);
+        if ((int) $invoice->customer_id !== (int) $this->customer->id) {
+            abort(404);
+        }
+
+        try {
+            $log = $service->sendManually($invoice, auth()->user(), $resend);
+        } catch (AuthorizationException $e) {
+            $this->sendPdfError = 'Anda tidak punya izin mengirim invoice.';
+
+            return;
+        } catch (InvoicePdfSendException $e) {
+            $this->sendPdfError = $e->getMessage();
+
+            return;
+        }
+
+        $this->cancelSendPdf();
+
+        session()->flash('status', $log->is_test
+            ? 'Pesan UJI diantrekan ke nomor uji (pelanggan TIDAK menerima).'
+            : 'PDF invoice diantrekan untuk dikirim ke pelanggan.');
+    }
+
+    /**
+     * v0.13.5.3 — penanda kirim per invoice (baris terakhir InvoiceIssued),
+     * keyed by invoice_id. "Terkirim" hanya non-uji; uji ditandai "Uji".
+     *
+     * @param  list<int>  $invoiceIds
+     * @return array<int, array{status: string, is_test: bool, at: ?Carbon}>
+     */
+    private function sendMarkersFor(array $invoiceIds): array
+    {
+        if ($invoiceIds === []) {
+            return [];
+        }
+
+        $logs = WhatsappMessageLog::query()
+            ->whereIn('invoice_id', $invoiceIds)
+            ->where('event_type', WhatsappEventType::InvoiceIssued->value)
+            ->orderByDesc('created_at')
+            ->get(['invoice_id', 'status', 'is_test', 'sent_at', 'created_at']);
+
+        $markers = [];
+        foreach ($logs as $log) {
+            if (isset($markers[$log->invoice_id])) {
+                continue;
+            }
+            $markers[$log->invoice_id] = [
+                'status' => $log->status->value,
+                'is_test' => (bool) $log->is_test,
+                'at' => $log->sent_at ?? $log->created_at,
+            ];
+        }
+
+        return $markers;
+    }
+
     public function render(RadiusCredentialService $radiusCredential)
     {
         $this->customer->refresh();
@@ -456,19 +559,23 @@ class CustomerShow extends Component
 
         $schemeState = $this->commissionSchemeState();
 
+        // Bagian B (v0.9.12) — Invoice KHUSUS pelanggan ini (referensi
+        // MixRadius "Invoice & Session"). Menu /invoices global tetap ada
+        // untuk overview lintas pelanggan.
+        $customerInvoices = Invoice::query()
+            ->where('customer_id', $this->customer->id)
+            ->with('lineItems:id,invoice_id,description')
+            ->latest('period_start')
+            ->latest('id')
+            ->limit(50)
+            ->get();
+
         return view('livewire.customers.customer-show', [
             'contacts' => $this->customer->contacts()->latest()->get(),
             'timelineEntries' => $this->customer->timelineEntries()->with('actor')->paginate(15),
-            // Bagian B (v0.9.12) — Invoice KHUSUS pelanggan ini (referensi
-            // MixRadius "Invoice & Session"). Menu /invoices global tetap ada
-            // untuk overview lintas pelanggan.
-            'customerInvoices' => Invoice::query()
-                ->where('customer_id', $this->customer->id)
-                ->with('lineItems:id,invoice_id,description')
-                ->latest('period_start')
-                ->latest('id')
-                ->limit(50)
-                ->get(),
+            'customerInvoices' => $customerInvoices,
+            'invoiceSendMarkers' => $this->sendMarkersFor($customerInvoices->pluck('id')->all()),
+            'canManageInvoices' => auth()->user()->can('manage', Invoice::class),
             'availableTransitions' => $availableTransitions,
             'accessLevels' => ContactAccessLevel::cases(),
             'canManage' => auth()->user()->can('update', $this->customer),

@@ -116,6 +116,10 @@ services:
       # read-only since boss-app never writes LibreNMS's own poller data.
       # See CLAUDE.md "Dashboard Monitoring (v0.8.2)".
       - librenms_data:/librenms-data:ro
+      # v0.13.6 — volume bersama media masuk (READ-ONLY). Webhook
+      # incoming-message (recordFromWebhook) menyalin file dari sini ke disk
+      # privat; boss-app tidak pernah menulis/menghapus di sini.
+      - wa_incoming_media:/wa-incoming:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
@@ -247,6 +251,10 @@ services:
       # X doesn't have the env/volume container Y assumed it would" bugs.
       - vpn_pki:/vpn-pki-data
       - vpn_wg_data:/vpn-wg-data
+      # v0.13.6 — READ-ONLY. whatsapp:reconcile-incoming-media (schedule:run
+      # jalan DI SINI, bukan boss-app) memindai sidecar di volume ini untuk
+      # menutup webhook yang hilang.
+      - wa_incoming_media:/wa-incoming:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
@@ -347,9 +355,17 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+      # v0.13.6 — volume bersama media masuk: gateway MENULIS (file+sidecar),
+      # boss-app & boss-scheduler MEMBACA (:ro). Gateway yang membersihkan
+      # (retensi 7 hari, WA_INCOMING_MEDIA_RETENTION_DAYS) — Laravel tak pernah
+      # menghapus file di sini.
+      - wa_incoming_media:/wa-incoming
     environment:
       TZ: Asia/Jakarta
       PORT: 3000
+      # v0.13.6 — dir volume bersama (HARUS = Laravel
+      # services.whatsapp_gateway.incoming_media_dir).
+      WA_INCOMING_MEDIA_DIR: /wa-incoming
       WHATSAPP_GATEWAY_HMAC_SECRET: ${WHATSAPP_GATEWAY_HMAC_SECRET}
       LARAVEL_BASE_URL: http://boss-nginx
       LOG_LEVEL: info
@@ -1454,6 +1470,10 @@ volumes:
   freeradius_nas_config:
   librenms_db_data:
   librenms_data:
+  # v0.13.6 — media masuk WhatsApp: ditulis gateway (rw), dibaca boss-app &
+  # boss-scheduler (:ro). Gateway membersihkan sendiri (retensi 7 hari);
+  # Laravel menyalin ke disk privatnya (retensi 90 hari) & tak pernah hapus di sini.
+  wa_incoming_media:
   # v0.8.4 — boss.bajastu.id activation, the first real TLS deployment in
   # this project (v0.1.0-foundation deliberately deferred it, see
   # docs/DEPLOYMENT.md's own "HTTPS (menyusul)" note). certbot_conf holds

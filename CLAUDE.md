@@ -9671,6 +9671,76 @@ disentuh; 571/572/573 utuh.
   beberapa `storage/framework/views/*.php` terkompilasi root. Fix tuntas = loop chown entrypoint (butuh
   rebuild).
 
+## Terima Media WhatsApp Masuk (v0.13.6 — implementasi di worktree, BELUM merge/tag)
+
+**Pesan masuk bermedia (foto/dokumen PDF/audio termasuk voice note/video/stiker) dari pelanggan/teknisi
+diterima, disimpan aman, ditampilkan.** Melengkapi v0.13.1 (yang HANYA teks 1:1 — media di-`return` dibuang
+di `onIncomingMessage`). Branch topik `v0.13.6-terima-media` dari develop (`0421ab5`), di git worktree.
+
+**ALUR (keputusan D1-D10 final Agung):** Gateway Go **mengunduh** (satu-satunya pemegang kunci dekripsi
+whatsmeow) → simpan ke **volume bersama** `wa_incoming_media` (`/wa-incoming/{session_key}/{message_id}.{ext}`)
++ **sidecar JSON** → webhook diperkaya metadata. Laravel **HANYA MEMBACA** volume (menyalin ke disk privat);
+**tak pernah menghapus** di volume — gateway yang bersihkan (retensi 7 hari). **Grup tetap dibuang (1:1 saja,
+D3).**
+
+**Gateway Go** (`whatsapp-gateway/internal/session/incoming_media.go` + `manager.go` `onIncomingMessage`/
+`handleIncomingMedia`): teks tetap diteruskan seperti dulu; selain itu `detectIncomingMedia` kenali 5 jenis.
+**Cap per jenis** (image 10MB/document 16MB/audio 16MB/video 32MB/sticker 1MB) — **tolak SEBELUM unduh** bila
+`FileLength` metadata > cap, cek ulang ukuran nyata pasca-unduh. Whitelist MIME WA-reported per jenis
+(dokumen **hanya PDF**). `cli.Download(ctx, msg)` di **goroutine** (tak blok event loop) dengan semafor
+`mediaSem` yang sudah ada. Simpan file **atomic** (tmp+rename) **mode 0644, dir 0755** (gateway = root uid 0;
+world-readable → `www-data` uid 82 boss-app bisa baca — **diverifikasi nyata lintas-uid**) + sidecar JSON
+(message_id/session/sender/is_lid/chat_jid/media_type/mime/file_name/file_size/caption/sha256/timestamp/
+push_name/media_path). Webhook payload tambah `media_type/mime/file_name/file_size/caption/media_path/sha256`
+(omitempty; Text dibiarkan kosong untuk media, caption terpisah). Retensi volume gateway `startIncomingMediaCleanup`
+(7 hari, env `WA_INCOMING_MEDIA_RETENTION_DAYS`). `WA_INCOMING_MEDIA_DIR` default `/wa-incoming` (HARUS =
+config Laravel).
+
+**Laravel.** Kolom aditif `whatsapp_incoming_messages`: `media_type/media_mime/media_file_path/media_file_size/
+media_file_name/media_caption/media_sha256/media_rejected_reason` + `customer_id` (FK nullable). **`WhatsappIncomingMediaService::ingestFromSource`** — baca file volume → **RE-VALIDASI dari isi byte** (`finfo`,
+BUKAN MIME WA): **denylist keras** (svg/html/xml/js/exe/apk/sh) + tolak semua `text/*`; per-jenis (foto/
+stiker/dokumen KETAT; audio/video toleran container opaque) → cap → **EXIF-strip via GD re-encode** untuk
+FOTO (jpeg/png/webp; stiker tak di-reencode demi animasi) → simpan ke disk **PRIVAT** `whatsapp-incoming/
+{session}/{message_id}.{ext}`. Gagal validasi → baris dicatat dengan `media_rejected_reason`, **tanpa file**.
+`recordFromWebhook` (webhook, HMAC) + `recordFromSidecar` (reconcile, sumber lokal tepercaya) berbagi
+`attachMediaFile`; `customer_id` di-resolve dari `sender_phone` (LID tak pernah cocok → null). **Media TIDAK
+di-routing** ke state machine/fallback (bukan perintah teks). **GOTCHA:** middleware
+`ConvertEmptyStringsToNull` mengubah `"text":""` (caption media kosong) jadi null → default `$text` ke `''`
+(bukan null) + izinkan text kosong bila `hasMedia`.
+
+**Reconcile + retensi (D8/D6).** `whatsapp:reconcile-incoming-media` (`->everyFiveMinutes()->withoutOverlapping()`,
+boss-scheduler) pindai sidecar `*/*.json` di volume → masukkan yang belum ada di DB (**idempoten via
+`message_id` UNIQUE**) → **menutup webhook yang hilang** (fire-and-forget tanpa retry). `whatsapp:prune-incoming-media`
+(`->dailyAt('03:30')`, 90 hari) hapus FILE privat + null `media_file_path`, **baris dipertahankan** (jejak).
+
+**Serve + privasi (D7/D10).** `GET /whatsapp-incoming/{incomingMessage}/media` (`web.whatsapp-incoming.media`,
+grup `admin.panel`) → `WhatsappIncomingMediaController` (`authorize('view')` → `WhatsappIncomingMessagePolicy`:
+`whatsapp_gateway.view/manage` ATAU reseller membership ATAU `customers.view` bila tertaut pelanggan),
+StreamedResponse disk privat + `nosniff`, **tanpa URL publik**. UI: partial `incoming-media-cell` (thumbnail
+foto/stiker, `<audio>` voice note, link unduh dokumen/video, badge jenis + caption) dipakai di tab "Pesan
+Masuk" (`WhatsappGatewayIndex`) DAN **Detail Pelanggan** (seksi read-only pesan masuk tertaut `customer_id`).
+
+**docker-compose.yml:** volume `wa_incoming_media` — `whatsapp-gateway` **rw** (`/wa-incoming`) + `WA_INCOMING_MEDIA_DIR`,
+`boss-app` **:ro** (webhook ingest baca volume), `boss-scheduler` **:ro** (reconcile). Config
+`services.whatsapp_gateway.incoming_media_dir/caps/mimes`.
+
+**D9 (commit terpisah):** `WhatsappIncomingMessageWebhookTest` fallback dibuat deterministik via
+`config()->set(unrecognized_fallback_enabled, true)` + test pasangan cabang disabled — cluster 13 regresi
+bersih (sebelumnya gagal non-deterministik karena env ambient `false` di container boss-app).
+
+**Verifikasi:** Go build + gofmt + test session hijau; Laravel scoped (media 11 + webhook 21 incl. D9)
+hijau, Pint clean; lintas-uid root→www-data diverifikasi nyata. **Kegagalan CustomerShow di throwaway =
+pra-ada** (koneksi `radius` tak tersedia, bukan regresi — dikonfirmasi di baseline).
+
+**RILIS (menunggu "go" Agung, jendela trafik rendah):** `php artisan migrate` (1 migrasi aditif) +
+**`docker compose up -d --build whatsapp-gateway`** (kode download baru; `RestoreAll` sambung sesi otomatis,
+putus beberapa detik — **BUKAN logout**; webhook masuk selama jendela rebuild HILANG, ditutup reconcile) +
+recreate `boss-app`/`boss-scheduler` untuk mount volume baru (**JANGAN sentuh `.env`** agar Postgres tak ikut
+recreate — pelajaran v0.13.5.1; restart `boss-nginx` setelah boss-app recreate). Urutan paling aman: deploy
+Laravel dulu (backward-compatible — abaikan field media bila gateway lama) → rebuild gateway. **Uji nyata
+HANYA ke nomor Agung** (foto/voice note/PDF). **Backlog:** transkripsi voice note (di luar scope), virus scan
+(tak perlu sekarang), fix durabilitas izin (lihat pelajaran v0.13.5.3).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

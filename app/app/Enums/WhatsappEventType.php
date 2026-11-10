@@ -175,6 +175,16 @@ enum WhatsappEventType: string
      */
     case InvoiceIssued = 'invoice_issued';
 
+    /**
+     * v0.13.4.2.3 — notifikasi ke GRUP/admin (BUKAN pelanggan) saat pemicu
+     * OMCI/ZTP saat aktivasi GAGAL (ONU tak ditemukan/ganda, OLT tak terjangkau,
+     * tahap provision gagal). Dirutekan lewat WhatsappGroupRouter (kategori di
+     * WhatsappGroupCategory) — TIDAK melewati saklar notifikasi pelanggan.
+     * Variabel: `{work_order_id}` `{customer_name}` `{cid}` `{onu_sn}`
+     * `{olt_name}` `{stage}` `{reason}` `{status_link}`.
+     */
+    case OnuProvisioningFailed = 'onu_provisioning_failed';
+
     public function label(): string
     {
         return match ($this) {
@@ -193,6 +203,7 @@ enum WhatsappEventType: string
             self::WorkOrderActivationReady => 'Work Order Siap Aktivasi (Link Aktivasi)',
             self::WorkOrderCompleted => 'Work Order Selesai (Grup + Foto)',
             self::InvoiceIssued => 'Tagihan Terbit (PDF ke Pelanggan)',
+            self::OnuProvisioningFailed => 'Provisioning OLT/ONU Gagal (Grup/Admin)',
         };
     }
 }

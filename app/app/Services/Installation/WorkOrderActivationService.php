@@ -5,7 +5,9 @@ namespace App\Services\Installation;
 use App\Enums\CpeActionStatus;
 use App\Enums\WorkOrderDeviceType;
 use App\Enums\WorkOrderStatus;
+use App\Enums\ZtpStatus;
 use App\Exceptions\WorkOrderActivationException;
+use App\Jobs\ProvisionOnuViaZtp;
 use App\Models\CpeDevice;
 use App\Models\Customer;
 use App\Models\Technician;
@@ -228,6 +230,15 @@ class WorkOrderActivationService
             }
         }
 
+        // v0.13.4.2.3 — pemicu OMCI/ZTP: job antrean afterCommit (DI LUAR
+        // transaksi). Hanya bila belum pernah diprovisioning sukses (idempoten).
+        // Kegagalan ZTP TIDAK memblokir aktivasi (radcheck/InProgress sudah jalan).
+        if ($workOrder->ztp_provisioned_at === null && $workOrder->ztp_status !== ZtpStatus::Success->value) {
+            $workOrder->update(['ztp_status' => ZtpStatus::Pending->value]);
+            ProvisionOnuViaZtp::dispatch($workOrder->id)->afterCommit();
+        }
+        $result['ztp_status'] = $workOrder->ztp_status;
+
         return $result;
     }
 
@@ -259,6 +270,13 @@ class WorkOrderActivationService
         $onuOnline = $cpe !== null && $cpe->genieacs_device_id !== null;
         $wifiSent = $cpe !== null && $cpe->wifi_provisioned_at !== null;
 
+        // v0.13.4.2.3 — tahap "Provisioning OLT" (ZTP). done = sukses ATAU
+        // dilewati (kanal/gate off bukan kegagalan). gagal = tampil alasan ringkas.
+        // TIDAK masuk all_done — ZTP adalah SARANA membuka jalur WAN, bukan gerbang.
+        $ztpStatusValue = $workOrder->ztp_status;
+        $ztpDone = in_array($ztpStatusValue, [ZtpStatus::Success->value, ZtpStatus::Skipped->value], true);
+        $ztpFailed = $ztpStatusValue === ZtpStatus::Failed->value;
+
         return [
             'work_order_id' => $workOrder->id,
             'status' => $workOrder->status->value,
@@ -267,10 +285,23 @@ class WorkOrderActivationService
             'stages' => [
                 ['key' => 'modem', 'label' => 'Modem terdaftar', 'done' => $modemRegistered],
                 ['key' => 'pppoe', 'label' => 'Akun PPPoE dibuat', 'done' => $pppoeCreated],
+                ['key' => 'ztp', 'label' => 'Provisioning OLT', 'done' => $ztpDone, 'failed' => $ztpFailed, 'note' => $this->ztpStageNote($ztpStatusValue)],
                 ['key' => 'onu', 'label' => 'ONU online di sistem', 'done' => $onuOnline],
                 ['key' => 'wifi', 'label' => 'WiFi terkirim ke perangkat', 'done' => $wifiSent],
             ],
             'all_done' => $modemRegistered && $pppoeCreated && $onuOnline && $wifiSent,
         ];
+    }
+
+    /** Teks AMAN untuk teknisi (tanpa detail internal OLT). */
+    private function ztpStageNote(?string $ztpStatus): ?string
+    {
+        return match ($ztpStatus) {
+            ZtpStatus::Pending->value, ZtpStatus::Running->value => 'Menunggu perangkat terdeteksi di jaringan…',
+            ZtpStatus::Success->value => 'Perangkat sudah terhubung ke jaringan.',
+            ZtpStatus::Skipped->value => 'Dilewati (penyiapan jaringan manual).',
+            ZtpStatus::Failed->value => 'Perlu dicek tim NOC — hubungi admin bila lama.',
+            default => null,
+        };
     }
 }

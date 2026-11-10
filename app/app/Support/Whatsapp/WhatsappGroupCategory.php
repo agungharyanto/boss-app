@@ -30,6 +30,8 @@ final class WhatsappGroupCategory
             WhatsappEventType::WorkOrderDispatched->value => 'WO Baru / Dispatch & Reminder',
             WhatsappEventType::WorkOrderClaimedReminder->value => 'Reminder WO Sudah Diklaim',
             WhatsappEventType::WorkOrderCompleted->value => 'WO Selesai (+ Foto)',
+            // v0.13.4.2.3 — pemicu OMCI/ZTP gagal saat aktivasi (ke grup/admin).
+            WhatsappEventType::OnuProvisioningFailed->value => 'Provisioning OLT/ONU Gagal',
         ];
     }
 

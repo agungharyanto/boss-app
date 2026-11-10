@@ -100,6 +100,17 @@ return [
     'olt_sidecar' => [
         'url' => env('OLT_SIDECAR_URL'),
         'hmac_secret' => env('OLT_SIDECAR_HMAC_SECRET'),
+
+        // v0.13.4.2.3 — GATE KODE KERAS jalur WAN via OMCI (ZTE C300). Default
+        // FALSE: pemicu ZTP saat aktivasi TIDAK PERNAH memprovisioning OLT
+        // ber-`wanInternetVia=omci` (ZTE C300) meski `olt_devices.
+        // omci_channel_enabled=true` di DB — lapisan kedua di atas flag per-OLT.
+        // ALASAN: ZTE C300 produksi (188 ONU) belum punya replay-safety + guard
+        // "hanya ONU uncfg"; jalur OMCI dibuat+diuji dgn MOCK tapi tetap OFF
+        // sampai keduanya selesai. Menyalakan = set true (env) SETELAH
+        // replay-safety ZTE beres (lihat CLAUDE.md v0.13.4.2.3). OLT CT-COM/
+        // E04ID/G02ID (`tr069_device_driven`) TIDAK terpengaruh gate ini.
+        'ztp_omci_activation_enabled' => (bool) env('OLT_ZTP_OMCI_ACTIVATION_ENABLED', false),
     ],
 
     // v0.6.2 OpenVPN provisioning — these paths are the boss-app side of

@@ -9671,7 +9671,7 @@ disentuh; 571/572/573 utuh.
   beberapa `storage/framework/views/*.php` terkompilasi root. Fix tuntas = loop chown entrypoint (butuh
   rebuild).
 
-## Kirim PDF Invoice OTOMATIS + Saklar Kedua (v0.13.5.3.1 — implementasi di worktree, BELUM merge/tag)
+## Kirim PDF Invoice OTOMATIS + Saklar Kedua (v0.13.5.3.1 — SELESAI, merged `develop`→`main`, tag `v0.13.5.3.1`)
 
 **Sweep terjadwal yang mengirim PDF invoice (event `invoice_issued`, template yang sudah ada) ke pelanggan
 untuk invoice yang BARU terbit — melanjutkan kirim MANUAL (v0.13.5.3).** Branch topik
@@ -9746,8 +9746,50 @@ ON dulu (dry-run membuktikan sweep berhenti), lalu Mode Uji OFF + pelanggan TEST
 TEST baru (`generated_at > enabled_at`) → sweep antre 1 pesan ke Agung; invoice lama tak terpilih; backup
 `pg_dump` dulu, cleanup satu transaksi FK-ordered setelahnya; kembalikan Mode Uji ON.
 
-**Backlog**: opt-out pelanggan (belum ada mekanisme); fix durabilitas izin (`chown storage/app/private` di
-loop `docker/php/entrypoint.sh`, butuh rebuild) — lihat pelajaran (a) v0.13.5.3 di atas.
+**Backlog**: opt-out pelanggan (belum ada mekanisme); fix durabilitas izin via loop `chown storage/app/private`
+di `docker/php/entrypoint.sh` (butuh rebuild — gabung jendela rilis v0.13.6); file root lain di `storage/`.
+
+### PENUTUPAN (2026-11-10) — UJI NYATA + PERBAIKAN IZIN + MERGE/TAG
+
+**Terbukti nyata (TAHAP B, uji sweep end-to-end ke nomor Agung).** Dengan Mode Uji sebagai jaring pengaman:
+backup `pg_dump` → pelanggan+subscription+invoice TEST → nyalakan saklar pelanggan+auto (`enabled_at`=now) →
+dry-run saat Mode Uji ON = **0** (sweep berhenti total) → **pre-flight**: satu-satunya invoice `gen>=enabled_at`
+= kandidat tepat **1** (invoice TEST) → **jendela eksposur ~18 detik** (Mode Uji OFF → dry-run konfirmasi kandidat
+tetap 1 → sweep nyata SEKALI → Mode Uji ON + 2 saklar OFF segera). Hasil: **tepat 1** `whatsapp_message_logs`
+(`event=invoice_issued`, `is_test=false`, `sent_by_user_id=NULL`, sesi `direct`, tujuan `6287...939` Agung,
+lampiran PDF, caption `invoice_issued` **tanpa** prefiks `[UJI]`, `status=sent`), **nol pesan ke pelanggan nyata**,
+antrean kosong, nol exception. Cleanup (TAHAP C) satu transaksi FK-ordered (log→invoice→subscription→timeline→
+customer), file PDF root dihapus, `wa_logs` kembali 446, 571/572/573 utuh.
+
+**Perbaikan izin file (bukan rebuild) — `App\Support\Filesystem\WebOwnership` + delete-before-write di
+`InvoicePdfService::store()`.** `store()` kini: hapus file dulu bila ada (www-data boleh unlink file root di
+direktori milik www-data) → tulis → `WebOwnership::normalize()` chown file + direktori induk milik-root ke
+www-data bila proses euid=0 (no-op bila bukan root). **Diverifikasi nyata di container `boss-scheduler` SEBAGAI
+ROOT**: `store()` untuk invoice nyata (#1243, hanya tulis cache, tanpa WA) → file + semua dir **www-data:www-data**,
+lalu cache dihapus. Jujur: jalur root TIDAK bisa dibuktikan penuh oleh PHPUnit (proses test non-root → helper
+no-op); test PHPUnit menutup: helper no-op saat non-root, dipanggil sekali dari `store()` (spy seam),
+delete-before-write mengganti file existing, idempoten.
+
+**PELAJARAN (governance, pakai ulang untuk tugas scheduler/worker + WA/invoice berikutnya):**
+- **(a) `boss-scheduler`, `boss-worker`, `boss-whatsapp-worker` menjalankan `schedule:run`/`queue:work` sebagai
+  ROOT; php-fpm (`boss-app` request web) sebagai www-data (uid 82).** Jadi SEMUA file yang ditulis lewat jalur
+  scheduler/worker (cache PDF, dsb.) WAJIB dinormalkan kepemilikannya ke www-data (pakai `WebOwnership`), kalau
+  tidak tombol/manual www-data berikutnya bisa 500 saat menimpa — kelas bug sama dengan 500 v0.13.5.3. Catatan
+  terkait: dir scratch test `storage/framework/{testing,views}` sempat `root:root` dari run root lama → `php
+  artisan test` sebagai www-data gagal (`Storage::fake` tak bisa buat dir); dinormalkan ke www-data (ephemeral,
+  gitignored).
+- **(b) Jalankan SEMUA artisan/php manual di container sebagai www-data** (`docker compose exec -u www-data
+  boss-app ...`); `exec` default = root → meninggalkan file root (akar masalah berulang di seluruh file ini).
+- **(c) Prosedur uji sweep AMAN**: Mode Uji **ON dulu** (jaring pengaman) → nyalakan saklar → buat invoice TEST
+  (`gen>enabled_at`) → dry-run (Mode Uji ON = 0) → **pre-flight kandidat tepat 1** → matikan Mode Uji **sesingkat
+  mungkin** → dry-run konfirmasi → jalankan SEKALI → **re-arm segera** (Mode Uji ON + saklar OFF).
+- **(d) Prosedur GO-LIVE urut (hari sepi, JANGAN dekat run `GenerateDueInvoices` tgl-1 — burst ~308):**
+  pengingat/tagihan **MixRadius dimatikan dulu** untuk segmen terkait → **Mode Uji OFF** → **saklar pelanggan
+  ON** (`customer_auto_notify_enabled`) → **saklar kirim otomatis ON** (`enabled_at`=now = 0 backlog; opsi
+  "Mulai dari tanggal" bila ingin mencakup invoice Pending yang sudah terbit).
+- **Catatan v0.13.6:** ingest media (scheduler = root) DAN webhook (php-fpm = www-data) sama-sama menulis ke
+  `storage/app/private/whatsapp-incoming` → **pakai `WebOwnership` yang sama sebelum rilis v0.13.6** (tindakan di
+  branch v0.13.6, bukan di sini).
 
 ## Architecture
 

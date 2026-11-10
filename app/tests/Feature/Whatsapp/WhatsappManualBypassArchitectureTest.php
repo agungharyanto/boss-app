@@ -51,6 +51,9 @@ class WhatsappManualBypassArchitectureTest extends TestCase
             'app/Services/RegistrationService.php',     // customer_registered
             'app/Console/Commands/SendWhatsappDueReminders.php',
             'app/Console/Commands/SendWhatsappSuspendedReminders.php',
+            // v0.13.5.3.1 — sweep kirim PDF otomatis: jalur OTOMATIS, WAJIB
+            // tanpa InvoiceSendContext (tetap ber-guard customer_auto_notify).
+            'app/Console/Commands/SendInvoicePdfAutomatically.php',
         ];
 
         foreach ($automaticCallers as $relative) {

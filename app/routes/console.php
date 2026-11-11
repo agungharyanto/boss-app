@@ -4,6 +4,7 @@ use App\Console\Commands\DispatchWorkOrders;
 use App\Console\Commands\GenerateDueInvoices;
 use App\Console\Commands\MarkOverdueInvoices;
 use App\Console\Commands\ReconcileCpeDevices;
+use App\Console\Commands\SendInvoicePdfAutomatically;
 use App\Console\Commands\SendWhatsappDueReminders;
 use App\Console\Commands\SendWhatsappSuspendedReminders;
 use App\Console\Commands\SyncContainerStats;
@@ -34,6 +35,14 @@ Schedule::command(MarkOverdueInvoices::class)->daily();
 Schedule::command(SendWhatsappDueReminders::class)->everyMinute();
 Schedule::command(SendWhatsappSuspendedReminders::class)->dailyAt('08:00');
 Schedule::command(WhatsappCheckSessionHealth::class)->hourly();
+
+// v0.13.5.3.1 — Kirim PDF Invoice OTOMATIS. Sweep self-gate: jam WIB
+// [08:00,20:00), saklar ganda per tenant (auto-send AND customer-notify AND
+// BUKAN Mode Uji), cap harian per sesi. ->withoutOverlapping() mencegah dua
+// run paralel (dedup tetap dari log yang tersisip sinkron). everyFifteenMinutes
+// — margin lebar di bawah kuota + pacing worker (bukan hook sinkron saat
+// invoice terbit, hindari burst tengah malam GenerateDueInvoices).
+Schedule::command(SendInvoicePdfAutomatically::class)->everyFifteenMinutes()->withoutOverlapping();
 
 // v0.13.6 — TERIMA media masuk. Reconcile menutup webhook incoming-message
 // yang hilang (fire-and-forget) dari sidecar di volume gateway; withoutOverlapping

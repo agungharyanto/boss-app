@@ -87,6 +87,27 @@ return [
         'media_max_bytes' => (int) env('WHATSAPP_MEDIA_MAX_BYTES', 16 * 1024 * 1024),
         'media_mimes' => ['image/jpeg', 'image/png', 'application/pdf'],
         'media_http_timeout' => (int) env('WHATSAPP_MEDIA_HTTP_TIMEOUT', 100),
+
+        // v0.13.6 — TERIMA media masuk. `incoming_media_dir` = volume bersama
+        // yang gateway tulis & boss-app baca (read-only) — HARUS = env Go
+        // WA_INCOMING_MEDIA_DIR. Cap per jenis + whitelist MIME HARUS identik
+        // sisi Go (internal/session/incoming_media.go) — di sini dipakai untuk
+        // RE-VALIDASI dari isi byte (finfo), bukan percaya MIME WA.
+        'incoming_media_dir' => env('WHATSAPP_INCOMING_MEDIA_DIR', '/wa-incoming'),
+        'incoming_media_caps' => [
+            'image' => 10 * 1024 * 1024,
+            'document' => 16 * 1024 * 1024,
+            'audio' => 16 * 1024 * 1024,
+            'video' => 32 * 1024 * 1024,
+            'sticker' => 1 * 1024 * 1024,
+        ],
+        'incoming_media_mimes' => [
+            'image' => ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'],
+            'document' => ['application/pdf' => 'pdf'],
+            'audio' => ['audio/ogg' => 'ogg', 'audio/mpeg' => 'mp3', 'audio/mp4' => 'm4a', 'audio/x-m4a' => 'm4a', 'audio/amr' => 'amr', 'audio/aac' => 'aac'],
+            'video' => ['video/mp4' => 'mp4', 'video/3gpp' => '3gp'],
+            'sticker' => ['image/webp' => 'webp'],
+        ],
     ],
 
     // v0.23.3 OLT Sidecar — internal HTTP API ke container Python

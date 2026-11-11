@@ -9791,7 +9791,7 @@ delete-before-write mengganti file existing, idempoten.
   `storage/app/private/whatsapp-incoming` → **pakai `WebOwnership` yang sama sebelum rilis v0.13.6** (tindakan di
   branch v0.13.6, bukan di sini).
 
-## Terima Media WhatsApp Masuk (v0.13.6 — implementasi di worktree, BELUM merge/tag)
+## Terima Media WhatsApp Masuk (v0.13.6 — SELESAI, merged `develop`→`main`, tag `v0.13.6`)
 
 **Pesan masuk bermedia (foto/dokumen PDF/audio termasuk voice note/video/stiker) dari pelanggan/teknisi
 diterima, disimpan aman, ditampilkan.** Melengkapi v0.13.1 (yang HANYA teks 1:1 — media di-`return` dibuang
@@ -9860,6 +9860,50 @@ recreate — pelajaran v0.13.5.1; restart `boss-nginx` setelah boss-app recreate
 Laravel dulu (backward-compatible — abaikan field media bila gateway lama) → rebuild gateway. **Uji nyata
 HANYA ke nomor Agung** (foto/voice note/PDF). **Backlog:** transkripsi voice note (di luar scope), virus scan
 (tak perlu sekarang), fix durabilitas izin (lihat pelajaran v0.13.5.3).
+
+### PENUTUPAN (2026-11-11) — RILIS + UJI NYATA + MERGE/TAG
+
+**Dirilis ke server & TERBUKTI NYATA.** Rilis dari branch topik (urutan dipakai: tag image rollback
+`boss-app:pre-v13.6-2026-11-11` + `whatsapp-gateway:pre-v13.6-2026-11-11`; backup `pg_dump`; `migrate`
+additive-only pada `whatsapp_incoming_messages`; recreate Laravel `up -d --build boss-app` + **`restart
+boss-nginx` SEGERA** [aturan stale FastCGI upstream]; lalu `up -d --build whatsapp-gateway`). `RestoreAll`
+menyambung sesi "direct" ~2 detik — **BUKAN logout**. Postgres TIDAK ter-recreate (`.env` tak disentuh).
+
+**Uji nyata dari HP Agung (nomor `0878***939`, cust=34):** 5 jenis media **ter-ingest sempurna** — foto
+(image/jpeg, **GD re-encode → EXIF bersih**, sha/size beda sumber), video (video/mp4), voice note
+(audio/ogg OggS), stiker (image/webp), PDF (application/pdf %PDF); file privat `www-data:www-data` (file
+0644, dir 0700), finfo cocok isi, nol file svg/html/exe. **Zip DIBLOKIR di gateway** (`application/x-zip-compressed`
+tak di-whitelist, tolak **pre-download** → nol file + nol sidecar + nol baris DB; jejak hanya di log
+gateway). Serve `GET /whatsapp-incoming/{id}/media`: admin → **200** + `Content-Type` benar + `nosniff` +
+`inline`; guest → **302 /login**. UI: Detail Pelanggan 34 + tab "Pesan Masuk" merender media (thumbnail/
+`<audio>`/link PDF/stiker) tanpa 500. **Nol efek keluar** (media tak di-routing ke state-machine/fallback;
+`whatsapp_message_logs` tetap 446; antrean kosong; nol exception). **Bonus produksi:** 2 foto pelanggan
+NYATA (cust 417) ikut ter-ingest mulus di jendela yang sama — bukti fitur hidup di produksi. Data uji
+Agung (5 baris 1240-1244 + 5 file privat) **dibersihkan tuntas** (1 transaksi; backup
+`/opt/boss-backups/pre-v136-cleanup-2026-11-11.sql`); baris/foto pelanggan nyata & customer 34 tidak
+disentuh.
+
+**PELAJARAN (pakai ulang untuk fitur WA/media + uji rilis berikutnya):**
+- **(a) Uji tautan `sender_phone`→pelanggan pakai pelanggan yang SUDAH punya nomor itu** — `resolveCustomerId`
+  cocok EXACT `phone_number` lalu `->value('id')` (**id terkecil menang**). JANGAN buat pelanggan "TEST"
+  bernomor sama (duplikat ambigu + tautan menang ke id terkecil). Di sini nomor Agung sudah dimiliki
+  pelanggan nyata id 34 → tautan otomatis benar.
+- **(b) Beda identitas proses: gateway Go = root (file volume `root:root` 0644/0755 world-readable → `www-data`
+  boss-app bisa baca); file privat Laravel = www-data** (lewat `WebOwnership` + loop chown `storage/app/private`
+  di `docker/php/entrypoint.sh`, v0.13.5.3.1). Jalankan SEMUA artisan/`docker compose exec` manual sebagai
+  `www-data`, bukan root.
+- **(c) Penolakan media pre-download HANYA tercatat di log gateway, BUKAN DB** (`media_rejected_reason` hanya
+  terisi bila file lolos gateway lalu ditolak re-validasi Laravel) — **backlog: catat penolakan media ke DB**
+  (dikonfirmasi Agung: untuk sekarang cukup di-log).
+- **(d) Uji lintas-tenant/izin→403/404 hanya lewat test suite** — semua user DB tenant 1 & admin-eligible,
+  jadi negatif-izin HTTP tak bisa diperagakan dengan user nyata (jangan buat user baru); Policy
+  `WhatsappIncomingMessagePolicy` + testnya yang otoritatif. `WhatsappIncomingMessage` TIDAK tenant-scoped
+  (otorisasi murni via Policy).
+- **(e) Prosedur rilis yang terpakai**: tag image rollback dulu → **Laravel dulu lalu gateway** (webhook
+  backward-compatible; gateway lama diabaikan field media) → restart `boss-nginx` setelah boss-app recreate →
+  jeda sesi WA ~2 detik (`RestoreAll`, bukan logout) → webhook yang hilang saat rebuild ditutup `reconcile`
+  (*/5).
+- **Backlog lain:** transkripsi voice note, opt-out, virus scan bila perlu.
 
 ## Architecture
 

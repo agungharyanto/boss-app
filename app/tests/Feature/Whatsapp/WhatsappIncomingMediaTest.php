@@ -6,11 +6,14 @@ use App\Models\Customer;
 use App\Models\User;
 use App\Models\WhatsappIncomingMessage;
 use App\Models\WhatsappSession;
+use App\Services\Whatsapp\WhatsappIncomingMediaService;
+use App\Support\Filesystem\WebOwnership;
 use App\Support\WhatsappHmac;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Testing\TestResponse;
+use Mockery;
 use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
 
@@ -120,6 +123,29 @@ class WhatsappIncomingMediaTest extends TestCase
         // EXIF strip = re-encode: ukuran tersimpan boleh beda, tapi tetap JPEG valid.
         $stored = Storage::disk('local')->get($msg->media_file_path);
         $this->assertSame('image/jpeg', (new \finfo(FILEINFO_MIME_TYPE))->buffer($stored));
+    }
+
+    public function test_ingest_invokes_web_ownership_normalize_after_writing(): void
+    {
+        // Seam: spy helper lewat container — tak bergantung uid proses test.
+        // Jalur reconcile (scheduler) jalan sebagai ROOT; helper menormalkan
+        // file+direktori baru ke www-data. (Jalur root tak dapat dibuktikan
+        // penuh oleh PHPUnit: proses test non-root -> helper no-op; lihat
+        // CLAUDE.md v0.13.5.3.1.)
+        $spy = Mockery::spy(WebOwnership::class);
+        $this->app->instance(WebOwnership::class, $spy);
+
+        $source = $this->volumeDir.'/'.$this->putOnVolume('direct', 'MID-OWN', 'jpg', $this->realJpeg());
+
+        $result = app(WhatsappIncomingMediaService::class)
+            ->ingestFromSource('image', 'image/jpeg', $source, 'direct', 'MID-OWN');
+
+        $this->assertArrayHasKey('stored_path', $result);
+        Storage::disk('local')->assertExists($result['stored_path']);
+        $spy->shouldHaveReceived('normalize')->once()->with(
+            Mockery::pattern('#whatsapp-incoming/direct/MID-OWN\\.jpg$#'),
+            Mockery::type('string'),
+        );
     }
 
     public function test_svg_disguised_as_document_is_rejected_no_file_stored(): void

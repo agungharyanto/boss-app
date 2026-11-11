@@ -2,6 +2,7 @@
 
 namespace App\Services\Whatsapp;
 
+use App\Support\Filesystem\WebOwnership;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -30,6 +31,8 @@ class WhatsappIncomingMediaService
         'application/x-sh', 'application/x-shellscript', 'text/x-shellscript',
         'application/vnd.android.package-archive', 'application/x-msdownload',
     ];
+
+    public function __construct(private readonly WebOwnership $webOwnership) {}
 
     /**
      * Salin+validasi file sumber ke disk privat. Mengembalikan:
@@ -90,7 +93,15 @@ class WhatsappIncomingMediaService
         }
 
         $storedPath = "whatsapp-incoming/{$this->sanitize($scopeKey)}/{$this->sanitize($messageId)}.{$ext}";
-        Storage::disk('local')->put($storedPath, $bytes);
+        $disk = Storage::disk('local');
+        $disk->put($storedPath, $bytes);
+
+        // v0.13.5.3.1 WebOwnership — jalur reconcile (scheduler) berjalan sebagai
+        // ROOT; normalkan file + direktori baru ke www-data supaya webhook
+        // php-fpm (www-data) bisa menulis/menimpa di folder yang sama. No-op
+        // bila bukan root. (Prune/hapus tidak bergantung pemilik file —
+        // izin unlink mengikuti direktori, yang kini milik www-data.)
+        $this->webOwnership->normalize($disk->path($storedPath), $disk->path(''));
 
         return ['stored_path' => $storedPath, 'size' => strlen($bytes), 'mime' => $finfoMime];
     }

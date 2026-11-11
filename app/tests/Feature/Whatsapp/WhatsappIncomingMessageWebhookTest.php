@@ -470,6 +470,11 @@ class WhatsappIncomingMessageWebhookTest extends TestCase
      */
     public function test_a_message_that_matches_nothing_gets_the_generic_fallback_reply(): void
     {
+        // v0.13.6 D9 — deterministik: set flag ON eksplisit, tidak bergantung
+        // env ambient (WHATSAPP_UNRECOGNIZED_FALLBACK_ENABLED di .env container
+        // bisa false, membuat test ini gagal non-deterministik sebelumnya).
+        config(['services.whatsapp_gateway.unrecognized_fallback_enabled' => true]);
+
         Queue::fake();
 
         $tenant = Tenant::factory()->create();
@@ -497,5 +502,41 @@ class WhatsappIncomingMessageWebhookTest extends TestCase
         ]);
 
         Queue::assertPushed(SendWhatsappMessageJob::class);
+    }
+
+    /**
+     * v0.13.6 D9 — cabang HOTFIX: saat fallback dimatikan
+     * (unrecognized_fallback_enabled=false), pesan tetap DISIMPAN tapi TIDAK
+     * ada balasan fallback yang di-antre. Pasangan deterministik test di atas.
+     */
+    public function test_generic_fallback_is_suppressed_when_disabled(): void
+    {
+        config(['services.whatsapp_gateway.unrecognized_fallback_enabled' => false]);
+
+        Queue::fake();
+
+        $tenant = Tenant::factory()->create();
+        WhatsappSession::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);
+        WhatsappMessageTemplate::create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'event_type' => WhatsappEventType::UnrecognizedMessageFallback,
+            'content' => 'Maaf, pesan Anda tidak dikenali — {company_name}.',
+            'is_active' => true,
+        ]);
+
+        $this->postSigned($this->validPayload([
+            'sender_phone' => '089900002222',
+            'text' => 'halo ini siapa',
+            'message_id' => 'MSG-UNKNOWN-OFF',
+        ]))->assertJsonPath('data.result', 'recorded');
+
+        // Pesan tetap tersimpan.
+        $this->assertDatabaseHas('whatsapp_incoming_messages', ['message_id' => 'MSG-UNKNOWN-OFF']);
+        // Tapi TIDAK ada balasan fallback.
+        $this->assertDatabaseMissing('whatsapp_message_logs', [
+            'event_type' => WhatsappEventType::UnrecognizedMessageFallback->value,
+        ]);
+        Queue::assertNotPushed(SendWhatsappMessageJob::class);
     }
 }

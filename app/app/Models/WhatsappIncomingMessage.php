@@ -41,6 +41,16 @@ class WhatsappIncomingMessage extends Model
         'text',
         'push_name',
         'received_at',
+        // v0.13.6 — media masuk (nullable untuk pesan teks).
+        'customer_id',
+        'media_type',
+        'media_mime',
+        'media_file_path',
+        'media_file_size',
+        'media_file_name',
+        'media_caption',
+        'media_sha256',
+        'media_rejected_reason',
     ];
 
     public function reseller(): BelongsTo
@@ -48,11 +58,29 @@ class WhatsappIncomingMessage extends Model
         return $this->belongsTo(Reseller::class);
     }
 
+    public function customer(): BelongsTo
+    {
+        return $this->belongsTo(Customer::class);
+    }
+
+    /** v0.13.6 — baris ini membawa media (foto/dokumen/audio/video/stiker)? */
+    public function hasMedia(): bool
+    {
+        return $this->media_type !== null;
+    }
+
+    /** v0.13.6 — media sudah tersimpan & aman disajikan (lolos validasi). */
+    public function hasServableMedia(): bool
+    {
+        return $this->media_file_path !== null && $this->media_rejected_reason === null;
+    }
+
     protected function casts(): array
     {
         return [
             'is_lid' => 'boolean',
             'received_at' => 'datetime',
+            'media_file_size' => 'integer',
         ];
     }
 }

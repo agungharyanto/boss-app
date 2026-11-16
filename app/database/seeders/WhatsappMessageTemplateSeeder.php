@@ -16,6 +16,13 @@ use Illuminate\Database\Seeder;
  */
 class WhatsappMessageTemplateSeeder extends Seeder
 {
+    /**
+     * v0.13.5.4 — body bawaan invoice_issued SEBELUM {payment_instructions}
+     * ditambahkan. Template tenant yang isinya PERSIS ini (belum pernah diedit
+     * admin) diperbarui ke bawaan baru; selain itu dibiarkan (dilaporkan).
+     */
+    private const LEGACY_INVOICE_ISSUED = 'Halo {customer_name}, tagihan internet Anda sudah terbit.'.PHP_EOL.'Invoice: {invoice_number}'.PHP_EOL.'Paket: {package_name}'.PHP_EOL.'Total: {total_amount}'.PHP_EOL.'Jatuh tempo: {due_date}'.PHP_EOL.'Rincian lengkap ada pada file PDF terlampir.'.PHP_EOL.'Bantuan: CS {cs_number}'.PHP_EOL.'Terima kasih - {company_name}';
+
     public function run(): void
     {
         $defaults = [
@@ -56,7 +63,8 @@ class WhatsappMessageTemplateSeeder extends Seeder
             // v0.13.5.3 — "Tagihan terbit" + lampiran PDF, dikirim MANUAL ke
             // pelanggan. TANPA {payment_link} (Xendit mati/sandbox). Caption =
             // teks ini; PDF menyusul sebagai lampiran pada pesan yang sama.
-            WhatsappEventType::InvoiceIssued->value => 'Halo {customer_name}, tagihan internet Anda sudah terbit.'.PHP_EOL.'Invoice: {invoice_number}'.PHP_EOL.'Paket: {package_name}'.PHP_EOL.'Total: {total_amount}'.PHP_EOL.'Jatuh tempo: {due_date}'.PHP_EOL.'Rincian lengkap ada pada file PDF terlampir.'.PHP_EOL.'Bantuan: CS {cs_number}'.PHP_EOL.'Terima kasih - {company_name}',
+            // v0.13.5.4 — tambah baris {payment_instructions} (cara bayar ringkas).
+            WhatsappEventType::InvoiceIssued->value => 'Halo {customer_name}, tagihan internet Anda sudah terbit.'.PHP_EOL.'Invoice: {invoice_number}'.PHP_EOL.'Paket: {package_name}'.PHP_EOL.'Total: {total_amount}'.PHP_EOL.'Jatuh tempo: {due_date}'.PHP_EOL.'Cara bayar: {payment_instructions}'.PHP_EOL.'Rincian lengkap ada pada file PDF terlampir.'.PHP_EOL.'Bantuan: CS {cs_number}'.PHP_EOL.'Terima kasih - {company_name}',
         ];
 
         Tenant::all()->each(function (Tenant $tenant) use ($defaults) {
@@ -74,5 +82,26 @@ class WhatsappMessageTemplateSeeder extends Seeder
                 );
             }
         });
+
+        // v0.13.5.4 — template invoice_issued tenant lama diperbarui HANYA bila
+        // isinya PERSIS bawaan lama (belum diedit admin). Yang sudah diedit
+        // dibiarkan utuh dan dilaporkan jumlahnya.
+        $newInvoiceIssued = $defaults[WhatsappEventType::InvoiceIssued->value];
+        $updated = 0;
+        $leftEdited = 0;
+        WhatsappMessageTemplate::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::InvoiceIssued->value)
+            ->whereNull('reseller_id')
+            ->get()
+            ->each(function (WhatsappMessageTemplate $tpl) use ($newInvoiceIssued, &$updated, &$leftEdited) {
+                if ($tpl->content === self::LEGACY_INVOICE_ISSUED) {
+                    $tpl->update(['content' => $newInvoiceIssued]);
+                    $updated++;
+                } elseif ($tpl->content !== $newInvoiceIssued) {
+                    $leftEdited++;
+                }
+            });
+
+        $this->command?->info("invoice_issued: {$updated} template diperbarui ke bawaan baru, {$leftEdited} dibiarkan (sudah diedit admin).");
     }
 }

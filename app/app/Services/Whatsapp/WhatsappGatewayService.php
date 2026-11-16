@@ -391,8 +391,15 @@ class WhatsappGatewayService
      */
     private function buildVariables(WhatsappEventType $eventType, Customer $customer, ?Invoice $invoice): array
     {
-        $reseller = $customer->reseller_id !== null ? $customer->reseller : null;
-        $companyName = $reseller?->name ?? $customer->tenant?->name;
+        // v0.13.5.4 (TAHAP A) — caption pelanggan WAJIB memakai SUMBER YANG SAMA
+        // dengan PDF invoice: CompanyProfileService::resolveFor (brand/legal +
+        // override CS reseller), BUKAN nama tenant mentah. Dulu {company_name}
+        // menampilkan nama tenant ("ISP Demo") sementara PDF menampilkan brand/
+        // legal ("TOKEN WIFI"/"PT ..."); sekarang keduanya sinkron.
+        $company = app(CompanyProfileService::class)->resolveFor($customer->tenant_id, $customer->reseller_id);
+        $companyName = $company['brand_name'] !== ''
+            ? $company['brand_name']
+            : ($company['legal_name'] !== '' ? $company['legal_name'] : (string) ($customer->tenant?->name ?? ''));
 
         $variables = [
             'customer_name' => $customer->name,
@@ -404,11 +411,10 @@ class WhatsappGatewayService
             'company_name' => $companyName,
             'payment_link' => null,
             // v0.13.5.3 — {period} = bulan periode invoice; {cs_number} = nomor
-            // CS efektif (override reseller → CS tenant → env), dari
-            // CompanyProfileService::resolveCs.
+            // CS efektif (override reseller → CS tenant → env), dari resolveFor
+            // (resolveCs yang sama) agar sinkron dengan PDF.
             'period' => $invoice?->period_start?->translatedFormat('F Y'),
-            'cs_number' => app(CompanyProfileService::class)
-                ->resolveCs(null, $customer->tenant_id, $customer->reseller_id),
+            'cs_number' => $company['cs'],
             // v0.13.5.4 — {payment_instructions} = teks ringkas cara bayar
             // (render-only, TANPA Xendit). Diisi hanya untuk invoice_issued di
             // bawah; null untuk event lain (renderer menangani var kosong).

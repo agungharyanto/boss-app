@@ -9905,6 +9905,61 @@ disentuh.
   (*/5).
 - **Backlog lain:** transkripsi voice note, opt-out, virus scan bila perlu.
 
+## Rekening Multi-Bank + Metode Pembayaran + "Cara Pembayaran" di Invoice (v0.13.5.4 — implementasi di worktree `v0.13.5.4-rekening-metode-bayar`, BELUM merge/tag)
+
+**Prasyarat go-live MixRadius**: sebelum Agung memindahkan semua pelanggan dan menyalakan kirim invoice
+otomatis (v0.13.5.3.1), invoice WAJIB menampilkan CARA BAYAR — minimal rekening transfer manual. Keputusan
+audit K1-K11 disetujui Agung.
+
+- **`company_bank_accounts`** (per tenant, **tanpa `BelongsToTenant`** — dibaca dari jalur render PDF/sweep
+  tanpa Auth; semua query `tenant_id` eksplisit, pola `whatsapp_notification_groups`): `bank_name/
+  account_number/account_holder/sort_order/is_default/is_active/created_by/updated_by`. **Partial unique
+  "satu default AKTIF per tenant"** (`WHERE is_default AND is_active`, driver-conditional Postgres/SQLite).
+  **`company_bank_account_logs`** = jejak APPEND-ONLY (`action` created/updated/deleted/made_default/
+  activated/deactivated, `before`/`after` dengan nomor TER-MASK 4 digit terakhir, `user_id`) — anti-fraud
+  K10. **Migrasi data**: `company_profiles.bank_*` lama → 1 rekening default aktif per tenant (idempoten,
+  `CompanyBankAccountService::backfillFromProfile`); kolom lama `company_profiles.bank_name/number/holder`
+  **DEPRECATED** (dibiarkan, `resolveFor` tetap mengembalikannya sebagai fallback).
+- **`App\Services\Company\CompanyBankAccountService`** = satu-satunya logika (bukan di Livewire). Aturan:
+  rekening pertama otomatis default+aktif; **default tak boleh dihapus/dinonaktifkan selama ada rekening
+  lain** (pilih default baru dulu → `RuntimeException`); validasi `bank_name`/`account_holder` wajib,
+  `account_number` digit/spasi/hubung; tiap perubahan di-log (nomor ter-mask). `makeDefault` menolak
+  rekening nonaktif.
+- **3 saklar metode di `company_profiles`** (kolom boolean aditif): `pay_manual_transfer_enabled`
+  (default **TRUE**), `pay_gateway_enabled` (default **FALSE**), `pay_agent_enabled` (default **FALSE**) —
+  K5: gateway & agen DISIAPKAN, tak diaktifkan. Enum `App\Enums\PaymentMethod` (manual_transfer/
+  payment_gateway/agent) untuk label; **kolom `payments.method` DITUNDA ke v0.13.5.5** (K7).
+- **`App\Services\Billing\PaymentInstructionsService::forInvoice()`** merakit instruksi berdasarkan saklar
+  tenant. **ATURAN KERAS: jalur render TIDAK PERNAH memanggil Xendit/`createPaymentFor`** — untuk gateway
+  HANYA membaca `payments.raw_response.invoice_url` yang SUDAH ada (link tersimpan), tak pernah membuat
+  pembayaran saat render. Dijaga `PaymentInstructionsArchitectureTest` (scan sumber via
+  `php_strip_whitespace`). `agent` = kontak Referrer/Sales penagih (alur Titip) bila
+  `customers.referred_by_referrer_id` terisi (K4). Tanpa metode/rekening → tampil kontak CS saja, tanpa
+  error. `captionText()` = teks ringkas satu-blok (prioritas manual→gateway→agen) untuk variabel caption.
+- **Invoice PDF**: bagian **"Cara Pembayaran"** di bawah total, **disembunyikan untuk Paid & Cancelled**
+  (`invoice-pdf.blade.php`). SATU `InvoicePdfService` untuk unduh/kirim manual/sweep (nol jalur baru) —
+  `render()` mengirim `payment` = `PaymentInstructionsService::forInvoice()` ke view. Blade memakai
+  `$payment ?? null` sehingga View::make lama (tanpa `payment`) tetap aman.
+- **Caption**: variabel **`{payment_instructions}`** di `buildVariables()` HANYA untuk `invoice_issued`
+  (null untuk event lain), additive. `WhatsappMessageTemplateSeeder` menambah baris `Cara bayar:
+  {payment_instructions}` ke bawaan; template tenant lama diperbarui **HANYA bila isinya PERSIS bawaan
+  lama** (`LEGACY_INVOICE_ISSUED`), yang sudah diedit admin dibiarkan + dilaporkan jumlahnya.
+- **UI** `App\Livewire\Settings\PaymentSettings` (komponen nested di halaman `/settings/company-profile`):
+  kartu "Rekening Pembayaran" (daftar + bintang Default + badge Aktif + aksi ubah/hapus/jadikan-default/
+  aktif-nonaktif dgn flash, pola multi-grup WA) + kartu "Metode Pembayaran di Invoice" (3 saklar; gateway/
+  agen diberi penjelasan nonaktif) + "Lihat riwayat perubahan rekening". Izin via `CompanyProfilePolicy`
+  (`company_profile.view/.manage`, tier-admin). Field bank lama di form Profil tidak lagi sumber utama
+  (deprecated, tidak dihapus).
+- **Pelajaran (governance untuk fitur invoice/pembayaran berikutnya):** (1) **jalur RENDER tidak boleh
+  membuat tautan bayar** — hanya membaca yang sudah ada (architecture test mengunci ini). (2) Template WA
+  hanya diperbarui otomatis bila **identik bawaan lama**; edit admin tak pernah ditimpa. (3) Rekening di
+  PDF/WA hanya yang **aktif**; perubahan rekening wajib ber-jejak (anti-fraud). **Prosedur go-live
+  bertambah:** rekening HARUS terisi + metode transfer manual ON sebelum menyalakan kirim otomatis.
+- **Rilis (aditif, NOL downtime, menunggu "go" Agung):** `php artisan migrate` (4 migrasi: 2 tabel + 3
+  kolom + backfill data) → `optimize:clear` → `queue:restart`. **NOL `.env`/rebuild/logout WA** (tanpa
+  endpoint/gateway baru). **Bukti bayar (receipt) = v0.13.5.5 TERPISAH** (markPaid mulai catat `payments` +
+  varian PDF; event WA baru butuh izin Agung).
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

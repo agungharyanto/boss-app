@@ -13,6 +13,7 @@ use App\Models\Customer;
 use App\Models\Technician;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
+use App\Models\WorkOrderDispatchSettings;
 use App\Services\Network\CpeActionService;
 use App\Services\Network\CpeBindingService;
 use App\Services\Network\RadcheckWriterService;
@@ -233,7 +234,16 @@ class WorkOrderActivationService
         // v0.13.4.2.3 — pemicu OMCI/ZTP: job antrean afterCommit (DI LUAR
         // transaksi). Hanya bila belum pernah diprovisioning sukses (idempoten).
         // Kegagalan ZTP TIDAK memblokir aktivasi (radcheck/InProgress sudah jalan).
-        if ($workOrder->ztp_provisioned_at === null && $workOrder->ztp_status !== ZtpStatus::Success->value) {
+        //
+        // Saklar per-tenant "Pemicu OMCI/ZTP saat Aktivasi" (default OFF) adalah
+        // gerbang PERTAMA: OFF = TIDAK men-dispatch job sama sekali, aktivasi
+        // berjalan persis seperti sebelumnya. Jalur WAN OMCI/ZTE di DALAM job
+        // tetap digerbangi env OLT_ZTP_OMCI_ACTIVATION_ENABLED (lapisan kedua).
+        $ztpOnActivationEnabled = WorkOrderDispatchSettings::forTenant((int) $workOrder->tenant_id)
+            ->ztp_on_activation_enabled;
+        if ($ztpOnActivationEnabled
+            && $workOrder->ztp_provisioned_at === null
+            && $workOrder->ztp_status !== ZtpStatus::Success->value) {
             $workOrder->update(['ztp_status' => ZtpStatus::Pending->value]);
             ProvisionOnuViaZtp::dispatch($workOrder->id)->afterCommit();
         }

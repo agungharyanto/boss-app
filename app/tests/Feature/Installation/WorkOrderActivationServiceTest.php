@@ -5,16 +5,20 @@ namespace Tests\Feature\Installation;
 use App\Enums\CpeDeviceStatus;
 use App\Enums\WorkOrderDeviceType;
 use App\Enums\WorkOrderStatus;
+use App\Enums\ZtpStatus;
 use App\Exceptions\WorkOrderActivationException;
+use App\Jobs\ProvisionOnuViaZtp;
 use App\Models\Customer;
 use App\Models\Technician;
 use App\Models\WorkOrder;
 use App\Models\WorkOrderDevice;
+use App\Models\WorkOrderDispatchSettings;
 use App\Services\Installation\WorkOrderActivationService;
 use App\Services\Network\TestCredentialSyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 /**
@@ -243,5 +247,47 @@ class WorkOrderActivationServiceTest extends TestCase
         // MAC ter-update ke nilai dari modem unit (updateOrCreate menimpa).
         $this->assertSame('00:11:22:33:44:00', WorkOrderDevice::where('work_order_id', $wo->id)
             ->where('serial_number', 'SNACT00001')->value('mac_address'));
+    }
+
+    // ── v0.13.4.2.3 — saklar per-tenant "Pemicu OMCI/ZTP saat Aktivasi" ──
+
+    public function test_ztp_on_activation_switch_defaults_off(): void
+    {
+        [$wo] = $this->claimedWorkOrder();
+
+        $settings = WorkOrderDispatchSettings::forTenant((int) $wo->tenant_id);
+
+        $this->assertFalse((bool) $settings->ztp_on_activation_enabled);
+    }
+
+    public function test_activation_with_switch_off_does_not_dispatch_ztp(): void
+    {
+        Queue::fake();
+        $this->fakeTier('POOL-10M');
+        [$wo, $tech, $customer] = $this->claimedWorkOrder();
+
+        // Default OFF — tidak perlu di-set.
+        $result = $this->service()->activateFromForm($wo, $tech, (string) $customer->name, 'TestSSID', 'password123');
+
+        Queue::assertNotPushed(ProvisionOnuViaZtp::class);
+        // Aktivasi tetap berjalan: ztp_status tidak disentuh (tetap null).
+        $this->assertNull($wo->fresh()->ztp_status);
+        $this->assertNull($result['ztp_status'] ?? null);
+    }
+
+    public function test_activation_with_switch_on_dispatches_ztp(): void
+    {
+        Queue::fake();
+        $this->fakeTier('POOL-10M');
+        [$wo, $tech, $customer] = $this->claimedWorkOrder();
+
+        WorkOrderDispatchSettings::forTenant((int) $wo->tenant_id)
+            ->update(['ztp_on_activation_enabled' => true]);
+
+        $result = $this->service()->activateFromForm($wo, $tech, (string) $customer->name, 'TestSSID', 'password123');
+
+        Queue::assertPushed(ProvisionOnuViaZtp::class);
+        $this->assertSame(ZtpStatus::Pending->value, $wo->fresh()->ztp_status);
+        $this->assertSame(ZtpStatus::Pending->value, $result['ztp_status']);
     }
 }

@@ -68,6 +68,8 @@ class WorkOrderDispatchSettings extends Model
         'invoice_pdf_auto_send_enabled_at',
         'invoice_pdf_auto_send_from',
         'invoice_pdf_auto_send_daily_cap',
+        // v0.13.4.2.3 — "Pemicu OMCI/ZTP saat Aktivasi" per tenant (default OFF).
+        'ztp_on_activation_enabled',
     ];
 
     protected function casts(): array
@@ -80,6 +82,7 @@ class WorkOrderDispatchSettings extends Model
             'invoice_pdf_auto_send_enabled_at' => 'datetime',
             'invoice_pdf_auto_send_from' => 'date',
             'invoice_pdf_auto_send_daily_cap' => 'integer',
+            'ztp_on_activation_enabled' => 'boolean',
         ];
     }
 
@@ -124,6 +127,9 @@ class WorkOrderDispatchSettings extends Model
                 'invoice_pdf_auto_send_enabled_at' => null,
                 'invoice_pdf_auto_send_from' => null,
                 'invoice_pdf_auto_send_daily_cap' => 80,
+                // v0.13.4.2.3 — pemicu OMCI/ZTP saat aktivasi default MATI
+                // (perilaku aman: tidak menulis ke OLT). Dinyalakan lewat UI.
+                'ztp_on_activation_enabled' => false,
             ]
         );
     }

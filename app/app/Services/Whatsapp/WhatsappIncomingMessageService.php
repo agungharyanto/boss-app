@@ -4,6 +4,7 @@ namespace App\Services\Whatsapp;
 
 use App\Enums\WhatsappConversationDirection;
 use App\Enums\WhatsappEventType;
+use App\Models\Customer;
 use App\Models\Reseller;
 use App\Models\Tenant;
 use App\Models\WhatsappIncomingMessage;
@@ -34,6 +35,7 @@ class WhatsappIncomingMessageService
         private readonly WhatsappConversationStateService $stateService,
         private readonly WhatsappTechnicianAuthService $technicianAuthService,
         private readonly WhatsappGatewayService $gatewayService,
+        private readonly WhatsappIncomingMediaService $mediaService,
     ) {}
 
     /**
@@ -56,23 +58,36 @@ class WhatsappIncomingMessageService
         $senderPhone = $payload['sender_phone'] ?? null;
         $chatJid = $payload['chat_jid'] ?? null;
         $messageId = $payload['message_id'] ?? null;
-        $text = $payload['text'] ?? null;
+        // Default '' (bukan null) — middleware ConvertEmptyStringsToNull
+        // mengubah "text":"" (caption media kosong) menjadi null; untuk media
+        // text boleh kosong.
+        $text = $payload['text'] ?? '';
         $timestamp = $payload['timestamp'] ?? null;
         // is_lid — opsional untuk backward-compat (payload lama sebelum
         // fix bug LID tidak mengirim field ini sama sekali), default false
         // konsisten dengan default kolom DB.
         $isLid = (bool) ($payload['is_lid'] ?? false);
 
+        // v0.13.6 — field media (opsional; kosong untuk pesan teks biasa).
+        $mediaType = $payload['media_type'] ?? null;
+        $hasMedia = is_string($mediaType) && $mediaType !== '';
+
+        // Teks WAJIB non-kosong KECUALI ini pesan media (text boleh '' — caption
+        // ada di media_caption).
         if (! is_string($sessionKey) || $sessionKey === ''
             || ! is_string($senderPhone) || $senderPhone === ''
             || ! is_string($chatJid) || $chatJid === ''
             || ! is_string($messageId) || $messageId === ''
-            || ! is_string($text) || $text === ''
-            || ! is_int($timestamp)) {
+            || ! is_string($text)
+            || ! is_int($timestamp)
+            || (! $hasMedia && $text === '')) {
             Log::warning('WhatsappIncomingMessageService: webhook payload missing required fields.');
 
             return false;
         }
+
+        $resellerId = $this->resolveResellerId($sessionKey);
+        $customerId = $this->resolveCustomerId($senderPhone, $isLid, $resellerId);
 
         // firstOrCreate by message_id — idempotency guard (whatsmeow bisa
         // mengirim ulang event yang sama lewat retry/offline-sync di sisi
@@ -83,15 +98,29 @@ class WhatsappIncomingMessageService
             ['message_id' => $messageId],
             [
                 'session_key' => $sessionKey,
-                'reseller_id' => $this->resolveResellerId($sessionKey),
+                'reseller_id' => $resellerId,
+                'customer_id' => $customerId,
                 'sender_phone' => $senderPhone,
                 'is_lid' => $isLid,
                 'chat_jid' => $chatJid,
                 'text' => $text,
                 'push_name' => $payload['push_name'] ?? null,
                 'received_at' => Carbon::createFromTimestamp($timestamp),
+                'media_type' => $hasMedia ? $mediaType : null,
+                'media_mime' => $hasMedia ? ($payload['mime'] ?? null) : null,
+                'media_file_name' => $hasMedia ? ($payload['file_name'] ?? null) : null,
+                'media_file_size' => $hasMedia ? ($payload['file_size'] ?? null) : null,
+                'media_caption' => $hasMedia ? ($payload['caption'] ?? null) : null,
+                'media_sha256' => $hasMedia ? ($payload['sha256'] ?? null) : null,
             ]
         );
+
+        // v0.13.6 — ingest file media (baca volume gateway → validasi → disk
+        // privat) HANYA saat baris genuinely baru DAN membawa media. Jalur
+        // reconcile menutup kasus webhook hilang.
+        if ($message->wasRecentlyCreated && $hasMedia) {
+            $this->attachMediaFile($message, $sessionKey, $mediaType, (string) ($payload['mime'] ?? ''), $payload['media_path'] ?? null);
+        }
 
         // Retroactive backfill LID (fix bug LID, lanjutan 2026-09-15) —
         // HANYA saat baris ini GENUINELY baru dibuat (bukan re-post
@@ -116,11 +145,133 @@ class WhatsappIncomingMessageService
         // cuma belum ke-resolve. Tidak fatal (tetap ada respons, bukan
         // silent fail), tapi dicatat sebagai gap — tidak diminta scope
         // ini untuk ditangani.
-        if ($message->wasRecentlyCreated) {
+        // Media TIDAK di-routing ke state machine/fallback (bukan perintah teks).
+        if ($message->wasRecentlyCreated && ! $hasMedia) {
             $this->routeToConversationOrFallback($senderPhone, $text, $message->reseller_id);
         }
 
         return true;
+    }
+
+    /**
+     * v0.13.6 — jalur RECONCILE: masukkan satu sidecar media (dari volume
+     * gateway) yang belum punya baris DB. Idempoten via message_id UNIQUE.
+     * Mengembalikan true kalau baris baru dibuat, false kalau sudah ada /
+     * payload tidak valid. TIDAK memverifikasi HMAC (sumber = volume lokal
+     * tepercaya, bukan webhook jaringan).
+     *
+     * @param  array<string, mixed>  $sidecar
+     */
+    public function recordFromSidecar(array $sidecar): bool
+    {
+        $messageId = $sidecar['message_id'] ?? null;
+        $sessionKey = $sidecar['session_key'] ?? null;
+        $senderPhone = $sidecar['sender_phone'] ?? null;
+        $chatJid = $sidecar['chat_jid'] ?? null;
+        $mediaType = $sidecar['media_type'] ?? null;
+        $timestamp = $sidecar['timestamp'] ?? null;
+
+        if (! is_string($messageId) || $messageId === ''
+            || ! is_string($sessionKey) || $sessionKey === ''
+            || ! is_string($senderPhone) || $senderPhone === ''
+            || ! is_string($chatJid) || $chatJid === ''
+            || ! is_string($mediaType) || $mediaType === ''
+            || ! is_int($timestamp)) {
+            return false;
+        }
+
+        if (WhatsappIncomingMessage::where('message_id', $messageId)->exists()) {
+            return false; // sudah tertutup webhook/reconcile sebelumnya.
+        }
+
+        $isLid = (bool) ($sidecar['is_lid'] ?? false);
+        $resellerId = $this->resolveResellerId($sessionKey);
+
+        $message = WhatsappIncomingMessage::firstOrCreate(
+            ['message_id' => $messageId],
+            [
+                'session_key' => $sessionKey,
+                'reseller_id' => $resellerId,
+                'customer_id' => $this->resolveCustomerId($senderPhone, $isLid, $resellerId),
+                'sender_phone' => $senderPhone,
+                'is_lid' => $isLid,
+                'chat_jid' => $chatJid,
+                'text' => '',
+                'push_name' => $sidecar['push_name'] ?? null,
+                'received_at' => Carbon::createFromTimestamp($timestamp),
+                'media_type' => $mediaType,
+                'media_mime' => $sidecar['mime'] ?? null,
+                'media_file_name' => $sidecar['file_name'] ?? null,
+                'media_file_size' => $sidecar['file_size'] ?? null,
+                'media_caption' => $sidecar['caption'] ?? null,
+                'media_sha256' => $sidecar['sha256'] ?? null,
+            ]
+        );
+
+        if ($message->wasRecentlyCreated) {
+            $this->attachMediaFile($message, $sessionKey, $mediaType, (string) ($sidecar['mime'] ?? ''), $sidecar['media_path'] ?? null);
+        }
+
+        return $message->wasRecentlyCreated;
+    }
+
+    /**
+     * Ingest file media dari volume bersama gateway → disk privat boss-app.
+     * Hasil ditulis ke baris: media_file_path (sukses) atau
+     * media_rejected_reason (ditolak) — baris tetap ada apa pun hasilnya.
+     */
+    private function attachMediaFile(WhatsappIncomingMessage $message, string $sessionKey, string $mediaType, string $declaredMime, mixed $mediaPath): void
+    {
+        if (! is_string($mediaPath) || $mediaPath === '') {
+            $message->update(['media_rejected_reason' => 'media_path kosong di payload']);
+
+            return;
+        }
+
+        $baseDir = rtrim((string) config('services.whatsapp_gateway.incoming_media_dir'), '/');
+        // Cegah traversal: media_path tidak boleh absolut / mengandung '..'.
+        if (str_contains($mediaPath, '..') || str_starts_with($mediaPath, '/')) {
+            $message->update(['media_rejected_reason' => 'media_path tidak aman']);
+
+            return;
+        }
+
+        $source = $baseDir.'/'.$mediaPath;
+        $result = $this->mediaService->ingestFromSource($mediaType, $declaredMime, $source, $sessionKey, $message->message_id);
+
+        if (isset($result['stored_path'])) {
+            $message->update([
+                'media_file_path' => $result['stored_path'],
+                'media_file_size' => $result['size'],
+                'media_mime' => $result['mime'],
+                'media_rejected_reason' => null,
+            ]);
+        } else {
+            $message->update(['media_rejected_reason' => $result['reason'] ?? 'ditolak tanpa alasan']);
+            Log::info("WhatsappIncomingMessageService: media ditolak untuk message_id={$message->message_id} — ".($result['reason'] ?? '?'));
+        }
+    }
+
+    /**
+     * Resolve customer_id dari sender_phone (format lokal '0xxx', sama dengan
+     * customers.phone_number). LID mentah tidak pernah cocok → null. Pencarian
+     * di-scope tenant yang relevan (dari reseller/sesi direct).
+     */
+    private function resolveCustomerId(string $senderPhone, bool $isLid, ?int $resellerId): ?int
+    {
+        if ($isLid) {
+            return null;
+        }
+
+        $tenantId = $this->resolveTenantIdForFallback($resellerId);
+        if ($tenantId === null) {
+            return null;
+        }
+
+        return Customer::withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->where('phone_number', $senderPhone)
+            ->value('id');
     }
 
     /**

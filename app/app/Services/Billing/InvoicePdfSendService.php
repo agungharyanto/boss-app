@@ -92,9 +92,11 @@ class InvoicePdfSendService
             );
         }
 
-        // 6. Anti-spam kirim ulang: kalau sudah pernah dikirim (uji/non-uji),
-        //    butuh $resend=true; dan jeda minimal untuk invoice yang sama.
-        $lastSend = $this->lastSendFor($invoice);
+        // 6. Anti-spam kirim ulang: kalau sudah pernah dikirim NON-UJI, butuh
+        //    $resend=true; dan jeda minimal untuk invoice yang sama. (v0.13.5.3.1
+        //    D7 — log UJI TIDAK ikut memblokir kirim pertama nyata; penanda
+        //    "Terkirim ke pelanggan" di previewFor() juga sudah pakai non-uji.)
+        $lastSend = $this->lastSendFor($invoice, includeTest: false);
         if ($lastSend !== null) {
             if (! $resend) {
                 $when = $lastSend->created_at?->translatedFormat('d M Y H:i') ?? 'sebelumnya';

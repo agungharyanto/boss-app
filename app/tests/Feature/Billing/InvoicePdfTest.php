@@ -11,12 +11,14 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Services\Billing\InvoicePdfService;
 use App\Services\Company\CompanyProfileService;
+use App\Support\Filesystem\WebOwnership;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\View;
+use Mockery;
 use Tests\TestCase;
 
 /**
@@ -149,8 +151,66 @@ class InvoicePdfTest extends TestCase
         Storage::disk('local')->assertExists($expected);
 
         // Idempoten: panggil lagi → tetap 1 file di direktori tenant itu.
-        app(InvoicePdfService::class)->store($invoice);
+        $path2 = app(InvoicePdfService::class)->store($invoice);
+        $this->assertSame($expected, $path2);
         $this->assertCount(1, Storage::disk('local')->files("invoice-pdfs/{$tenant->id}"));
+    }
+
+    // ── v0.13.5.3.1 — normalisasi kepemilikan (root → www-data) ──────────────
+
+    public function test_store_replaces_an_existing_file_rather_than_failing(): void
+    {
+        Storage::fake('local');
+        [$invoice, $tenant] = $this->invoice();
+        $path = "invoice-pdfs/{$tenant->id}/{$invoice->id}.pdf";
+
+        // Simulasikan file sisa (mis. ditulis sweep terjadwal sebelumnya) —
+        // bukan PDF. store() harus menghapus-lalu-menulis, menggantinya.
+        Storage::disk('local')->put($path, 'SISA-BUKAN-PDF');
+        $this->assertSame('SISA-BUKAN-PDF', Storage::disk('local')->get($path));
+
+        $returned = app(InvoicePdfService::class)->store($invoice);
+
+        $this->assertSame($path, $returned);
+        $this->assertStringStartsWith('%PDF', Storage::disk('local')->get($path));
+        $this->assertCount(1, Storage::disk('local')->files("invoice-pdfs/{$tenant->id}"));
+    }
+
+    public function test_store_invokes_web_ownership_normalize_once(): void
+    {
+        Storage::fake('local');
+        [$invoice, $tenant] = $this->invoice();
+
+        // Seam: spy helper lewat container — tak bergantung uid proses test.
+        $spy = Mockery::spy(WebOwnership::class);
+        $this->app->instance(WebOwnership::class, $spy);
+
+        app(InvoicePdfService::class)->store($invoice);
+
+        $spy->shouldHaveReceived('normalize')
+            ->once()
+            ->with(
+                Mockery::pattern("#invoice-pdfs/{$tenant->id}/{$invoice->id}\\.pdf$#"),
+                Mockery::type('string'),
+            );
+    }
+
+    public function test_web_ownership_normalize_is_a_noop_when_not_root(): void
+    {
+        // Proses PHPUnit berjalan sebagai NON-root → helper harus tidak berbuat
+        // apa pun dan tidak melempar exception. (Jalur root tidak dapat
+        // diuji penuh oleh PHPUnit — lihat verifikasi nyata di CLAUDE.md.)
+        $this->assertNotSame(0, function_exists('posix_geteuid') ? posix_geteuid() : 1, 'Test harus dijalankan sebagai non-root');
+
+        $tmp = tempnam(sys_get_temp_dir(), 'webown');
+        file_put_contents($tmp, 'x');
+        $ownerBefore = fileowner($tmp);
+
+        (new WebOwnership)->normalize($tmp, dirname($tmp));
+
+        $this->assertFileExists($tmp);
+        $this->assertSame($ownerBefore, fileowner($tmp), 'Kepemilikan tak boleh berubah saat non-root');
+        @unlink($tmp);
     }
 
     // ── Akses (route) ────────────────────────────────────────────────────

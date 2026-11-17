@@ -140,6 +140,10 @@ func NewManager(ctx context.Context, store *sqlstore.Container, db *sql.DB, log 
 		return nil, fmt.Errorf("failed to ensure boss_session_keys table: %w", err)
 	}
 
+	// v0.13.6 — retensi volume media masuk (gateway yang bersihkan; Laravel
+	// cuma membaca). Goroutine berhenti saat ctx selesai.
+	startIncomingMediaCleanup(ctx)
+
 	return m, nil
 }
 
@@ -905,29 +909,124 @@ func (m *Manager) onIncomingMessage(e *entry, evt *events.Message) {
 		text = evt.Message.GetExtendedTextMessage().GetText()
 	}
 
-	if text == "" {
-		// Bukan pesan teks (media/lokasi/stiker/dll) — v0.13.1 cuma
-		// menangani teks, sesuai instruksi. Bukan error, tidak perlu log.
-		return
-	}
-
 	var lidStore store.LIDStore
 	if e.client != nil && e.client.Store != nil {
 		lidStore = e.client.Store.LIDs
 	}
 	senderPhone, isLid := resolveSenderPhone(context.Background(), evt.Info.Sender, evt.Info.SenderAlt, lidStore)
 
-	slog.Info("incoming text message", "sessionKey", e.key, "sender", evt.Info.Sender.User, "messageId", evt.Info.ID, "isLid", isLid)
+	if text != "" {
+		slog.Info("incoming text message", "sessionKey", e.key, "sender", evt.Info.Sender.User, "messageId", evt.Info.ID, "isLid", isLid)
+
+		m.notifier.NotifyIncomingMessage(webhook.IncomingMessagePayload{
+			SessionKey:  e.key,
+			SenderPhone: senderPhone,
+			IsLid:       isLid,
+			ChatJID:     evt.Info.Chat.String(),
+			Text:        text,
+			MessageID:   evt.Info.ID,
+			Timestamp:   evt.Info.Timestamp.Unix(),
+			PushName:    evt.Info.PushName,
+		})
+
+		return
+	}
+
+	// v0.13.6 — bukan teks: coba sebagai media (foto/dokumen/audio/video/
+	// stiker). Non-media (lokasi/kontak/dll) diabaikan diam-diam.
+	if media, ok := detectIncomingMedia(evt.Message); ok {
+		// Spawn goroutine: unduh+simpan bisa lama (file besar) — JANGAN
+		// memblokir event loop whatsmeow. Semafor mediaSem membatasi
+		// konkurensi di dalam handler.
+		go m.handleIncomingMedia(e, evt, senderPhone, isLid, media)
+	}
+}
+
+// handleIncomingMedia — v0.13.6. Validasi cap+mime (pass pertama; Laravel
+// re-validasi dari isi byte), unduh via whatsmeow (satu-satunya pemegang
+// kunci), simpan ke volume bersama + sidecar, lalu webhook diperkaya. Semua
+// kegagalan best-effort (di-log, tidak retry) — media yang lolos tersimpan
+// di volume, webhook yang hilang ditutup command reconcile Laravel.
+func (m *Manager) handleIncomingMedia(e *entry, evt *events.Message, senderPhone string, isLid bool, media incomingMedia) {
+	msgID := evt.Info.ID
+
+	extMap, okType := incomingAllowedMimes[media.mediaType]
+	if !okType {
+		return
+	}
+	ext, okMime := extMap[media.mime]
+	if !okMime {
+		slog.Info("incoming media ditolak: mime tidak di-whitelist", "sessionKey", e.key, "messageId", msgID, "mediaType", media.mediaType, "mime", media.mime)
+
+		return
+	}
+
+	sizeCap := incomingCaps[media.mediaType]
+	if media.fileLength > 0 && int64(media.fileLength) > sizeCap {
+		slog.Info("incoming media ditolak: melebihi cap (metadata)", "sessionKey", e.key, "messageId", msgID, "mediaType", media.mediaType, "fileLength", media.fileLength, "cap", sizeCap)
+
+		return
+	}
+
+	m.mediaSem <- struct{}{}
+	defer func() { <-m.mediaSem }()
+
+	ctx, cancel := context.WithTimeout(m.ctx, mediaTimeout)
+	defer cancel()
+
+	data, err := e.client.Download(ctx, media.downloader)
+	if err != nil {
+		slog.Warn("incoming media: gagal unduh", "sessionKey", e.key, "messageId", msgID, "err", err)
+
+		return
+	}
+	if int64(len(data)) > sizeCap {
+		slog.Info("incoming media ditolak: melebihi cap (ukuran nyata)", "sessionKey", e.key, "messageId", msgID, "size", len(data), "cap", sizeCap)
+
+		return
+	}
+
+	sidecar := incomingMediaSidecar{
+		MessageID:   msgID,
+		SessionKey:  e.key,
+		SenderPhone: senderPhone,
+		IsLid:       isLid,
+		ChatJID:     evt.Info.Chat.String(),
+		MediaType:   media.mediaType,
+		Mime:        media.mime,
+		FileName:    media.fileName,
+		FileSize:    int64(len(data)),
+		Caption:     media.caption,
+		Sha256:      sha256Hex(data),
+		Timestamp:   evt.Info.Timestamp.Unix(),
+		PushName:    evt.Info.PushName,
+	}
+
+	rel, err := storeIncomingMedia(e.key, msgID, ext, data, sidecar)
+	if err != nil {
+		slog.Error("incoming media: gagal simpan ke volume", "sessionKey", e.key, "messageId", msgID, "err", err)
+
+		return
+	}
+
+	slog.Info("incoming media disimpan", "sessionKey", e.key, "messageId", msgID, "mediaType", media.mediaType, "mime", media.mime, "size", len(data), "path", rel)
 
 	m.notifier.NotifyIncomingMessage(webhook.IncomingMessagePayload{
 		SessionKey:  e.key,
 		SenderPhone: senderPhone,
 		IsLid:       isLid,
 		ChatJID:     evt.Info.Chat.String(),
-		Text:        text,
-		MessageID:   evt.Info.ID,
+		Text:        "",
+		MessageID:   msgID,
 		Timestamp:   evt.Info.Timestamp.Unix(),
 		PushName:    evt.Info.PushName,
+		MediaType:   media.mediaType,
+		Mime:        media.mime,
+		FileName:    media.fileName,
+		FileSize:    sidecar.FileSize,
+		Caption:     media.caption,
+		MediaPath:   rel,
+		Sha256:      sidecar.Sha256,
 	})
 }
 

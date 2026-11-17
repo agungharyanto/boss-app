@@ -293,6 +293,26 @@ class InvoicePdfSendServiceTest extends TestCase
         $this->assertSame(2, WhatsappMessageLog::withoutGlobalScopes()->where('invoice_id', $invoice->id)->count());
     }
 
+    public function test_a_prior_test_log_does_not_block_the_first_real_send(): void
+    {
+        // v0.13.5.3.1 D7 — gate "sudah pernah dikirim" pakai includeTest:false,
+        // jadi log UJI tidak memblokir kirim pertama NYATA (tanpa resend).
+        $tenant = Tenant::factory()->create();
+        $this->template($tenant->id);
+        $this->connectedSession($tenant->id);
+        $this->enableTestMode($tenant->id, '6287884374939');
+        $invoice = $this->invoice($tenant->id, phone: '081111111111');
+        $service = app(InvoicePdfSendService::class);
+
+        $test = $service->sendManually($invoice, $this->actor($tenant->id));
+        $this->assertTrue($test->is_test);
+
+        WorkOrderDispatchSettings::forTenant($tenant->id)->update(['invoice_pdf_test_mode_enabled' => false]);
+
+        $real = $service->sendManually($invoice, $this->actor($tenant->id), resend: false);
+        $this->assertFalse($real->is_test);
+    }
+
     // ── Mode Uji ─────────────────────────────────────────────────────────
 
     public function test_test_mode_redirects_to_test_number_marks_is_test_and_prefixes_caption(): void

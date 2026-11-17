@@ -11,6 +11,7 @@ use App\Http\Controllers\CommissionPaymentProofController;
 use App\Http\Controllers\FiberNodePhotoController;
 use App\Http\Controllers\Settings\CompanyLogoController;
 use App\Http\Controllers\VpnScriptDownloadController;
+use App\Http\Controllers\WhatsappIncomingMediaController;
 use App\Http\Controllers\WorkOrderActivationController;
 use App\Http\Controllers\WorkOrderClaimController;
 use App\Http\Controllers\WorkOrderCloseController;
@@ -219,6 +220,8 @@ Route::middleware(['auth', 'admin.panel', 'password.changed'])->name('web.')->gr
         Route::get('/invoices/{invoice}/pdf', [InvoicePrintController::class, 'downloadPdf'])->name('invoices.pdf');
         Route::get('/payment-reconciliation', ReconciliationReport::class)->name('payment-reconciliation.index');
         Route::get('/whatsapp-gateway', WhatsappGatewayIndex::class)->name('whatsapp-gateway.index');
+        // v0.13.6 — sajikan media pesan masuk dari disk privat (auth + policy).
+        Route::get('/whatsapp-incoming/{incomingMessage}/media', [WhatsappIncomingMediaController::class, 'show'])->name('whatsapp-incoming.media');
         Route::get('/nas', NasIndex::class)->name('nas.index');
         Route::get('/vpn-script-generator', VpnScriptGenerator::class)->name('vpn-script-generator.index');
         Route::get('/olt-devices', OltDeviceIndex::class)->name('olt-devices.index');

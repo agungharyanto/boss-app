@@ -61,10 +61,28 @@ chmod 1777 /tmp
 # log file can't be predicted or fully prevented.
 chown www-data:www-data storage/logs/*.log 2>/dev/null || true
 
+# v0.13.5.3.1/v0.13.6 — self-healing kepemilikan file PRIVAT yang ditulis oleh
+# proses ROOT (scheduler/worker: cache PDF invoice v0.13.5.3.1, ingest media
+# whatsapp-incoming v0.13.6) kembali ke www-data, supaya request php-fpm
+# (www-data) berikutnya bisa menimpa/menulis di folder yang sama. Lapis-dua di
+# atas App\Support\Filesystem\WebOwnership (yang sudah chown saat menulis).
+# DIBATASI ke subpath yang memang ditulis proses root + `! -user www-data` agar
+# murah: di steady-state nol entri cocok (chown tak dipanggil), tidak men-scan
+# seluruh storage/app/private (mis. fiber-node-photos yang bisa besar).
+# CATATAN: butuh rebuild image boss-app; commit terpisah, bisa dibuang saat
+# rilis bila tidak jadi dipakai.
+normalize_private_owner() {
+    for d in storage/app/private/invoice-pdfs storage/app/private/whatsapp-incoming; do
+        [ -d "$d" ] && find "$d" ! -user www-data -exec chown www-data:www-data {} + 2>/dev/null || true
+    done
+}
+normalize_private_owner
+
 (
     while true; do
         chmod 1777 /tmp
         chown www-data:www-data storage/logs/*.log 2>/dev/null || true
+        normalize_private_owner
         sleep 30
     done
 ) &

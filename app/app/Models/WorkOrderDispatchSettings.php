@@ -63,6 +63,11 @@ class WorkOrderDispatchSettings extends Model
         // v0.13.5.3 — "Mode Uji Kirim Invoice" per tenant.
         'invoice_pdf_test_mode_enabled',
         'invoice_pdf_test_recipient',
+        // v0.13.5.3.1 — "Kirim PDF Invoice Otomatis" per tenant (saklar kedua).
+        'invoice_pdf_auto_send_enabled',
+        'invoice_pdf_auto_send_enabled_at',
+        'invoice_pdf_auto_send_from',
+        'invoice_pdf_auto_send_daily_cap',
     ];
 
     protected function casts(): array
@@ -71,6 +76,10 @@ class WorkOrderDispatchSettings extends Model
             'last_dispatch_run_at' => 'datetime',
             'customer_auto_notify_enabled' => 'boolean',
             'invoice_pdf_test_mode_enabled' => 'boolean',
+            'invoice_pdf_auto_send_enabled' => 'boolean',
+            'invoice_pdf_auto_send_enabled_at' => 'datetime',
+            'invoice_pdf_auto_send_from' => 'date',
+            'invoice_pdf_auto_send_daily_cap' => 'integer',
         ];
     }
 
@@ -109,6 +118,12 @@ class WorkOrderDispatchSettings extends Model
                 // UI/langkah rilis, bukan di sini.
                 'invoice_pdf_test_mode_enabled' => false,
                 'invoice_pdf_test_recipient' => null,
+                // v0.13.5.3.1 — Kirim otomatis default MATI; dinyalakan lewat
+                // UI/langkah rilis (go-live di hari sepi, MixRadius mati dulu).
+                'invoice_pdf_auto_send_enabled' => false,
+                'invoice_pdf_auto_send_enabled_at' => null,
+                'invoice_pdf_auto_send_from' => null,
+                'invoice_pdf_auto_send_daily_cap' => 80,
             ]
         );
     }

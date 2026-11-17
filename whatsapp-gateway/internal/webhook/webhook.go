@@ -124,6 +124,18 @@ type IncomingMessagePayload struct {
 	MessageID string `json:"message_id"`
 	Timestamp int64  `json:"timestamp"`
 	PushName  string `json:"push_name"`
+
+	// v0.13.6 — field media (omitempty; kosong untuk pesan teks biasa). File
+	// sudah DIUNDUH+disimpan gateway ke volume bersama; MediaPath relatif
+	// terhadap WA_INCOMING_MEDIA_DIR. Caption dibawa terpisah dari Text (Text
+	// dibiarkan kosong untuk media supaya caption tidak dobel).
+	MediaType string `json:"media_type,omitempty"`
+	Mime      string `json:"mime,omitempty"`
+	FileName  string `json:"file_name,omitempty"`
+	FileSize  int64  `json:"file_size,omitempty"`
+	Caption   string `json:"caption,omitempty"`
+	MediaPath string `json:"media_path,omitempty"`
+	Sha256    string `json:"sha256,omitempty"`
 }
 
 // NotifyIncomingMessage — pola PERSIS NotifySessionStatus() di atas: HMAC

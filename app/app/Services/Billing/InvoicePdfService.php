@@ -5,6 +5,7 @@ namespace App\Services\Billing;
 use App\Models\CompanyProfile;
 use App\Models\Invoice;
 use App\Services\Company\CompanyProfileService;
+use App\Support\Filesystem\WebOwnership;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\View;
@@ -28,7 +29,11 @@ class InvoicePdfService
 {
     private const LOGO_MAX_WIDTH = 240;
 
-    public function __construct(private readonly CompanyProfileService $companyProfiles) {}
+    public function __construct(
+        private readonly CompanyProfileService $companyProfiles,
+        private readonly WebOwnership $webOwnership,
+        private readonly PaymentInstructionsService $paymentInstructions,
+    ) {}
 
     public function render(Invoice $invoice): string
     {
@@ -41,6 +46,8 @@ class InvoicePdfService
             'invoice' => $invoice,
             'company' => $company,
             'logoDataUri' => $this->logoDataUri($invoice->tenant_id),
+            // v0.13.5.4 — bagian "Cara Pembayaran" (render-only, tanpa Xendit).
+            'payment' => $this->paymentInstructions->forInvoice($invoice),
         ])->render();
 
         // isRemoteEnabled=false (tak fetch URL remote), chroot dibatasi ke
@@ -62,7 +69,21 @@ class InvoicePdfService
     public function store(Invoice $invoice): string
     {
         $path = "invoice-pdfs/{$invoice->tenant_id}/{$invoice->id}.pdf";
-        Storage::disk('local')->put($path, $this->render($invoice));
+        $disk = Storage::disk('local');
+
+        // Hapus dulu bila file sudah ada: file yang ditulis sweep TERJADWAL
+        // berjalan sebagai root; direktori tenant milik www-data, jadi www-data
+        // tetap bisa menghapusnya (izin unlink bergantung pada direktori, bukan
+        // pemilik file) lalu menulis ulang — mencegah 500 "overwrite file root".
+        if ($disk->exists($path)) {
+            $disk->delete($path);
+        }
+
+        $disk->put($path, $this->render($invoice));
+
+        // Bila proses ini ROOT (scheduler/worker), normalkan kepemilikan file +
+        // direktori baru ke www-data; no-op total bila bukan root.
+        $this->webOwnership->normalize($disk->path($path), $disk->path(''));
 
         return $path;
     }

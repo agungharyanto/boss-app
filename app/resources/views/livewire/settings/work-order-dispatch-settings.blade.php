@@ -80,6 +80,69 @@
         </button>
     </div>
 
+    {{-- ── Kirim PDF Invoice Otomatis (v0.13.5.3.1) ─────────────────── --}}
+    <div class="bg-white border border-gray-200 rounded-md p-6 mb-6">
+        <div class="flex items-center justify-between mb-1">
+            <h2 class="text-lg font-semibold text-gray-800">{{ __('Kirim PDF Invoice Otomatis') }}</h2>
+            @if ($invoicePdfAutoSendEnabled)
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">{{ __('AKTIF') }}</span>
+            @else
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">{{ __('MATI') }}</span>
+            @endif
+        </div>
+        <p class="text-xs text-gray-500 mb-1">
+            {{ __('Sweep terjadwal mengirim PDF invoice (tagihan terbit) ke pelanggan secara OTOMATIS, bertahap dan aman terhadap ban WhatsApp.') }}
+        </p>
+
+        {{-- Peringatan wajib --}}
+        <div class="rounded-md bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 mb-4 space-y-1">
+            <p>• {{ __('Hanya invoice yang terbit SETELAH batas mulai yang dikirim (bukan backlog lama).') }}</p>
+            <p>• {{ __('Butuh saklar "Notifikasi Otomatis ke Pelanggan" di atas juga AKTIF.') }}</p>
+            <p>• {{ __('Maksimal') }} {{ $invoicePdfAutoSendDailyCap }} {{ __('pesan/hari, hanya jam 08:00–20:00 WIB.') }}</p>
+            <p>• {{ __('Sweep BERHENTI TOTAL saat "Mode Uji Kirim Invoice" di bawah AKTIF.') }}</p>
+            <p>• {{ __('Pastikan pengingat/tagihan MixRadius untuk pelanggan ini sudah DIMATIKAN dulu agar pelanggan tidak menerima tagihan ganda.') }}</p>
+        </div>
+
+        {{-- Indikator status --}}
+        <div class="rounded-md bg-gray-50 border border-gray-200 p-3 text-xs text-gray-700 mb-4 space-y-0.5">
+            <p>{{ __('Status') }}:
+                @php $st = $autoSend['status']; @endphp
+                <span class="font-medium {{ $st === 'Aktif' ? 'text-green-700' : ($st === 'Mati' ? 'text-gray-600' : 'text-amber-700') }}">{{ $st }}</span>
+            </p>
+            <p>{{ __('Hari ini terkirim') }}: <span class="font-medium">{{ $autoSend['sent_today'] }}</span> {{ __('dari') }} {{ $autoSend['cap'] }}</p>
+            <p>{{ __('Terakhir jalan') }}: <span class="font-medium">{{ $autoSend['last_run'] ?? __('belum pernah') }}</span></p>
+        </div>
+
+        <label class="flex items-center gap-2 text-sm text-gray-700 mb-4">
+            <input type="checkbox" wire:model="invoicePdfAutoSendEnabled" class="rounded border-gray-300">
+            <span>{{ __('Aktifkan kirim PDF invoice otomatis') }}</span>
+        </label>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Mulai dari tanggal') }}</label>
+                <input type="date" wire:model="invoicePdfAutoSendFrom"
+                    class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                @error('invoicePdfAutoSendFrom') <p class="text-sm text-red-600 mt-1">{{ $message }}</p> @enderror
+                <p class="text-xs text-gray-400 mt-1">{{ __('Kosongkan = mulai dari saat saklar dinyalakan.') }}</p>
+                @if ($invoicePdfAutoSendFrom && $invoicePdfAutoSendFrom < now()->toDateString())
+                    <p class="text-xs text-amber-700 mt-1">{{ __('Peringatan: invoice Pending yang sudah terbit sejak tanggal itu akan dikirim bertahap, maks') }} {{ $invoicePdfAutoSendDailyCap }} {{ __('/hari.') }}</p>
+                @endif
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Batas harian (pesan/hari)') }}</label>
+                <input type="number" min="1" max="200" wire:model="invoicePdfAutoSendDailyCap"
+                    class="block w-full rounded-md border-gray-300 shadow-sm text-sm">
+                @error('invoicePdfAutoSendDailyCap') <p class="text-sm text-red-600 mt-1">{{ $message }}</p> @enderror
+                <p class="text-xs text-gray-400 mt-1">{{ __('1 sampai 200. Default 80.') }}</p>
+            </div>
+        </div>
+
+        <button type="button" wire:click="saveInvoicePdfAutoSend" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">
+            {{ __('Simpan') }}
+        </button>
+    </div>
+
     {{-- ── Mode Uji Kirim Invoice (v0.13.5.3) ───────────────────────── --}}
     <div class="bg-white border border-gray-200 rounded-md p-6 mb-6">
         <div class="flex items-center justify-between mb-1">

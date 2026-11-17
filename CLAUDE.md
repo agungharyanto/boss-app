@@ -9732,6 +9732,341 @@ disentuh; 571/572/573 utuh.
   beberapa `storage/framework/views/*.php` terkompilasi root. Fix tuntas = loop chown entrypoint (butuh
   rebuild).
 
+## Kirim PDF Invoice OTOMATIS + Saklar Kedua (v0.13.5.3.1 — SELESAI, merged `develop`→`main`, tag `v0.13.5.3.1`)
+
+**Sweep terjadwal yang mengirim PDF invoice (event `invoice_issued`, template yang sudah ada) ke pelanggan
+untuk invoice yang BARU terbit — melanjutkan kirim MANUAL (v0.13.5.3).** Branch topik
+`v0.13.5.3.1-kirim-pdf-otomatis` dari develop (`0421ab5`), dikerjakan di git worktree (server tetap di
+develop). Belum di-migrate di server, belum merge/tag.
+
+**SAKLAR KEDUA — harus lolos BERSAMA `customer_auto_notify_enabled`.** Kolom aditif
+`work_order_dispatch_settings`: `invoice_pdf_auto_send_enabled` (bool default FALSE),
+`invoice_pdf_auto_send_enabled_at` (timestamp, diisi saat OFF→ON = batas bawah "hanya invoice baru"),
+`invoice_pdf_auto_send_from` (date nullable = "Mulai dari tanggal", override batas bawah),
+`invoice_pdf_auto_send_daily_cap` (unsignedSmallInteger default 80, UI 1..200).
+
+**`SendInvoicePdfAutomatically`** (`invoices:send-pdf-automatically`, `->everyFifteenMinutes()->withoutOverlapping()`).
+Urutan gate (semua early-exit): (1) **jam WIB [08:00,20:00)** — dihitung eksplisit `Asia/Jakarta`
+(`self::TIMEZONE`), **BUKAN `now()->hour` app-tz** (test harness bisa UTC → window salah; bug ini
+ditemukan & ditutup saat menulis test); (2) per tenant: `invoice_pdf_auto_send_enabled` AND
+`customer_auto_notify_enabled` AND NOT `invoice_pdf_test_mode_enabled` (**Mode Uji ON = BERHENTI TOTAL**);
+(3) cap harian per **sesi tujuan** (hitung log `invoice_issued` NON-UJI hari ini WIB per `reseller_id` —
+`whatsapp_message_logs` TIDAK punya kolom `session_key`, sesi diturunkan dari `reseller_id`, NULL=direct);
+(4) pilih invoice: `status=Pending` (re-cek), `generated_at >= batas bawah`, pelanggan `aktif` + nomor
+valid, sesi connected (bukan logged_out), **belum ada log `invoice_issued` non-uji**, limit = `cap -
+sent_today`, urut `generated_at` asc. Per invoice: `InvoicePdfService::store()` → `buildAndQueue(InvoiceIssued,
+customer, invoice, attachment, context: null)`. **JALUR OTOMATIS = `context: null`** → tetap ber-guard
+`customer_auto_notify_enabled` (jalur manual yang bypass via `InvoiceSendContext` tak disentuh; command
+baru ditambahkan ke `$automaticCallers` `WhatsappManualBypassArchitectureTest`). Tanpa `sleep()` — pacing
+oleh worker (`SendWhatsappMessageJob` jeda 5-10s/pesan + FIFO single-worker). Exception per invoice
+ditangkap (satu gagal tak menghentikan sisanya). `--dry-run` untuk test/pelaporan (tak antre). "Terakhir
+jalan" disimpan di **cache** (`SendInvoicePdfAutomatically::lastRunCacheKey($tenant)`), bukan dari log WA.
+
+**Anti kirim-ganda (D6) — partial unique index DI-SCOPE JALUR OTOMATIS SAJA (keputusan desain penting).**
+`wa_logs_invoice_issued_nontest_unique` = `UNIQUE (invoice_id) WHERE event_type='invoice_issued' AND
+is_test=false AND sent_by_user_id IS NULL AND invoice_id IS NOT NULL`. **`sent_by_user_id IS NULL` sengaja**
+ditambahkan ke predikat D6 asli: kirim MANUAL + "Kirim Ulang" (v0.13.5.3) memang boleh menghasilkan beberapa
+log non-uji untuk invoice sama (`sent_by_user_id` terisi) — index TIDAK boleh memblokirnya. Sweep otomatis
+selalu `sent_by_user_id=null` = persis jalur yang dijaga. Dedup di command tetap mengecek SEMUA log non-uji
+(termasuk manual) → sweep tak mengirim ulang invoice yang sudah dikirim admin manual. Migrasi punya
+**pre-check**: tolak + laporkan bila sudah ada duplikat (jalur otomatis) sebelum membuat index. Partial
+index jalan di PostgreSQL (produksi) dan SQLite (test).
+
+**D7 — log uji tidak memblokir kirim pertama.** `InvoicePdfSendService` gate "sudah pernah dikirim" diubah
+ke `lastSendFor($invoice, includeTest: false)` → hanya kiriman NON-UJI yang memblokir kirim pertama/butuh
+Kirim Ulang. Penanda "Terkirim ke pelanggan" (`previewFor`) sudah non-uji sejak awal (tak berubah).
+
+**UI** kartu "Kirim PDF Invoice Otomatis" di Konfig WA Gateway (di bawah "Notifikasi Otomatis ke Pelanggan",
+di atas "Mode Uji"): toggle + "Mulai dari tanggal" + "Batas harian" (1..200) + tombol Simpan
+(`saveInvoicePdfAutoSend`, set `enabled_at=now()` saat OFF→ON, dibiarkan saat re-save ON). Peringatan wajib
+(hanya invoice terbit setelah batas mulai; butuh saklar pelanggan AKTIF; maks N/hari 08:00-20:00; BERHENTI
+saat Mode Uji ON; matikan MixRadius dulu). Indikator: "Hari ini terkirim X dari N", "terakhir jalan: <jam>",
+status "Aktif" / "Berhenti: Mode Uji ON" / "Berhenti: saklar pelanggan OFF" / "Mati". Peringatan khusus bila
+"Mulai dari tanggal" lebih lama dari hari ini.
+
+**PROSEDUR GO-LIVE (URUT, di HARI SEPI — bukan dekat tgl jatuh tempo day-1):**
+1. **Matikan pengingat/tagihan MixRadius** untuk segmen pelanggan yang akan masuk auto-send (hindari
+   tagihan ganda — overlap MixRadius↔BOSS tak bisa dihitung dari `boss_db`, tak ada flag).
+2. **Mode Uji OFF** (`invoice_pdf_test_mode_enabled=false`) — selama ON, sweep BERHENTI TOTAL.
+3. **Saklar pelanggan ON** (`customer_auto_notify_enabled=true`) — penegak otomatis di `buildAndQueue`.
+4. **Saklar kirim otomatis ON** (`invoice_pdf_auto_send_enabled=true`) → `enabled_at=now()` → **0 backlog**
+   (hanya invoice terbit SETELAH saat ini; dibuktikan read-only 2026-11-09: enabling now = 0 eligible,
+   dari tertua = 53 Pending). Aktifkan di hari sepi; **JANGAN** nyalakan dekat run day-1 (burst ~308
+   `billing_cycle_day=1` → ~4 hari kuras @80/hari).
+Default semua MATI; template 4 event pelanggan otomatis saat ini nonaktif (tenant 1) — aktifkan
+`invoice_issued` tetap (manual sudah pakai) + saklar pelanggan sesuai kebutuhan saat go-live.
+
+**Cap, jendela, Mode Uji (ringkas):** cap default 80/hari/sesi (editable UI 1..200, kolom settings);
+jendela 08:00-20:00 WIB; Mode Uji ON → sweep berhenti total (bukan dry-run — benar-benar nol antre).
+
+**Rilis (aditif, NOL downtime, menunggu "go" Agung):** `php artisan migrate` (2 migrasi: 4 kolom + 1
+partial index dengan pre-check) + `optimize:clear` + `queue:restart`. NOL `.env`/rebuild/logout (endpoint
+`/send-media` + GD + dompdf sudah ada). Scheduler `->everyFifteenMinutes()` terbaca otomatis oleh loop
+`boss-scheduler`. **Uji nyata HANYA ke nomor Agung 6287884374939** lewat pelanggan/invoice TEST: Mode Uji
+ON dulu (dry-run membuktikan sweep berhenti), lalu Mode Uji OFF + pelanggan TEST bernomor Agung + invoice
+TEST baru (`generated_at > enabled_at`) → sweep antre 1 pesan ke Agung; invoice lama tak terpilih; backup
+`pg_dump` dulu, cleanup satu transaksi FK-ordered setelahnya; kembalikan Mode Uji ON.
+
+**Backlog**: opt-out pelanggan (belum ada mekanisme); fix durabilitas izin via loop `chown storage/app/private`
+di `docker/php/entrypoint.sh` (butuh rebuild — gabung jendela rilis v0.13.6); file root lain di `storage/`.
+
+### PENUTUPAN (2026-11-10) — UJI NYATA + PERBAIKAN IZIN + MERGE/TAG
+
+**Terbukti nyata (TAHAP B, uji sweep end-to-end ke nomor Agung).** Dengan Mode Uji sebagai jaring pengaman:
+backup `pg_dump` → pelanggan+subscription+invoice TEST → nyalakan saklar pelanggan+auto (`enabled_at`=now) →
+dry-run saat Mode Uji ON = **0** (sweep berhenti total) → **pre-flight**: satu-satunya invoice `gen>=enabled_at`
+= kandidat tepat **1** (invoice TEST) → **jendela eksposur ~18 detik** (Mode Uji OFF → dry-run konfirmasi kandidat
+tetap 1 → sweep nyata SEKALI → Mode Uji ON + 2 saklar OFF segera). Hasil: **tepat 1** `whatsapp_message_logs`
+(`event=invoice_issued`, `is_test=false`, `sent_by_user_id=NULL`, sesi `direct`, tujuan `6287...939` Agung,
+lampiran PDF, caption `invoice_issued` **tanpa** prefiks `[UJI]`, `status=sent`), **nol pesan ke pelanggan nyata**,
+antrean kosong, nol exception. Cleanup (TAHAP C) satu transaksi FK-ordered (log→invoice→subscription→timeline→
+customer), file PDF root dihapus, `wa_logs` kembali 446, 571/572/573 utuh.
+
+**Perbaikan izin file (bukan rebuild) — `App\Support\Filesystem\WebOwnership` + delete-before-write di
+`InvoicePdfService::store()`.** `store()` kini: hapus file dulu bila ada (www-data boleh unlink file root di
+direktori milik www-data) → tulis → `WebOwnership::normalize()` chown file + direktori induk milik-root ke
+www-data bila proses euid=0 (no-op bila bukan root). **Diverifikasi nyata di container `boss-scheduler` SEBAGAI
+ROOT**: `store()` untuk invoice nyata (#1243, hanya tulis cache, tanpa WA) → file + semua dir **www-data:www-data**,
+lalu cache dihapus. Jujur: jalur root TIDAK bisa dibuktikan penuh oleh PHPUnit (proses test non-root → helper
+no-op); test PHPUnit menutup: helper no-op saat non-root, dipanggil sekali dari `store()` (spy seam),
+delete-before-write mengganti file existing, idempoten.
+
+**PELAJARAN (governance, pakai ulang untuk tugas scheduler/worker + WA/invoice berikutnya):**
+- **(a) `boss-scheduler`, `boss-worker`, `boss-whatsapp-worker` menjalankan `schedule:run`/`queue:work` sebagai
+  ROOT; php-fpm (`boss-app` request web) sebagai www-data (uid 82).** Jadi SEMUA file yang ditulis lewat jalur
+  scheduler/worker (cache PDF, dsb.) WAJIB dinormalkan kepemilikannya ke www-data (pakai `WebOwnership`), kalau
+  tidak tombol/manual www-data berikutnya bisa 500 saat menimpa — kelas bug sama dengan 500 v0.13.5.3. Catatan
+  terkait: dir scratch test `storage/framework/{testing,views}` sempat `root:root` dari run root lama → `php
+  artisan test` sebagai www-data gagal (`Storage::fake` tak bisa buat dir); dinormalkan ke www-data (ephemeral,
+  gitignored).
+- **(b) Jalankan SEMUA artisan/php manual di container sebagai www-data** (`docker compose exec -u www-data
+  boss-app ...`); `exec` default = root → meninggalkan file root (akar masalah berulang di seluruh file ini).
+- **(c) Prosedur uji sweep AMAN**: Mode Uji **ON dulu** (jaring pengaman) → nyalakan saklar → buat invoice TEST
+  (`gen>enabled_at`) → dry-run (Mode Uji ON = 0) → **pre-flight kandidat tepat 1** → matikan Mode Uji **sesingkat
+  mungkin** → dry-run konfirmasi → jalankan SEKALI → **re-arm segera** (Mode Uji ON + saklar OFF).
+- **(d) Prosedur GO-LIVE urut (hari sepi, JANGAN dekat run `GenerateDueInvoices` tgl-1 — burst ~308):**
+  pengingat/tagihan **MixRadius dimatikan dulu** untuk segmen terkait → **Mode Uji OFF** → **saklar pelanggan
+  ON** (`customer_auto_notify_enabled`) → **saklar kirim otomatis ON** (`enabled_at`=now = 0 backlog; opsi
+  "Mulai dari tanggal" bila ingin mencakup invoice Pending yang sudah terbit).
+- **Catatan v0.13.6:** ingest media (scheduler = root) DAN webhook (php-fpm = www-data) sama-sama menulis ke
+  `storage/app/private/whatsapp-incoming` → **pakai `WebOwnership` yang sama sebelum rilis v0.13.6** (tindakan di
+  branch v0.13.6, bukan di sini).
+
+## Terima Media WhatsApp Masuk (v0.13.6 — SELESAI, merged `develop`→`main`, tag `v0.13.6`)
+
+**Pesan masuk bermedia (foto/dokumen PDF/audio termasuk voice note/video/stiker) dari pelanggan/teknisi
+diterima, disimpan aman, ditampilkan.** Melengkapi v0.13.1 (yang HANYA teks 1:1 — media di-`return` dibuang
+di `onIncomingMessage`). Branch topik `v0.13.6-terima-media` dari develop (`0421ab5`), di git worktree.
+
+**ALUR (keputusan D1-D10 final Agung):** Gateway Go **mengunduh** (satu-satunya pemegang kunci dekripsi
+whatsmeow) → simpan ke **volume bersama** `wa_incoming_media` (`/wa-incoming/{session_key}/{message_id}.{ext}`)
++ **sidecar JSON** → webhook diperkaya metadata. Laravel **HANYA MEMBACA** volume (menyalin ke disk privat);
+**tak pernah menghapus** di volume — gateway yang bersihkan (retensi 7 hari). **Grup tetap dibuang (1:1 saja,
+D3).**
+
+**Gateway Go** (`whatsapp-gateway/internal/session/incoming_media.go` + `manager.go` `onIncomingMessage`/
+`handleIncomingMedia`): teks tetap diteruskan seperti dulu; selain itu `detectIncomingMedia` kenali 5 jenis.
+**Cap per jenis** (image 10MB/document 16MB/audio 16MB/video 32MB/sticker 1MB) — **tolak SEBELUM unduh** bila
+`FileLength` metadata > cap, cek ulang ukuran nyata pasca-unduh. Whitelist MIME WA-reported per jenis
+(dokumen **hanya PDF**). `cli.Download(ctx, msg)` di **goroutine** (tak blok event loop) dengan semafor
+`mediaSem` yang sudah ada. Simpan file **atomic** (tmp+rename) **mode 0644, dir 0755** (gateway = root uid 0;
+world-readable → `www-data` uid 82 boss-app bisa baca — **diverifikasi nyata lintas-uid**) + sidecar JSON
+(message_id/session/sender/is_lid/chat_jid/media_type/mime/file_name/file_size/caption/sha256/timestamp/
+push_name/media_path). Webhook payload tambah `media_type/mime/file_name/file_size/caption/media_path/sha256`
+(omitempty; Text dibiarkan kosong untuk media, caption terpisah). Retensi volume gateway `startIncomingMediaCleanup`
+(7 hari, env `WA_INCOMING_MEDIA_RETENTION_DAYS`). `WA_INCOMING_MEDIA_DIR` default `/wa-incoming` (HARUS =
+config Laravel).
+
+**Laravel.** Kolom aditif `whatsapp_incoming_messages`: `media_type/media_mime/media_file_path/media_file_size/
+media_file_name/media_caption/media_sha256/media_rejected_reason` + `customer_id` (FK nullable). **`WhatsappIncomingMediaService::ingestFromSource`** — baca file volume → **RE-VALIDASI dari isi byte** (`finfo`,
+BUKAN MIME WA): **denylist keras** (svg/html/xml/js/exe/apk/sh) + tolak semua `text/*`; per-jenis (foto/
+stiker/dokumen KETAT; audio/video toleran container opaque) → cap → **EXIF-strip via GD re-encode** untuk
+FOTO (jpeg/png/webp; stiker tak di-reencode demi animasi) → simpan ke disk **PRIVAT** `whatsapp-incoming/
+{session}/{message_id}.{ext}`. Gagal validasi → baris dicatat dengan `media_rejected_reason`, **tanpa file**.
+`recordFromWebhook` (webhook, HMAC) + `recordFromSidecar` (reconcile, sumber lokal tepercaya) berbagi
+`attachMediaFile`; `customer_id` di-resolve dari `sender_phone` (LID tak pernah cocok → null). **Media TIDAK
+di-routing** ke state machine/fallback (bukan perintah teks). **GOTCHA:** middleware
+`ConvertEmptyStringsToNull` mengubah `"text":""` (caption media kosong) jadi null → default `$text` ke `''`
+(bukan null) + izinkan text kosong bila `hasMedia`.
+
+**Reconcile + retensi (D8/D6).** `whatsapp:reconcile-incoming-media` (`->everyFiveMinutes()->withoutOverlapping()`,
+boss-scheduler) pindai sidecar `*/*.json` di volume → masukkan yang belum ada di DB (**idempoten via
+`message_id` UNIQUE**) → **menutup webhook yang hilang** (fire-and-forget tanpa retry). `whatsapp:prune-incoming-media`
+(`->dailyAt('03:30')`, 90 hari) hapus FILE privat + null `media_file_path`, **baris dipertahankan** (jejak).
+
+**Serve + privasi (D7/D10).** `GET /whatsapp-incoming/{incomingMessage}/media` (`web.whatsapp-incoming.media`,
+grup `admin.panel`) → `WhatsappIncomingMediaController` (`authorize('view')` → `WhatsappIncomingMessagePolicy`:
+`whatsapp_gateway.view/manage` ATAU reseller membership ATAU `customers.view` bila tertaut pelanggan),
+StreamedResponse disk privat + `nosniff`, **tanpa URL publik**. UI: partial `incoming-media-cell` (thumbnail
+foto/stiker, `<audio>` voice note, link unduh dokumen/video, badge jenis + caption) dipakai di tab "Pesan
+Masuk" (`WhatsappGatewayIndex`) DAN **Detail Pelanggan** (seksi read-only pesan masuk tertaut `customer_id`).
+
+**docker-compose.yml:** volume `wa_incoming_media` — `whatsapp-gateway` **rw** (`/wa-incoming`) + `WA_INCOMING_MEDIA_DIR`,
+`boss-app` **:ro** (webhook ingest baca volume), `boss-scheduler` **:ro** (reconcile). Config
+`services.whatsapp_gateway.incoming_media_dir/caps/mimes`.
+
+**D9 (commit terpisah):** `WhatsappIncomingMessageWebhookTest` fallback dibuat deterministik via
+`config()->set(unrecognized_fallback_enabled, true)` + test pasangan cabang disabled — cluster 13 regresi
+bersih (sebelumnya gagal non-deterministik karena env ambient `false` di container boss-app).
+
+**Verifikasi:** Go build + gofmt + test session hijau; Laravel scoped (media 11 + webhook 21 incl. D9)
+hijau, Pint clean; lintas-uid root→www-data diverifikasi nyata. **Kegagalan CustomerShow di throwaway =
+pra-ada** (koneksi `radius` tak tersedia, bukan regresi — dikonfirmasi di baseline).
+
+**RILIS (menunggu "go" Agung, jendela trafik rendah):** `php artisan migrate` (1 migrasi aditif) +
+**`docker compose up -d --build whatsapp-gateway`** (kode download baru; `RestoreAll` sambung sesi otomatis,
+putus beberapa detik — **BUKAN logout**; webhook masuk selama jendela rebuild HILANG, ditutup reconcile) +
+recreate `boss-app`/`boss-scheduler` untuk mount volume baru (**JANGAN sentuh `.env`** agar Postgres tak ikut
+recreate — pelajaran v0.13.5.1; restart `boss-nginx` setelah boss-app recreate). Urutan paling aman: deploy
+Laravel dulu (backward-compatible — abaikan field media bila gateway lama) → rebuild gateway. **Uji nyata
+HANYA ke nomor Agung** (foto/voice note/PDF). **Backlog:** transkripsi voice note (di luar scope), virus scan
+(tak perlu sekarang), fix durabilitas izin (lihat pelajaran v0.13.5.3).
+
+### PENUTUPAN (2026-11-11) — RILIS + UJI NYATA + MERGE/TAG
+
+**Dirilis ke server & TERBUKTI NYATA.** Rilis dari branch topik (urutan dipakai: tag image rollback
+`boss-app:pre-v13.6-2026-11-11` + `whatsapp-gateway:pre-v13.6-2026-11-11`; backup `pg_dump`; `migrate`
+additive-only pada `whatsapp_incoming_messages`; recreate Laravel `up -d --build boss-app` + **`restart
+boss-nginx` SEGERA** [aturan stale FastCGI upstream]; lalu `up -d --build whatsapp-gateway`). `RestoreAll`
+menyambung sesi "direct" ~2 detik — **BUKAN logout**. Postgres TIDAK ter-recreate (`.env` tak disentuh).
+
+**Uji nyata dari HP Agung (nomor `0878***939`, cust=34):** 5 jenis media **ter-ingest sempurna** — foto
+(image/jpeg, **GD re-encode → EXIF bersih**, sha/size beda sumber), video (video/mp4), voice note
+(audio/ogg OggS), stiker (image/webp), PDF (application/pdf %PDF); file privat `www-data:www-data` (file
+0644, dir 0700), finfo cocok isi, nol file svg/html/exe. **Zip DIBLOKIR di gateway** (`application/x-zip-compressed`
+tak di-whitelist, tolak **pre-download** → nol file + nol sidecar + nol baris DB; jejak hanya di log
+gateway). Serve `GET /whatsapp-incoming/{id}/media`: admin → **200** + `Content-Type` benar + `nosniff` +
+`inline`; guest → **302 /login**. UI: Detail Pelanggan 34 + tab "Pesan Masuk" merender media (thumbnail/
+`<audio>`/link PDF/stiker) tanpa 500. **Nol efek keluar** (media tak di-routing ke state-machine/fallback;
+`whatsapp_message_logs` tetap 446; antrean kosong; nol exception). **Bonus produksi:** 2 foto pelanggan
+NYATA (cust 417) ikut ter-ingest mulus di jendela yang sama — bukti fitur hidup di produksi. Data uji
+Agung (5 baris 1240-1244 + 5 file privat) **dibersihkan tuntas** (1 transaksi; backup
+`/opt/boss-backups/pre-v136-cleanup-2026-11-11.sql`); baris/foto pelanggan nyata & customer 34 tidak
+disentuh.
+
+**PELAJARAN (pakai ulang untuk fitur WA/media + uji rilis berikutnya):**
+- **(a) Uji tautan `sender_phone`→pelanggan pakai pelanggan yang SUDAH punya nomor itu** — `resolveCustomerId`
+  cocok EXACT `phone_number` lalu `->value('id')` (**id terkecil menang**). JANGAN buat pelanggan "TEST"
+  bernomor sama (duplikat ambigu + tautan menang ke id terkecil). Di sini nomor Agung sudah dimiliki
+  pelanggan nyata id 34 → tautan otomatis benar.
+- **(b) Beda identitas proses: gateway Go = root (file volume `root:root` 0644/0755 world-readable → `www-data`
+  boss-app bisa baca); file privat Laravel = www-data** (lewat `WebOwnership` + loop chown `storage/app/private`
+  di `docker/php/entrypoint.sh`, v0.13.5.3.1). Jalankan SEMUA artisan/`docker compose exec` manual sebagai
+  `www-data`, bukan root.
+- **(c) Penolakan media pre-download HANYA tercatat di log gateway, BUKAN DB** (`media_rejected_reason` hanya
+  terisi bila file lolos gateway lalu ditolak re-validasi Laravel) — **backlog: catat penolakan media ke DB**
+  (dikonfirmasi Agung: untuk sekarang cukup di-log).
+- **(d) Uji lintas-tenant/izin→403/404 hanya lewat test suite** — semua user DB tenant 1 & admin-eligible,
+  jadi negatif-izin HTTP tak bisa diperagakan dengan user nyata (jangan buat user baru); Policy
+  `WhatsappIncomingMessagePolicy` + testnya yang otoritatif. `WhatsappIncomingMessage` TIDAK tenant-scoped
+  (otorisasi murni via Policy).
+- **(e) Prosedur rilis yang terpakai**: tag image rollback dulu → **Laravel dulu lalu gateway** (webhook
+  backward-compatible; gateway lama diabaikan field media) → restart `boss-nginx` setelah boss-app recreate →
+  jeda sesi WA ~2 detik (`RestoreAll`, bukan logout) → webhook yang hilang saat rebuild ditutup `reconcile`
+  (*/5).
+- **Backlog lain:** transkripsi voice note, opt-out, virus scan bila perlu.
+
+## Rekening Multi-Bank + Metode Pembayaran + "Cara Pembayaran" di Invoice (v0.13.5.4 — SELESAI, merged `develop`→`main`, tag `v0.13.5.4`)
+
+**Prasyarat go-live MixRadius**: sebelum Agung memindahkan semua pelanggan dan menyalakan kirim invoice
+otomatis (v0.13.5.3.1), invoice WAJIB menampilkan CARA BAYAR — minimal rekening transfer manual. Keputusan
+audit K1-K11 disetujui Agung.
+
+- **`company_bank_accounts`** (per tenant, **tanpa `BelongsToTenant`** — dibaca dari jalur render PDF/sweep
+  tanpa Auth; semua query `tenant_id` eksplisit, pola `whatsapp_notification_groups`): `bank_name/
+  account_number/account_holder/sort_order/is_default/is_active/created_by/updated_by`. **Partial unique
+  "satu default AKTIF per tenant"** (`WHERE is_default AND is_active`, driver-conditional Postgres/SQLite).
+  **`company_bank_account_logs`** = jejak APPEND-ONLY (`action` created/updated/deleted/made_default/
+  activated/deactivated, `before`/`after` dengan nomor TER-MASK 4 digit terakhir, `user_id`) — anti-fraud
+  K10. **Migrasi data**: `company_profiles.bank_*` lama → 1 rekening default aktif per tenant (idempoten,
+  `CompanyBankAccountService::backfillFromProfile`); kolom lama `company_profiles.bank_name/number/holder`
+  **DEPRECATED** (dibiarkan, `resolveFor` tetap mengembalikannya sebagai fallback).
+- **`App\Services\Company\CompanyBankAccountService`** = satu-satunya logika (bukan di Livewire). Aturan:
+  rekening pertama otomatis default+aktif; **default tak boleh dihapus/dinonaktifkan selama ada rekening
+  lain** (pilih default baru dulu → `RuntimeException`); validasi `bank_name`/`account_holder` wajib,
+  `account_number` digit/spasi/hubung; tiap perubahan di-log (nomor ter-mask). `makeDefault` menolak
+  rekening nonaktif.
+- **3 saklar metode di `company_profiles`** (kolom boolean aditif): `pay_manual_transfer_enabled`
+  (default **TRUE**), `pay_gateway_enabled` (default **FALSE**), `pay_agent_enabled` (default **FALSE**) —
+  K5: gateway & agen DISIAPKAN, tak diaktifkan. Enum `App\Enums\PaymentMethod` (manual_transfer/
+  payment_gateway/agent) untuk label; **kolom `payments.method` DITUNDA ke v0.13.5.5** (K7).
+- **`App\Services\Billing\PaymentInstructionsService::forInvoice()`** merakit instruksi berdasarkan saklar
+  tenant. **ATURAN KERAS: jalur render TIDAK PERNAH memanggil Xendit/`createPaymentFor`** — untuk gateway
+  HANYA membaca `payments.raw_response.invoice_url` yang SUDAH ada (link tersimpan), tak pernah membuat
+  pembayaran saat render. Dijaga `PaymentInstructionsArchitectureTest` (scan sumber via
+  `php_strip_whitespace`). `agent` = kontak Referrer/Sales penagih (alur Titip) bila
+  `customers.referred_by_referrer_id` terisi (K4). Tanpa metode/rekening → tampil kontak CS saja, tanpa
+  error. `captionText()` = teks ringkas satu-blok (prioritas manual→gateway→agen) untuk variabel caption.
+- **Invoice PDF**: bagian **"Cara Pembayaran"** di bawah total, **disembunyikan untuk Paid & Cancelled**
+  (`invoice-pdf.blade.php`). SATU `InvoicePdfService` untuk unduh/kirim manual/sweep (nol jalur baru) —
+  `render()` mengirim `payment` = `PaymentInstructionsService::forInvoice()` ke view. Blade memakai
+  `$payment ?? null` sehingga View::make lama (tanpa `payment`) tetap aman.
+- **Caption**: variabel **`{payment_instructions}`** di `buildVariables()` HANYA untuk `invoice_issued`
+  (null untuk event lain), additive. `WhatsappMessageTemplateSeeder` menambah baris `Cara bayar:
+  {payment_instructions}` ke bawaan; template tenant lama diperbarui **HANYA bila isinya PERSIS bawaan
+  lama** (`LEGACY_INVOICE_ISSUED`), yang sudah diedit admin dibiarkan + dilaporkan jumlahnya.
+- **UI** `App\Livewire\Settings\PaymentSettings` (komponen nested di halaman `/settings/company-profile`):
+  kartu "Rekening Pembayaran" (daftar + bintang Default + badge Aktif + aksi ubah/hapus/jadikan-default/
+  aktif-nonaktif dgn flash, pola multi-grup WA) + kartu "Metode Pembayaran di Invoice" (3 saklar; gateway/
+  agen diberi penjelasan nonaktif) + "Lihat riwayat perubahan rekening". Izin via `CompanyProfilePolicy`
+  (`company_profile.view/.manage`, tier-admin). Field bank lama di form Profil tidak lagi sumber utama
+  (deprecated, tidak dihapus).
+- **Pelajaran (governance untuk fitur invoice/pembayaran berikutnya):** (1) **jalur RENDER tidak boleh
+  membuat tautan bayar** — hanya membaca yang sudah ada (architecture test mengunci ini). (2) Template WA
+  hanya diperbarui otomatis bila **identik bawaan lama**; edit admin tak pernah ditimpa. (3) Rekening di
+  PDF/WA hanya yang **aktif**; perubahan rekening wajib ber-jejak (anti-fraud). **Prosedur go-live
+  bertambah:** rekening HARUS terisi + metode transfer manual ON sebelum menyalakan kirim otomatis.
+- **Rilis (aditif, NOL downtime, menunggu "go" Agung):** `php artisan migrate` (4 migrasi: 2 tabel + 3
+  kolom + backfill data) → `optimize:clear` → `queue:restart`. **NOL `.env`/rebuild/logout WA** (tanpa
+  endpoint/gateway baru). **Bukti bayar (receipt) = v0.13.5.5 TERPISAH** (markPaid mulai catat `payments` +
+  varian PDF; event WA baru butuh izin Agung).
+
+### PENUTUPAN (2026-11-17) — RILIS KE SERVER + UJI NYATA + MERGE/TAG
+
+**Dirilis ke server (TAHAP A) & TERBUKTI NYATA (TAHAP B).** Rilis Laravel-only dari branch topik: 4 migrasi
+aditif (`company_bank_accounts` + `company_bank_account_logs` + 3 saklar `company_profiles` + backfill) →
+seed template idempoten → `optimize:clear`+`queue:restart`; **NOL `.env`/rebuild/logout WA**. Backfill
+membuat **1 rekening default aktif tenant 1** dari `company_profiles.bank_*` lama (BCA · a.n. "Bajastu
+Teknologi Waringin" · `created_by`/`updated_by` **null**, wajar untuk baris migrasi). Caption `invoice_issued`
+diperbaiki agar `{company_name}`/`{cs_number}` memakai `CompanyProfileService::resolveFor` (sumber SAMA dgn
+PDF) — commit `d4b6fec`.
+
+**Uji nyata via UI oleh Agung (kirim manual Mode Uji, log `whatsapp_message_logs` id=682):** invoice nyata
+**#1280** (`INV/DIRECT/2026/10/000158`, pelanggan Salbiyah, Pending, Rp150.000) → **TEPAT SATU** log
+(`event=invoice_issued`, `is_test=true`, `sent_by_user_id=43`, `invoice_id=1280`, sesi `direct`, lampiran PDF
+`invoice-pdfs/1/1280.pdf`, `status=sent`) HANYA ke nomor Agung `6287…939` (0 ke tujuan lain). Caption berprefiks
+`[UJI untuk: Salbiyah - INV/DIRECT/2026/10/000158]`, memuat **"- TOKEN WIFI"** (nama perusahaan benar, sinkron
+PDF), baris **"Cara bayar: Transfer ke BCA 5700339027 a.n. Bajastu Teknologi Waringin."**, dan "Bantuan: CS
++62 813-8901-4113". Invoice #1280 tetap `pending` (send manual TIDAK mengubah status/`updated_at`); penanda
+"Terkirim ke pelanggan" **kosong** (0 log non-uji `invoice_issued`). Pelanggan nyata TIDAK menerima apa pun
+(Mode Uji mengalihkan ke nomor Agung). PDF invoice nyata menampilkan bagian **"Cara Pembayaran"** (terverifikasi
+HTML view TAHAP A: Pending #1271 memuat, Paid #540 tidak).
+
+**Catatan jujur:** rekening yang dipakai = hasil **backfill migrasi** (bukan ditambah dari UI) — `company_bank_accounts`
+tetap 1 baris, `company_bank_account_logs` **0** (nol perubahan rekening dari UI). Data rekening backfill sudah
+benar & tampil di PDF/caption, jadi fitur terbukti. **Mode Uji tenant 1 TETAP ON** (recipient `6287884374939`),
+`customer_auto_notify_enabled` tenant 1 **OFF**, 4 template pelanggan otomatis **nonaktif**, `invoice_issued`
+manual **aktif** — menunggu keputusan go-live Agung.
+
+**Cleanup (TAHAP B):** log uji id=682 (`is_test=true`) + cache `invoice-pdfs/1/1280.pdf` dihapus dalam satu
+transaksi FK-aman; `whatsapp_message_logs` kembali **446**, log uji **0**. Rekening/log rekening/saklar/
+pelanggan/invoice **TIDAK disentuh**. Backup pre-cleanup: `/opt/boss-backups/pre-v13554-cleanup-2026-11-17.sql`
+(~124 MB, berisi baris uji, header+tail valid). `1/1.pdf` (sisa v0.13.5.3.1) dibiarkan — bukan dari uji ini.
+
+**PELAJARAN (governance, pakai ulang untuk fitur invoice/pembayaran berikutnya):**
+- **(a)** Caption `{company_name}` dulu menampilkan **"ISP Demo"** (nama tenant mentah via `customer->tenant->name`),
+  kini memakai **sumber yang SAMA dengan PDF** lewat `CompanyProfileService::resolveFor` (brand→legal→tenant,
+  plus override nomor CS reseller). Jalur caption pelanggan WAJIB sinkron PDF.
+- **(b)** Jalur **RENDER** PDF/caption **tidak boleh membuat tautan bayar / memanggil Xendit** — hanya baca
+  `payments.raw_response.invoice_url` yang SUDAH ada (dikunci `PaymentInstructionsArchitectureTest`).
+- **(c)** Template `invoice_issued` hanya **diperbarui otomatis bila identik bawaan lama**; edit admin tak pernah
+  ditimpa.
+- **(d)** Prasyarat go-live: **rekening terisi + metode transfer manual ON** sebelum menyalakan kirim otomatis
+  (v0.13.5.3.1).
+- **Backlog:** v0.13.5.5 Bukti Bayar (markPaid mencatat `payments`, varian PDF, keputusan event/tombol kirim);
+  v0.27.0 biaya sewa perangkat; loop `chown storage/app/private` di `docker/php/entrypoint.sh` sudah aktif
+  (v0.13.5.3.1) → cache PDF jalur scheduler/worker ternormalkan ke www-data.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

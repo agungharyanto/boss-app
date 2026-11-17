@@ -4,6 +4,7 @@ use App\Console\Commands\DispatchWorkOrders;
 use App\Console\Commands\GenerateDueInvoices;
 use App\Console\Commands\MarkOverdueInvoices;
 use App\Console\Commands\ReconcileCpeDevices;
+use App\Console\Commands\SendInvoicePdfAutomatically;
 use App\Console\Commands\SendWhatsappDueReminders;
 use App\Console\Commands\SendWhatsappSuspendedReminders;
 use App\Console\Commands\SyncContainerStats;
@@ -13,6 +14,8 @@ use App\Console\Commands\SyncCpeSignalHistory;
 use App\Console\Commands\VpnCheckNodeHealth;
 use App\Console\Commands\VpnSyncRouteFragments;
 use App\Console\Commands\WhatsappCheckSessionHealth;
+use App\Console\Commands\WhatsappPruneIncomingMedia;
+use App\Console\Commands\WhatsappReconcileIncomingMedia;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -32,6 +35,21 @@ Schedule::command(MarkOverdueInvoices::class)->daily();
 Schedule::command(SendWhatsappDueReminders::class)->everyMinute();
 Schedule::command(SendWhatsappSuspendedReminders::class)->dailyAt('08:00');
 Schedule::command(WhatsappCheckSessionHealth::class)->hourly();
+
+// v0.13.5.3.1 — Kirim PDF Invoice OTOMATIS. Sweep self-gate: jam WIB
+// [08:00,20:00), saklar ganda per tenant (auto-send AND customer-notify AND
+// BUKAN Mode Uji), cap harian per sesi. ->withoutOverlapping() mencegah dua
+// run paralel (dedup tetap dari log yang tersisip sinkron). everyFifteenMinutes
+// — margin lebar di bawah kuota + pacing worker (bukan hook sinkron saat
+// invoice terbit, hindari burst tengah malam GenerateDueInvoices).
+Schedule::command(SendInvoicePdfAutomatically::class)->everyFifteenMinutes()->withoutOverlapping();
+
+// v0.13.6 — TERIMA media masuk. Reconcile menutup webhook incoming-message
+// yang hilang (fire-and-forget) dari sidecar di volume gateway; withoutOverlapping
+// supaya pindaian panjang tidak tumpang-tindih. Prune = retensi copy privat
+// boss-app (90 hari; retensi volume gateway sendiri 7 hari di sisi Go).
+Schedule::command(WhatsappReconcileIncomingMedia::class)->everyFiveMinutes()->withoutOverlapping();
+Schedule::command(WhatsappPruneIncomingMedia::class)->dailyAt('03:30');
 
 // v0.6.4 Multi-Node VPN Pool — same boss-scheduler loop. everyMinute()
 // matches boss-scheduler's own 60s polling granularity (no point checking

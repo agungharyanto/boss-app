@@ -309,8 +309,8 @@
                                     {{ $resellersById->get($msg->reseller_id)?->name ?? 'Reseller #'.$msg->reseller_id }}
                                 @endif
                             </td>
-                            <td class="py-2 pr-4 max-w-md" title="{{ $msg->text }}">
-                                {{ Str::limit($msg->text, 80) }}
+                            <td class="py-2 pr-4 max-w-md">
+                                @include('livewire.whatsapp.partials.incoming-media-cell', ['msg' => $msg])
                             </td>
                             <td class="py-2 pr-4 whitespace-nowrap">{{ $msg->push_name ?? '—' }}</td>
                         </tr>

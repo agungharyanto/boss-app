@@ -17,6 +17,7 @@ use App\Models\CustomerContact;
 use App\Models\Invoice;
 use App\Models\PppPackage;
 use App\Models\Referrer;
+use App\Models\WhatsappIncomingMessage;
 use App\Models\WhatsappMessageLog;
 use App\Services\Billing\InvoicePdfSendService;
 use App\Services\CommissionAttributionService;
@@ -570,7 +571,16 @@ class CustomerShow extends Component
             ->limit(50)
             ->get();
 
+        // v0.13.6 — pesan masuk WhatsApp yang tertaut pelanggan ini (read-only;
+        // media disajikan lewat route ber-auth).
+        $incomingWhatsappMessages = WhatsappIncomingMessage::query()
+            ->where('customer_id', $this->customer->id)
+            ->latest('received_at')
+            ->limit(30)
+            ->get();
+
         return view('livewire.customers.customer-show', [
+            'incomingWhatsappMessages' => $incomingWhatsappMessages,
             'contacts' => $this->customer->contacts()->latest()->get(),
             'timelineEntries' => $this->customer->timelineEntries()->with('actor')->paginate(15),
             'customerInvoices' => $customerInvoices,

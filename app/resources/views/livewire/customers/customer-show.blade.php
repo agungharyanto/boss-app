@@ -260,6 +260,36 @@
         @endif
     </div>
 
+    {{-- Pesan Masuk WhatsApp (v0.13.6) — read-only, tertaut nomor pelanggan --}}
+    <div class="p-4 border border-gray-200 rounded-md">
+        <h2 class="text-sm font-semibold text-gray-700 mb-3">Pesan Masuk WhatsApp</h2>
+        @if ($incomingWhatsappMessages->isEmpty())
+            <p class="text-sm text-gray-400">Belum ada pesan masuk dari nomor pelanggan ini.</p>
+        @else
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-left text-sm">
+                    <thead class="text-gray-500 border-b border-gray-200">
+                        <tr>
+                            <th class="py-2 pr-4">Waktu</th>
+                            <th class="py-2 pr-4">Pesan</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach ($incomingWhatsappMessages as $msg)
+                            <tr class="border-b border-gray-100">
+                                <td class="py-2 pr-4 whitespace-nowrap align-top">{{ $msg->received_at->format('d/m/Y H:i') }}</td>
+                                <td class="py-2 pr-4 max-w-md">
+                                    @include('livewire.whatsapp.partials.incoming-media-cell', ['msg' => $msg])
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+            <p class="mt-2 text-xs text-gray-400">Menampilkan {{ $incomingWhatsappMessages->count() }} pesan masuk terbaru (read-only).</p>
+        @endif
+    </div>
+
     {{-- Status lifecycle --}}
     @if ($canManage)
         <div class="p-4 border border-gray-200 rounded-md">

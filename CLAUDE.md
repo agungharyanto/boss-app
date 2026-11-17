@@ -9905,7 +9905,7 @@ disentuh.
   (*/5).
 - **Backlog lain:** transkripsi voice note, opt-out, virus scan bila perlu.
 
-## Rekening Multi-Bank + Metode Pembayaran + "Cara Pembayaran" di Invoice (v0.13.5.4 — implementasi di worktree `v0.13.5.4-rekening-metode-bayar`, BELUM merge/tag)
+## Rekening Multi-Bank + Metode Pembayaran + "Cara Pembayaran" di Invoice (v0.13.5.4 — SELESAI, merged `develop`→`main`, tag `v0.13.5.4`)
 
 **Prasyarat go-live MixRadius**: sebelum Agung memindahkan semua pelanggan dan menyalakan kirim invoice
 otomatis (v0.13.5.3.1), invoice WAJIB menampilkan CARA BAYAR — minimal rekening transfer manual. Keputusan
@@ -9959,6 +9959,52 @@ audit K1-K11 disetujui Agung.
   kolom + backfill data) → `optimize:clear` → `queue:restart`. **NOL `.env`/rebuild/logout WA** (tanpa
   endpoint/gateway baru). **Bukti bayar (receipt) = v0.13.5.5 TERPISAH** (markPaid mulai catat `payments` +
   varian PDF; event WA baru butuh izin Agung).
+
+### PENUTUPAN (2026-11-17) — RILIS KE SERVER + UJI NYATA + MERGE/TAG
+
+**Dirilis ke server (TAHAP A) & TERBUKTI NYATA (TAHAP B).** Rilis Laravel-only dari branch topik: 4 migrasi
+aditif (`company_bank_accounts` + `company_bank_account_logs` + 3 saklar `company_profiles` + backfill) →
+seed template idempoten → `optimize:clear`+`queue:restart`; **NOL `.env`/rebuild/logout WA**. Backfill
+membuat **1 rekening default aktif tenant 1** dari `company_profiles.bank_*` lama (BCA · a.n. "Bajastu
+Teknologi Waringin" · `created_by`/`updated_by` **null**, wajar untuk baris migrasi). Caption `invoice_issued`
+diperbaiki agar `{company_name}`/`{cs_number}` memakai `CompanyProfileService::resolveFor` (sumber SAMA dgn
+PDF) — commit `d4b6fec`.
+
+**Uji nyata via UI oleh Agung (kirim manual Mode Uji, log `whatsapp_message_logs` id=682):** invoice nyata
+**#1280** (`INV/DIRECT/2026/10/000158`, pelanggan Salbiyah, Pending, Rp150.000) → **TEPAT SATU** log
+(`event=invoice_issued`, `is_test=true`, `sent_by_user_id=43`, `invoice_id=1280`, sesi `direct`, lampiran PDF
+`invoice-pdfs/1/1280.pdf`, `status=sent`) HANYA ke nomor Agung `6287…939` (0 ke tujuan lain). Caption berprefiks
+`[UJI untuk: Salbiyah - INV/DIRECT/2026/10/000158]`, memuat **"- TOKEN WIFI"** (nama perusahaan benar, sinkron
+PDF), baris **"Cara bayar: Transfer ke BCA 5700339027 a.n. Bajastu Teknologi Waringin."**, dan "Bantuan: CS
++62 813-8901-4113". Invoice #1280 tetap `pending` (send manual TIDAK mengubah status/`updated_at`); penanda
+"Terkirim ke pelanggan" **kosong** (0 log non-uji `invoice_issued`). Pelanggan nyata TIDAK menerima apa pun
+(Mode Uji mengalihkan ke nomor Agung). PDF invoice nyata menampilkan bagian **"Cara Pembayaran"** (terverifikasi
+HTML view TAHAP A: Pending #1271 memuat, Paid #540 tidak).
+
+**Catatan jujur:** rekening yang dipakai = hasil **backfill migrasi** (bukan ditambah dari UI) — `company_bank_accounts`
+tetap 1 baris, `company_bank_account_logs` **0** (nol perubahan rekening dari UI). Data rekening backfill sudah
+benar & tampil di PDF/caption, jadi fitur terbukti. **Mode Uji tenant 1 TETAP ON** (recipient `6287884374939`),
+`customer_auto_notify_enabled` tenant 1 **OFF**, 4 template pelanggan otomatis **nonaktif**, `invoice_issued`
+manual **aktif** — menunggu keputusan go-live Agung.
+
+**Cleanup (TAHAP B):** log uji id=682 (`is_test=true`) + cache `invoice-pdfs/1/1280.pdf` dihapus dalam satu
+transaksi FK-aman; `whatsapp_message_logs` kembali **446**, log uji **0**. Rekening/log rekening/saklar/
+pelanggan/invoice **TIDAK disentuh**. Backup pre-cleanup: `/opt/boss-backups/pre-v13554-cleanup-2026-11-17.sql`
+(~124 MB, berisi baris uji, header+tail valid). `1/1.pdf` (sisa v0.13.5.3.1) dibiarkan — bukan dari uji ini.
+
+**PELAJARAN (governance, pakai ulang untuk fitur invoice/pembayaran berikutnya):**
+- **(a)** Caption `{company_name}` dulu menampilkan **"ISP Demo"** (nama tenant mentah via `customer->tenant->name`),
+  kini memakai **sumber yang SAMA dengan PDF** lewat `CompanyProfileService::resolveFor` (brand→legal→tenant,
+  plus override nomor CS reseller). Jalur caption pelanggan WAJIB sinkron PDF.
+- **(b)** Jalur **RENDER** PDF/caption **tidak boleh membuat tautan bayar / memanggil Xendit** — hanya baca
+  `payments.raw_response.invoice_url` yang SUDAH ada (dikunci `PaymentInstructionsArchitectureTest`).
+- **(c)** Template `invoice_issued` hanya **diperbarui otomatis bila identik bawaan lama**; edit admin tak pernah
+  ditimpa.
+- **(d)** Prasyarat go-live: **rekening terisi + metode transfer manual ON** sebelum menyalakan kirim otomatis
+  (v0.13.5.3.1).
+- **Backlog:** v0.13.5.5 Bukti Bayar (markPaid mencatat `payments`, varian PDF, keputusan event/tombol kirim);
+  v0.27.0 biaya sewa perangkat; loop `chown storage/app/private` di `docker/php/entrypoint.sh` sudah aktif
+  (v0.13.5.3.1) → cache PDF jalur scheduler/worker ternormalkan ke www-data.
 
 ## Architecture
 

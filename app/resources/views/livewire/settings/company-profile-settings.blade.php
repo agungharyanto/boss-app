@@ -164,4 +164,7 @@
             @endif
         </div>
     </form>
+
+    {{-- v0.13.5.4 — Rekening Pembayaran + Metode Pembayaran di Invoice --}}
+    @livewire('settings.payment-settings')
 </div>

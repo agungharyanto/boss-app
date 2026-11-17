@@ -32,6 +32,7 @@ class InvoicePdfService
     public function __construct(
         private readonly CompanyProfileService $companyProfiles,
         private readonly WebOwnership $webOwnership,
+        private readonly PaymentInstructionsService $paymentInstructions,
     ) {}
 
     public function render(Invoice $invoice): string
@@ -45,6 +46,8 @@ class InvoicePdfService
             'invoice' => $invoice,
             'company' => $company,
             'logoDataUri' => $this->logoDataUri($invoice->tenant_id),
+            // v0.13.5.4 — bagian "Cara Pembayaran" (render-only, tanpa Xendit).
+            'payment' => $this->paymentInstructions->forInvoice($invoice),
         ])->render();
 
         // isRemoteEnabled=false (tak fetch URL remote), chroot dibatasi ke

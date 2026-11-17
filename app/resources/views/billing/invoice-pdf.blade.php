@@ -38,6 +38,10 @@
         .footer { margin-top: 48px; color: #6b7280; font-size: 11px; border-top: 1px solid #e5e7eb; padding-top: 10px; }
         .paid-stamp { display: inline-block; margin-top: 8px; border: 3px solid #16a34a; color: #16a34a; font-weight: 800; font-size: 20px; letter-spacing: 3px; padding: 4px 18px; border-radius: 6px; }
         .logo { max-height: 56px; margin-bottom: 6px; }
+        .pay-box { margin-top: 22px; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 12px; font-size: 11px; }
+        .pay-title { font-weight: 700; font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: #374151; margin-bottom: 4px; }
+        .pay-method { margin-top: 4px; font-weight: 600; }
+        .pay-line { margin-left: 4px; }
         @page { margin: 14mm; }
     </style>
 </head>
@@ -89,6 +93,30 @@
         </table>
 
         @include('billing.partials.invoice-items-totals', ['invoice' => $invoice])
+
+        @php $pay = $payment ?? null; @endphp
+        @if ($pay !== null && ! in_array($invoice->status->value, ['paid', 'cancelled'], true))
+            <div class="pay-box">
+                <div class="pay-title">Cara Pembayaran</div>
+                @if ($pay['manual']['enabled'] && count($pay['manual']['accounts']))
+                    <div class="pay-method">Transfer Bank (manual):</div>
+                    @foreach ($pay['manual']['accounts'] as $acc)
+                        <div class="pay-line">&bull; {{ $acc['bank_name'] }} {{ $acc['account_number'] }} a.n. {{ $acc['account_holder'] }}@if ($acc['is_default']) <span class="muted">(utama)</span>@endif</div>
+                    @endforeach
+                @endif
+                @if ($pay['gateway']['enabled'] && $pay['gateway']['link'])
+                    <div class="pay-method">Bayar Online:</div>
+                    <div class="pay-line">{{ $pay['gateway']['link'] }}</div>
+                @endif
+                @if ($pay['agent']['enabled'] && $pay['agent']['name'])
+                    <div class="pay-method">Via Agen:</div>
+                    <div class="pay-line">{{ $pay['agent']['name'] }}@if ($pay['agent']['contact']) ({{ $pay['agent']['contact'] }})@endif</div>
+                @endif
+                @if (($pay['cs'] ?? '') !== '')
+                    <div class="pay-line muted">Konfirmasi: CS {{ $pay['cs'] }}</div>
+                @endif
+            </div>
+        @endif
 
         @if ($invoice->status->value === 'paid')
             <div class="paid-stamp">LUNAS</div>

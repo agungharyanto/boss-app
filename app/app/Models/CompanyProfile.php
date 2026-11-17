@@ -33,7 +33,20 @@ class CompanyProfile extends Model
         'bank_account_holder',
         'logo_path',
         'updated_by',
+        // v0.13.5.4 — saklar metode pembayaran di invoice (per tenant).
+        'pay_manual_transfer_enabled',
+        'pay_gateway_enabled',
+        'pay_agent_enabled',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'pay_manual_transfer_enabled' => 'boolean',
+            'pay_gateway_enabled' => 'boolean',
+            'pay_agent_enabled' => 'boolean',
+        ];
+    }
 
     public function tenant(): BelongsTo
     {

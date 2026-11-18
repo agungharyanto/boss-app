@@ -80,6 +80,36 @@
         </button>
     </div>
 
+    {{-- ── Pemicu OMCI/ZTP saat Aktivasi (v0.13.4.2.3) ──────────────── --}}
+    <div class="bg-white border border-gray-200 rounded-md p-6 mb-6">
+        <div class="flex items-center justify-between mb-1">
+            <h2 class="text-lg font-semibold text-gray-800">{{ __('Pemicu OMCI/ZTP saat Aktivasi') }}</h2>
+            @if ($ztpOnActivationEnabled)
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">{{ __('AKTIF') }}</span>
+            @else
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{{ __('MATI') }}</span>
+            @endif
+        </div>
+        <p class="text-xs text-gray-500 mb-1">
+            {{ __('Saat teknisi menutup form aktivasi, sistem otomatis men-dispatch provisioning ONU ke OLT (penemuan ONU + konfigurasi).') }}
+        </p>
+        <p class="text-xs text-red-600 font-medium mb-1">
+            {{ __('⚠️ Fitur ini MENULIS ke perangkat OLT. Biarkan MATI sampai jalur OMCI/ZTP benar-benar diverifikasi aman per OLT.') }}
+        </p>
+        <p class="text-xs text-gray-400 italic mb-4">
+            {{ __('Jalur WAN OMCI untuk ZTE C300 tetap digerbangi flag server OLT_ZTP_OMCI_ACTIVATION_ENABLED (lapisan kedua). MATI = aktivasi berjalan seperti biasa, tanpa menyentuh OLT.') }}
+        </p>
+
+        <label class="flex items-center gap-2 text-sm text-gray-700 mb-4">
+            <input type="checkbox" wire:model="ztpOnActivationEnabled" class="rounded border-gray-300">
+            <span>{{ __('Picu provisioning ONU ke OLT saat aktivasi work order') }}</span>
+        </label>
+
+        <button type="button" wire:click="saveZtpOnActivation" class="px-4 py-2 bg-primary text-white rounded-md hover:opacity-90 text-sm">
+            {{ __('Simpan') }}
+        </button>
+    </div>
+
     {{-- ── Kirim PDF Invoice Otomatis (v0.13.5.3.1) ─────────────────── --}}
     <div class="bg-white border border-gray-200 rounded-md p-6 mb-6">
         <div class="flex items-center justify-between mb-1">

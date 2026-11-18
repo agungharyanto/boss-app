@@ -27,12 +27,18 @@
 
     <ol class="space-y-2 mb-4">
         @foreach ($activation['stages'] as $stage)
-            <li class="flex items-center gap-3 text-sm">
-                <span class="inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold
-                    {{ $stage['done'] ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400' }}">
-                    {{ $stage['done'] ? '✓' : '•' }}
+            @php $failed = ($stage['failed'] ?? false) === true; @endphp
+            <li class="flex items-start gap-3 text-sm">
+                <span class="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold
+                    {{ $failed ? 'bg-red-100 text-red-700' : ($stage['done'] ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400') }}">
+                    {{ $failed ? '!' : ($stage['done'] ? '✓' : '•') }}
                 </span>
-                <span class="{{ $stage['done'] ? 'text-gray-800' : 'text-gray-500' }}">{{ $stage['label'] }}</span>
+                <span>
+                    <span class="{{ $failed ? 'text-red-700' : ($stage['done'] ? 'text-gray-800' : 'text-gray-500') }}">{{ $stage['label'] }}</span>
+                    @if (! empty($stage['note']))
+                        <span class="block text-xs {{ $failed ? 'text-red-500' : 'text-gray-400' }}">{{ $stage['note'] }}</span>
+                    @endif
+                </span>
             </li>
         @endforeach
     </ol>

@@ -65,6 +65,10 @@ class WhatsappMessageTemplateSeeder extends Seeder
             // teks ini; PDF menyusul sebagai lampiran pada pesan yang sama.
             // v0.13.5.4 — tambah baris {payment_instructions} (cara bayar ringkas).
             WhatsappEventType::InvoiceIssued->value => 'Halo {customer_name}, tagihan internet Anda sudah terbit.'.PHP_EOL.'Invoice: {invoice_number}'.PHP_EOL.'Paket: {package_name}'.PHP_EOL.'Total: {total_amount}'.PHP_EOL.'Jatuh tempo: {due_date}'.PHP_EOL.'Cara bayar: {payment_instructions}'.PHP_EOL.'Rincian lengkap ada pada file PDF terlampir.'.PHP_EOL.'Bantuan: CS {cs_number}'.PHP_EOL.'Terima kasih - {company_name}',
+
+            // v0.13.4.2.3 — pemicu OMCI/ZTP GAGAL saat aktivasi, ke GRUP/admin
+            // (bukan pelanggan). Tanpa data sensitif berlebih.
+            WhatsappEventType::OnuProvisioningFailed->value => '⚠️ Provisioning OLT/ONU GAGAL (perlu cek NOC).'.PHP_EOL.'WO #{work_order_id} — {customer_name} (CID {cid})'.PHP_EOL.'ONU SN: {onu_sn}'.PHP_EOL.'OLT: {olt_name}'.PHP_EOL.'Tahap: {stage}'.PHP_EOL.'Alasan: {reason}'.PHP_EOL.'Status aktivasi: {status_link}',
         ];
 
         Tenant::all()->each(function (Tenant $tenant) use ($defaults) {

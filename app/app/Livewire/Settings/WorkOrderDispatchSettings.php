@@ -59,6 +59,13 @@ class WorkOrderDispatchSettings extends Component
     public bool $customerAutoNotifyEnabled = true;
 
     /**
+     * v0.13.4.2.3 — "Pemicu OMCI/ZTP saat Aktivasi" per tenant (default OFF).
+     * ON = aktivasi work order men-dispatch ProvisionOnuViaZtp (MENULIS ke OLT
+     * untuk jalur yang didukung; jalur WAN OMCI/ZTE tetap digerbangi env).
+     */
+    public bool $ztpOnActivationEnabled = false;
+
+    /**
      * v0.13.5.3 — "Mode Uji Kirim Invoice" per tenant. Bila AKTIF, kirim PDF
      * invoice (manual) dialihkan ke nomor uji — pelanggan nyata TIDAK
      * menerima apa pun. Default MATI.
@@ -143,6 +150,23 @@ class WorkOrderDispatchSettings extends Component
         $this->refreshFromSettings($settings->fresh());
 
         session()->flash('status', 'Pengaturan notifikasi otomatis ke pelanggan disimpan.');
+    }
+
+    /**
+     * v0.13.4.2.3 — simpan saklar "Pemicu OMCI/ZTP saat Aktivasi" (per-tenant).
+     * ON = aktivasi work order akan men-dispatch job provisioning ONU yang
+     * MENULIS ke OLT. Default OFF.
+     */
+    public function saveZtpOnActivation(): void
+    {
+        $this->authorize('work_orders.manage');
+
+        $settings = WorkOrderDispatchSettingsModel::forTenant($this->tenantId());
+        $settings->update(['ztp_on_activation_enabled' => $this->ztpOnActivationEnabled]);
+
+        $this->refreshFromSettings($settings->fresh());
+
+        session()->flash('status', 'Pengaturan pemicu OMCI/ZTP saat aktivasi disimpan.');
     }
 
     /**
@@ -483,6 +507,7 @@ class WorkOrderDispatchSettings extends Component
         $this->invoicePdfAutoSendEnabled = (bool) $settings->invoice_pdf_auto_send_enabled;
         $this->invoicePdfAutoSendFrom = $settings->invoice_pdf_auto_send_from?->format('Y-m-d');
         $this->invoicePdfAutoSendDailyCap = (int) ($settings->invoice_pdf_auto_send_daily_cap ?? 80);
+        $this->ztpOnActivationEnabled = (bool) $settings->ztp_on_activation_enabled;
     }
 
     /**

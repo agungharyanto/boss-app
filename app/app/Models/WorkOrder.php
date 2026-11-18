@@ -39,6 +39,12 @@ class WorkOrder extends Model
         'claimed_at',
         'claimed_by_technician_id',
         'notes',
+        // v0.13.4.2.3 — pemicu OMCI/ZTP saat aktivasi.
+        'ztp_status',
+        'ztp_attempts',
+        'ztp_provisioned_at',
+        'ztp_last_result',
+        'ztp_olt_device_id',
     ];
 
     protected function casts(): array
@@ -52,6 +58,9 @@ class WorkOrder extends Model
             'dispatched_at' => 'datetime',
             'last_reminder_sent_at' => 'date',
             'claimed_at' => 'datetime',
+            'ztp_provisioned_at' => 'datetime',
+            'ztp_last_result' => 'array',
+            'ztp_attempts' => 'integer',
         ];
     }
 

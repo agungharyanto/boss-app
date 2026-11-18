@@ -203,6 +203,42 @@ class OltSidecarClient
     }
 
     /**
+     * v0.13.4.2.3 — BACA daftar ONU uncfg ZTE C300 (`show gpon onu uncfg`).
+     * Operasi sudah ada di sidecar (zte_c300 OPERATIONS) — ini thin wrapper
+     * Laravel saja, NOL perubahan sidecar. Dipakai OnuDiscoveryService untuk
+     * memastikan ONU yang akan diprovisioning genuinely BELUM terkonfigurasi.
+     *
+     * @return array<string, mixed>
+     */
+    public function onuUncfgList(OltDevice $oltDevice, ?int $requestedBy = null): array
+    {
+        return $this->read($oltDevice, 'onu_uncfg_list', [], $requestedBy, maskSensitive: false);
+    }
+
+    /**
+     * v0.13.4.2.3 — BACA semua ONU E04ID (`show onu-info all`, node config).
+     * ONU EPON yang belum di-bind muncul di sini (deny-by-default, Auth=FALSE).
+     * Operasi sudah ada (hsgq_e04id OPERATIONS_CONFIG_READ) — thin wrapper.
+     *
+     * @return array<string, mixed>
+     */
+    public function showOnuInfoAll(OltDevice $oltDevice, ?int $requestedBy = null): array
+    {
+        return $this->read($oltDevice, 'show_onu_info_all', [], $requestedBy, maskSensitive: false);
+    }
+
+    /**
+     * v0.13.4.2.3 — BACA satu ONU E04ID by MAC (`show onu-info mac <MAC>`,
+     * ringkas, tanpa pager). Operasi sudah ada — thin wrapper.
+     *
+     * @return array<string, mixed>
+     */
+    public function showOnuInfoMac(OltDevice $oltDevice, string $mac, ?int $requestedBy = null): array
+    {
+        return $this->read($oltDevice, 'show_onu_info_mac', ['mac' => $mac], $requestedBy, maskSensitive: false);
+    }
+
+    /**
      * v0.23.6 (G02ID) — TULIS: `ont setting <id> name "<Nama - CID>"`
      * (+ `desc` opsional). Arsitektur final G02ID: OMCI-direct HANYA untuk
      * penamaan (WAN lewat TR-069). `$params`: `pon`/`onu_id`/`name`/`desc?`.

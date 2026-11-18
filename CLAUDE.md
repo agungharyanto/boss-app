@@ -9187,7 +9187,45 @@ sudah punya kode pengisi `{close_link}`, jadi tidak ada lagi risiko baris mengga
 penahanan: `/opt/boss-backups/whatsapp_activation_ready_v0.13.4.3.1_body_backup_2026-11-02.json` — arsip, tidak
 perlu dipakai lagi.)
 
-## Pemicu OMCI/ZTP saat Aktivasi (v0.13.4.2.3 — branch `v0.13.4.2.3-pemicu-omci-ztp`, worktree, BELUM merge/tag)
+## Pemicu OMCI/ZTP saat Aktivasi (v0.13.4.2.3 — SELESAI DORMANT, merged `develop`→`main`, tag `v0.13.4.2.3`)
+
+**STATUS JUJUR (penutupan 2026-11-18): dirilis DORMANT — pemicu + discovery + pengaman + status + saklar
+terbukti; provisioning yang MENULIS ke OLT BELUM terbukti sama sekali.** Kedua gerbang tetap OFF
+(`OLT_ZTP_OMCI_ACTIVATION_ENABLED` env = false, `ztp_on_activation_enabled` per-tenant default false,
+tenant 1 false). Tidak ada satu pun tulis ke OLT dilakukan sepanjang sprint ini (hanya baca read-only).
+
+- **TERBUKTI (nyata, di server/OLT asli):** pemicu dispatch job saat aktivasi; `OnuDiscoveryService`
+  membaca ZTE C300 produksi #1 secara read-only (SN uji `CMDCA102B7D9` terbaca di `onu_uncfg_list`
+  `gpon-olt_1/3/12`); pengaman berlapis (guard tenant/kanal/gate/SN-aktif); kolom status `ztp_*`; event
+  `onu_provisioning_failed`; saklar `ztp_on_activation_enabled` (default OFF) + gerbang env OMCI; rilis
+  dormant (migrate, UI toggle terlihat OFF). Baseline OLT read-only: `/opt/boss-backups/ztp-baseline-2026-11-17.txt`.
+- **BELUM TERBUKTI (dormant, menunggu wiring parameter OMCI):** provisioning yang benar-benar MENULIS ke
+  OLT. Via jalur job sekarang, `ProvisionOnuViaZtp` memanggil `ZtpOrchestratorService::provision()` dengan
+  `$options` HANYA `requested_by`(+`pon_interface`) — TIDAK menyuplai `onu_id`/`onu_type`/`tcont_profile`/
+  `traffic_profile`/`vlan_mgmt`/`vlan_bridge`. `ZteC300OltAdapter::pushWanInternetOmci()` mewajibkan semua
+  key itu (`REQUIRED_PUSH_KEYS`, cek `array_key_exists`) dan **`throw` SEBELUM** memanggil sidecar →
+  tahap `wan_internet` **gagal aman, NOL perintah terkirim ke OLT**. Jadi walau kedua gerbang dinyalakan
+  hari ini, jalur ZTE C300 tetap tidak pernah menulis. Wiring parameter OMCI ini **BELUM dikerjakan** dan
+  **belum punya slot sub-versi bernama** (lihat catatan ROADMAP v0.23 di bawah). `v0.23.8.5b` di ROADMAP
+  adalah "Verifikasi device" (admisi E04ID + jalur TR-069 CT-COM, SELESAI 2026-10-25) — **BUKAN** wiring
+  onu_id ke job ini; jangan samakan. Orkestrator `provision()` baru terbukti end-to-end untuk jalur
+  TR-069 CT-COM/E04ID (`v0.23.8.6c`), bukan jalur OMCI ZTE C300.
+
+**⚠️ ATURAN KESELAMATAN WAJIB saat wiring onu_id nanti (jangan diabaikan):** onu-id ZTE **TIDAK BOLEH**
+diambil dari usulan indeks daftar `onu_uncfg_list` — indeks itu tidak reliabel dan bisa bentrok dengan
+ONU yang genuinely sudah terpakai. Di PON uji `gpon-olt_1/3/12`, **id 1 SUDAH DIPAKAI** ONU SN
+`CIOT17092318` ("Hambalang Baru" / "kantor bumireja", configured/OffLine) — mendaftarkan SN uji sebagai
+`onu 1` akan MENIMPA ONU itu (RISIKO MERAH ke config pelanggan lain). Prosedur wajib: baca
+`onu_baseinfo <PON>`, ambil **id bebas terkecil** dari situ (bukan dari uncfg), **cek ulang tepat sebelum
+menulis**, dan **BATALKAN** bila SN lain menempati id itu. **Rencana pemulihan**: `no onu <id-uji>` HANYA
+setelah `onu_baseinfo` memastikan id itu = SN uji (jangan pernah `no onu 1`).
+
+**⚠️ CATATAN OPERASIONAL — event gagal ke GRUP SUPPORT PRODUKSI:** `onu_provisioning_failed` di-resolve
+`WhatsappGroupRouter` ke grup **DEFAULT** tenant 1 = **"Token Wifi - Support - Bajastu"**
+(jid `120363315132303139@g.us`, sesi `direct`, `is_default=true`) — **grup support nyata, bukan grup uji**.
+Mode Uji & saklar `customer_auto_notify_enabled` TIDAK berpengaruh ke kiriman grup (hanya kiriman pelanggan).
+**Sebelum uji provisioning berikutnya, arahkan route kategori `onu_provisioning_failed` ke grup UJI dulu**
+(atau nonaktifkan grup default sementara) supaya kegagalan uji tidak membanjiri grup support produksi.
 
 **Memicu provisioning OLT/ONU (ZTP) OTOMATIS saat teknisi mengaktivasi pelanggan** — menutup sisa alur
 klaim→aktivasi→tutup WO cluster v0.13.4.x. `WorkOrderActivationService::activateFromForm()` men-dispatch
@@ -9243,10 +9281,14 @@ di root `.env` + recreate container PHP, setelah ZTE C300 benar-benar siap diuji
 **Cara membaca status ZTP**: kolom `work_orders.ztp_status`/`ztp_last_result`, + tahap "ZTP" di halaman
 status aktivasi signed-link.
 
-**Rilis (Laravel-only, saat disetujui Agung): `php artisan migrate`** (5 kolom aditif + FK) →
-`optimize:clear` → `queue:restart` (worker `boss-worker` memuat job baru) → `db:seed
+**Rilis (Laravel-only) — SUDAH DIJALANKAN DORMANT di server:** `php artisan migrate` (5 kolom aditif + FK,
+`2026_11_10_160000`) → `optimize:clear` → `queue:restart` (worker `boss-worker` memuat job baru) → `db:seed
 --class=WhatsappMessageTemplateSeeder` (template `onu_provisioning_failed`, idempoten). TANPA rebuild
-gateway/.env wajib (gate OMCI default FALSE, jadi ZTE tetap aman walau `.env` belum disetel).
+gateway/.env (gate OMCI default FALSE, jadi ZTE tetap aman walau `.env` belum disetel). Verifikasi pasca-rilis
+lihat blok STATUS JUJUR di awal section ini. Saat nanti BENAR-BENAR mau uji tulis ZTE: nyalakan
+`OLT_ZTP_OMCI_ACTIVATION_ENABLED=true` di root `.env` + recreate container PHP — HANYA setelah wiring
+parameter OMCI ada (lihat "BELUM TERBUKTI" di atas) + ONU cadangan di PON uji + route event gagal diarahkan
+ke grup uji + aturan keselamatan onu-id dipatuhi.
 
 ## WhatsApp Kirim Media — gambar + PDF (v0.13.5.1)
 

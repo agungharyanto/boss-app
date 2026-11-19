@@ -10109,6 +10109,70 @@ pelanggan/invoice **TIDAK disentuh**. Backup pre-cleanup: `/opt/boss-backups/pre
   v0.27.0 biaya sewa perangkat; loop `chown storage/app/private` di `docker/php/entrypoint.sh` sudah aktif
   (v0.13.5.3.1) → cache PDF jalur scheduler/worker ternormalkan ke www-data.
 
+## Bukti Pembayaran — Kuitansi PDF (v0.13.5.5, cabang `v0.13.5.5-bukti-pembayaran`, BELUM rilis/merge/tag)
+
+**T1+T2 SELESAI di cabang; T3+T4 TERTAHAN gerbang STOP (menunggu keputusan Agung).** Basis develop
+`f42d519`, dikerjakan di git worktree. Keputusan final Agung: nomor kuitansi = `invoice_number` (tanpa
+sequence baru), event = `PaymentReceived` (TIDAK buat `WhatsappEventType` baru), kirim MANUAL saja (T5
+otomatis TIDAK dibangun), biaya perangkat → v0.27.0, parsial/refund di luar lingkup.
+
+**T1 — PDF kuitansi (SELESAI).** Mode `$receipt` di view yang SAMA `resources/views/billing/invoice-pdf.blade.php`
+(`@php $isReceipt = ($receipt ?? false); @endphp` — default false, pemanggil invoice biasa tak berubah):
+judul "KUITANSI PEMBAYARAN", "No. Kuitansi: {invoice_number}", label "Diterima dari", baris "Metode bayar",
+"Tanggal bayar" (`paid_at`), stempel LUNAS (sudah ada), sembunyikan "Cara Pembayaran" (guard `&& ! $isReceipt`,
+lapis kedua di atas guard status paid lama). `InvoicePdfService::renderReceipt(Invoice)` — HANYA invoice
+`Paid` (status lain → `InvalidArgumentException`); `storeReceipt(Invoice)` → `invoice-pdfs/{tenant}/{id}-receipt.pdf`
+(**folder + prefix yang SUDAH ADA** supaya tercakup loop chown `docker/php/entrypoint.sh` + whitelist
+`WhatsappAttachment::ALLOWED_PREFIXES` — TIDAK ubah entrypoint), delete-then-write + `WebOwnership::normalize`
+(pola sama `store()`). Helper privat `receiptPaymentMethodLabel()`: baca baris `payments` Lunas terbaru → label
+channel gateway (`PaymentGatewayChannel::labelFor`); tidak ada baris → **"Tidak tercatat"** (invoice lama/jalur
+manual/Perpanjang/migrasi tak menulis `payments`; TIDAK backfill, TIDAK menebak — `payments.method` T4 belum
+ada). `render()` di-refactor berbagi helper privat `outputPdf()` dengan `renderReceipt()` (satu konfigurasi
+dompdf). NOL kirim WA, NOL Xendit.
+
+**T2 — unduh kuitansi (SELESAI).** Rute `web.invoices.receipt` (`GET /invoices/{invoice}/receipt`,
+`InvoicePrintController::downloadReceipt`) — `authorize('view', $invoice)` (aturan akses sama dengan
+`web.invoices.pdf`), **Paid → 200 `application/pdf`** (filename `kuitansi-{slug nomor}.pdf`), **non-Paid →
+`abort(404)`**, guest → redirect `/login`. Tombol "Unduh Kuitansi" di dropdown Cetak `/invoices`
+(`invoice-index.blade.php`) + Detail Pelanggan (`customer-show.blade.php`), muncul HANYA saat
+`status->value === 'paid'`. Policy `InvoicePolicy::view` yang sama, tanpa permission baru.
+
+**T3 — kirim manual kuitansi: TERTAHAN (KONFLIK template, tidak menebak solusi).** Fakta terverifikasi kode:
+kirim manual MENSYARATKAN template AKTIF — `WhatsappTemplateService::resolve()` memfilter `->where('is_active',
+true)` (baris 90/102) → template nonaktif ⇒ `null`; `InvoicePdfSendService::sendManually()` (baris 77-82)
+`throw InvoicePdfSendException` bila resolve `null`. Generalisasi ke kuitansi memakai event `PaymentReceived`,
+tapi template `payment_received` **NONAKTIF** (tenant 1) DAN **TIDAK BOLEH diaktifkan** — bila aktif,
+`InvoiceService::markPaid()` (baris 188-190) otomatis mengirim `payment_received` **teks-saja** ke pelanggan
+saat saklar `customer_auto_notify_enabled` ON. Jadi: aktifkan template → bocor pesan teks otomatis; biarkan
+nonaktif → kirim manual kuitansi `throw`. **Keputusan Agung diperlukan** (mis. template receipt terpisah yang
+selalu aktif tapi tak dipakai markPaid, ATAU markPaid berhenti auto-kirim payment_received, ATAU jalur kirim
+kuitansi yang tak lewat cek template-aktif). TIDAK dibangun di cabang ini.
+
+**T4 — catat metode bayar: TERTAHAN (ReconciliationReport bergeser).** Daftar pembaca tabel `payments` +
+efek baris manual (status Paid):
+
+| Pembaca | File:baris | Efek baris `payments` manual |
+|---|---|---|
+| `ReconciliationReport` | `app/Livewire/Billing/ReconciliationReport.php:44-49` | **BERGESER** — menandai invoice Paid tanpa baris `payments` Lunas sebagai `is_anomaly=true`. Menulis baris manual membuat invoice "Tandai Lunas" berhenti jadi anomali (true→false); invoice Perpanjang/migrasi (tak diubah) tetap anomali → report jadi campuran tak konsisten |
+| `PaymentService::resolvePaymentFor` | `app/Services/Payment/PaymentService.php:168-176` | Tidak bergeser — match `xendit_reference_id=$ref` (manual null) atau `status=pending` (manual Paid); baris manual tak terpilih |
+| `PaymentInstructionsService::existingGatewayLink` | `app/Services/Billing/PaymentInstructionsService.php:112-131` | Tidak bergeser — baca `raw_response.invoice_url` (manual tak punya) + skip `status=failed`; link tetap null |
+| `PaymentController::index`/`PaymentResource` | `app/Http/Controllers/Api/V1/PaymentController.php:18` | Menampilkan baris lebih banyak (per-invoice), tapi tak ada agregat/SUM yang "salah" — bukan laporan |
+| `WhatsappGatewayService::resolvePaymentLink` | `WhatsappGatewayService.php` | Sama seperti existingGatewayLink (baca invoice_url) — tidak bergeser |
+| Komisi (`CommissionApprovalService`) | hanya komentar, bukan query | Tidak membaca tabel `payments` |
+
+**Karena `ReconciliationReport` bergeser → STOP sesuai gerbang.** TIDAK dibuat migrasi kolom (`method`/
+`recorded_by`/`reference_note`/`company_bank_account_id`), TIDAK menulis baris `payments` dari jalur manual,
+TIDAK isi `method` di jalur Xendit. **Keputusan Agung diperlukan** (mis. sesuaikan `ReconciliationReport`
+agar tak menandai invoice Paid non-gateway sebagai anomali sebelum mulai menulis baris manual).
+
+**Verifikasi (container throwaway dari image `boss-app-boss-app`, sqlite in-memory, worktree + `vendor`/`.env`
+checkout utama di-mount):** `InvoiceReceiptPdfTest` (12 baru) + regresi `InvoicePdfTest`/`InvoicePdfPaymentSectionTest`/
+`InvoicePrintControllerTest`/`WhatsappManualBypassArchitectureTest`/`InvoicePdfSendServiceTest`/
+`InvoiceIndexSendPdfLivewireTest`/`InvoiceIssuedCaptionPaymentTest` — **59 test hijau**, Pint clean (4 file PHP).
+**BELUM diuji di server nyata; BELUM rilis; BELUM merge/tag.** Tanpa migrasi/`.env`/rebuild (T4 migrasi
+tertahan). Kuitansi berfungsi hanya dari `invoices` (`paid_at`/line items/`grand_total`) — invoice lama tanpa
+`payments` tetap menghasilkan kuitansi ("Tidak tercatat"), terbukti test.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

@@ -47,6 +47,9 @@
 </head>
 <body>
     <div class="sheet">
+        {{-- v0.13.5.5 — mode kuitansi (receipt). Default false supaya pemanggil
+             lama (invoice biasa) tak berubah. --}}
+        @php $isReceipt = ($receipt ?? false); @endphp
         <table class="head">
             <tr>
                 <td>
@@ -62,8 +65,8 @@
                     @if (($company['cs'] ?? '') !== '')<div class="muted">CS: {{ $company['cs'] }}</div>@endif
                 </td>
                 <td class="right">
-                    <h1>INVOICE</h1>
-                    <div class="muted">{{ $invoice->invoice_number }}</div>
+                    <h1>{{ $isReceipt ? 'KUITANSI PEMBAYARAN' : 'INVOICE' }}</h1>
+                    <div class="muted">@if ($isReceipt)No. Kuitansi: @endif{{ $invoice->invoice_number }}</div>
                     <div style="margin-top:6px">
                         <span class="badge {{ $invoice->status->value === 'paid' ? 'paid' : 'other' }}">{{ $invoice->status->label() }}</span>
                     </div>
@@ -74,7 +77,7 @@
         <table class="parties">
             <tr>
                 <td>
-                    <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">Ditagihkan kepada</div>
+                    <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">{{ $isReceipt ? 'Diterima dari' : 'Ditagihkan kepada' }}</div>
                     <div style="font-weight:700;margin-top:2px">{{ $invoice->customer?->name ?? '—' }}</div>
                     @if ($invoice->customer?->address)<div class="muted">{{ $invoice->customer->address }}</div>@endif
                     @if ($invoice->customer?->phone_number)<div class="muted">{{ $invoice->customer->phone_number }}</div>@endif
@@ -82,10 +85,15 @@
                 <td>
                     <table class="meta">
                         <tr><td>Tanggal terbit</td><td>{{ $invoice->generated_at?->translatedFormat('d M Y') }}</td></tr>
-                        <tr><td>Jatuh tempo</td><td>{{ $invoice->due_date?->translatedFormat('d M Y') }}</td></tr>
+                        @unless ($isReceipt)
+                            <tr><td>Jatuh tempo</td><td>{{ $invoice->due_date?->translatedFormat('d M Y') }}</td></tr>
+                        @endunless
                         <tr><td>Periode</td><td>{{ $invoice->period_start?->translatedFormat('d M Y') }} – {{ $invoice->period_end?->translatedFormat('d M Y') }}</td></tr>
                         @if ($invoice->paid_at)
-                            <tr><td>Dibayar</td><td>{{ $invoice->paid_at?->translatedFormat('d M Y H:i') }}</td></tr>
+                            <tr><td>{{ $isReceipt ? 'Tanggal bayar' : 'Dibayar' }}</td><td>{{ $invoice->paid_at?->translatedFormat('d M Y H:i') }}</td></tr>
+                        @endif
+                        @if ($isReceipt)
+                            <tr><td>Metode bayar</td><td>{{ $paymentMethod ?? 'Tidak tercatat' }}</td></tr>
                         @endif
                     </table>
                 </td>
@@ -95,7 +103,7 @@
         @include('billing.partials.invoice-items-totals', ['invoice' => $invoice])
 
         @php $pay = $payment ?? null; @endphp
-        @if ($pay !== null && ! in_array($invoice->status->value, ['paid', 'cancelled'], true))
+        @if ($pay !== null && ! $isReceipt && ! in_array($invoice->status->value, ['paid', 'cancelled'], true))
             <div class="pay-box">
                 <div class="pay-title">Cara Pembayaran</div>
                 @if ($pay['manual']['enabled'] && count($pay['manual']['accounts']))

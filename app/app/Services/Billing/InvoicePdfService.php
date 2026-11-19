@@ -2,13 +2,18 @@
 
 namespace App\Services\Billing;
 
+use App\Enums\InvoiceStatus;
+use App\Enums\PaymentStatus;
 use App\Models\CompanyProfile;
 use App\Models\Invoice;
+use App\Models\Payment;
+use App\Models\PaymentGatewayChannel;
 use App\Services\Company\CompanyProfileService;
 use App\Support\Filesystem\WebOwnership;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\View;
+use InvalidArgumentException;
 use Throwable;
 
 /**
@@ -50,16 +55,59 @@ class InvoicePdfService
             'payment' => $this->paymentInstructions->forInvoice($invoice),
         ])->render();
 
-        // isRemoteEnabled=false (tak fetch URL remote), chroot dibatasi ke
-        // storage (meski logo di-embed base64, bukan path file).
-        $pdf = Pdf::setOptions([
-            'isRemoteEnabled' => false,
-            'chroot' => storage_path('app'),
-            'defaultFont' => 'DejaVu Sans',
-            'isHtml5ParserEnabled' => true,
-        ])->loadHTML($html)->setPaper('a4');
+        return $this->outputPdf($html);
+    }
 
-        return $pdf->output();
+    /**
+     * v0.13.5.5 — render KUITANSI PEMBAYARAN (mode $receipt view yang sama).
+     * HANYA untuk invoice berstatus Lunas; status lain ditolak. Tidak
+     * menampilkan "Cara Pembayaran"; menampilkan metode bayar + tanggal bayar +
+     * stempel LUNAS. NOL kirim WA, NOL panggilan Xendit.
+     */
+    public function renderReceipt(Invoice $invoice): string
+    {
+        if ($invoice->status !== InvoiceStatus::Paid) {
+            throw new InvalidArgumentException('Kuitansi hanya untuk invoice berstatus Lunas.');
+        }
+
+        $invoice->loadMissing(['customer', 'lineItems', 'reseller']);
+
+        $company = $this->companyProfiles->resolveFor($invoice->tenant_id, $invoice->reseller_id);
+        $company['footer_note'] = config('invoice.footer_note');
+
+        $html = View::make('billing.invoice-pdf', [
+            'invoice' => $invoice,
+            'company' => $company,
+            'logoDataUri' => $this->logoDataUri($invoice->tenant_id),
+            // Kuitansi TIDAK menampilkan "Cara Pembayaran" (sudah lunas) — view
+            // juga meng-guard dengan $isReceipt, ini lapis kedua.
+            'payment' => null,
+            'receipt' => true,
+            'paymentMethod' => $this->receiptPaymentMethodLabel($invoice),
+        ])->render();
+
+        return $this->outputPdf($html);
+    }
+
+    /**
+     * Simpan PDF kuitansi ke disk privat; kembalikan path. Idempoten
+     * (delete-then-write) + normalisasi pemilik — pola sama dengan store().
+     * Pakai folder & prefix yang SUDAH ADA (invoice-pdfs/) supaya tercakup loop
+     * chown entrypoint + whitelist WhatsappAttachment, tanpa ubah entrypoint.
+     */
+    public function storeReceipt(Invoice $invoice): string
+    {
+        $path = "invoice-pdfs/{$invoice->tenant_id}/{$invoice->id}-receipt.pdf";
+        $disk = Storage::disk('local');
+
+        if ($disk->exists($path)) {
+            $disk->delete($path);
+        }
+
+        $disk->put($path, $this->renderReceipt($invoice));
+        $this->webOwnership->normalize($disk->path($path), $disk->path(''));
+
+        return $path;
     }
 
     /**
@@ -86,6 +134,46 @@ class InvoicePdfService
         $this->webOwnership->normalize($disk->path($path), $disk->path(''));
 
         return $path;
+    }
+
+    /**
+     * isRemoteEnabled=false (tak fetch URL remote), chroot dibatasi ke storage
+     * (meski logo di-embed base64, bukan path file). Dipakai bersama render()
+     * + renderReceipt() — satu konfigurasi dompdf.
+     */
+    private function outputPdf(string $html): string
+    {
+        $pdf = Pdf::setOptions([
+            'isRemoteEnabled' => false,
+            'chroot' => storage_path('app'),
+            'defaultFont' => 'DejaVu Sans',
+            'isHtml5ParserEnabled' => true,
+        ])->loadHTML($html)->setPaper('a4');
+
+        return $pdf->output();
+    }
+
+    /**
+     * Label metode bayar untuk kuitansi. Baca baris `payments` LUNAS terbaru:
+     *  - Ada  → jalur Xendit menulis `channel_type` (kode channel gateway).
+     *           T4 (`payments.method`) BELUM dibangun (gerbang STOP v0.13.5.5),
+     *           jadi untuk sekarang label berasal dari channel gateway.
+     *  - Tidak → "Tidak tercatat" (jalur manual/Perpanjang/migrasi tidak menulis
+     *           baris `payments`; JANGAN backfill, JANGAN menebak).
+     */
+    private function receiptPaymentMethodLabel(Invoice $invoice): string
+    {
+        $payment = Payment::query()
+            ->where('invoice_id', $invoice->id)
+            ->where('status', PaymentStatus::Paid->value)
+            ->latest('paid_at')
+            ->first();
+
+        if ($payment === null) {
+            return 'Tidak tercatat';
+        }
+
+        return 'Gateway — '.PaymentGatewayChannel::labelFor($payment->channel_type);
     }
 
     private function logoDataUri(int $tenantId): ?string

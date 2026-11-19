@@ -235,6 +235,9 @@
                                             <a href="{{ route('web.invoices.print', ['invoice' => $inv, 'format' => 'thermal', 'width' => '80']) }}" target="_blank" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50">Print Thermal 80mm</a>
                                             <a href="{{ route('web.invoices.print', ['invoice' => $inv, 'format' => 'thermal', 'width' => '58']) }}" target="_blank" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50">Print Thermal 58mm</a>
                                             <a href="{{ route('web.invoices.pdf', $inv) }}" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 border-t border-gray-100">Unduh PDF</a>
+                                            @if ($inv->status->value === 'paid')
+                                                <a href="{{ route('web.invoices.receipt', $inv) }}" class="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50">Unduh Kuitansi</a>
+                                            @endif
                                             @if ($canManageInvoices)
                                                 <button type="button" wire:click="confirmSendPdf({{ $inv->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-xs text-primary hover:bg-gray-50 border-t border-gray-100">Kirim PDF via WhatsApp</button>
                                             @endif

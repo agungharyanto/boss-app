@@ -65,4 +65,40 @@ class WhatsappManualBypassArchitectureTest extends TestCase
             );
         }
     }
+
+    /**
+     * v0.13.5.5 (T3) — markPaid() TIDAK lagi mengirim WA payment_received
+     * otomatis. Satu-satunya jalur yang boleh memakai event PaymentReceived
+     * adalah kirim kuitansi MANUAL (InvoicePdfSendService, yang membangun
+     * InvoiceSendContext). Jaminan ARSITEKTUR: tak ada file app lain (selain
+     * definisi enum) yang menyebut WhatsappEventType::PaymentReceived — jadi
+     * tidak mungkin ada jalur OTOMATIS yang mengirimnya tanpa context.
+     */
+    public function test_payment_received_event_is_only_referenced_by_the_manual_receipt_service(): void
+    {
+        // Catatan: definisi enum (app/Enums/WhatsappEventType.php) memakai
+        // `self::PaymentReceived`/`case PaymentReceived`, BUKAN
+        // `WhatsappEventType::PaymentReceived`, jadi tidak ikut terjaring scan ini.
+        $allowed = [
+            'app/Services/Billing/InvoicePdfSendService.php', // kirim kuitansi MANUAL (pakai konteks kirim manual)
+        ];
+
+        $referencing = [];
+        foreach ($this->appPhpFiles() as $path) {
+            $src = (string) file_get_contents($path);
+            if (str_contains($src, 'WhatsappEventType::PaymentReceived')) {
+                $referencing[] = str_replace(base_path().'/', '', $path);
+            }
+        }
+
+        sort($referencing);
+        sort($allowed);
+
+        $this->assertSame(
+            $allowed,
+            $referencing,
+            'WhatsappEventType::PaymentReceived hanya boleh disebut oleh InvoicePdfSendService (kirim manual) + definisi enum. '.
+            'Pemakaian di tempat lain berarti ada jalur OTOMATIS yang mengirim payment_received tanpa InvoiceSendContext.'
+        );
+    }
 }

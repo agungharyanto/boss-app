@@ -100,6 +100,32 @@ final class WhatsappAttachment
     }
 
     /**
+     * v0.13.5.5 (T3) — factory tepercaya untuk PDF KUITANSI pembayaran. Sama
+     * hook kepemilikan tenant dengan fromInvoicePdf (resolver = Invoice induk).
+     * Path mengikuti InvoicePdfService::storeReceipt()
+     * (`invoice-pdfs/{tenant}/{id}-receipt.pdf`, di bawah prefiks ALLOWED).
+     * File harus sudah di-storeReceipt() oleh pemanggil; ISI & MIME divalidasi
+     * ulang saat kirim (assertValidForSend).
+     */
+    public static function fromInvoiceReceiptPdf(Invoice $invoice, int $expectedTenantId, ?string $caption = null): self
+    {
+        if ((int) $invoice->tenant_id !== $expectedTenantId) {
+            throw new WhatsappAttachmentException('Lampiran bukan milik tenant ini.');
+        }
+
+        $path = "invoice-pdfs/{$invoice->tenant_id}/{$invoice->id}-receipt.pdf";
+        $fileName = 'kuitansi-'.Str::slug((string) $invoice->invoice_number, '-').'.pdf';
+
+        return new self(
+            disk: 'local',
+            path: $path,
+            mime: 'application/pdf',
+            filename: $fileName,
+            caption: $caption,
+        );
+    }
+
+    /**
      * @param  array<string, mixed>  $data
      */
     public static function fromArray(array $data): self

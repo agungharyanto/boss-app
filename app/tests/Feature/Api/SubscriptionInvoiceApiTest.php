@@ -2,7 +2,9 @@
 
 namespace Tests\Feature\Api;
 
+use App\Enums\InvoiceStatus;
 use App\Models\Customer;
+use App\Models\Invoice;
 use App\Models\Subscription;
 use App\Models\Tenant;
 use App\Models\User;
@@ -72,6 +74,67 @@ class SubscriptionInvoiceApiTest extends TestCase
         $this->patchJson("/api/v1/invoices/{$invoiceId}/cancel")
             ->assertStatus(422)
             ->assertJsonPath('success', false);
+    }
+
+    /**
+     * v0.13.5.5 (T4) — PATCH .../paid dengan `method` menulis satu baris
+     * payments; `recorded_by` = pengguna API.
+     */
+    public function test_mark_paid_with_method_records_a_payment_row(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $billing = $this->billingUser($tenant);
+        $this->actingAs($billing);
+
+        $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);
+        $subscription = Subscription::factory()->create([
+            'tenant_id' => $tenant->id, 'customer_id' => $customer->id, 'reseller_id' => null,
+        ]);
+        $invoice = app(InvoiceService::class)->markPending(
+            Invoice::factory()->create([
+                'tenant_id' => $tenant->id, 'customer_id' => $customer->id,
+                'subscription_id' => $subscription->id, 'reseller_id' => null,
+                'grand_total' => 150000, 'status' => InvoiceStatus::Draft->value,
+            ])
+        );
+
+        $this->patchJson("/api/v1/invoices/{$invoice->id}/paid", [
+            'method' => 'manual_transfer',
+            'reference_note' => 'TF mandiri 1234',
+        ])->assertOk()->assertJsonPath('data.status', 'paid');
+
+        $this->assertDatabaseHas('payments', [
+            'invoice_id' => $invoice->id,
+            'method' => 'manual_transfer',
+            'recorded_by' => $billing->id,
+            'reference_note' => 'TF mandiri 1234',
+            'status' => 'paid',
+            'amount' => '150000.00',
+        ]);
+    }
+
+    public function test_mark_paid_without_method_records_no_payment_row(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $billing = $this->billingUser($tenant);
+        $this->actingAs($billing);
+
+        $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);
+        $subscription = Subscription::factory()->create([
+            'tenant_id' => $tenant->id, 'customer_id' => $customer->id, 'reseller_id' => null,
+        ]);
+        $invoice = app(InvoiceService::class)->markPending(
+            Invoice::factory()->create([
+                'tenant_id' => $tenant->id, 'customer_id' => $customer->id,
+                'subscription_id' => $subscription->id, 'reseller_id' => null,
+                'status' => InvoiceStatus::Draft->value,
+            ])
+        );
+
+        $this->patchJson("/api/v1/invoices/{$invoice->id}/paid")
+            ->assertOk()->assertJsonPath('data.status', 'paid');
+
+        $this->assertDatabaseCount('payments', 0);
     }
 
     /**

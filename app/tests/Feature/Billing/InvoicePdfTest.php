@@ -115,16 +115,63 @@ class InvoicePdfTest extends TestCase
         $this->assertStringNotContainsString('<script>', $html);
     }
 
-    public function test_paid_invoice_shows_lunas_stamp_unpaid_does_not(): void
+    private function pdfViewHtml(Invoice $invoice): string
+    {
+        return View::make('billing.invoice-pdf', [
+            'invoice' => $invoice,
+            'company' => ['brand_name' => 'X', 'legal_name' => 'X', 'address' => '', 'email' => '', 'cs' => '', 'footer_note' => ''],
+            'logoDataUri' => null,
+        ])->render();
+    }
+
+    /**
+     * v0.13.5.5 revisi — stempel "LUNAS" kini watermark DIAGONAL TRANSPARAN di
+     * BELAKANG isi (position:fixed, rotate, opacity rendah, z-index di bawah
+     * .sheet) — hanya untuk status Paid. Pending & Cancelled tak menampilkannya.
+     */
+    public function test_paid_invoice_shows_diagonal_lunas_watermark_pending_and_cancelled_do_not(): void
     {
         [$paid] = $this->invoice(['status' => InvoiceStatus::Paid->value, 'paid_at' => now()]);
-        [$unpaid] = $this->invoice(['invoice_number' => 'INV/TEST/2026/11/000002']);
+        [$pending] = $this->invoice(['invoice_number' => 'INV/TEST/2026/11/000002']);
+        [$cancelled] = $this->invoice(['invoice_number' => 'INV/TEST/2026/11/000003', 'status' => InvoiceStatus::Cancelled->value]);
 
-        $paidHtml = View::make('billing.invoice-pdf', ['invoice' => $paid, 'company' => ['brand_name' => 'X', 'legal_name' => 'X', 'address' => '', 'email' => '', 'cs' => '', 'footer_note' => ''], 'logoDataUri' => null])->render();
-        $unpaidHtml = View::make('billing.invoice-pdf', ['invoice' => $unpaid, 'company' => ['brand_name' => 'X', 'legal_name' => 'X', 'address' => '', 'email' => '', 'cs' => '', 'footer_note' => ''], 'logoDataUri' => null])->render();
+        $paidHtml = $this->pdfViewHtml($paid);
 
+        // Stempel ada hanya saat Lunas, dan berupa watermark (bukan kotak lama).
         $this->assertStringContainsString('LUNAS', $paidHtml);
-        $this->assertStringNotContainsString('LUNAS', $unpaidHtml);
+        $this->assertStringContainsString('class="watermark"', $paidHtml);
+        // Diagonal + transparan (watermark), bukan .paid-stamp kotak lama.
+        $this->assertStringContainsString('transform: rotate(', $paidHtml);
+        $this->assertStringContainsString('opacity: 0.15', $paidHtml);
+        $this->assertStringNotContainsString('paid-stamp', $paidHtml);
+
+        // Pending & Cancelled: tak ada DIV watermark sama sekali (kata "LUNAS"
+        // hanya di DIV kondisional, bukan di komentar CSS — jadi juga absen).
+        // Catatan: aturan CSS ".watermark {" memang selalu ada di <style>, jadi
+        // yang dicek adalah DIV-nya, bukan kata telanjang "watermark".
+        $pendingHtml = $this->pdfViewHtml($pending);
+        $this->assertStringNotContainsString('LUNAS', $pendingHtml);
+        $this->assertStringNotContainsString('<div class="watermark"', $pendingHtml);
+
+        $cancelledHtml = $this->pdfViewHtml($cancelled);
+        $this->assertStringNotContainsString('LUNAS', $cancelledHtml);
+        $this->assertStringNotContainsString('<div class="watermark"', $cancelledHtml);
+    }
+
+    /**
+     * Watermark position:fixed (di luar alur) tak menggeser layout / tak
+     * menambah halaman: PDF tetap valid %PDF dan tetap 1 halaman (dibuktikan
+     * juga via pdfinfo saat verifikasi manual; di sini via penanda /Count 1
+     * pada pohon Pages dompdf, bukan /Count 2).
+     */
+    public function test_paid_invoice_pdf_stays_valid_and_single_page_with_watermark(): void
+    {
+        [$paid] = $this->invoice(['status' => InvoiceStatus::Paid->value, 'paid_at' => now()]);
+        $pdf = app(InvoicePdfService::class)->render($paid);
+
+        $this->assertStringStartsWith('%PDF', $pdf);
+        $this->assertStringContainsString('/Count 1', $pdf);
+        $this->assertStringNotContainsString('/Count 2', $pdf);
     }
 
     public function test_corrupt_or_missing_logo_does_not_error(): void

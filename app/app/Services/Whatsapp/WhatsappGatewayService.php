@@ -406,6 +406,9 @@ class WhatsappGatewayService
             'customer_id' => $customer->id,
             'invoice_number' => $invoice?->invoice_number,
             'due_date' => $invoice?->due_date?->format('d/m/Y'),
+            // v0.13.5.5 (T3) — {paid_date} untuk caption kuitansi (event
+            // PaymentReceived). null bila invoice belum lunas / tak ada paid_at.
+            'paid_date' => $invoice?->paid_at?->format('d/m/Y'),
             'total_amount' => $invoice !== null ? 'Rp'.number_format((float) $invoice->grand_total, 0, ',', '.') : null,
             'package_name' => $invoice?->subscription?->name,
             'company_name' => $companyName,

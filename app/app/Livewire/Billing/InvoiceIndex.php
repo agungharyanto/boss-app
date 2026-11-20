@@ -3,13 +3,16 @@
 namespace App\Livewire\Billing;
 
 use App\Enums\InvoiceStatus;
+use App\Enums\PaymentMethod;
 use App\Enums\WhatsappEventType;
 use App\Exceptions\InvalidInvoiceStatusTransitionException;
 use App\Exceptions\InvoicePdfSendException;
 use App\Models\Invoice;
 use App\Models\WhatsappMessageLog;
 use App\Services\Billing\InvoicePdfSendService;
+use App\Services\Company\CompanyBankAccountService;
 use App\Services\InvoiceService;
+use App\Support\Billing\ManualPaymentInput;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Carbon;
@@ -39,6 +42,28 @@ class InvoiceIndex extends Component
     public array $sendPdfPreview = [];
 
     public ?string $sendPdfError = null;
+
+    // v0.13.5.5 (T4) — modal "Tandai Lunas" (metode + rekening + catatan).
+    public ?int $markPaidInvoiceId = null;
+
+    public string $markPaidMethod = 'manual_transfer';
+
+    public ?int $markPaidBankAccountId = null;
+
+    public string $markPaidReferenceNote = '';
+
+    /** @var array<int, string> */
+    public array $markPaidBankOptions = [];
+
+    public ?string $markPaidError = null;
+
+    // v0.13.5.5 (T3) — modal "Kirim Kuitansi via WhatsApp".
+    public ?int $sendReceiptInvoiceId = null;
+
+    /** @var array<string, mixed> */
+    public array $sendReceiptPreview = [];
+
+    public ?string $sendReceiptError = null;
 
     public function mount(): void
     {
@@ -121,10 +146,129 @@ class InvoiceIndex extends Component
         $this->attemptTransition(fn () => $service->markPending(Invoice::findOrFail($id)));
     }
 
-    public function markPaid(int $id, InvoiceService $service): void
+    /**
+     * v0.13.5.5 (T4) — buka modal "Tandai Lunas": pilih metode (default
+     * Transfer Manual), rekening (default rekening aktif bila manual), catatan
+     * opsional. Penulisan baris payments terjadi di submitMarkPaid().
+     */
+    public function confirmMarkPaid(int $id): void
     {
         $this->authorize('manage', Invoice::class);
-        $this->attemptTransition(fn () => $service->markPaid(Invoice::findOrFail($id)));
+        $this->markPaidError = null;
+
+        $invoice = Invoice::with('customer')->findOrFail($id);
+        if (! $invoice->status->canTransitionTo(InvoiceStatus::Paid)) {
+            $this->transitionError = 'Invoice ini tidak bisa ditandai Lunas dari status saat ini.';
+
+            return;
+        }
+
+        $accounts = app(CompanyBankAccountService::class)->activeAccounts($invoice->tenant_id);
+        $default = app(CompanyBankAccountService::class)->defaultAccount($invoice->tenant_id);
+
+        $this->markPaidInvoiceId = $invoice->id;
+        $this->markPaidMethod = PaymentMethod::ManualTransfer->value;
+        $this->markPaidBankOptions = $accounts
+            ->mapWithKeys(fn ($a) => [$a->id => "{$a->bank_name} — {$a->account_number} a.n. {$a->account_holder}"])
+            ->all();
+        $this->markPaidBankAccountId = $default?->id;
+        $this->markPaidReferenceNote = '';
+    }
+
+    public function cancelMarkPaid(): void
+    {
+        $this->markPaidInvoiceId = null;
+        $this->markPaidBankOptions = [];
+        $this->markPaidBankAccountId = null;
+        $this->markPaidReferenceNote = '';
+        $this->markPaidError = null;
+    }
+
+    public function submitMarkPaid(InvoiceService $service): void
+    {
+        $this->authorize('manage', Invoice::class);
+        $this->markPaidError = null;
+
+        if ($this->markPaidInvoiceId === null) {
+            return;
+        }
+
+        $method = PaymentMethod::tryFrom($this->markPaidMethod);
+        if ($method === null) {
+            $this->markPaidError = 'Metode pembayaran tidak valid.';
+
+            return;
+        }
+
+        $invoice = Invoice::findOrFail($this->markPaidInvoiceId);
+
+        // Rekening hanya relevan untuk Transfer Manual.
+        $bankAccountId = $method === PaymentMethod::ManualTransfer ? $this->markPaidBankAccountId : null;
+        $note = trim($this->markPaidReferenceNote);
+
+        $payment = new ManualPaymentInput(
+            method: $method,
+            recordedBy: auth()->id(),
+            referenceNote: $note !== '' ? $note : null,
+            companyBankAccountId: $bankAccountId,
+        );
+
+        $invoiceId = $this->markPaidInvoiceId;
+        $this->cancelMarkPaid();
+        $this->attemptTransition(fn () => $service->markPaid(Invoice::findOrFail($invoiceId), $payment));
+
+        if ($this->transitionError === null) {
+            session()->flash('status', 'Invoice ditandai Lunas dan pembayaran tercatat.');
+        }
+    }
+
+    // v0.13.5.5 (T3) — kirim kuitansi MANUAL.
+    public function confirmSendReceipt(int $id): void
+    {
+        $this->authorize('manage', Invoice::class);
+        $this->sendReceiptError = null;
+
+        $invoice = Invoice::with('customer')->findOrFail($id);
+
+        $this->sendReceiptInvoiceId = $invoice->id;
+        $this->sendReceiptPreview = app(InvoicePdfSendService::class)->previewReceiptFor($invoice);
+    }
+
+    public function cancelSendReceipt(): void
+    {
+        $this->sendReceiptInvoiceId = null;
+        $this->sendReceiptPreview = [];
+        $this->sendReceiptError = null;
+    }
+
+    public function sendReceipt(bool $resend, InvoicePdfSendService $service): void
+    {
+        $this->authorize('manage', Invoice::class);
+        $this->sendReceiptError = null;
+
+        if ($this->sendReceiptInvoiceId === null) {
+            return;
+        }
+
+        $invoice = Invoice::with('customer')->findOrFail($this->sendReceiptInvoiceId);
+
+        try {
+            $log = $service->sendReceiptManually($invoice, auth()->user(), $resend);
+        } catch (AuthorizationException $e) {
+            $this->sendReceiptError = 'Anda tidak punya izin mengirim kuitansi.';
+
+            return;
+        } catch (InvoicePdfSendException $e) {
+            $this->sendReceiptError = $e->getMessage();
+
+            return;
+        }
+
+        $this->cancelSendReceipt();
+
+        session()->flash('status', $log->is_test
+            ? 'Kuitansi UJI diantrekan ke nomor uji (pelanggan TIDAK menerima).'
+            : 'Kuitansi diantrekan untuk dikirim ke pelanggan.');
     }
 
     public function cancelInvoice(int $id, InvoiceService $service): void

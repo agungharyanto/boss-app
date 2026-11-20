@@ -95,8 +95,14 @@
                                     <a href="{{ route('web.invoices.print', ['invoice' => $invoice, 'format' => 'thermal', 'width' => '80']) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Thermal 80mm') }}</a>
                                     <a href="{{ route('web.invoices.print', ['invoice' => $invoice, 'format' => 'thermal', 'width' => '58']) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Thermal 58mm') }}</a>
                                     <a href="{{ route('web.invoices.pdf', $invoice) }}" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 border-t border-gray-100">{{ __('Unduh PDF') }}</a>
+                                    @if ($invoice->status->value === 'paid')
+                                        <a href="{{ route('web.invoices.receipt', $invoice) }}" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Unduh Kuitansi') }}</a>
+                                    @endif
                                     @if ($canManage)
                                         <button type="button" wire:click="confirmSendPdf({{ $invoice->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-gray-50 border-t border-gray-100">{{ __('Kirim PDF via WhatsApp') }}</button>
+                                        @if ($invoice->status->value === 'paid')
+                                            <button type="button" wire:click="confirmSendReceipt({{ $invoice->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-gray-50">{{ __('Kirim Kuitansi via WhatsApp') }}</button>
+                                        @endif
                                     @endif
                                 </div>
                             </span>
@@ -115,7 +121,7 @@
                                     <button wire:click="markPending({{ $invoice->id }})" class="text-primary hover:underline">{{ __('Issue') }}</button>
                                 @endif
                                 @if ($invoice->status->canTransitionTo(\App\Enums\InvoiceStatus::Paid))
-                                    <button wire:click="markPaid({{ $invoice->id }})" class="text-green-600 hover:underline">{{ __('Tandai Lunas') }}</button>
+                                    <button wire:click="confirmMarkPaid({{ $invoice->id }})" class="text-green-600 hover:underline">{{ __('Tandai Lunas') }}</button>
                                 @endif
                                 @if ($invoice->status->canTransitionTo(\App\Enums\InvoiceStatus::Cancelled))
                                     <button
@@ -145,4 +151,6 @@
     </div>
 
     @include('billing.partials.send-invoice-pdf-modal')
+    @include('billing.partials.send-receipt-modal')
+    @include('billing.partials.mark-paid-modal')
 </div>

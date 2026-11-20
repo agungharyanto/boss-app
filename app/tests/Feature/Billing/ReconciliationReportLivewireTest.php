@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Billing;
 
+use App\Enums\PaymentMethod;
 use App\Livewire\Billing\ReconciliationReport;
 use App\Models\Customer;
 use App\Models\Payment;
@@ -10,6 +11,7 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Services\InvoiceService;
 use App\Services\SubscriptionService;
+use App\Support\Billing\ManualPaymentInput;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -43,6 +45,36 @@ class ReconciliationReportLivewireTest extends TestCase
         $invoice = $invoiceService->markPending($invoice);
         Payment::factory()->paid()->for($invoice, 'invoice')->create(['tenant_id' => $tenant->id]);
         $invoice = $invoiceService->markPaid($invoice);
+
+        Livewire::actingAs($admin)
+            ->test(ReconciliationReport::class)
+            ->assertOk()
+            ->assertSee($invoice->invoice_number)
+            ->assertDontSee('ANOMALY');
+    }
+
+    public function test_paid_invoice_with_a_manual_payment_row_is_not_anomaly(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $admin = User::factory()->create(['tenant_id' => $tenant->id]);
+        $admin->assignRole('superadmin');
+        $this->actingAs($admin);
+
+        $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);
+        $subscription = app(SubscriptionService::class)->create($customer, [
+            'name' => 'Paket Test', 'monthly_amount' => 100000, 'billing_cycle_day' => now()->day,
+            'started_at' => now()->startOfMonth()->toDateString(),
+        ]);
+        $invoiceService = app(InvoiceService::class);
+        $invoice = $invoiceService->generateNextForSubscription($subscription);
+        $invoice = $invoiceService->markPending($invoice);
+
+        // v0.13.5.5 (T4) — "Tandai Lunas" manual menulis baris payments LUNAS →
+        // bukan lagi anomali.
+        $invoice = $invoiceService->markPaid($invoice, new ManualPaymentInput(
+            method: PaymentMethod::ManualTransfer,
+            recordedBy: $admin->id,
+        ));
 
         Livewire::actingAs($admin)
             ->test(ReconciliationReport::class)

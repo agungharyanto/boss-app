@@ -94,14 +94,20 @@
                                     <a href="{{ route('web.invoices.print', $invoice) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Standar (A4)') }}</a>
                                     <a href="{{ route('web.invoices.print', ['invoice' => $invoice, 'format' => 'thermal', 'width' => '80']) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Thermal 80mm') }}</a>
                                     <a href="{{ route('web.invoices.print', ['invoice' => $invoice, 'format' => 'thermal', 'width' => '58']) }}" target="_blank" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Print Thermal 58mm') }}</a>
-                                    <a href="{{ route('web.invoices.pdf', $invoice) }}" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 border-t border-gray-100">{{ __('Unduh PDF') }}</a>
+                                    {{-- v0.13.5.5.1 — tombol unduh/kirim per status: Paid → hanya
+                                         Kuitansi; selain Paid → hanya PDF invoice. Route PDF untuk
+                                         Paid TIDAK dihapus (arsip/permintaan lama tetap jalan), cuma
+                                         tak ditampilkan. Cancelled = seperti non-Paid lain (PDF). --}}
                                     @if ($invoice->status->value === 'paid')
-                                        <a href="{{ route('web.invoices.receipt', $invoice) }}" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">{{ __('Unduh Kuitansi') }}</a>
+                                        <a href="{{ route('web.invoices.receipt', $invoice) }}" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 border-t border-gray-100">{{ __('Unduh Kuitansi') }}</a>
+                                    @else
+                                        <a href="{{ route('web.invoices.pdf', $invoice) }}" class="block px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 border-t border-gray-100">{{ __('Unduh PDF') }}</a>
                                     @endif
                                     @if ($canManage)
-                                        <button type="button" wire:click="confirmSendPdf({{ $invoice->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-gray-50 border-t border-gray-100">{{ __('Kirim PDF via WhatsApp') }}</button>
                                         @if ($invoice->status->value === 'paid')
-                                            <button type="button" wire:click="confirmSendReceipt({{ $invoice->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-gray-50">{{ __('Kirim Kuitansi via WhatsApp') }}</button>
+                                            <button type="button" wire:click="confirmSendReceipt({{ $invoice->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-gray-50 border-t border-gray-100">{{ __('Kirim Kuitansi via WhatsApp') }}</button>
+                                        @else
+                                            <button type="button" wire:click="confirmSendPdf({{ $invoice->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-sm text-primary hover:bg-gray-50 border-t border-gray-100">{{ __('Kirim PDF via WhatsApp') }}</button>
                                         @endif
                                     @endif
                                 </div>

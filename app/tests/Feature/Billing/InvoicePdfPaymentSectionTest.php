@@ -73,7 +73,9 @@ class InvoicePdfPaymentSectionTest extends TestCase
         ])->render();
 
         $this->assertStringNotContainsString('Cara Pembayaran', $html);
-        $this->assertStringContainsString('LUNAS', $html);
+        // v0.13.5.5.1 — invoice Paid: badge "Lunas" (Indonesia), TANPA watermark.
+        $this->assertStringContainsString('>Lunas<', $html);
+        $this->assertStringNotContainsString('<div class="watermark"', $html);
     }
 
     public function test_section_hidden_for_cancelled_invoice(): void

@@ -111,14 +111,24 @@ class InvoiceReceiptPdfTest extends TestCase
         ])->render();
 
         $this->assertStringContainsString('KUITANSI PEMBAYARAN', $html);
-        // v0.13.5.5 revisi — stempel LUNAS = watermark diagonal transparan.
-        $this->assertStringContainsString('LUNAS', $html);
-        $this->assertStringContainsString('class="watermark"', $html);
+        // v0.13.5.5.1 — watermark LUNAS HANYA pada kuitansi; badge Indonesia.
+        $this->assertStringContainsString('<div class="watermark">LUNAS</div>', $html);
         $this->assertStringContainsString('transform: rotate(', $html);
         $this->assertStringNotContainsString('paid-stamp', $html);
+        // Badge "Lunas" (Indonesia), bukan "Paid".
+        $this->assertStringContainsString('>Lunas<', $html);
+        $this->assertStringNotContainsString('>Paid<', $html);
+        // Nomor kuitansi + ref invoice + kalimat jumlah diterima.
+        $this->assertStringContainsString('No. Kuitansi:', $html);
+        $this->assertStringContainsString('Ref. Invoice:', $html);
         $this->assertStringContainsString('INV/TEST/2026/11/000055', $html);
+        $this->assertStringContainsString('Telah diterima pembayaran sebesar', $html);
+        // Blok ringkas kuitansi: Tanggal bayar / Metode bayar; TANPA terbit & jatuh tempo.
+        $this->assertStringContainsString('Tanggal bayar', $html);
         $this->assertStringContainsString('Metode bayar', $html);
         $this->assertStringContainsString('Tidak tercatat', $html);
+        $this->assertStringNotContainsString('Tanggal terbit', $html);
+        $this->assertStringNotContainsString('Jatuh tempo', $html);
         $this->assertStringContainsString('Diterima dari', $html);
         $this->assertStringNotContainsString('Cara Pembayaran', $html);
         $this->assertStringNotContainsString('INVOICE</h1>', $html);
@@ -139,6 +149,11 @@ class InvoiceReceiptPdfTest extends TestCase
         $this->assertStringContainsString('INVOICE', $html);
         $this->assertStringNotContainsString('KUITANSI PEMBAYARAN', $html);
         $this->assertStringNotContainsString('Metode bayar', $html);
+        // v0.13.5.5.1 — invoice mode (meski Paid) TIDAK memakai watermark; badge "Lunas" Indonesia.
+        $this->assertStringNotContainsString('<div class="watermark"', $html);
+        $this->assertStringContainsString('>Lunas<', $html);
+        $this->assertStringNotContainsString('>Paid<', $html);
+        $this->assertStringContainsString('Tanggal terbit', $html);
     }
 
     // ---- T1: label metode bayar (invoice lama tanpa payments vs ada baris) ----

@@ -124,54 +124,70 @@ class InvoicePdfTest extends TestCase
         ])->render();
     }
 
+    private function receiptViewHtml(Invoice $invoice): string
+    {
+        return View::make('billing.invoice-pdf', [
+            'invoice' => $invoice,
+            'company' => ['brand_name' => 'X', 'legal_name' => 'X', 'address' => '', 'email' => '', 'cs' => '', 'footer_note' => ''],
+            'logoDataUri' => null,
+            'payment' => null,
+            'receipt' => true,
+            'paymentMethod' => 'Tidak tercatat',
+        ])->render();
+    }
+
     /**
-     * v0.13.5.5 revisi — stempel "LUNAS" kini watermark DIAGONAL TRANSPARAN di
-     * BELAKANG isi (position:fixed, rotate, opacity rendah, z-index di bawah
-     * .sheet) — hanya untuk status Paid. Pending & Cancelled tak menampilkannya.
+     * v0.13.5.5.1 — watermark "LUNAS" diagonal HANYA pada KUITANSI. Invoice biasa
+     * (termasuk yang berstatus Paid) TIDAK memakai watermark — cukup badge "Lunas"
+     * (Indonesia). Pending & Cancelled jelas tanpa watermark, badge Indonesia.
      */
-    public function test_paid_invoice_shows_diagonal_lunas_watermark_pending_and_cancelled_do_not(): void
+    public function test_watermark_only_on_receipt_not_on_invoice_even_when_paid(): void
     {
         [$paid] = $this->invoice(['status' => InvoiceStatus::Paid->value, 'paid_at' => now()]);
         [$pending] = $this->invoice(['invoice_number' => 'INV/TEST/2026/11/000002']);
         [$cancelled] = $this->invoice(['invoice_number' => 'INV/TEST/2026/11/000003', 'status' => InvoiceStatus::Cancelled->value]);
 
+        // KUITANSI (mode receipt) → ADA watermark diagonal transparan.
+        $receiptHtml = $this->receiptViewHtml($paid);
+        $this->assertStringContainsString('<div class="watermark">LUNAS</div>', $receiptHtml);
+        $this->assertStringContainsString('transform: rotate(', $receiptHtml);
+        $this->assertStringContainsString('opacity: 0.15', $receiptHtml);
+        $this->assertStringNotContainsString('paid-stamp', $receiptHtml);
+
+        // INVOICE Paid (mode invoice) → TANPA watermark; badge "Lunas" Indonesia.
         $paidHtml = $this->pdfViewHtml($paid);
+        $this->assertStringNotContainsString('<div class="watermark"', $paidHtml);
+        $this->assertStringContainsString('>Lunas<', $paidHtml);
+        $this->assertStringNotContainsString('>Paid<', $paidHtml);
 
-        // Stempel ada hanya saat Lunas, dan berupa watermark (bukan kotak lama).
-        $this->assertStringContainsString('LUNAS', $paidHtml);
-        $this->assertStringContainsString('class="watermark"', $paidHtml);
-        // Diagonal + transparan (watermark), bukan .paid-stamp kotak lama.
-        $this->assertStringContainsString('transform: rotate(', $paidHtml);
-        $this->assertStringContainsString('opacity: 0.15', $paidHtml);
-        $this->assertStringNotContainsString('paid-stamp', $paidHtml);
-
-        // Pending & Cancelled: tak ada DIV watermark sama sekali (kata "LUNAS"
-        // hanya di DIV kondisional, bukan di komentar CSS — jadi juga absen).
-        // Catatan: aturan CSS ".watermark {" memang selalu ada di <style>, jadi
-        // yang dicek adalah DIV-nya, bukan kata telanjang "watermark".
+        // Pending & Cancelled: tanpa watermark, badge Indonesia.
         $pendingHtml = $this->pdfViewHtml($pending);
-        $this->assertStringNotContainsString('LUNAS', $pendingHtml);
         $this->assertStringNotContainsString('<div class="watermark"', $pendingHtml);
+        $this->assertStringContainsString('>Belum Bayar<', $pendingHtml);
 
         $cancelledHtml = $this->pdfViewHtml($cancelled);
-        $this->assertStringNotContainsString('LUNAS', $cancelledHtml);
         $this->assertStringNotContainsString('<div class="watermark"', $cancelledHtml);
+        $this->assertStringContainsString('>Dibatalkan<', $cancelledHtml);
     }
 
     /**
-     * Watermark position:fixed (di luar alur) tak menggeser layout / tak
-     * menambah halaman: PDF tetap valid %PDF dan tetap 1 halaman (dibuktikan
-     * juga via pdfinfo saat verifikasi manual; di sini via penanda /Count 1
-     * pada pohon Pages dompdf, bukan /Count 2).
+     * Watermark position:fixed (di luar alur) tak menggeser layout / tak menambah
+     * halaman: PDF kuitansi tetap valid %PDF dan tetap 1 halaman (dibuktikan juga
+     * via pdfinfo saat verifikasi manual; di sini via penanda /Count 1 pada pohon
+     * Pages dompdf, bukan /Count 2). Invoice biasa juga tetap 1 halaman.
      */
-    public function test_paid_invoice_pdf_stays_valid_and_single_page_with_watermark(): void
+    public function test_receipt_and_invoice_pdf_stay_valid_and_single_page(): void
     {
         [$paid] = $this->invoice(['status' => InvoiceStatus::Paid->value, 'paid_at' => now()]);
-        $pdf = app(InvoicePdfService::class)->render($paid);
 
-        $this->assertStringStartsWith('%PDF', $pdf);
-        $this->assertStringContainsString('/Count 1', $pdf);
-        $this->assertStringNotContainsString('/Count 2', $pdf);
+        foreach ([
+            app(InvoicePdfService::class)->renderReceipt($paid),
+            app(InvoicePdfService::class)->render($paid),
+        ] as $pdf) {
+            $this->assertStringStartsWith('%PDF', $pdf);
+            $this->assertStringContainsString('/Count 1', $pdf);
+            $this->assertStringNotContainsString('/Count 2', $pdf);
+        }
     }
 
     public function test_corrupt_or_missing_logo_does_not_error(): void

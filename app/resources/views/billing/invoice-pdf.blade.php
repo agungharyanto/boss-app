@@ -57,6 +57,10 @@
             transform: rotate(-32deg);
             transform-origin: 50% 50%;
         }
+        /* v0.13.5.5.1 — mode KUITANSI dibuat jelas berbeda dari invoice. */
+        .receipt-title { font-size: 28px; color: #166534; }
+        .receipt-rule { border-top: 3px solid #16a34a; margin: 2px 0 12px; }
+        .receipt-amount { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 9px 12px; font-size: 13px; color: #14532d; margin: 0 0 10px; }
         .logo { max-height: 56px; margin-bottom: 6px; }
         .pay-box { margin-top: 22px; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 12px; font-size: 11px; }
         .pay-title { font-weight: 700; font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: #374151; margin-bottom: 4px; }
@@ -66,17 +70,29 @@
     </style>
 </head>
 <body>
-    {{-- v0.13.5.5 revisi — watermark "LUNAS" diagonal transparan, HANYA status
-         Lunas (kuitansi selalu Lunas; invoice hanya bila Paid). Di luar alur
-         (.sheet) & z-index di bawahnya → tidak menggeser layout / menambah
-         halaman, isi tetap terbaca di atasnya. --}}
-    @if ($invoice->status->value === 'paid')
+    {{-- v0.13.5.5 — mode kuitansi (receipt). Default false supaya pemanggil
+         lama (invoice biasa) tak berubah. --}}
+    @php $isReceipt = ($receipt ?? false); @endphp
+    {{-- v0.13.5.5.1 — watermark "LUNAS" diagonal transparan HANYA pada KUITANSI.
+         Invoice biasa (termasuk yang berstatus Paid) TIDAK memakai watermark —
+         cukup badge "LUNAS". Di luar alur (.sheet) & z-index di bawahnya →
+         tidak menggeser layout / menambah halaman, isi tetap terbaca. --}}
+    @if ($isReceipt)
         <div class="watermark">LUNAS</div>
     @endif
     <div class="sheet">
-        {{-- v0.13.5.5 — mode kuitansi (receipt). Default false supaya pemanggil
-             lama (invoice biasa) tak berubah. --}}
-        @php $isReceipt = ($receipt ?? false); @endphp
+        {{-- Badge status dalam bahasa Indonesia (lokal di view; enum label()
+             tetap Inggris dan dipakai di tempat lain — tidak diubah). --}}
+        @php
+            $statusLabelId = match ($invoice->status->value) {
+                'paid' => 'Lunas',
+                'pending' => 'Belum Bayar',
+                'overdue' => 'Terlambat',
+                'cancelled' => 'Dibatalkan',
+                'draft' => 'Draf',
+                default => $invoice->status->label(),
+            };
+        @endphp
         <table class="head">
             <tr>
                 <td>
@@ -92,14 +108,28 @@
                     @if (($company['cs'] ?? '') !== '')<div class="muted">CS: {{ $company['cs'] }}</div>@endif
                 </td>
                 <td class="right">
-                    <h1>{{ $isReceipt ? 'KUITANSI PEMBAYARAN' : 'INVOICE' }}</h1>
-                    <div class="muted">@if ($isReceipt)No. Kuitansi: @endif{{ $invoice->invoice_number }}</div>
+                    <h1 class="{{ $isReceipt ? 'receipt-title' : '' }}">{{ $isReceipt ? 'KUITANSI PEMBAYARAN' : 'INVOICE' }}</h1>
+                    @if ($isReceipt)
+                        <div class="muted">No. Kuitansi: <strong>{{ $invoice->invoice_number }}</strong></div>
+                        <div class="muted" style="font-size:10px">Ref. Invoice: {{ $invoice->invoice_number }}</div>
+                    @else
+                        <div class="muted">{{ $invoice->invoice_number }}</div>
+                    @endif
                     <div style="margin-top:6px">
-                        <span class="badge {{ $invoice->status->value === 'paid' ? 'paid' : 'other' }}">{{ $invoice->status->label() }}</span>
+                        <span class="badge {{ $invoice->status->value === 'paid' ? 'paid' : 'other' }}">{{ $statusLabelId }}</span>
                     </div>
                 </td>
             </tr>
         </table>
+
+        @if ($isReceipt)
+            {{-- v0.13.5.5.1 — garis hijau tipis + kalimat jumlah diterima (khas
+                 kuitansi). Terbilang Indonesia TIDAK ditambahkan: Number::spell
+                 locale 'id' mengembalikan bahasa Inggris di ICU/environment ini,
+                 jadi dilewati sesuai instruksi (tanpa hand-roll). --}}
+            <div class="receipt-rule"></div>
+            <div class="receipt-amount">Telah diterima pembayaran sebesar <strong>{{ 'Rp '.number_format((float) $invoice->grand_total, 0, ',', '.') }}</strong>.</div>
+        @endif
 
         <table class="parties">
             <tr>
@@ -111,16 +141,18 @@
                 </td>
                 <td>
                     <table class="meta">
-                        <tr><td>Tanggal terbit</td><td>{{ $invoice->generated_at?->translatedFormat('d M Y') }}</td></tr>
-                        @unless ($isReceipt)
-                            <tr><td>Jatuh tempo</td><td>{{ $invoice->due_date?->translatedFormat('d M Y') }}</td></tr>
-                        @endunless
-                        <tr><td>Periode</td><td>{{ $invoice->period_start?->translatedFormat('d M Y') }} – {{ $invoice->period_end?->translatedFormat('d M Y') }}</td></tr>
-                        @if ($invoice->paid_at)
-                            <tr><td>{{ $isReceipt ? 'Tanggal bayar' : 'Dibayar' }}</td><td>{{ $invoice->paid_at?->translatedFormat('d M Y H:i') }}</td></tr>
-                        @endif
                         @if ($isReceipt)
+                            {{-- Kuitansi: ringkas pembayaran. TANPA "Tanggal terbit" & "Jatuh tempo". --}}
+                            <tr><td>Tanggal bayar</td><td>{{ $invoice->paid_at?->translatedFormat('d M Y H:i') ?? '—' }}</td></tr>
                             <tr><td>Metode bayar</td><td>{{ $paymentMethod ?? 'Tidak tercatat' }}</td></tr>
+                            <tr><td>Periode</td><td>{{ $invoice->period_start?->translatedFormat('d M Y') }} – {{ $invoice->period_end?->translatedFormat('d M Y') }}</td></tr>
+                        @else
+                            <tr><td>Tanggal terbit</td><td>{{ $invoice->generated_at?->translatedFormat('d M Y') }}</td></tr>
+                            <tr><td>Jatuh tempo</td><td>{{ $invoice->due_date?->translatedFormat('d M Y') }}</td></tr>
+                            <tr><td>Periode</td><td>{{ $invoice->period_start?->translatedFormat('d M Y') }} – {{ $invoice->period_end?->translatedFormat('d M Y') }}</td></tr>
+                            @if ($invoice->paid_at)
+                                <tr><td>Dibayar</td><td>{{ $invoice->paid_at?->translatedFormat('d M Y H:i') }}</td></tr>
+                            @endif
                         @endif
                     </table>
                 </td>

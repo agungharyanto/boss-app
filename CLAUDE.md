@@ -9149,7 +9149,7 @@ Regresi penuh branch `v0.23.8-ztp-dynamic-config` (27 commit sejak `main`, NOL m
 (session.upload_progress) keduanya `-` terhadap HEAD (patch-equivalent, sudah ada di branch ini) — saat
 branch infra di-merge ke `main`, keduanya duplikat/no-op, bukan konflik.
 
-## Form Web Tutup WO — validasi tanda tangan tanpa GD/Imagick (v0.13.4.3.1, branch `v0.13.4.3.1-tutup-wo-web`, menunggu verifikasi manual Agung)
+## Form Web Tutup WO — validasi tanda tangan tanpa GD/Imagick (v0.13.4.3.1 — SELESAI, merged `develop`→`main`, tag `v0.13.4.3.1`)
 
 Form publik signed-link `work-orders.close.*` (`WorkOrderCloseController`/`WorkOrderCloseService`) — teknisi
 pengklaim menutup WO lewat link WA (var `{close_link}` di template `WorkOrderActivationReady` yang ada, BUKAN
@@ -9298,7 +9298,7 @@ lihat blok STATUS JUJUR di awal section ini. Saat nanti BENAR-BENAR mau uji tuli
 parameter OMCI ada (lihat "BELUM TERBUKTI" di atas) + ONU cadangan di PON uji + route event gagal diarahkan
 ke grup uji + aturan keselamatan onu-id dipatuhi.
 
-## WhatsApp Kirim Media — gambar + PDF (v0.13.5.1)
+## WhatsApp Kirim Media — gambar + PDF (v0.13.5.1 — SELESAI, merged `develop`→`main`, tag `v0.13.5.1`)
 
 Kemampuan kirim media generik (gambar caption + dokumen PDF) ke nomor pribadi DAN grup. Dipakai nanti oleh
 v0.13.4.3.2 (grup "WO selesai" + 6 foto) dan v0.13.5.2 (PDF invoice). **DIRILIS 2026-11-03 dini hari WIB**
@@ -10319,6 +10319,66 @@ keuangan akan di-RESET sebelum go-live**; cara migrasi dari MixRadius dibahas se
 keputusan.** Tercemar data uji yang DIKETAHUI: baris **`payments` id=2** (invoice NYATA **1287** =
 `INV/DIRECT/2026/10/000165`, pelanggan **Sri Rohmah**) ditandai Lunas keliru saat uji v0.13.5.5 — **JANGAN
 dipulihkan satu per satu**, cukup masuk daftar reset.
+
+## v0.13.0 Cluster Closure — WhatsApp 2-Arah (regresi penuh + penutupan, v0.13.7, 2026-11-21)
+
+**Cluster v0.13.0 "WhatsApp 2-Arah" DITUTUP (Closed 2026-11-21).** Penutupan dilabeli **v0.13.7**, mengikuti
+konvensi cluster v0.23 (lihat "v0.23.0 Cluster Closure" di atas): sub-versi penutup adalah act DOCS +
+regresi penuh + merge `develop`→`main` berjudul "PENUTUPAN cluster v0.13.0", **TANPA tag penutupan** (v0.23
+precedent: `v0.23.9` penutupan TIDAK di-tag; tag terakhir cluster = sub-versi fungsional terakhir). **Tag
+terakhir cluster 13 = `v0.13.6`** (tak ada tag baru dibuat untuk penutupan ini — tidak mengarang format
+baru).
+
+**Regresi penuh (read-only terhadap server, container throwaway dari image boss-app, develop `cf32c34`,
+www-data, sqlite in-memory, `-d memory_limit=512M`):** **2764 test / 8421 asersi — 0 gagal, 0 error**
+(~24:58 mnt, 9 PHPUnit Deprecation notice non-gagal). **Nol kegagalan kategori (a) maupun (b).** Test yang
+dulu rapuh LOLOS semua di sini karena dijalankan sebagai www-data **dan** koneksi `radius` tersedia di
+throwaway (compose env): `test_web_ownership_normalize_is_a_noop_when_not_root` (www-data), CustomerShow
+(radius ada), `FrontendBuildTest` (sudah difix v0.13.4.1.1 — inline `Alpine.data`), `WhatsappIncomingMessageWebhookTest`
+fallback (sudah dibuat deterministik v0.13.6 D9). (`ProvisioningSsidTest` v0.23 TIDAK ada di develop —
+cluster ZTP belum di-merge.) **Pint `--test`**: 1293 file, **3 isu pra-ada** (`LegacyDeviceMatcherService.php`,
+`bootstrap/providers.php`, `CpeDeviceDatatableControllerTest.php` — modul Network/bootstrap, BUKAN cluster
+13) → backlog "Pint cleanup di develop", tidak diformat massal. **Konsistensi**: 22 tag `v0.13.*` semua
+ANOTASI + ancestor `main`; branch topik cluster 13 semua ter-merge (sebagian hanya lokal — konvensi proyek
+tak hapus branch); 2 header CLAUDE.md stale diperbaiki di penutupan ini (`v0.13.4.3.1` dulu "menunggu
+verifikasi Agung"; `v0.13.5.1` tanpa penanda SELESAI — keduanya genuinely selesai + ter-tag).
+
+**Isi cluster (jujur) — WhatsApp 2-Arah + Billing komunikasi:**
+- **2-Arah inbound + state machine** (v0.13.0/.1/.2/.3): listener pesan masuk (gateway Go/whatsmeow), state
+  machine percakapan, auth teknisi + fallback.
+- **Klaim/Aktivasi/Tutup WO via signed-link** (v0.13.4.1–.5): klaim WO, form aktivasi, form tutup WO (S&K
+  dinamis, tanda tangan tanpa GD/Imagick), halaman sadar-status, grup WA "WO selesai" + 6 foto, multi-grup
+  notifikasi + routing per kategori.
+- **Pemicu OMCI/ZTP saat aktivasi — DORMANT** (v0.13.4.2.3): job + discovery + pengaman + status + saklar
+  terbukti; **provisioning yang MENULIS ke OLT BELUM terbukti** (kedua gerbang OFF).
+- **Notifikasi pelanggan + Mode Uji** (v0.13.5.1.2): saklar per-tenant `customer_auto_notify_enabled`
+  (penegak di `buildAndQueue`) — tenant 1 OFF (duplikat MixRadius).
+- **Kirim PDF invoice** (v0.13.5.2/.3/.3.1): render PDF server-side (dompdf+GD), kirim MANUAL + Mode Uji,
+  kirim OTOMATIS (sweep terjadwal `*/15`, cap/jendela/dedup).
+- **Terima media WhatsApp masuk** (v0.13.6): foto/PDF/audio/video/stiker 1:1, re-validasi byte + EXIF-strip
+  GD, disk privat, reconcile `*/5` + prune 03:30.
+- **Rekening multi-bank + metode bayar + "Cara Pembayaran"** (v0.13.5.4).
+- **Bukti Pembayaran — kuitansi PDF** (v0.13.5.5/.5.1): kuitansi dibedakan dari invoice, tombol per status,
+  watermark per status, badge Indonesia; markPaid catat `payments` + berhenti kirim WA otomatis.
+
+**BELUM terbukti / DITUNDA (bukan bagian cluster 13 yang tuntas):**
+- **ZTP tulis ke OLT** (jalur OMCI ZTE C300) — belum pernah menulis; wiring parameter OMCI + uji hardware =
+  **sub-versi lanjutan v0.23.10** (bukan v0.13).
+- **T5 — kirim kuitansi otomatis saat lunas** — PINDAH ke **daftar kesiapan go-live** (bukan cluster 13;
+  menunggu keputusan Agung; mekanisme manual sudah ada).
+- **Terbilang rupiah di kuitansi** (`Number::spell` locale id → Inggris; butuh solusi tanpa dependensi
+  sembarangan).
+- **Opt-out notifikasi per pelanggan** (belum ada mekanisme).
+- **Transkripsi voice note** (di luar scope).
+- **Catat penolakan media di DB** (saat ini penolakan pre-download hanya di log gateway).
+- **Biaya sewa perangkat** → **v0.27.0**.
+
+**CATATAN GO-LIVE (butir tetap, lintas-sprint sampai reset):** target go-live **awal 2027**; **data keuangan
+akan di-RESET sebelum go-live**; cara migrasi dari MixRadius dibahas **setelah semua sprint selesai**.
+Sampai reset, laporan Payment Reconciliation / dashboard memuat DATA UJI dan **tidak boleh dipakai untuk
+keputusan**. Tercemar data uji yang DIKETAHUI: baris `payments` id=2 (invoice nyata 1287 =
+`INV/DIRECT/2026/10/000165`, pelanggan Sri Rohmah) keliru Lunas saat uji v0.13.5.5 — JANGAN dipulihkan
+satuan, cukup masuk daftar reset.
 
 ## Architecture
 

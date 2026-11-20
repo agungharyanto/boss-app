@@ -10117,9 +10117,10 @@ pelanggan/invoice **TIDAK disentuh**. Backup pre-cleanup: `/opt/boss-backups/pre
   v0.27.0 biaya sewa perangkat; loop `chown storage/app/private` di `docker/php/entrypoint.sh` sudah aktif
   (v0.13.5.3.1) → cache PDF jalur scheduler/worker ternormalkan ke www-data.
 
-## Bukti Pembayaran — Kuitansi PDF (v0.13.5.5, cabang `v0.13.5.5-bukti-pembayaran`, BELUM rilis/merge/tag)
+## Bukti Pembayaran — Kuitansi PDF (v0.13.5.5 — SELESAI, merged `develop`→`main`, tag `v0.13.5.5`)
 
-**T1–T4 SELESAI di cabang (BELUM rilis/merge/tag).** Basis develop `f42d519`, dikerjakan di git worktree.
+**T1–T4 SELESAI + stempel LUNAS direvisi jadi watermark + DIUJI DI SERVER NYATA (uji Agung) + merged/tag.**
+Basis develop `f42d519`, dikerjakan di git worktree.
 Keputusan final Agung: nomor kuitansi = `invoice_number` (tanpa sequence baru), event = `PaymentReceived`
 (TIDAK buat `WhatsappEventType` baru), kirim MANUAL saja (**T5 otomatis/sweep TIDAK dibangun**), biaya
 perangkat → **v0.27.0**, parsial/refund di luar lingkup. **T3 diselesaikan via Opsi 2** (markPaid berhenti
@@ -10203,10 +10204,49 @@ Pint clean (25 file). Dua kegagalan di throwaway yang BUKAN regresi:
 `InvoicePdfTest::test_web_ownership_normalize_is_a_noop_when_not_root` (container jalan sebagai root; lolos di
 CI www-data) dan `CustomerShowInvoiceSectionTest` (koneksi DB `radius` tak tersedia saat render blade — tak
 menyentuh invoice/kuitansi) — keduanya keterbatasan harness terdokumentasi.
-**BELUM diuji di server nyata; BELUM rilis; BELUM merge/tag.** Rilis nanti (Laravel-only, aditif):
-`php artisan migrate` (1 migrasi payments) + `db:seed --class=WhatsappMessageTemplateSeeder` (idempoten) +
-`optimize:clear` + `queue:restart`; TANPA `.env`/rebuild/logout. Agung mengaktifkan template
-`payment_received` tenant 1 saat rilis.
+
+**REVISI stempel LUNAS (2026-11-20) — watermark DIAGONAL TRANSPARAN di BELAKANG isi.** Stempel kotak kecil
+`.paid-stamp` lama (inline, menggeser alur) diganti di `billing/invoice-pdf.blade.php` (satu tempat, kuitansi
+& invoice) jadi watermark: `<div class="watermark">LUNAS</div>` sebagai anak pertama `<body>`,
+`position: fixed` (di luar alur → tak menggeser layout / tak menambah halaman), `transform: rotate(-32deg)` +
+`transform-origin: 50% 50%`, `opacity: 0.15` hijau `#16a34a` besar; `.sheet` diberi `z-index: 1` & watermark
+`z-index: 0` → teks/tabel/angka ter-paint di ATAS watermark (benar-benar di belakang, bukan sekadar tembus).
+Hanya saat `status === 'paid'` (kuitansi selalu Paid). dompdf 3.x mendukung fixed+rotate+opacity+z-index
+penuh — diverifikasi via render NYATA ke PNG (pdftoppm) lalu dilihat: miring, transparan, isi terbaca,
+`pdfinfo` 1 halaman, kuitansi 1291 & invoice Paid #21 benar. `invoice-print-standard.blade.php` (browser-print)
+TIDAK disentuh (di luar scope) — masih pakai `.paid-stamp` lama. Catatan test: komentar CSS tak boleh memuat
+kata "LUNAS"/menyalahi `assertStringNotContainsString`; dicek via DIV `<div class="watermark"`, bukan kata
+telanjang "watermark" (aturan `.watermark {` memang selalu ada di `<style>`).
+
+**TERBUKTI DI SERVER NYATA (uji Agung, 2026-11-20) + merged/tag.** Dirilis Laravel-only aditif ke server
+(`php artisan migrate` 1 migrasi payments `2026_11_20_120000` → `db:seed --class=WhatsappMessageTemplateSeeder`
+idempoten → `optimize:clear` + `queue:restart`; TANPA `.env`/rebuild/logout). Agung mengaktifkan template
+`payment_received` tenant 1. Uji nyata via UI (semua dibersihkan tuntas setelahnya, lihat TAHAP B):
+- **T4 "Tandai Lunas"**: manual UI menulis SATU baris `payments` LUNAS (`method=manual_transfer`,
+  `amount=grand_total`, `recorded_by`=admin, `company_bank_account_id`=rekening default, `channel_type`=null)
+  pada invoice TEST (1291) DAN pada satu invoice NYATA (1287/customer 536) — keduanya bekerja; invoice jadi
+  Paid + `paid_at` terisi.
+- **T3 kirim kuitansi (Mode Uji)**: TEPAT SATU `whatsapp_message_logs` (`event=payment_received`,
+  `is_test=true`, `sent_by_user_id`=admin, lampiran `kuitansi-...pdf`, `status=sent`) HANYA ke nomor Agung
+  `6287884374939`; caption berprefiks `[UJI kuitansi untuk: ...]`, `{paid_date}` ter-render ("pada 20/11/2026"),
+  nama perusahaan benar ("TOKEN WIFI"); pelanggan dummy tak menerima apa pun; **nol log non-uji**.
+- **markPaid TIDAK LAGI kirim WA otomatis** (T3 Opsi 2) — dikonfirmasi: kuitansi hanya keluar lewat tombol
+  manual. **Anomali `ReconciliationReport` = Paid TANPA catatan pembayaran** (Perpanjang/migrasi), bukan lagi
+  "Paid tanpa WA".
+- **T5 kirim kuitansi OTOMATIS/sweep DITUNDA** (belum dibangun). **Biaya sewa perangkat → v0.27.0**
+  (di luar lingkup). Parsial/refund di luar lingkup.
+
+Saklar akhir tenant 1 (dibiarkan apa adanya, menunggu keputusan go-live Agung): **Mode Uji ON**
+(→`6287884374939`), **kirim otomatis OFF**, **saklar pelanggan OFF**; template `payment_received` **AKTIF**,
+`invoice_issued` (manual) AKTIF, tiga template pelanggan lain (`invoice_due_reminder`/`customer_registered`/
+`customer_suspended_reminder`) **nonaktif**. Backup pra-cleanup uji:
+`/opt/boss-backups/pre-v13555-cleanup-2026-11-20.sql`.
+
+**PELAJARAN (governance, pakai ulang untuk uji rilis invoice/pembayaran berikutnya):** uji Agung lewat UI
+bisa menyentuh **data nyata**, bukan hanya entitas TEST — di sini satu invoice NYATA (1287/customer 536)
+ikut ditandai Lunas (baris `payments` id=2 nyata). Saat cleanup, baris itu **sengaja DIPERTAHANKAN** (data
+nyata) sehingga `payments` total pasca-cleanup = **1**, bukan 0. Selalu bedakan "entitas TEST yang dibuat
+untuk uji" dari "aksi uji yang jatuh pada baris nyata"; hapus hanya yang pertama, laporkan yang kedua.
 
 ## Architecture
 

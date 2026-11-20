@@ -111,7 +111,11 @@ class InvoiceReceiptPdfTest extends TestCase
         ])->render();
 
         $this->assertStringContainsString('KUITANSI PEMBAYARAN', $html);
+        // v0.13.5.5 revisi — stempel LUNAS = watermark diagonal transparan.
         $this->assertStringContainsString('LUNAS', $html);
+        $this->assertStringContainsString('class="watermark"', $html);
+        $this->assertStringContainsString('transform: rotate(', $html);
+        $this->assertStringNotContainsString('paid-stamp', $html);
         $this->assertStringContainsString('INV/TEST/2026/11/000055', $html);
         $this->assertStringContainsString('Metode bayar', $html);
         $this->assertStringContainsString('Tidak tercatat', $html);

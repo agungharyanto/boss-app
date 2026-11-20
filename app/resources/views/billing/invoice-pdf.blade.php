@@ -57,6 +57,14 @@
             transform: rotate(-32deg);
             transform-origin: 50% 50%;
         }
+        /* v0.13.5.5.1 tambahan — watermark INVOICE per status (mekanisme sama
+           dengan .watermark kuitansi; hanya override warna/opacity/ukuran).
+           Opacity <= LUNAS (0.15) supaya kotak instruksi bayar/nomor rekening,
+           tabel item, total & alamat tetap TERBACA di HP. Teks lebih panjang →
+           font lebih kecil + letter-spacing lebih rapat agar tetap miring rapi,
+           tidak melebar keluar halaman & tidak menambah halaman. */
+        .watermark.wm-belum { color: #d97706; opacity: 0.12; font-size: 76px; letter-spacing: 6px; }
+        .watermark.wm-batal { color: #6b7280; opacity: 0.12; font-size: 90px; letter-spacing: 10px; }
         /* v0.13.5.5.1 — mode KUITANSI dibuat jelas berbeda dari invoice. */
         .receipt-title { font-size: 28px; color: #166534; }
         .receipt-rule { border-top: 3px solid #16a34a; margin: 2px 0 12px; }
@@ -73,12 +81,26 @@
     {{-- v0.13.5.5 — mode kuitansi (receipt). Default false supaya pemanggil
          lama (invoice biasa) tak berubah. --}}
     @php $isReceipt = ($receipt ?? false); @endphp
-    {{-- v0.13.5.5.1 — watermark "LUNAS" diagonal transparan HANYA pada KUITANSI.
-         Invoice biasa (termasuk yang berstatus Paid) TIDAK memakai watermark —
-         cukup badge "LUNAS". Di luar alur (.sheet) & z-index di bawahnya →
-         tidak menggeser layout / menambah halaman, isi tetap terbaca. --}}
+    {{-- v0.13.5.5.1 — watermark diagonal transparan di BELAKANG isi (position:fixed,
+         z-index 0 di bawah .sheet) → tak menggeser layout / tak menambah halaman,
+         isi tetap terbaca. Satu tempat bersama (tak diduplikasi):
+           • KUITANSI  → "LUNAS" hijau (base .watermark, opacity 0.15).
+           • Invoice Pending/Overdue → "BELUM LUNAS" kuning redup (selaras badge).
+           • Invoice Cancelled → "DIBATALKAN" abu-abu.
+           • Invoice Draft & Paid → TANPA watermark (Paid cukup badge "Lunas"). --}}
     @if ($isReceipt)
         <div class="watermark">LUNAS</div>
+    @else
+        @php
+            $invoiceWatermark = match ($invoice->status->value) {
+                'pending', 'overdue' => ['text' => 'BELUM LUNAS', 'class' => 'wm-belum'],
+                'cancelled' => ['text' => 'DIBATALKAN', 'class' => 'wm-batal'],
+                default => null, // draft & paid → tanpa watermark
+            };
+        @endphp
+        @if ($invoiceWatermark !== null)
+            <div class="watermark {{ $invoiceWatermark['class'] }}">{{ $invoiceWatermark['text'] }}</div>
+        @endif
     @endif
     <div class="sheet">
         {{-- Badge status dalam bahasa Indonesia (lokal di view; enum label()

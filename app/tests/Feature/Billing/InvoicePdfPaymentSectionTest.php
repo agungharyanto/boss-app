@@ -61,6 +61,9 @@ class InvoicePdfPaymentSectionTest extends TestCase
 
         $this->assertStringContainsString('Cara Pembayaran', $html);
         $this->assertStringContainsString('BCA 1234567890 a.n. PT Uji', $html);
+        // v0.13.5.5.1 — watermark "BELUM LUNAS" (kuning) hidup berdampingan dengan
+        // kotak Cara Pembayaran; opacity rendah → keduanya tetap terbaca.
+        $this->assertStringContainsString('<div class="watermark wm-belum">BELUM LUNAS</div>', $html);
     }
 
     public function test_section_hidden_for_paid_invoice(): void
@@ -88,6 +91,8 @@ class InvoicePdfPaymentSectionTest extends TestCase
         ])->render();
 
         $this->assertStringNotContainsString('Cara Pembayaran', $html);
+        // v0.13.5.5.1 — invoice Cancelled: watermark "DIBATALKAN" (abu).
+        $this->assertStringContainsString('<div class="watermark wm-batal">DIBATALKAN</div>', $html);
     }
 
     public function test_render_produces_pdf_and_never_calls_xendit(): void

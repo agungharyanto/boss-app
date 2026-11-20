@@ -137,36 +137,48 @@ class InvoicePdfTest extends TestCase
     }
 
     /**
-     * v0.13.5.5.1 — watermark "LUNAS" diagonal HANYA pada KUITANSI. Invoice biasa
-     * (termasuk yang berstatus Paid) TIDAK memakai watermark — cukup badge "Lunas"
-     * (Indonesia). Pending & Cancelled jelas tanpa watermark, badge Indonesia.
+     * v0.13.5.5.1 tambahan — watermark diagonal transparan per konteks:
+     *   KUITANSI → "LUNAS" hijau; Invoice Pending/Overdue → "BELUM LUNAS" kuning;
+     *   Invoice Cancelled → "DIBATALKAN" abu; Invoice Draft & Paid → TANPA watermark.
+     * Semua miring (rotate) dan di belakang isi (badge Indonesia, bukan Inggris).
      */
-    public function test_watermark_only_on_receipt_not_on_invoice_even_when_paid(): void
+    public function test_watermark_per_status_and_receipt(): void
     {
         [$paid] = $this->invoice(['status' => InvoiceStatus::Paid->value, 'paid_at' => now()]);
         [$pending] = $this->invoice(['invoice_number' => 'INV/TEST/2026/11/000002']);
+        [$overdue] = $this->invoice(['invoice_number' => 'INV/TEST/2026/11/000004', 'status' => InvoiceStatus::Overdue->value]);
         [$cancelled] = $this->invoice(['invoice_number' => 'INV/TEST/2026/11/000003', 'status' => InvoiceStatus::Cancelled->value]);
+        [$draft] = $this->invoice(['invoice_number' => 'INV/TEST/2026/11/000005', 'status' => InvoiceStatus::Draft->value]);
 
-        // KUITANSI (mode receipt) → ADA watermark diagonal transparan.
+        // KUITANSI (mode receipt) → watermark "LUNAS" (base, hijau opacity 0.15).
         $receiptHtml = $this->receiptViewHtml($paid);
         $this->assertStringContainsString('<div class="watermark">LUNAS</div>', $receiptHtml);
         $this->assertStringContainsString('transform: rotate(', $receiptHtml);
         $this->assertStringContainsString('opacity: 0.15', $receiptHtml);
         $this->assertStringNotContainsString('paid-stamp', $receiptHtml);
 
-        // INVOICE Paid (mode invoice) → TANPA watermark; badge "Lunas" Indonesia.
+        // INVOICE Paid → TANPA watermark; badge "Lunas" (Indonesia).
         $paidHtml = $this->pdfViewHtml($paid);
         $this->assertStringNotContainsString('<div class="watermark"', $paidHtml);
         $this->assertStringContainsString('>Lunas<', $paidHtml);
         $this->assertStringNotContainsString('>Paid<', $paidHtml);
 
-        // Pending & Cancelled: tanpa watermark, badge Indonesia.
+        // INVOICE Draft → TANPA watermark.
+        $this->assertStringNotContainsString('<div class="watermark"', $this->pdfViewHtml($draft));
+
+        // INVOICE Pending → watermark "BELUM LUNAS" (kuning, wm-belum).
         $pendingHtml = $this->pdfViewHtml($pending);
-        $this->assertStringNotContainsString('<div class="watermark"', $pendingHtml);
+        $this->assertStringContainsString('<div class="watermark wm-belum">BELUM LUNAS</div>', $pendingHtml);
         $this->assertStringContainsString('>Belum Bayar<', $pendingHtml);
 
+        // INVOICE Overdue → watermark "BELUM LUNAS" juga.
+        $overdueHtml = $this->pdfViewHtml($overdue);
+        $this->assertStringContainsString('<div class="watermark wm-belum">BELUM LUNAS</div>', $overdueHtml);
+        $this->assertStringContainsString('>Terlambat<', $overdueHtml);
+
+        // INVOICE Cancelled → watermark "DIBATALKAN" (abu, wm-batal).
         $cancelledHtml = $this->pdfViewHtml($cancelled);
-        $this->assertStringNotContainsString('<div class="watermark"', $cancelledHtml);
+        $this->assertStringContainsString('<div class="watermark wm-batal">DIBATALKAN</div>', $cancelledHtml);
         $this->assertStringContainsString('>Dibatalkan<', $cancelledHtml);
     }
 

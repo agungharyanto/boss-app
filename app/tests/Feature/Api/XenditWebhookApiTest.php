@@ -3,13 +3,17 @@
 namespace Tests\Feature\Api;
 
 use App\Enums\InvoiceStatus;
+use App\Enums\PaymentMethod;
+use App\Enums\PaymentStatus;
 use App\Models\Customer;
 use App\Models\Invoice;
+use App\Models\Payment;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\InvoiceService;
 use App\Services\Payment\PaymentGatewaySettingsService;
 use App\Services\SubscriptionService;
+use App\Support\Billing\ManualPaymentInput;
 use Database\Seeders\PaymentGatewayChannelSeeder;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -85,6 +89,82 @@ class XenditWebhookApiTest extends TestCase
         $response->assertJsonPath('data.result', 'applied');
         $this->assertEquals(InvoiceStatus::Paid, $invoice->fresh()->status);
         $this->assertDatabaseHas('payment_webhook_logs', ['xendit_event_id' => 'evt_1', 'processing_result' => 'applied']);
+    }
+
+    /**
+     * v0.13.5.5 (T4) — webhook menandai method=payment_gateway pada baris
+     * payments Xendit yang SUDAH ada (lewat createPaymentFor), bukan membuat
+     * baris manual baru.
+     */
+    public function test_webhook_tags_existing_payment_row_with_payment_gateway_method(): void
+    {
+        Http::fake(['api.xendit.co/*' => Http::response(['id' => 'xnd_ref_tag'], 200)]);
+
+        $invoice = $this->pendingInvoice();
+        $this->postJson("/api/v1/invoices/{$invoice->id}/payments", ['channel_type' => 'BRI_VA'])->assertCreated();
+
+        $this->postJson('/api/v1/webhooks/xendit', [
+            'id' => 'xnd_ref_tag',
+            'external_id' => $invoice->invoice_number,
+            'amount' => (float) $invoice->grand_total,
+        ], ['x-callback-token' => 'test-token-abc'])->assertOk()->assertJsonPath('data.result', 'applied');
+
+        $this->assertDatabaseHas('payments', [
+            'invoice_id' => $invoice->id,
+            'xendit_reference_id' => 'xnd_ref_tag',
+            'method' => 'payment_gateway',
+            'status' => 'paid',
+        ]);
+        // Tidak membuat baris manual terpisah — tetap satu baris payments.
+        $this->assertDatabaseCount('payments', 1);
+    }
+
+    /**
+     * v0.13.5.5 (T4) — resolvePaymentFor TIDAK memilih baris manual
+     * (xendit_reference_id null); webhook tidak mengubah/menandai ulang baris
+     * manual LUNAS yang sudah ada.
+     */
+    public function test_webhook_does_not_mutate_a_pre_existing_manual_paid_row(): void
+    {
+        $invoice = $this->pendingInvoice();
+
+        $manual = Payment::create([
+            'tenant_id' => $invoice->tenant_id,
+            'invoice_id' => $invoice->id,
+            'xendit_reference_id' => null,
+            'channel_type' => null,
+            'method' => PaymentMethod::ManualTransfer,
+            'amount' => $invoice->grand_total,
+            'status' => PaymentStatus::Paid->value,
+            'paid_at' => now(),
+        ]);
+
+        $this->postJson('/api/v1/webhooks/xendit', [
+            'id' => 'evt_manual_guard',
+            'external_id' => $invoice->invoice_number,
+            'amount' => (float) $invoice->grand_total,
+        ], ['x-callback-token' => 'test-token-abc'])->assertOk()->assertJsonPath('data.result', 'applied');
+
+        $manual->refresh();
+        // Tidak dipilih resolvePaymentFor (ref tak cocok) → metode tetap manual,
+        // bukan ditimpa payment_gateway. Tidak ada baris payments baru.
+        $this->assertSame(PaymentMethod::ManualTransfer, $manual->method);
+        $this->assertDatabaseCount('payments', 1);
+    }
+
+    public function test_payment_index_lists_manual_row_without_leaking_a_gateway_label(): void
+    {
+        $invoice = $this->pendingInvoice(); // actingAs admin (lihat helper)
+
+        app(InvoiceService::class)->markPaid($invoice, new ManualPaymentInput(
+            method: PaymentMethod::ManualTransfer,
+            recordedBy: auth()->id(),
+        ));
+
+        $res = $this->getJson("/api/v1/invoices/{$invoice->id}/payments")->assertOk();
+        $res->assertJsonPath('data.0.method', 'manual_transfer');
+        $res->assertJsonPath('data.0.channel_type', null);
+        $res->assertJsonPath('data.0.channel_type_label', '');
     }
 
     public function test_webhook_with_invalid_signature_is_rejected_and_does_not_touch_invoice(): void

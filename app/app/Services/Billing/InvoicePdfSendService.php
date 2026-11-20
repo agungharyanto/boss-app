@@ -164,6 +164,122 @@ class InvoicePdfSendService
     }
 
     /**
+     * v0.13.5.5 (T3) — kirim (atau kirim ulang) KUITANSI pembayaran (PDF) ke
+     * pelanggan secara MANUAL. Kembaran sendManually(), beda di: HANYA invoice
+     * LUNAS, event WhatsApp = PaymentReceived (template "Pembayaran Diterima"),
+     * lampiran = PDF kuitansi (storeReceipt). Jalur pengiriman tetap lewat
+     * buildAndQueue() dengan InvoiceSendContext (Mode Uji, override penerima,
+     * is_test, catat pelaku) — satu-satunya jalur yang memakai event
+     * PaymentReceived (markPaid TIDAK lagi memakainya sejak T3).
+     */
+    public function sendReceiptManually(Invoice $invoice, User $actor, bool $resend = false): WhatsappMessageLog
+    {
+        // 1. Izin.
+        if (Gate::forUser($actor)->denies('manage', Invoice::class)) {
+            throw new AuthorizationException('Anda tidak punya izin mengirim kuitansi.');
+        }
+
+        // 2. Status: kuitansi HANYA untuk invoice LUNAS.
+        if ($invoice->status !== InvoiceStatus::Paid) {
+            throw new InvoicePdfSendException(
+                "Kuitansi hanya untuk invoice berstatus Lunas (saat ini {$invoice->status->label()})."
+            );
+        }
+
+        // 3. Pelanggan + nomor valid.
+        $customer = $invoice->customer;
+        if ($customer === null) {
+            throw new InvoicePdfSendException('Invoice ini tidak terkait pelanggan — tidak bisa dikirim.');
+        }
+
+        $customerPhone = WhatsappPhone::normalize($customer->phone_number);
+        if (! $this->isValidWaNumber($customerPhone)) {
+            throw new InvoicePdfSendException('Nomor WhatsApp pelanggan kosong atau tidak valid.');
+        }
+
+        // 4. Template PaymentReceived aktif.
+        $template = $this->templateService->resolve(WhatsappEventType::PaymentReceived, $customer->tenant_id, $customer->reseller_id);
+        if ($template === null) {
+            throw new InvoicePdfSendException(
+                "Template WhatsApp 'Pembayaran Diterima' tidak aktif atau belum ada. Aktifkan dulu di menu Template WA."
+            );
+        }
+
+        // 5. Sesi tujuan connected.
+        $session = $this->sessionForCustomer($invoice);
+        $sessionKey = WhatsappSession::sessionKeyFor($customer->reseller_id);
+        if ($session === null || $session->status !== WhatsappSessionStatus::Connected) {
+            $statusText = $session?->status?->value ?? 'belum ada';
+            throw new InvoicePdfSendException(
+                "Sesi WhatsApp ($sessionKey) belum terhubung (status: {$statusText}). Hubungkan dulu di Konfig WA Gateway."
+            );
+        }
+
+        // 6. Anti-spam kirim ulang (keyed ke event PaymentReceived, non-uji).
+        $lastSend = $this->lastSendFor($invoice, includeTest: false, event: WhatsappEventType::PaymentReceived);
+        if ($lastSend !== null) {
+            if (! $resend) {
+                $when = $lastSend->created_at?->translatedFormat('d M Y H:i') ?? 'sebelumnya';
+                throw new InvoicePdfSendException(
+                    "Kuitansi invoice ini sudah pernah dikirim ($when). Gunakan Kirim Ulang bila memang perlu."
+                );
+            }
+
+            $remaining = $this->resendRemainingMinutes($lastSend->created_at);
+            if ($remaining > 0) {
+                throw new InvoicePdfSendException(
+                    "Terlalu cepat. Tunggu {$remaining} menit sebelum mengirim ulang kuitansi ini."
+                );
+            }
+        }
+
+        // 7. Mode Uji per tenant — penerima diganti ke nomor uji.
+        $settings = WorkOrderDispatchSettings::forTenant($customer->tenant_id);
+        $recipientOverride = null;
+        $isTest = false;
+        $captionPrefix = '';
+
+        if ($settings->invoice_pdf_test_mode_enabled) {
+            $testRecipient = WhatsappPhone::normalize($settings->invoice_pdf_test_recipient);
+            if (! $this->isValidWaNumber($testRecipient)) {
+                throw new InvoicePdfSendException(
+                    'Mode Uji aktif tapi nomor uji belum diisi/valid. Isi nomor uji di Konfig WA Gateway.'
+                );
+            }
+
+            $recipientOverride = $testRecipient;
+            $isTest = true;
+            $captionPrefix = "[UJI kuitansi untuk: {$customer->name} - {$invoice->invoice_number}]".PHP_EOL;
+        }
+
+        // 8. Render kuitansi fresh -> store -> lampiran.
+        $this->pdfService->storeReceipt($invoice);
+        $attachment = WhatsappAttachment::fromInvoiceReceiptPdf($invoice, $invoice->tenant_id);
+
+        // 9. Kirim lewat jalur pelanggan dengan context.
+        $context = new InvoiceSendContext(
+            recipientOverride: $recipientOverride,
+            isTest: $isTest,
+            captionPrefix: $captionPrefix,
+            sentByUserId: $actor->id,
+        );
+
+        $log = $this->gateway->buildAndQueue(
+            WhatsappEventType::PaymentReceived,
+            $customer,
+            $invoice,
+            $attachment,
+            $context,
+        );
+
+        if ($log === null) {
+            throw new InvoicePdfSendException('Gagal mengantrekan pesan kuitansi.');
+        }
+
+        return $log;
+    }
+
+    /**
      * Data untuk modal konfirmasi UI — dihitung dengan logika yang SAMA dengan
      * sendManually() supaya banner "nomor tujuan" cocok dengan yang benar-benar
      * dipakai service.
@@ -217,6 +333,48 @@ class InvoicePdfSendService
         ];
     }
 
+    /**
+     * v0.13.5.5 (T3) — data modal konfirmasi "Kirim Kuitansi". Mirror
+     * previewFor() tapi untuk event PaymentReceived + hanya sendable bila LUNAS.
+     *
+     * @return array<string, mixed>
+     */
+    public function previewReceiptFor(Invoice $invoice): array
+    {
+        $customer = $invoice->customer;
+        $customerPhone = $customer !== null ? WhatsappPhone::normalize($customer->phone_number) : '';
+
+        $settings = WorkOrderDispatchSettings::query()
+            ->where('tenant_id', $invoice->tenant_id)
+            ->first();
+
+        $testMode = (bool) ($settings->invoice_pdf_test_mode_enabled ?? false);
+        $testRecipient = WhatsappPhone::normalize($settings->invoice_pdf_test_recipient ?? null);
+        $testRecipientValid = $this->isValidWaNumber($testRecipient);
+
+        $recipientDisplay = $testMode && $testRecipientValid ? $testRecipient : $customerPhone;
+
+        $lastRealSend = $this->lastSendFor($invoice, includeTest: false, event: WhatsappEventType::PaymentReceived);
+        $lastAny = $this->lastSendFor($invoice, event: WhatsappEventType::PaymentReceived);
+
+        return [
+            'customer_name' => $customer?->name ?? '—',
+            'customer_phone' => $customerPhone,
+            'recipient_display' => $recipientDisplay,
+            'invoice_number' => (string) $invoice->invoice_number,
+            'total' => 'Rp'.number_format((float) $invoice->grand_total, 0, ',', '.'),
+            'paid_date' => $invoice->paid_at?->format('d/m/Y') ?? '—',
+            'status_label' => $invoice->status->label(),
+            'sendable' => $invoice->status === InvoiceStatus::Paid,
+            'test_mode' => $testMode,
+            'test_recipient' => $testRecipient,
+            'test_recipient_valid' => $testRecipientValid,
+            'already_sent_at' => $lastRealSend?->sent_at ?? $lastRealSend?->created_at,
+            'last_is_test' => (bool) ($lastAny?->is_test ?? false),
+            'last_status' => $lastAny?->status?->value,
+        ];
+    }
+
     private function sessionForCustomer(Invoice $invoice): ?WhatsappSession
     {
         return WhatsappSession::withoutGlobalScopes()
@@ -230,11 +388,11 @@ class InvoicePdfSendService
             ->first();
     }
 
-    private function lastSendFor(Invoice $invoice, bool $includeTest = true): ?WhatsappMessageLog
+    private function lastSendFor(Invoice $invoice, bool $includeTest = true, WhatsappEventType $event = WhatsappEventType::InvoiceIssued): ?WhatsappMessageLog
     {
         return WhatsappMessageLog::withoutGlobalScopes()
             ->where('invoice_id', $invoice->id)
-            ->where('event_type', WhatsappEventType::InvoiceIssued->value)
+            ->where('event_type', $event->value)
             ->when(! $includeTest, fn ($query) => $query->where('is_test', false))
             ->latest('created_at')
             ->first();

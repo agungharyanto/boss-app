@@ -19,6 +19,9 @@ class PaymentResource extends JsonResource
             'xendit_reference_id' => $this->xendit_reference_id,
             'channel_type' => $this->channel_type,
             'channel_type_label' => PaymentGatewayChannel::labelFor($this->channel_type),
+            // v0.13.5.5 (T4) — metode bayar tercatat (null untuk baris lama).
+            'method' => $this->method?->value,
+            'method_label' => $this->method?->label(),
             'amount' => (float) $this->amount,
             'status' => $this->status->value,
             'status_label' => $this->status->label(),

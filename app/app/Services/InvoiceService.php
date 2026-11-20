@@ -3,12 +3,13 @@
 namespace App\Services;
 
 use App\Enums\InvoiceStatus;
-use App\Enums\WhatsappEventType;
+use App\Enums\PaymentStatus;
 use App\Exceptions\InvalidInvoiceStatusTransitionException;
 use App\Models\Invoice;
+use App\Models\Payment;
 use App\Models\Subscription;
 use App\Services\Tax\TaxCalculationService;
-use App\Services\Whatsapp\WhatsappGatewayService;
+use App\Support\Billing\ManualPaymentInput;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -17,7 +18,6 @@ class InvoiceService
     public function __construct(
         private readonly TaxCalculationService $taxService,
         private readonly InvoiceNumberService $numberService,
-        private readonly WhatsappGatewayService $whatsappService,
         private readonly CommissionLedgerMaturityService $commissionMaturity,
     ) {}
 
@@ -160,15 +160,26 @@ class InvoiceService
     }
 
     /**
-     * @param  bool  $notifyCustomer  v0.9.12 (Bagian A) — false HANYA dari
-     *                                `RenewalInvoiceService` (alur "Perpanjang"): Perpanjang bisa
-     *                                membuat beberapa invoice sekaligus (multi-bulan) → tanpa ini
-     *                                pelanggan kebanjiran N pesan "pembayaran diterima" terpisah untuk
-     *                                satu transaksi perpanjangan. Dua caller lain (PATCH manual v0.3.4,
-     *                                webhook Xendit v0.3.5) TETAP default `true` — WA dikirim seperti
-     *                                biasa. Pematangan komisi (v0.9.5) TIDAK terpengaruh flag ini.
+     * SATU-SATUNYA titik transisi invoice → LUNAS (3 pemanggil: PATCH manual
+     * v0.3.4 / "Tandai Lunas" UI, webhook Xendit v0.3.5, RenewalInvoiceService
+     * v0.9.12).
+     *
+     * v0.13.5.5 (T3) — markPaid() TIDAK LAGI mengirim WhatsApp payment_received
+     * otomatis (keputusan Agung, Opsi 2). Parameter lama `$notifyCustomer`
+     * dihapus (tak terpakai lagi). Kirim kuitansi ke pelanggan sekarang MANUAL
+     * saja lewat `InvoicePdfSendService::sendReceiptManually()` (jalur satu-
+     * satunya yang boleh memakai event PaymentReceived — lewat konteks kirim
+     * manual). Pengiriman otomatis (sweep) = T5, belum dibangun.
+     *
+     * v0.13.5.5 (T4) — bila `$payment` disertakan DAN membawa metode, tulis
+     * SATU baris `payments` LUNAS (amount = grand_total) untuk invoice ini.
+     * Idempoten: kalau sudah ada baris LUNAS (mis. baris Xendit), tidak membuat
+     * duplikat. Perpanjang (RenewalInvoiceService) & migrasi
+     * (PppoeVlan10MigrationService) memanggil TANPA `$payment` → tidak menulis
+     * baris, persis perilaku lamanya. Xendit menulis/menandai barisnya sendiri
+     * di PaymentService (bukan lewat sini).
      */
-    public function markPaid(Invoice $invoice, bool $notifyCustomer = true): Invoice
+    public function markPaid(Invoice $invoice, ?ManualPaymentInput $payment = null): Invoice
     {
         $invoice = $this->transition($invoice, InvoiceStatus::Paid);
         $invoice->update(['paid_at' => now()]);
@@ -182,14 +193,45 @@ class InvoiceService
         // / GenerateDueInvoices — murni membaca $invoice->customer_id.
         $this->commissionMaturity->matureForPaidInvoice($invoice);
 
-        // v0.4.0 WhatsApp Gateway contract: caller PATCH manual v0.3.4 +
-        // webhook Xendit v0.3.5 memicu ini dengan cara yang sama.
-        // RenewalInvoiceService (v0.9.12) lewat $notifyCustomer=false.
-        if ($notifyCustomer && $invoice->customer !== null) {
-            $this->whatsappService->buildAndQueue(WhatsappEventType::PaymentReceived, $invoice->customer, $invoice);
+        if ($payment !== null && $payment->records()) {
+            $this->recordManualPayment($invoice, $payment);
         }
 
         return $invoice;
+    }
+
+    /**
+     * v0.13.5.5 (T4) — tulis SATU baris `payments` LUNAS untuk pembayaran
+     * manual. Idempoten (satu baris per invoice): kalau sudah ada baris LUNAS
+     * untuk invoice ini, tidak membuat yang kedua. `channel_type` null (bukan
+     * gateway); metode nyata di kolom `method`. Tenant-eksplisit + tanpa global
+     * scope agar benar baik di konteks ber-Auth (UI) maupun tidak.
+     */
+    private function recordManualPayment(Invoice $invoice, ManualPaymentInput $payment): void
+    {
+        $alreadyPaid = Payment::withoutGlobalScopes()
+            ->where('tenant_id', $invoice->tenant_id)
+            ->where('invoice_id', $invoice->id)
+            ->where('status', PaymentStatus::Paid->value)
+            ->exists();
+
+        if ($alreadyPaid) {
+            return;
+        }
+
+        Payment::withoutGlobalScopes()->create([
+            'tenant_id' => $invoice->tenant_id,
+            'invoice_id' => $invoice->id,
+            'xendit_reference_id' => null,
+            'channel_type' => null,
+            'method' => $payment->method,
+            'recorded_by' => $payment->recordedBy,
+            'reference_note' => $payment->referenceNote,
+            'company_bank_account_id' => $payment->companyBankAccountId,
+            'amount' => $invoice->grand_total,
+            'status' => PaymentStatus::Paid,
+            'paid_at' => $invoice->paid_at ?? now(),
+        ]);
     }
 
     public function markOverdue(Invoice $invoice): Invoice

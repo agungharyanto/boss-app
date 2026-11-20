@@ -23,11 +23,22 @@ class WhatsappMessageTemplateSeeder extends Seeder
      */
     private const LEGACY_INVOICE_ISSUED = 'Halo {customer_name}, tagihan internet Anda sudah terbit.'.PHP_EOL.'Invoice: {invoice_number}'.PHP_EOL.'Paket: {package_name}'.PHP_EOL.'Total: {total_amount}'.PHP_EOL.'Jatuh tempo: {due_date}'.PHP_EOL.'Rincian lengkap ada pada file PDF terlampir.'.PHP_EOL.'Bantuan: CS {cs_number}'.PHP_EOL.'Terima kasih - {company_name}';
 
+    /**
+     * v0.13.5.5 (T3) — body bawaan payment_received SEBELUM ditambahkan
+     * {paid_date} + menyebut lampiran kuitansi. Template tenant yang isinya
+     * PERSIS ini (belum diedit admin) diperbarui ke bawaan baru; selain itu
+     * dibiarkan. Sejak T3, event ini TIDAK lagi dikirim otomatis oleh markPaid()
+     * — hanya dikirim MANUAL sebagai caption kuitansi (InvoicePdfSendService).
+     */
+    private const LEGACY_PAYMENT_RECEIVED = 'Halo {customer_name}, pembayaran invoice {invoice_number} sebesar {total_amount} telah kami terima. Terima kasih atas kepercayaan Anda — {company_name}.';
+
     public function run(): void
     {
         $defaults = [
             WhatsappEventType::InvoiceDueReminder->value => 'Halo {customer_name}, invoice {invoice_number} sebesar {total_amount} untuk paket {package_name} akan jatuh tempo pada {due_date}. Silakan lakukan pembayaran melalui: {payment_link}. Terima kasih — {company_name}.',
-            WhatsappEventType::PaymentReceived->value => 'Halo {customer_name}, pembayaran invoice {invoice_number} sebesar {total_amount} telah kami terima. Terima kasih atas kepercayaan Anda — {company_name}.',
+            // v0.13.5.5 (T3) — caption kuitansi MANUAL: tambah {paid_date} +
+            // sebut lampiran kuitansi PDF. Tidak lagi dikirim otomatis.
+            WhatsappEventType::PaymentReceived->value => 'Halo {customer_name}, pembayaran invoice {invoice_number} sebesar {total_amount} telah kami terima pada {paid_date}. Kuitansi pembayaran terlampir. Terima kasih atas kepercayaan Anda — {company_name}.',
             WhatsappEventType::CustomerRegistered->value => 'Halo {customer_name}, terima kasih telah mendaftar layanan {package_name} di {company_name}. Tim kami akan segera menghubungi Anda untuk proses instalasi.',
             WhatsappEventType::CustomerSuspendedReminder->value => 'Halo {customer_name}, layanan Anda saat ini berstatus suspend. Segera lakukan pembayaran tertunggak agar layanan dapat diaktifkan kembali. Hubungi {company_name} untuk bantuan.',
             WhatsappEventType::ReferrerActionOtp->value => 'Halo {referrer_name}, kode verifikasi Anda: *{otp_code}*. Digunakan untuk: {action_label}. Berlaku {otp_minutes} menit. JANGAN bagikan kode ini ke siapa pun — {company_name}.',
@@ -107,5 +118,26 @@ class WhatsappMessageTemplateSeeder extends Seeder
             });
 
         $this->command?->info("invoice_issued: {$updated} template diperbarui ke bawaan baru, {$leftEdited} dibiarkan (sudah diedit admin).");
+
+        // v0.13.5.5 (T3) — payment_received: pola sama, HANYA update yang isinya
+        // PERSIS bawaan lama (belum diedit admin), supaya {paid_date} + sebutan
+        // kuitansi masuk. Yang sudah diedit dibiarkan utuh.
+        $newPaymentReceived = $defaults[WhatsappEventType::PaymentReceived->value];
+        $prUpdated = 0;
+        $prLeftEdited = 0;
+        WhatsappMessageTemplate::withoutGlobalScopes()
+            ->where('event_type', WhatsappEventType::PaymentReceived->value)
+            ->whereNull('reseller_id')
+            ->get()
+            ->each(function (WhatsappMessageTemplate $tpl) use ($newPaymentReceived, &$prUpdated, &$prLeftEdited) {
+                if ($tpl->content === self::LEGACY_PAYMENT_RECEIVED) {
+                    $tpl->update(['content' => $newPaymentReceived]);
+                    $prUpdated++;
+                } elseif ($tpl->content !== $newPaymentReceived) {
+                    $prLeftEdited++;
+                }
+            });
+
+        $this->command?->info("payment_received: {$prUpdated} template diperbarui ke bawaan baru, {$prLeftEdited} dibiarkan (sudah diedit admin).");
     }
 }

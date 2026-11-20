@@ -32,11 +32,11 @@ use Illuminate\Support\Carbon;
  * ASLI pelanggan (dari CSV) harus tetap tercatat meski Framed-Pool
  * mereka saat ini cuma fallback `PPPoE-Remote` (tier 1/2).
  *
- * WA `payment_received` SELALU di-suppress
- * (`InvoiceService::markPaid($invoice, notifyCustomer: false)`) — migrasi
- * data historis batch besar, bukan pembayaran nyata yang baru terjadi;
- * mengirim WA "pembayaran diterima" ke ratusan pelanggan sekaligus akan
- * jadi spam yang salah konteks. Sama alasan v0.9.12 Bagian A untuk
+ * WA `payment_received` tidak pernah terkirim dari sini — sejak v0.13.5.5
+ * (T3) `InvoiceService::markPaid()` memang tidak lagi mengirim WA sama sekali
+ * (dulu di-suppress eksplisit via `notifyCustomer: false`). Dipanggil TANPA
+ * ManualPaymentInput → juga tidak menulis baris `payments` (migrasi data
+ * historis batch besar, bukan pembayaran nyata). Sama alasan v0.9.12 Bagian A untuk
  * `RenewalInvoiceService`.
  *
  * v0.12.2 amendment — `PppPackage::hasZeroSellPrice()` (satu sumber
@@ -133,7 +133,7 @@ class PppoeVlan10MigrationService
 
         if ($invoice->status === InvoiceStatus::Pending) {
             $invoice = $isPaid
-                ? $this->invoiceService->markPaid($invoice, notifyCustomer: false)
+                ? $this->invoiceService->markPaid($invoice)
                 : $this->invoiceService->markOverdue($invoice);
         }
 

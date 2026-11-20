@@ -3,6 +3,7 @@
 namespace App\Services\Billing;
 
 use App\Enums\InvoiceStatus;
+use App\Enums\PaymentMethod;
 use App\Enums\PaymentStatus;
 use App\Models\CompanyProfile;
 use App\Models\Invoice;
@@ -155,11 +156,12 @@ class InvoicePdfService
 
     /**
      * Label metode bayar untuk kuitansi. Baca baris `payments` LUNAS terbaru:
-     *  - Ada  → jalur Xendit menulis `channel_type` (kode channel gateway).
-     *           T4 (`payments.method`) BELUM dibangun (gerbang STOP v0.13.5.5),
-     *           jadi untuk sekarang label berasal dari channel gateway.
-     *  - Tidak → "Tidak tercatat" (jalur manual/Perpanjang/migrasi tidak menulis
-     *           baris `payments`; JANGAN backfill, JANGAN menebak).
+     *  - Ada metode (`payments.method`, v0.13.5.5 T4) → label metode nyata.
+     *    Untuk Payment Gateway, lengkapi dengan nama channel bila ada.
+     *  - Baris lama tanpa metode tapi punya `channel_type` (gateway) → fallback
+     *    "Gateway — <channel>".
+     *  - Tidak ada baris sama sekali → "Tidak tercatat" (jalur Perpanjang/migrasi
+     *    tidak menulis baris; JANGAN backfill, JANGAN menebak).
      */
     private function receiptPaymentMethodLabel(Invoice $invoice): string
     {
@@ -173,7 +175,19 @@ class InvoicePdfService
             return 'Tidak tercatat';
         }
 
-        return 'Gateway — '.PaymentGatewayChannel::labelFor($payment->channel_type);
+        if ($payment->method !== null) {
+            if ($payment->method === PaymentMethod::PaymentGateway && ! empty($payment->channel_type)) {
+                return 'Gateway — '.PaymentGatewayChannel::labelFor($payment->channel_type);
+            }
+
+            return $payment->method->label();
+        }
+
+        if (! empty($payment->channel_type)) {
+            return 'Gateway — '.PaymentGatewayChannel::labelFor($payment->channel_type);
+        }
+
+        return 'Tidak tercatat';
     }
 
     private function logoDataUri(int $tenantId): ?string

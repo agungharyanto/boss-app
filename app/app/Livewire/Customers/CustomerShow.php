@@ -47,6 +47,14 @@ class CustomerShow extends Component
 
     public ?string $sendPdfError = null;
 
+    // v0.13.5.5 (T3) — kirim kuitansi via WhatsApp (modal, pola sama sendPdf).
+    public ?int $sendReceiptInvoiceId = null;
+
+    /** @var array<string, mixed> */
+    public array $sendReceiptPreview = [];
+
+    public ?string $sendReceiptError = null;
+
     public bool $editingProfile = false;
 
     #[Validate('required|string|max:255')]
@@ -514,6 +522,61 @@ class CustomerShow extends Component
         session()->flash('status', $log->is_test
             ? 'Pesan UJI diantrekan ke nomor uji (pelanggan TIDAK menerima).'
             : 'PDF invoice diantrekan untuk dikirim ke pelanggan.');
+    }
+
+    // v0.13.5.5 (T3) — kirim kuitansi MANUAL (mirror sendPdf, event PaymentReceived).
+    public function confirmSendReceipt(int $id): void
+    {
+        $this->authorize('manage', Invoice::class);
+        $this->sendReceiptError = null;
+
+        $invoice = Invoice::with('customer')->findOrFail($id);
+        if ((int) $invoice->customer_id !== (int) $this->customer->id) {
+            abort(404);
+        }
+
+        $this->sendReceiptInvoiceId = $invoice->id;
+        $this->sendReceiptPreview = app(InvoicePdfSendService::class)->previewReceiptFor($invoice);
+    }
+
+    public function cancelSendReceipt(): void
+    {
+        $this->sendReceiptInvoiceId = null;
+        $this->sendReceiptPreview = [];
+        $this->sendReceiptError = null;
+    }
+
+    public function sendReceipt(bool $resend, InvoicePdfSendService $service): void
+    {
+        $this->authorize('manage', Invoice::class);
+        $this->sendReceiptError = null;
+
+        if ($this->sendReceiptInvoiceId === null) {
+            return;
+        }
+
+        $invoice = Invoice::with('customer')->findOrFail($this->sendReceiptInvoiceId);
+        if ((int) $invoice->customer_id !== (int) $this->customer->id) {
+            abort(404);
+        }
+
+        try {
+            $log = $service->sendReceiptManually($invoice, auth()->user(), $resend);
+        } catch (AuthorizationException $e) {
+            $this->sendReceiptError = 'Anda tidak punya izin mengirim kuitansi.';
+
+            return;
+        } catch (InvoicePdfSendException $e) {
+            $this->sendReceiptError = $e->getMessage();
+
+            return;
+        }
+
+        $this->cancelSendReceipt();
+
+        session()->flash('status', $log->is_test
+            ? 'Kuitansi UJI diantrekan ke nomor uji (pelanggan TIDAK menerima).'
+            : 'Kuitansi diantrekan untuk dikirim ke pelanggan.');
     }
 
     /**

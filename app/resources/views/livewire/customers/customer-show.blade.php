@@ -240,6 +240,9 @@
                                             @endif
                                             @if ($canManageInvoices)
                                                 <button type="button" wire:click="confirmSendPdf({{ $inv->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-xs text-primary hover:bg-gray-50 border-t border-gray-100">Kirim PDF via WhatsApp</button>
+                                                @if ($inv->status->value === 'paid')
+                                                    <button type="button" wire:click="confirmSendReceipt({{ $inv->id }})" @click="open = false" class="block w-full text-left px-3 py-1.5 text-xs text-primary hover:bg-gray-50">Kirim Kuitansi via WhatsApp</button>
+                                                @endif
                                             @endif
                                         </div>
                                     </span>
@@ -462,4 +465,5 @@
     </div>
 
     @include('billing.partials.send-invoice-pdf-modal')
+    @include('billing.partials.send-receipt-modal')
 </div>

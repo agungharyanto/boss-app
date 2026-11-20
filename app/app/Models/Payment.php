@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\PaymentMethod;
 use App\Enums\PaymentStatus;
 use App\Models\Concerns\BelongsToTenant;
 use Database\Factories\PaymentFactory;
@@ -19,6 +20,11 @@ class Payment extends Model
         'invoice_id',
         'xendit_reference_id',
         'channel_type',
+        // v0.13.5.5 (T4) — metode bayar + jejak pencatatan manual.
+        'method',
+        'recorded_by',
+        'reference_note',
+        'company_bank_account_id',
         'amount',
         'status',
         'paid_at',
@@ -32,6 +38,8 @@ class Payment extends Model
             // is a payment_gateway_channels.code, a dynamic admin-managed
             // catalog, not 3 hardcoded cases. See PaymentGatewayChannel.
             'channel_type' => 'string',
+            // v0.13.5.5 (T4) — metode bayar yang tercatat (null = tidak tercatat).
+            'method' => PaymentMethod::class,
             'amount' => 'decimal:2',
             'status' => PaymentStatus::class,
             'paid_at' => 'datetime',
@@ -42,5 +50,15 @@ class Payment extends Model
     public function invoice(): BelongsTo
     {
         return $this->belongsTo(Invoice::class);
+    }
+
+    public function recordedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'recorded_by');
+    }
+
+    public function companyBankAccount(): BelongsTo
+    {
+        return $this->belongsTo(CompanyBankAccount::class);
     }
 }

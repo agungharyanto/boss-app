@@ -457,12 +457,18 @@ explicitly by Agung:
 2. `PaymentService::handleWebhook()` (Xendit, v0.3.5 — signature + idempotency + exact amount match).
 3. **`App\Services\Billing\RenewalInvoiceService::issuePaidForPeriod()` (v0.9.12)** — the "Perpanjang"
    action's Invoice-is-now-real path (see the dedicated section below). Creates an on-demand invoice for
-   the renewed period and marks it paid, which — same as the other two callers — auto-triggers
-   `CommissionLedgerMaturityService::matureForPaidInvoice()` (v0.9.5) and the `payment_received` WhatsApp.
+   the renewed period and marks it paid, which auto-triggers
+   `CommissionLedgerMaturityService::matureForPaidInvoice()` (v0.9.5).
 
-Don't "clean this up" by removing the manual endpoint without asking first — if a future sprint wants
-stricter audit trail parity for manually-recorded payments (e.g. requiring a `payments` row for those too,
-not just a bare status flip), that's new scope requiring its own confirmation, not an assumed cleanup.
+**v0.13.5.5 — `markPaid()` signature + side-effects changed** (see "Bukti Pembayaran — Kuitansi PDF"
+section): (a) **T3**: markPaid NO LONGER sends the `payment_received` WhatsApp automatically (the hook +
+the old `$notifyCustomer` param are gone); receipts go out manually only. (b) **T4**: the signature is now
+`markPaid(Invoice $invoice, ?App\Support\Billing\ManualPaymentInput $payment = null)` — when `$payment`
+carries a `method`, markPaid writes ONE `payments` row (manual "Tandai Lunas" UI + PATCH API do this;
+Xendit still writes/tags its own row in `PaymentService`; Perpanjang & the PppoeVlan10 migration call it
+with no `$payment` so they write no row, unchanged). This is exactly the "stricter audit-trail parity /
+require a `payments` row for manually-recorded payments" scope the next paragraph anticipated — now
+confirmed and built. Don't "clean this up" by removing the manual endpoint without asking first.
 
 **Webhook signature verification is a static shared-token comparison, not HMAC** — Xendit's actual
 callback verification mechanism is comparing the `x-callback-token` request header against the token shown
@@ -573,9 +579,11 @@ The original four:
 `invoice_due_reminder` (H-5 and H-0 only — **explicitly no overdue reminder**, once an invoice passes
 H-0 unpaid there is no further WhatsApp nudge for it, enforced almost for free by
 `whatsapp:send-due-reminders` only ever querying `InvoiceStatus::Pending`, never `Overdue`),
-`payment_received` (hooked into `InvoiceService::markPaid()` — fires for **both** legitimate callers, the
-v0.3.4 manual PATCH endpoint and `PaymentService::handleWebhook()`, same as every other `markPaid()`
-consumer), `customer_registered` (hooked into `RegistrationService::register()`, dispatched **after**
+`payment_received` (**v0.13.5.5 T3: TIDAK LAGI dikirim otomatis** — hook di `InvoiceService::markPaid()`
+DIHAPUS; event ini sekarang hanya dikirim MANUAL sebagai caption kuitansi via
+`InvoicePdfSendService::sendReceiptManually()`. Dulu: hooked into `markPaid()`, fires for both the v0.3.4
+manual PATCH endpoint and `PaymentService::handleWebhook()`), `customer_registered` (hooked into
+`RegistrationService::register()`, dispatched **after**
 `DB::transaction()` returns so a rolled-back registration never notifies), `customer_suspended_reminder`
 (daily for as long as `customer.status` stays `CustomerStatus::Suspend` — value `"suspend"`, not
 `"suspended"` — no manual stop flag, it just stops the moment the scheduled query no longer matches that
@@ -10111,10 +10119,12 @@ pelanggan/invoice **TIDAK disentuh**. Backup pre-cleanup: `/opt/boss-backups/pre
 
 ## Bukti Pembayaran — Kuitansi PDF (v0.13.5.5, cabang `v0.13.5.5-bukti-pembayaran`, BELUM rilis/merge/tag)
 
-**T1+T2 SELESAI di cabang; T3+T4 TERTAHAN gerbang STOP (menunggu keputusan Agung).** Basis develop
-`f42d519`, dikerjakan di git worktree. Keputusan final Agung: nomor kuitansi = `invoice_number` (tanpa
-sequence baru), event = `PaymentReceived` (TIDAK buat `WhatsappEventType` baru), kirim MANUAL saja (T5
-otomatis TIDAK dibangun), biaya perangkat → v0.27.0, parsial/refund di luar lingkup.
+**T1–T4 SELESAI di cabang (BELUM rilis/merge/tag).** Basis develop `f42d519`, dikerjakan di git worktree.
+Keputusan final Agung: nomor kuitansi = `invoice_number` (tanpa sequence baru), event = `PaymentReceived`
+(TIDAK buat `WhatsappEventType` baru), kirim MANUAL saja (**T5 otomatis/sweep TIDAK dibangun**), biaya
+perangkat → **v0.27.0**, parsial/refund di luar lingkup. **T3 diselesaikan via Opsi 2** (markPaid berhenti
+kirim WA otomatis), **T4 dilanjutkan** dengan pergeseran `ReconciliationReport` DITERIMA (maknanya berubah,
+lihat di bawah).
 
 **T1 — PDF kuitansi (SELESAI).** Mode `$receipt` di view yang SAMA `resources/views/billing/invoice-pdf.blade.php`
 (`@php $isReceipt = ($receipt ?? false); @endphp` — default false, pemanggil invoice biasa tak berubah):
@@ -10125,9 +10135,10 @@ lapis kedua di atas guard status paid lama). `InvoicePdfService::renderReceipt(I
 (**folder + prefix yang SUDAH ADA** supaya tercakup loop chown `docker/php/entrypoint.sh` + whitelist
 `WhatsappAttachment::ALLOWED_PREFIXES` — TIDAK ubah entrypoint), delete-then-write + `WebOwnership::normalize`
 (pola sama `store()`). Helper privat `receiptPaymentMethodLabel()`: baca baris `payments` Lunas terbaru → label
-channel gateway (`PaymentGatewayChannel::labelFor`); tidak ada baris → **"Tidak tercatat"** (invoice lama/jalur
-manual/Perpanjang/migrasi tak menulis `payments`; TIDAK backfill, TIDAK menebak — `payments.method` T4 belum
-ada). `render()` di-refactor berbagi helper privat `outputPdf()` dengan `renderReceipt()` (satu konfigurasi
+metode nyata `payments.method` bila ada (T4): manual → label PaymentMethod (mis. "Transfer Manual"), gateway →
+"Gateway — {channel}"; baris lama tanpa method tapi punya `channel_type` → fallback "Gateway — {channel}";
+tidak ada baris → **"Tidak tercatat"** (Perpanjang/migrasi tak menulis `payments`; TIDAK backfill, TIDAK
+menebak). `render()` di-refactor berbagi helper privat `outputPdf()` dengan `renderReceipt()` (satu konfigurasi
 dompdf). NOL kirim WA, NOL Xendit.
 
 **T2 — unduh kuitansi (SELESAI).** Rute `web.invoices.receipt` (`GET /invoices/{invoice}/receipt`,
@@ -10137,41 +10148,65 @@ dompdf). NOL kirim WA, NOL Xendit.
 (`invoice-index.blade.php`) + Detail Pelanggan (`customer-show.blade.php`), muncul HANYA saat
 `status->value === 'paid'`. Policy `InvoicePolicy::view` yang sama, tanpa permission baru.
 
-**T3 — kirim manual kuitansi: TERTAHAN (KONFLIK template, tidak menebak solusi).** Fakta terverifikasi kode:
-kirim manual MENSYARATKAN template AKTIF — `WhatsappTemplateService::resolve()` memfilter `->where('is_active',
-true)` (baris 90/102) → template nonaktif ⇒ `null`; `InvoicePdfSendService::sendManually()` (baris 77-82)
-`throw InvoicePdfSendException` bila resolve `null`. Generalisasi ke kuitansi memakai event `PaymentReceived`,
-tapi template `payment_received` **NONAKTIF** (tenant 1) DAN **TIDAK BOLEH diaktifkan** — bila aktif,
-`InvoiceService::markPaid()` (baris 188-190) otomatis mengirim `payment_received` **teks-saja** ke pelanggan
-saat saklar `customer_auto_notify_enabled` ON. Jadi: aktifkan template → bocor pesan teks otomatis; biarkan
-nonaktif → kirim manual kuitansi `throw`. **Keputusan Agung diperlukan** (mis. template receipt terpisah yang
-selalu aktif tapi tak dipakai markPaid, ATAU markPaid berhenti auto-kirim payment_received, ATAU jalur kirim
-kuitansi yang tak lewat cek template-aktif). TIDAK dibangun di cabang ini.
+**T3 — kirim manual kuitansi (SELESAI, Opsi 2).** `InvoiceService::markPaid()` **TIDAK LAGI mengirim WA
+payment_received otomatis** — pemanggilan `buildAndQueue(PaymentReceived, ...)` + dependency WhatsappGatewayService
+dihapus; parameter lama `$notifyCustomer` dihapus (2 pemanggil `notifyCustomer: false` — RenewalInvoiceService &
+PppoeVlan10MigrationService — disesuaikan drop named-arg, perilaku identik: tetap tak kirim WA & tak tulis
+`payments`). Konsekuensi: template `payment_received` **boleh aktif** (tak ada lagi jalur otomatis yang
+memakainya); pengaktifan untuk tenant 1 dilakukan Agung saat rilis — **seeder TIDAK mengubah `is_active`**.
+Kirim kuitansi kini MANUAL via `InvoicePdfSendService::sendReceiptManually(Invoice, User, bool $resend)` —
+kembaran `sendManually()`: gate status **Paid**, event `PaymentReceived`, lampiran `storeReceipt()`
+(`WhatsappAttachment::fromInvoiceReceiptPdf`), Mode Uji (banner merah di modal) + override penerima +
+`is_test` + cooldown 10 menit (keyed event PaymentReceived), dikirim lewat `buildAndQueue(..., $attachment,
+$context)` dengan `InvoiceSendContext`. `{paid_date}` ditambahkan ke `buildVariables()`. UI tombol "Kirim
+Kuitansi via WhatsApp" (hanya invoice Paid) di `/invoices` + Detail Pelanggan, partial modal bersama
+`send-receipt-modal.blade.php`. **Test arsitektur** (`WhatsappManualBypassArchitectureTest`):
+`WhatsappEventType::PaymentReceived` hanya boleh disebut oleh `InvoicePdfSendService` (di luar definisi enum,
+yang pakai `self::`) → tak ada jalur OTOMATIS yang mengirim payment_received tanpa `InvoiceSendContext`.
+Seeder payment_received dapat `{paid_date}` + sebut lampiran kuitansi, **hanya mem-update baris tenant yang
+isinya PERSIS bawaan lama** (`LEGACY_PAYMENT_RECEIVED`), yang sudah diedit admin dibiarkan. T5 (kirim kuitansi
+otomatis/sweep) BELUM dibangun.
 
-**T4 — catat metode bayar: TERTAHAN (ReconciliationReport bergeser).** Daftar pembaca tabel `payments` +
-efek baris manual (status Paid):
+**T4 — catat metode bayar (SELESAI; pergeseran `ReconciliationReport` DITERIMA).** Migrasi aditif pada
+`payments` (`2026_11_20_120000`): `method` (cast `PaymentMethod`, nullable), `recorded_by` (FK users
+`nullOnDelete`), `reference_note` (nullable), `company_bank_account_id` (FK company_bank_accounts
+`nullOnDelete`); **`channel_type` dilonggarkan jadi nullable** (baris manual tak punya kode channel gateway).
+`markPaid(Invoice, ?ManualPaymentInput $payment = null)` menulis **SATU** baris `payments` LUNAS (amount =
+`grand_total`, `status=Paid`, `channel_type` null) HANYA bila `$payment` membawa `method` — idempoten (cek
+baris Lunas sudah ada → tak duplikat; transisi Paid→Paid juga menolak panggilan kedua). Jalur yang menulis:
+**"Tandai Lunas" manual UI** (modal metode default Transfer Manual + rekening default bila manual + catatan
+opsional, `InvoiceIndex::confirmMarkPaid/submitMarkPaid`, partial `mark-paid-modal.blade.php`), **PATCH API**
+(`MarkInvoicePaidRequest` — field opsional; tanpa `method` → **tidak** menulis baris, perilaku lama),
+**Xendit** (`PaymentService::handleWebhook` set `method=PaymentGateway` pada baris yang SUDAH ada, bukan baris
+baru). **Perpanjang & PppoeVlan10MigrationService TIDAK diubah** (panggil tanpa `$payment` → tak menulis
+baris). TANPA backfill. `receiptPaymentMethodLabel()` kini menampilkan metode nyata (`method`) bila ada,
+"Tidak tercatat" bila tidak.
 
-| Pembaca | File:baris | Efek baris `payments` manual |
-|---|---|---|
-| `ReconciliationReport` | `app/Livewire/Billing/ReconciliationReport.php:44-49` | **BERGESER** — menandai invoice Paid tanpa baris `payments` Lunas sebagai `is_anomaly=true`. Menulis baris manual membuat invoice "Tandai Lunas" berhenti jadi anomali (true→false); invoice Perpanjang/migrasi (tak diubah) tetap anomali → report jadi campuran tak konsisten |
-| `PaymentService::resolvePaymentFor` | `app/Services/Payment/PaymentService.php:168-176` | Tidak bergeser — match `xendit_reference_id=$ref` (manual null) atau `status=pending` (manual Paid); baris manual tak terpilih |
-| `PaymentInstructionsService::existingGatewayLink` | `app/Services/Billing/PaymentInstructionsService.php:112-131` | Tidak bergeser — baca `raw_response.invoice_url` (manual tak punya) + skip `status=failed`; link tetap null |
-| `PaymentController::index`/`PaymentResource` | `app/Http/Controllers/Api/V1/PaymentController.php:18` | Menampilkan baris lebih banyak (per-invoice), tapi tak ada agregat/SUM yang "salah" — bukan laporan |
-| `WhatsappGatewayService::resolvePaymentLink` | `WhatsappGatewayService.php` | Sama seperti existingGatewayLink (baca invoice_url) — tidak bergeser |
-| Komisi (`CommissionApprovalService`) | hanya komentar, bukan query | Tidak membaca tabel `payments` |
+**PERGESERAN MAKNA `ReconciliationReport` (diterima Agung): anomali kini berarti "invoice Paid TANPA catatan
+pembayaran" (tak ada baris `payments` Lunas).** Invoice "Tandai Lunas" lewat UI/API ber-metode → ada baris →
+**bukan** anomali. Invoice Paid dari Perpanjang/migrasi (tak menulis baris) → **tetap** anomali (wajar — memang
+tak ada catatan pembayaran). Data lama tak berubah. Pembaca `payments` lain diperiksa ulang + ditest:
+`resolvePaymentFor` (match `xendit_reference_id`/`status=pending` → baris manual `xendit null`/`Paid` TAK
+terpilih; test webhook tak mengubah baris manual), `existingGatewayLink`/`resolvePaymentLink` (baca
+`raw_response.invoice_url`; manual null → tak bocor), `PaymentController::index`/`PaymentResource`
+(`PaymentGatewayChannel::labelFor` dibuat null-safe untuk `channel_type` null; resource dapat
+`method`/`method_label`; baris manual tampil tanpa label gateway — test 200).
 
-**Karena `ReconciliationReport` bergeser → STOP sesuai gerbang.** TIDAK dibuat migrasi kolom (`method`/
-`recorded_by`/`reference_note`/`company_bank_account_id`), TIDAK menulis baris `payments` dari jalur manual,
-TIDAK isi `method` di jalur Xendit. **Keputusan Agung diperlukan** (mis. sesuaikan `ReconciliationReport`
-agar tak menandai invoice Paid non-gateway sebagai anomali sebelum mulai menulis baris manual).
-
-**Verifikasi (container throwaway dari image `boss-app-boss-app`, sqlite in-memory, worktree + `vendor`/`.env`
-checkout utama di-mount):** `InvoiceReceiptPdfTest` (12 baru) + regresi `InvoicePdfTest`/`InvoicePdfPaymentSectionTest`/
-`InvoicePrintControllerTest`/`WhatsappManualBypassArchitectureTest`/`InvoicePdfSendServiceTest`/
-`InvoiceIndexSendPdfLivewireTest`/`InvoiceIssuedCaptionPaymentTest` — **59 test hijau**, Pint clean (4 file PHP).
-**BELUM diuji di server nyata; BELUM rilis; BELUM merge/tag.** Tanpa migrasi/`.env`/rebuild (T4 migrasi
-tertahan). Kuitansi berfungsi hanya dari `invoices` (`paid_at`/line items/`grand_total`) — invoice lama tanpa
-`payments` tetap menghasilkan kuitansi ("Tidak tercatat"), terbukti test.
+**Verifikasi (container throwaway `boss-app-boss-app`, sqlite in-memory, worktree + `vendor`/`.env` utama
+di-mount; PDF-heavy pakai `-d memory_limit=512M`):** `InvoiceReceiptPdfTest` (14), `InvoiceMarkPaidTest` (5,
+baru — ganti `InvoiceMarkPaidTriggersWhatsappTest` yang DIHAPUS), `InvoiceMarkPaidAndReceiptLivewireTest` (7),
+`ReconciliationReportLivewireTest` (+1), `WhatsappManualBypassArchitectureTest` (+1), `XenditWebhookApiTest`
+(+3), `SubscriptionInvoiceApiTest` (+2) + regresi `InvoicePdfTest`/`InvoicePdfPaymentSectionTest`/
+`InvoicePrintControllerTest`/`InvoicePdfSendServiceTest`/`InvoiceIndexSendPdfLivewireTest`/
+`CustomerAutoNotifySwitchTest`/`CommissionMaturityTest`/`SubscriptionRenewalServiceTest` — **semua hijau**,
+Pint clean (25 file). Dua kegagalan di throwaway yang BUKAN regresi:
+`InvoicePdfTest::test_web_ownership_normalize_is_a_noop_when_not_root` (container jalan sebagai root; lolos di
+CI www-data) dan `CustomerShowInvoiceSectionTest` (koneksi DB `radius` tak tersedia saat render blade — tak
+menyentuh invoice/kuitansi) — keduanya keterbatasan harness terdokumentasi.
+**BELUM diuji di server nyata; BELUM rilis; BELUM merge/tag.** Rilis nanti (Laravel-only, aditif):
+`php artisan migrate` (1 migrasi payments) + `db:seed --class=WhatsappMessageTemplateSeeder` (idempoten) +
+`optimize:clear` + `queue:restart`; TANPA `.env`/rebuild/logout. Agung mengaktifkan template
+`payment_received` tenant 1 saat rilis.
 
 ## Architecture
 

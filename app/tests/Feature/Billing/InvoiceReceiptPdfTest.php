@@ -3,6 +3,7 @@
 namespace Tests\Feature\Billing;
 
 use App\Enums\InvoiceStatus;
+use App\Enums\PaymentMethod;
 use App\Enums\PaymentStatus;
 use App\Models\Customer;
 use App\Models\Invoice;
@@ -32,6 +33,9 @@ class InvoiceReceiptPdfTest extends TestCase
     {
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
+        // Isolasi disk: storeReceipt() menulis ke disk 'local' NYATA; tanpa
+        // fake, sisa file antar-run mencemari assertCount file.
+        Storage::fake('local');
     }
 
     /**
@@ -161,6 +165,24 @@ class InvoiceReceiptPdfTest extends TestCase
         $label = $this->invokeLabel($invoice->fresh());
 
         $this->assertStringStartsWith('Gateway — ', $label);
+    }
+
+    public function test_method_label_shows_real_manual_method_when_recorded(): void
+    {
+        [$invoice] = $this->paidInvoice();
+
+        Payment::create([
+            'tenant_id' => $invoice->tenant_id,
+            'invoice_id' => $invoice->id,
+            'xendit_reference_id' => null,
+            'channel_type' => null,
+            'method' => PaymentMethod::ManualTransfer,
+            'amount' => $invoice->grand_total,
+            'status' => PaymentStatus::Paid->value,
+            'paid_at' => now(),
+        ]);
+
+        $this->assertSame('Transfer Manual', $this->invokeLabel($invoice->fresh()));
     }
 
     private function invokeLabel(Invoice $invoice): string

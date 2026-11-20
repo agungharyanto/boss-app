@@ -4,6 +4,7 @@ namespace App\Services\Payment;
 
 use App\Enums\InvoiceStatus;
 use App\Enums\PaymentGatewayChannelCategory;
+use App\Enums\PaymentMethod;
 use App\Enums\PaymentStatus;
 use App\Enums\WebhookProcessingResult;
 use App\Models\Invoice;
@@ -145,6 +146,9 @@ class PaymentService
             if ($payment !== null) {
                 $payment->update([
                     'status' => PaymentStatus::Paid,
+                    // v0.13.5.5 (T4) — tandai metode pada baris Xendit yang
+                    // SUDAH ada, supaya kuitansi menampilkan "Payment Gateway".
+                    'method' => PaymentMethod::PaymentGateway,
                     'paid_at' => now(),
                     'raw_response' => $payload,
                 ]);

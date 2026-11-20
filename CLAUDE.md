@@ -10248,6 +10248,78 @@ ikut ditandai Lunas (baris `payments` id=2 nyata). Saat cleanup, baris itu **sen
 nyata) sehingga `payments` total pasca-cleanup = **1**, bukan 0. Selalu bedakan "entitas TEST yang dibuat
 untuk uji" dari "aksi uji yang jatuh pada baris nyata"; hapus hanya yang pertama, laporkan yang kedua.
 
+## Kuitansi vs Invoice — Dibedakan + Watermark per Status (v0.13.5.5.1 — SELESAI, merged `develop`→`main`, tag `v0.13.5.5.1`)
+
+**Keluhan Agung**: untuk invoice Lunas, "Unduh PDF" vs "Unduh Kuitansi" dan "Kirim PDF" vs "Kirim Kuitansi"
+terasa SAMA, dan 4 tombol membingungkan. Investigasi (butir 1) memastikan **TIDAK ada bug wiring** — jalur
+unduh/kirim genuinely berbeda (`web.invoices.pdf`→`downloadPdf`→`render()` vs
+`web.invoices.receipt`→`downloadReceipt`→`renderReceipt()`; `sendManually()`→`InvoiceIssued`+`{id}.pdf` vs
+`sendReceiptManually()`→`PaymentReceived`+`{id}-receipt.pdf`). Akar keluhan **murni visual** (dua PDF
+terlalu mirip) + 4 tombol per invoice. Basis develop `d4a3a6a`, git worktree (server tetap di develop).
+NOL migrasi/seeder, NOL kirim WA, NOL ubah data nyata.
+
+**Tombol per status** (dropdown Cetak `/invoices` `invoice-index.blade.php` DAN Detail Pelanggan
+`customer-show.blade.php`): **Paid → hanya "Unduh Kuitansi" + "Kirim Kuitansi via WhatsApp"**; **non-Paid
+(Pending/Overdue/Cancelled/Draft) → hanya "Unduh PDF" + "Kirim PDF via WhatsApp"**. Rute/service PDF
+invoice untuk Paid **tidak dihapus** (arsip tetap jalan), hanya tak ditampilkan sebagai tombol. **Opsi
+"Print Standar (A4)/Thermal" DIPERTAHANKAN di SEMUA status** — itu bukan bagian dari 4 tombol yang
+dikeluhkan.
+
+**Kuitansi dibuat jelas berbeda** (mode `$receipt` di view yang SAMA `billing/invoice-pdf.blade.php`, tak
+diduplikasi): judul **"KUITANSI PEMBAYARAN"** besar hijau; **"No. Kuitansi" = `invoice_number`** + "Ref.
+Invoice" kecil; blok kiri **"Diterima dari"**; blok kanan **Tanggal bayar / Metode bayar ("Tidak tercatat"
+bila kosong) / Periode** — TANPA "Tanggal terbit" & "Jatuh tempo"; garis hijau + kotak "Telah diterima
+pembayaran sebesar Rp X". **Badge invoice berbahasa Indonesia** (lokal di view via `match()`: Lunas/Belum
+Bayar/Terlambat/Dibatalkan/Draf; enum `InvoiceStatus::label()` tetap Inggris & dipakai tempat lain — TIDAK
+diubah).
+
+**Watermark diagonal transparan per status — satu mekanisme bersama** (`position:fixed`, `rotate(-32deg)`,
+`z-index:0` di bawah `.sheet` `z-index:1` → di belakang isi, tak menggeser layout, tak menambah halaman;
+dompdf 3.x mendukung fixed+rotate+opacity+z-index penuh, diverifikasi render PNG nyata):
+
+| Konteks | Watermark | Warna | Opacity |
+|---|---|---|---|
+| **Kuitansi** (selalu Paid) | "LUNAS" | hijau `#16a34a` | 0.15 |
+| **Invoice Pending/Overdue** | "BELUM LUNAS" | kuning `#d97706` (selaras badge) | 0.12 (≤ LUNAS) |
+| **Invoice Cancelled** | "DIBATALKAN" | abu `#6b7280` | 0.12 |
+| **Invoice Draft & Paid** | — (tanpa) | — | — (Paid cukup badge "Lunas") |
+
+Base `.watermark` (hijau LUNAS) dipertahankan; dua kelas modifier `.wm-belum`/`.wm-batal` **hanya**
+override warna/opacity/ukuran (teks lebih panjang → font lebih kecil + letter-spacing rapat agar tetap
+miring rapi). **SYARAT UTAMA terbukti**: kotak "Cara Pembayaran"/nomor rekening/tabel/total/alamat **tetap
+terbaca** di atas watermark (render PNG nyata invoice Pending #1294 + Overdue #42 + kuitansi Paid #21,
+semua **1 halaman**, PNG di `/opt/boss-backups/wm-*.png`). Render kuitansi tetap persis
+`<div class="watermark">LUNAS</div>` (tak menyentuh test kuitansi). Satu bug ditutup saat uji: komentar CSS
+sempat memuat literal "Cara Pembayaran" → muncul di `<style>` & menggagalkan `assertStringNotContainsString`
+semua status (kelas bug sama seperti "LUNAS" di T1 v0.13.5.5) — frasa dihapus dari komentar.
+
+**Dampak cetak A4/Thermal = NOL**: `invoice-pdf.blade.php` HANYA dipakai `InvoicePdfService`. Browser-print
+**A4** (`invoice-print-standard.blade.php`) memakai `.paid-stamp` SENDIRI (view berbeda), **Thermal** tak
+punya watermark — keduanya tak diubah.
+
+**Terbilang rupiah DILEWATI** (dilaporkan): `Illuminate\Support\Number::spell(…, locale:'id')` mengembalikan
+**bahasa Inggris** di ICU/environment ini — sesuai instruksi tidak ditambahkan & tidak di-hand-roll.
+
+**Backlog**: (a) **terbilang rupiah di kuitansi** (butuh solusi tanpa dependensi sembarangan); (b) **T5 —
+kirim kuitansi otomatis saat lunas** (menunggu keputusan Agung — mekanisme manual sudah ada); (c) **cetak
+A4/Thermal untuk invoice Paid masih bentuk invoice** (bukan kuitansi) — browser-print belum punya mode
+kuitansi.
+
+**Rilis & uji**: Laravel-only, NOL migrasi/`.env`/rebuild/logout. `optimize:clear` + `queue:restart`.
+Diverifikasi di server nyata (read-only): `/login` 200 (localhost + boss.bajastu.id), unduh PDF invoice
+Pending nyata #1294 (INV/DIRECT/2026/10/000171) terautentikasi → **200 `application/pdf`** `%PDF`,
+`/invoices` 200, antrean 0, nol exception, saklar tak berubah (Mode Uji ON, kirim otomatis OFF, saklar
+pelanggan OFF). Test terbatas billing (`InvoicePdfTest`/`InvoicePdfPaymentSectionTest`/
+`InvoiceReceiptPdfTest`/`InvoicePrintControllerTest`/`InvoiceIndexSendPdfLivewireTest`) **43 hijau**, Pint
+clean. **Terbukti Agung periksa di UI** (tombol per status + tampilan kuitansi vs invoice disetujui).
+
+**CATATAN GO-LIVE (butir tetap, berlaku lintas-sprint sampai reset):** target go-live **awal 2027**; **data
+keuangan akan di-RESET sebelum go-live**; cara migrasi dari MixRadius dibahas setelah semua sprint selesai.
+**Sampai reset, laporan Payment Reconciliation / dashboard memuat DATA UJI dan TIDAK boleh dipakai untuk
+keputusan.** Tercemar data uji yang DIKETAHUI: baris **`payments` id=2** (invoice NYATA **1287** =
+`INV/DIRECT/2026/10/000165`, pelanggan **Sri Rohmah**) ditandai Lunas keliru saat uji v0.13.5.5 — **JANGAN
+dipulihkan satu per satu**, cukup masuk daftar reset.
+
 ## Architecture
 
 **Containers** (`docker-compose.yml`): `boss-nginx` (reverse proxy, port 80/443) → `boss-app` (PHP-FPM,

@@ -153,4 +153,47 @@ class InvoiceIndexSendPdfLivewireTest extends TestCase
             ->call('confirmSendPdf', $invoice->id)
             ->assertForbidden();
     }
+
+    // ── v0.13.5.5.1: tombol unduh/kirim per status ──────────────────────────
+
+    public function test_dropdown_shows_only_pdf_buttons_for_pending(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $this->seedInvoice($tenant); // Pending
+
+        Livewire::actingAs($this->manager($tenant))
+            ->test(InvoiceIndex::class)
+            ->assertSee('Unduh PDF')
+            ->assertSee('Kirim PDF via WhatsApp')
+            ->assertDontSee('Unduh Kuitansi')
+            ->assertDontSee('Kirim Kuitansi via WhatsApp');
+    }
+
+    public function test_dropdown_shows_only_receipt_buttons_for_paid(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $invoice = $this->seedInvoice($tenant);
+        $invoice->update(['status' => InvoiceStatus::Paid, 'paid_at' => now()]);
+
+        Livewire::actingAs($this->manager($tenant))
+            ->test(InvoiceIndex::class)
+            ->assertSee('Unduh Kuitansi')
+            ->assertSee('Kirim Kuitansi via WhatsApp')
+            ->assertDontSee('Unduh PDF')
+            ->assertDontSee('Kirim PDF via WhatsApp');
+    }
+
+    public function test_dropdown_shows_pdf_buttons_for_cancelled_unchanged(): void
+    {
+        $tenant = Tenant::factory()->create();
+        $invoice = $this->seedInvoice($tenant);
+        $invoice->update(['status' => InvoiceStatus::Cancelled]);
+
+        Livewire::actingAs($this->manager($tenant))
+            ->test(InvoiceIndex::class)
+            ->assertSee('Unduh PDF')
+            ->assertSee('Kirim PDF via WhatsApp')
+            ->assertDontSee('Unduh Kuitansi')
+            ->assertDontSee('Kirim Kuitansi via WhatsApp');
+    }
 }

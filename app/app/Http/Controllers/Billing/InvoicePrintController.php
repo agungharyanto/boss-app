@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Billing;
 
+use App\Enums\InvoiceStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
 use App\Models\Tenant;
@@ -66,6 +67,28 @@ class InvoicePrintController extends Controller
 
         $pdf = $service->render($invoice);
         $fileName = 'invoice-'.Str::slug((string) $invoice->invoice_number, '-').'.pdf';
+
+        return response($pdf, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.$fileName.'"',
+            'Cache-Control' => 'private, no-store, max-age=0',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+    }
+
+    /**
+     * v0.13.5.5 — unduh KUITANSI PEMBAYARAN (dompdf). Aturan akses SAMA dengan
+     * downloadPdf() (`view` policy). HANYA untuk invoice Lunas — status lain
+     * 404 (kuitansi memang tidak ada untuk invoice belum lunas). NOL kirim WA.
+     */
+    public function downloadReceipt(Invoice $invoice, InvoicePdfService $service): Response
+    {
+        $this->authorize('view', $invoice);
+
+        abort_unless($invoice->status === InvoiceStatus::Paid, 404);
+
+        $pdf = $service->renderReceipt($invoice);
+        $fileName = 'kuitansi-'.Str::slug((string) $invoice->invoice_number, '-').'.pdf';
 
         return response($pdf, 200, [
             'Content-Type' => 'application/pdf',

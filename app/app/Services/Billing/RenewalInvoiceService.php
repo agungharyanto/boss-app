@@ -103,9 +103,11 @@ class RenewalInvoiceService
             $invoice = $this->invoiceService->markPending($invoice);
         }
 
-        // Bagian A (v0.9.12) — JANGAN kirim WA "pembayaran diterima" per
-        // invoice; Perpanjang multi-bulan akan mengirim N pesan terpisah.
-        $invoice = $this->invoiceService->markPaid($invoice, notifyCustomer: false);
+        // Bagian A (v0.9.12) — Perpanjang multi-bulan tidak boleh memicu N
+        // pesan "pembayaran diterima" terpisah. Sejak v0.13.5.5 (T3) markPaid()
+        // memang tidak lagi mengirim WA sama sekali; dipanggil TANPA
+        // ManualPaymentInput → tidak menulis baris payments (tetap seperti dulu).
+        $invoice = $this->invoiceService->markPaid($invoice);
 
         return ['invoice' => $invoice, 'created' => $created, 'newly_paid' => true, 'skipped_zero_price' => false];
     }

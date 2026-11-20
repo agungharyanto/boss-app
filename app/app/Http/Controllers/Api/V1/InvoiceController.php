@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Concerns\ApiResponds;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\GenerateInvoiceRequest;
+use App\Http\Requests\MarkInvoicePaidRequest;
 use App\Http\Resources\InvoiceResource;
 use App\Models\Invoice;
 use App\Models\Subscription;
@@ -78,11 +79,15 @@ class InvoiceController extends Controller
         return $this->success(new InvoiceResource($invoice->load(['customer', 'reseller', 'lineItems'])), 'Status invoice berhasil diubah');
     }
 
-    public function markPaid(Invoice $invoice, InvoiceService $service): JsonResponse
+    /**
+     * v0.13.5.5 (T4) — field pembayaran OPSIONAL: tanpa `method` → invoice
+     * jadi Lunas tanpa menulis baris payments (perilaku lama). Dengan `method`
+     * → markPaid() mencatat satu baris payments (recorded_by = pengguna API).
+     * Otorisasi di MarkInvoicePaidRequest::authorize().
+     */
+    public function markPaid(MarkInvoicePaidRequest $request, Invoice $invoice, InvoiceService $service): JsonResponse
     {
-        $this->authorize('manage', Invoice::class);
-
-        $invoice = $service->markPaid($invoice);
+        $invoice = $service->markPaid($invoice, $request->toManualPaymentInput());
 
         return $this->success(new InvoiceResource($invoice->load(['customer', 'reseller', 'lineItems'])), 'Status invoice berhasil diubah');
     }

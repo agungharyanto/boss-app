@@ -9,6 +9,7 @@ use App\Actions\Customers\UpdateCustomerStatusAction;
 use App\Enums\ContactAccessLevel;
 use App\Enums\CustomerStatus;
 use App\Enums\WhatsappEventType;
+use App\Exceptions\CustomerOptOutException;
 use App\Exceptions\InvoicePdfSendException;
 use App\Models\CommissionRate;
 use App\Models\CpeDevice;
@@ -21,6 +22,7 @@ use App\Models\WhatsappIncomingMessage;
 use App\Models\WhatsappMessageLog;
 use App\Services\Billing\InvoicePdfSendService;
 use App\Services\CommissionAttributionService;
+use App\Services\Customers\CustomerNotificationOptOutService;
 use App\Services\Network\CpeBindingService;
 use App\Services\Network\RadiusCredentialService;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -54,6 +56,11 @@ class CustomerShow extends Component
     public array $sendReceiptPreview = [];
 
     public ?string $sendReceiptError = null;
+
+    // v0.28.1 (T1) — opt-out notifikasi otomatis: modal konfirmasi + alasan.
+    public bool $showOptOutModal = false;
+
+    public string $optOutReason = '';
 
     public bool $editingProfile = false;
 
@@ -579,6 +586,47 @@ class CustomerShow extends Component
             : 'Kuitansi diantrekan untuk dikirim ke pelanggan.');
     }
 
+    // v0.28.1 (T1) — opt-out / opt-in notifikasi otomatis. Livewire HANYA
+    // memanggil service (logika + jejak append-only di CustomerNotificationOptOutService).
+    public function openOptOutModal(): void
+    {
+        $this->authorize('update', $this->customer);
+
+        $this->optOutReason = '';
+        $this->resetErrorBag('optOutReason');
+        $this->showOptOutModal = true;
+    }
+
+    public function cancelOptOut(): void
+    {
+        $this->showOptOutModal = false;
+        $this->optOutReason = '';
+        $this->resetErrorBag('optOutReason');
+    }
+
+    public function submitOptOut(CustomerNotificationOptOutService $service): void
+    {
+        $this->authorize('update', $this->customer);
+
+        try {
+            if ($this->customer->auto_notify_opt_out) {
+                $service->optIn($this->customer, $this->optOutReason, auth()->user());
+                $flash = 'Pelanggan di-opt-in — notifikasi otomatis diaktifkan kembali.';
+            } else {
+                $service->optOut($this->customer, $this->optOutReason, auth()->user());
+                $flash = 'Pelanggan di-opt-out — tidak lagi menerima notifikasi otomatis.';
+            }
+        } catch (CustomerOptOutException $e) {
+            $this->addError('optOutReason', $e->getMessage());
+
+            return;
+        }
+
+        $this->cancelOptOut();
+        $this->customer = $this->customer->refresh();
+        session()->flash('status', $flash);
+    }
+
     /**
      * v0.13.5.3 — penanda kirim per invoice (baris terakhir InvoiceIssued),
      * keyed by invoice_id. "Terkirim" hanya non-uji; uji ditandai "Uji".
@@ -652,6 +700,8 @@ class CustomerShow extends Component
             'availableTransitions' => $availableTransitions,
             'accessLevels' => ContactAccessLevel::cases(),
             'canManage' => auth()->user()->can('update', $this->customer),
+            // v0.28.1 (T1) — riwayat opt-out/opt-in ringkas (append-only).
+            'optOutLogs' => $this->customer->optOutLogs()->with('user')->limit(10)->get(),
             'cpeDevice' => $this->customer->cpeDevices()->first(),
             'canAddDevice' => auth()->user()->can('create', [CpeDevice::class, $this->customer->reseller]),
             'availablePackages' => PppPackage::where('is_active', true)->orderBy('name')->get(),

@@ -131,6 +131,16 @@ class SendInvoicePdfAutomatically extends Command
             if ($customer->status !== CustomerStatus::Aktif) {
                 continue;
             }
+
+            // v0.28.1 (T1) — pelanggan opt-out dilewati SEBELUM buildAndQueue.
+            // Guard otoritatif tetap di buildAndQueue(), TAPI di sweep ini
+            // return null-nya opt-out akan disalahartikan sebagai "template
+            // nonaktif" (break di bawah) — jadi skip di sini supaya SATU
+            // pelanggan opt-out tidak menghentikan sisa sweep tenant.
+            if ($customer->auto_notify_opt_out) {
+                continue;
+            }
+
             $phone = WhatsappPhone::normalize($customer->phone_number);
             if (strlen($phone) < 10 || ! str_starts_with($phone, '62')) {
                 continue;

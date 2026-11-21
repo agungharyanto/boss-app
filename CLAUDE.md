@@ -9621,6 +9621,17 @@ event pelanggan di tenant 1 juga sebagian dinonaktifkan manual (`invoice_due_rem
 = is_active 0) — **boleh diaktifkan lagi** kapan pun; saklar per-tenant adalah penegak utama, template
 is_active hanya lapisan kedua. Keduanya harus ON agar notifikasi pelanggan jalan lagi.
 
+**v0.28.1 (T1 Opt-out Pelanggan) — lapisan DI ATAS saklar ini.** Pelanggan dengan
+`customers.auto_notify_opt_out=true` diblokir di `WhatsappGatewayService::buildAndQueue()` pada blok
+`context === null` (DI ATAS cek `customer_auto_notify_enabled`) → return `null` tanpa `WhatsappMessageLog`/
+dispatch; menutup keempat jalur otomatis. **Kirim MANUAL (`InvoiceSendContext`) TIDAK diblokir** (sengaja).
+Sweep `SendInvoicePdfAutomatically` melewati pelanggan opt-out SEBELUM `buildAndQueue` — karena sweep
+memperlakukan `buildAndQueue()===null` sebagai "template nonaktif → `break`", opt-out yang juga me-return
+`null` akan menghentikan sisa sweep bila tidak di-skip lebih dulu (dua command reminder TIDAK punya pola
+break ini — lihat catatan T2 di ROADMAP). Jejak `customer_notification_opt_out_logs` **APPEND-ONLY: model
+menolak update & delete** (lebih ketat dari `company_bank_account_logs`) — pembersihan data uji HANYA lewat
+`DB::table()->delete()`/cascade DB langsung (bukan Eloquent `->delete()`, yang akan throw).
+
 ## PDF Invoice server-side (v0.13.5.2 — SELESAI, merged `develop`→`main`, tag `v0.13.5.2`)
 
 **Render invoice jadi PDF server-side via dompdf (`barryvdh/laravel-dompdf ^3.1`) — untuk DIUNDUH/DILIHAT

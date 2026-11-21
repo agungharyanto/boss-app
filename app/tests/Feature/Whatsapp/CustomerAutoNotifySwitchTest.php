@@ -6,6 +6,7 @@ use App\Console\Commands\SendWhatsappSuspendedReminders;
 use App\Enums\CustomerStatus;
 use App\Enums\InvoiceStatus;
 use App\Enums\WhatsappEventType;
+use App\Enums\WhatsappSessionStatus;
 use App\Jobs\SendWhatsappMessageJob;
 use App\Models\Customer;
 use App\Models\Invoice;
@@ -14,10 +15,12 @@ use App\Models\Subscription;
 use App\Models\Tenant;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
+use App\Models\WhatsappSession;
 use App\Models\WorkOrderDispatchSettings;
 use App\Services\InvoiceService;
 use App\Services\Whatsapp\WhatsappGatewayService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -30,6 +33,31 @@ use Tests\TestCase;
 class CustomerAutoNotifySwitchTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // v0.28.2 — gerbang (CustomerAutoSendGate) kini menuntut jendela jam;
+        // kunci waktu di dalam jendela (09:00 WIB) supaya test "kirim" bukan
+        // gagal karena di luar jendela.
+        Carbon::setTestNow(Carbon::create(2026, 11, 21, 9, 0, 0, 'Asia/Jakarta'));
+    }
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
+    }
+
+    /** v0.28.2 — gerbang menuntut sesi tujuan Connected agar pesan diantre. */
+    private function connectedSession(int $tenantId, ?int $resellerId = null): void
+    {
+        WhatsappSession::factory()->create([
+            'tenant_id' => $tenantId,
+            'reseller_id' => $resellerId,
+            'status' => WhatsappSessionStatus::Connected,
+        ]);
+    }
 
     private function template(int $tenantId, WhatsappEventType $event, ?int $resellerId = null): void
     {
@@ -78,6 +106,7 @@ class CustomerAutoNotifySwitchTest extends TestCase
         $customer = $this->customer($tenant->id);
         // Default baris = ON (forTenant default true).
         WorkOrderDispatchSettings::forTenant($tenant->id);
+        $this->connectedSession($tenant->id);
 
         $result = app(WhatsappGatewayService::class)
             ->buildAndQueue(WhatsappEventType::CustomerRegistered, $customer);
@@ -93,6 +122,7 @@ class CustomerAutoNotifySwitchTest extends TestCase
         $tenant = Tenant::factory()->create();
         $this->template($tenant->id, WhatsappEventType::CustomerRegistered);
         $customer = $this->customer($tenant->id);
+        $this->connectedSession($tenant->id);
         // SENGAJA tidak membuat baris settings sama sekali → dianggap ON.
 
         $result = app(WhatsappGatewayService::class)
@@ -163,6 +193,7 @@ class CustomerAutoNotifySwitchTest extends TestCase
         $this->template($onTenant->id, WhatsappEventType::CustomerSuspendedReminder);
         $onCustomer = Customer::factory()->create(['tenant_id' => $onTenant->id, 'reseller_id' => null, 'status' => CustomerStatus::Suspend->value]);
         WorkOrderDispatchSettings::forTenant($onTenant->id); // default ON
+        $this->connectedSession($onTenant->id);
 
         $this->artisan(SendWhatsappSuspendedReminders::class)->assertExitCode(0);
 

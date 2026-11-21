@@ -8,6 +8,7 @@ use App\Models\Invoice;
 use App\Models\WhatsappGatewaySettings;
 use App\Models\WhatsappMessageLog;
 use App\Models\WorkOrderDispatchSettings;
+use App\Services\Whatsapp\CustomerAutoSendGate;
 use App\Services\Whatsapp\WhatsappGatewayService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -25,7 +26,7 @@ class SendWhatsappDueReminders extends Command
 
     protected $description = 'Kirim pengingat WhatsApp H-5 dan H-0 untuk invoice yang belum dibayar (sesuai jadwal daily_schedule_times)';
 
-    public function handle(WhatsappGatewayService $service): int
+    public function handle(WhatsappGatewayService $service, CustomerAutoSendGate $gate): int
     {
         if (! $this->isScheduledNow()) {
             return self::SUCCESS;
@@ -69,18 +70,33 @@ class SendWhatsappDueReminders extends Command
                 continue;
             }
 
+            // Dedup: sudah terkirim NYATA hari ini ATAU sudah ter-SIMULASI hari
+            // ini (Mode Uji, v0.28.2 — Simulated tidak membuat WhatsappMessageLog,
+            // jadi harus cek baris keputusan Simulated juga — aturan tambahan 1).
             $alreadySentToday = WhatsappMessageLog::withoutGlobalScopes()
                 ->where('invoice_id', $invoice->id)
                 ->where('event_type', WhatsappEventType::InvoiceDueReminder->value)
                 ->whereDate('created_at', now()->toDateString())
                 ->exists();
 
-            if ($alreadySentToday) {
+            if ($alreadySentToday
+                || $gate->simulatedTodayExists((int) $invoice->tenant_id, WhatsappEventType::InvoiceDueReminder->value, $invoice->customer, $invoice)) {
                 continue;
             }
 
-            $service->buildAndQueue(WhatsappEventType::InvoiceDueReminder, $invoice->customer, $invoice);
-            $sent++;
+            $decision = $service->buildAndQueueGated(WhatsappEventType::InvoiceDueReminder, $invoice->customer, $invoice);
+
+            if ($decision->queued()) {
+                $sent++;
+
+                continue;
+            }
+
+            // Hasil run-stop (sesi/pemutus/plafon/jendela) → hentikan run.
+            if ($decision->isRunStop()) {
+                break;
+            }
+            // SkippedOptOut/Simulated/SkippedTemplateInactive → lanjut invoice berikutnya.
         }
 
         $this->info("Selesai. {$sent} pengingat due-date diantrikan dari {$invoices->count()} invoice yang cocok.");

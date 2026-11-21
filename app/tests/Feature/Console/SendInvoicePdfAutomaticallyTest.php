@@ -177,6 +177,26 @@ class SendInvoicePdfAutomaticallyTest extends TestCase
         $this->assertSame(0, $this->queuedCount($tenant->id));
     }
 
+    // v0.28.1 (T1) — pelanggan opt-out dilewati sweep. REGRESI penting: pelanggan
+    // opt-out yang diproses LEBIH DULU (generated_at lebih awal) TIDAK boleh
+    // menghentikan sisa sweep (return null-nya opt-out tak boleh di-break
+    // sebagai "template nonaktif").
+    public function test_sweep_skips_opted_out_customer_but_still_sends_others(): void
+    {
+        $tenant = $this->tenantWithAutoSend();
+
+        $optedOutInvoice = $this->eligibleInvoice($tenant->id, generatedAt: now()->subHours(5));
+        $optedOutInvoice->customer->update(['auto_notify_opt_out' => true]);
+
+        $normalInvoice = $this->eligibleInvoice($tenant->id, generatedAt: now()->subHours(1));
+
+        $this->runSweep();
+
+        $this->assertSame(0, WhatsappMessageLog::withoutGlobalScopes()->where('invoice_id', $optedOutInvoice->id)->count());
+        $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()->where('invoice_id', $normalInvoice->id)->count());
+        $this->assertSame(1, $this->queuedCount($tenant->id));
+    }
+
     public function test_customer_auto_notify_off_queues_nothing(): void
     {
         $tenant = $this->tenantWithAutoSend(['customer_auto_notify_enabled' => false]);

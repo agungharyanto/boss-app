@@ -44,6 +44,11 @@ class Customer extends Model
         // false (default) = PPN tidak ditagihkan, Invoice lewat "Perpanjang"
         // di-set tax_total=0 tapi cetakan tetap tampilkan baris "PPN (0%)".
         'tax_billable',
+        // v0.28.1 (T1) — opt-out notifikasi WA OTOMATIS per-pelanggan. true =
+        // pelanggan TIDAK menerima notifikasi otomatis apa pun (lapisan di atas
+        // saklar per-tenant customer_auto_notify_enabled). Kirim MANUAL tetap
+        // boleh. Default false; diubah hanya lewat CustomerNotificationOptOutService.
+        'auto_notify_opt_out',
         // v0.23.5 — flag customer dummy/QA (mis. aktivasi ONU ZTE C300 uji
         // end-to-end), supaya bisa dikecualikan dari laporan/billing
         // pelanggan asli. Default false, tidak mengubah data existing.
@@ -64,6 +69,7 @@ class Customer extends Model
             'longitude' => 'decimal:7',
             'nik' => 'encrypted',
             'tax_billable' => 'boolean',
+            'auto_notify_opt_out' => 'boolean',
             'referral_locked' => 'boolean',
             'is_test_fixture' => 'boolean',
             'test_onu_metadata' => 'array',
@@ -124,6 +130,14 @@ class Customer extends Model
     public function timelineEntries(): HasMany
     {
         return $this->hasMany(CustomerTimelineEntry::class)->latest('created_at');
+    }
+
+    /**
+     * v0.28.1 (T1) — jejak append-only opt-out/opt-in notifikasi otomatis.
+     */
+    public function optOutLogs(): HasMany
+    {
+        return $this->hasMany(CustomerNotificationOptOutLog::class)->latest('id');
     }
 
     public function referredBy(): BelongsTo

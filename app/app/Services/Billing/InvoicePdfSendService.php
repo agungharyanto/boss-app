@@ -324,6 +324,9 @@ class InvoicePdfSendService
             'due_date' => $invoice->due_date?->format('d/m/Y') ?? '—',
             'status_label' => $invoice->status->label(),
             'sendable' => in_array($invoice->status, [InvoiceStatus::Pending, InvoiceStatus::Overdue, InvoiceStatus::Paid], true),
+            // v0.28.1 (T1) — banner peringatan: kirim MANUAL tetap BOLEH walau
+            // pelanggan opt-out notifikasi otomatis (keputusan sadar admin).
+            'opt_out' => (bool) ($customer?->auto_notify_opt_out ?? false),
             'test_mode' => $testMode,
             'test_recipient' => $testRecipient,
             'test_recipient_valid' => $testRecipientValid,
@@ -366,6 +369,8 @@ class InvoicePdfSendService
             'paid_date' => $invoice->paid_at?->format('d/m/Y') ?? '—',
             'status_label' => $invoice->status->label(),
             'sendable' => $invoice->status === InvoiceStatus::Paid,
+            // v0.28.1 (T1) — lihat previewFor(): banner opt-out, kirim manual tetap boleh.
+            'opt_out' => (bool) ($customer?->auto_notify_opt_out ?? false),
             'test_mode' => $testMode,
             'test_recipient' => $testRecipient,
             'test_recipient_valid' => $testRecipientValid,

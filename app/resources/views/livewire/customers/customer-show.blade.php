@@ -64,6 +64,50 @@
         @endif
     </div>
 
+    {{-- Notifikasi Otomatis WA (v0.28.1 T1 — opt-out per pelanggan) --}}
+    <div class="p-4 border border-gray-200 rounded-md">
+        <div class="flex items-center justify-between mb-2">
+            <h2 class="text-sm font-semibold text-gray-700">Notifikasi Otomatis WhatsApp</h2>
+            @if ($customer->auto_notify_opt_out)
+                <span class="px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 font-medium">Opt-out</span>
+            @else
+                <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-700 font-medium">Menerima</span>
+            @endif
+        </div>
+
+        <p class="text-sm text-gray-600">
+            @if ($customer->auto_notify_opt_out)
+                Pelanggan ini <span class="font-semibold text-red-700">OPT-OUT</span> — tidak menerima notifikasi
+                WhatsApp otomatis apa pun (tagihan terbit, pengingat jatuh tempo, suspend, registrasi).
+                Kirim MANUAL oleh admin tetap bisa.
+            @else
+                Pelanggan ini menerima notifikasi WhatsApp otomatis (bila saklar tenant & template aktif).
+            @endif
+        </p>
+
+        @if ($canManage)
+            <button wire:click="openOptOutModal" class="mt-3 text-sm {{ $customer->auto_notify_opt_out ? 'text-green-700' : 'text-red-600' }} hover:underline">
+                {{ $customer->auto_notify_opt_out ? 'Aktifkan lagi notifikasi otomatis (Opt-in)' : 'Berhentikan notifikasi otomatis (Opt-out)' }}
+            </button>
+        @endif
+
+        @if ($optOutLogs->isNotEmpty())
+            <div class="mt-3 border-t border-gray-100 pt-3">
+                <p class="text-xs font-medium text-gray-500 mb-1">Riwayat</p>
+                <ul class="space-y-1 text-xs text-gray-600">
+                    @foreach ($optOutLogs as $log)
+                        <li class="flex flex-wrap gap-x-2">
+                            <span class="text-gray-400 font-mono">{{ $log->created_at?->translatedFormat('d M Y H:i') }}</span>
+                            <span class="font-medium {{ $log->action === \App\Enums\CustomerOptOutAction::OptedOut ? 'text-red-600' : 'text-green-700' }}">{{ $log->action->label() }}</span>
+                            <span class="text-gray-500">oleh {{ $log->user?->name ?? 'sistem' }}</span>
+                            <span class="w-full text-gray-500">Alasan: {{ $log->reason }}</span>
+                        </li>
+                    @endforeach
+                </ul>
+            </div>
+        @endif
+    </div>
+
     {{-- Paket & Referral (v0.9.4 — link komisi saja, TIDAK terkait billing/subscriptions) --}}
     <div class="p-4 border border-gray-200 rounded-md">
         <h2 class="text-sm font-semibold text-gray-700 mb-3">Paket &amp; Referral</h2>
@@ -470,4 +514,44 @@
 
     @include('billing.partials.send-invoice-pdf-modal')
     @include('billing.partials.send-receipt-modal')
+
+    {{-- Modal opt-out / opt-in notifikasi otomatis (v0.28.1 T1) --}}
+    @if ($showOptOutModal)
+        <div class="fixed inset-0 z-[1100] flex items-center justify-center bg-black/40 p-4" wire:click.self="cancelOptOut">
+            <div class="w-full max-w-md rounded-lg bg-white shadow-xl">
+                <div class="border-b border-gray-200 px-5 py-3">
+                    <h3 class="text-base font-semibold text-gray-800">
+                        {{ $customer->auto_notify_opt_out ? 'Aktifkan Notifikasi Otomatis (Opt-in)' : 'Berhentikan Notifikasi Otomatis (Opt-out)' }}
+                    </h3>
+                </div>
+
+                <div class="px-5 py-4 space-y-3 text-sm">
+                    <p class="text-gray-600">
+                        @if ($customer->auto_notify_opt_out)
+                            Pelanggan <span class="font-semibold">{{ $customer->name }}</span> akan MENERIMA lagi notifikasi WhatsApp otomatis.
+                        @else
+                            Pelanggan <span class="font-semibold">{{ $customer->name }}</span> TIDAK akan menerima notifikasi WhatsApp otomatis.
+                            Kirim manual oleh admin tetap bisa.
+                        @endif
+                    </p>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Alasan <span class="text-red-600">*</span></label>
+                        <textarea wire:model="optOutReason" rows="2"
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
+                            placeholder="mis. permintaan pelanggan lewat telepon"></textarea>
+                        @error('optOutReason') <span class="text-sm text-red-600">{{ $message }}</span> @enderror
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-end gap-2 border-t border-gray-200 px-5 py-3">
+                    <button type="button" wire:click="cancelOptOut" class="px-3 py-1.5 text-sm text-gray-600 hover:underline">Batal</button>
+                    <button type="button" wire:click="submitOptOut" wire:loading.attr="disabled"
+                        class="px-4 py-1.5 text-sm text-white rounded-md hover:opacity-90 {{ $customer->auto_notify_opt_out ? 'bg-green-600' : 'bg-red-600' }}">
+                        {{ $customer->auto_notify_opt_out ? 'Aktifkan (Opt-in)' : 'Opt-out' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    @endif
 </div>

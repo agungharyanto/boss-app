@@ -67,6 +67,22 @@ class WhatsappGatewayService
         // (InvoicePdfSendService) → sengaja MELEWATI saklar. Baca read-only
         // (tanpa membuat baris): tak ada baris settings => dianggap ON.
         if ($context === null) {
+            // v0.28.1 (T1) — opt-out per-pelanggan: lapisan DI ATAS saklar
+            // tenant. Pelanggan yang opt-out TIDAK menerima notifikasi
+            // OTOMATIS apa pun (invoice_issued/invoice_due_reminder/
+            // customer_suspended_reminder/customer_registered). Kirim MANUAL
+            // (context != null) TIDAK sampai ke sini. Lewati tanpa membuat
+            // WhatsappMessageLog / dispatch job.
+            if ($customer->auto_notify_opt_out) {
+                Log::info('WhatsappGatewayService: dilewati — pelanggan opt-out notifikasi otomatis', [
+                    'event' => $eventType->value,
+                    'customer' => $customer->id,
+                    'tenant' => $customer->tenant_id,
+                ]);
+
+                return null;
+            }
+
             $settings = WorkOrderDispatchSettings::query()
                 ->where('tenant_id', $customer->tenant_id)
                 ->first();

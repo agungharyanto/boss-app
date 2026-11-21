@@ -23,6 +23,13 @@
                     </div>
                 @endif
 
+                @if (($p['opt_out'] ?? false))
+                    <div class="rounded-md border border-red-400 bg-red-50 px-3 py-2 text-red-700">
+                        <span class="font-semibold">{{ __('Pelanggan ini OPT-OUT dari notifikasi otomatis.') }}</span>
+                        {{ __('Kirim manual tetap bisa atas keputusan Anda.') }}
+                    </div>
+                @endif
+
                 <dl class="grid grid-cols-3 gap-y-1">
                     <dt class="text-gray-500">{{ __('Pelanggan') }}</dt>
                     <dd class="col-span-2 text-gray-800">{{ $p['customer_name'] ?? '—' }}</dd>

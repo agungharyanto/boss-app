@@ -239,6 +239,35 @@ class CustomerAutoSendGateTest extends TestCase
         $this->assertSame(0, CustomerAutoSendBreaker::where('tenant_id', $tenant->id)->first()->consecutive_failures);
     }
 
+    public function test_breaker_ignores_non_automatic_failures(): void
+    {
+        $tenant = $this->tenantReady();
+        $user = User::factory()->create(['tenant_id' => $tenant->id]);
+
+        $make = function (WhatsappEventType $event, ?int $sentBy, bool $isTest) use ($tenant) {
+            return WhatsappMessageLog::create([
+                'tenant_id' => $tenant->id, 'reseller_id' => null, 'customer_id' => null, 'invoice_id' => null,
+                'phone_number' => '6281234567890', 'event_type' => $event,
+                'sent_by_user_id' => $sentBy, 'is_test' => $isTest,
+                'rendered_content' => 'x', 'status' => WhatsappMessageStatus::Failed, 'queued_at' => now(),
+            ]);
+        };
+
+        // Kegagalan: manual (sent_by set), grup/teknisi (WorkOrderDispatched),
+        // OTP referrer, dan uji — SEMUA tidak boleh menaikkan counter pemutus.
+        $this->gate()->recordOutcome($make(WhatsappEventType::InvoiceIssued, $user->id, false), false);
+        $this->gate()->recordOutcome($make(WhatsappEventType::WorkOrderDispatched, null, false), false);
+        $this->gate()->recordOutcome($make(WhatsappEventType::ReferrerActionOtp, null, false), false);
+        $this->gate()->recordOutcome($make(WhatsappEventType::InvoiceIssued, null, true), false);
+
+        $this->assertSame(0, CustomerAutoSendBreaker::count());
+
+        // Kontrol: kegagalan OTOMATIS pelanggan (invoice_issued, sent_by null,
+        // non-uji) MEMANG menaikkan counter.
+        $this->gate()->recordOutcome($make(WhatsappEventType::InvoiceIssued, null, false), false);
+        $this->assertSame(1, CustomerAutoSendBreaker::where('tenant_id', $tenant->id)->first()->consecutive_failures);
+    }
+
     public function test_breaker_open_blocks_send(): void
     {
         $tenant = $this->tenantReady();

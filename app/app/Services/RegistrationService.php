@@ -5,18 +5,16 @@ namespace App\Services;
 use App\Enums\CustomerStatus;
 use App\Enums\RegistrationChannel;
 use App\Enums\RegistrationStatus;
-use App\Enums\WhatsappEventType;
 use App\Models\Customer;
+use App\Models\CustomerAutoSendDeferral;
 use App\Models\PppPackage;
 use App\Models\Referrer;
 use App\Services\Installation\WorkOrderService;
-use App\Services\Whatsapp\WhatsappGatewayService;
 use Illuminate\Support\Facades\DB;
 
 class RegistrationService
 {
     public function __construct(
-        private readonly WhatsappGatewayService $whatsappService,
         private readonly CommissionAttributionService $commissionAttribution,
         private readonly SubscriptionService $subscriptionService,
         private readonly WorkOrderService $workOrderService,
@@ -93,12 +91,25 @@ class RegistrationService
             return $customer;
         });
 
-        // v0.4.0 WhatsApp Gateway hook — outside the transaction above so a
-        // notification never fires for a registration that ends up rolled
-        // back. This flow never sets customer.reseller_id (confirmed,
-        // accepted as-is — see docs/ROADMAP.md), so session_key always
-        // resolves to "direct" here.
-        $this->whatsappService->buildAndQueue(WhatsappEventType::CustomerRegistered, $customer);
+        // v0.28.3 (T3, B4) — TIDAK lagi dispatch WA customer_registered
+        // langsung. Registrasi bisa terjadi kapan saja (termasuk di luar
+        // jendela jam), jadi notifikasi SELALU ditunda lewat SATU deferral
+        // 'pending' per pelanggan; CustomerAutoSendOrchestrator mengonsumsinya
+        // PALING AKHIR tiap tick (prioritas terendah K13), mengevaluasi gerbang
+        // penuh (jendela/plafon/sesi/pemutus/Mode Uji/opt-out/saklar), dan
+        // meng-expired-kan bila menunggu > 48 jam. Dibuat TANPA syarat (bahkan
+        // saat saklar notifikasi OFF) — orkestrator yang membatalkannya
+        // (gerbang → SkippedAutoNotifyOff) sehingga "langsung selesai" tanpa
+        // baris keputusan, bukan menggantung.
+        //
+        // Di LUAR transaksi di atas: registrasi yang ter-rollback tidak
+        // meninggalkan deferral. Alur ini tak pernah mengisi
+        // customer.reseller_id (diterima apa adanya — lihat docs/ROADMAP.md),
+        // jadi session_key selalu "direct".
+        CustomerAutoSendDeferral::query()->firstOrCreate(
+            ['customer_id' => $customer->id, 'status' => CustomerAutoSendDeferral::STATUS_PENDING],
+            ['tenant_id' => $customer->tenant_id],
+        );
 
         return $customer;
     }

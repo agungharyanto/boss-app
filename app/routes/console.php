@@ -3,18 +3,15 @@
 use App\Console\Commands\DispatchWorkOrders;
 use App\Console\Commands\GenerateDueInvoices;
 use App\Console\Commands\MarkOverdueInvoices;
-use App\Console\Commands\ProcessDeferredCustomerRegistered;
 use App\Console\Commands\PruneCustomerAutoSendDecisions;
 use App\Console\Commands\ReconcileCpeDevices;
-use App\Console\Commands\SendInvoicePdfAutomatically;
-use App\Console\Commands\SendWhatsappDueReminders;
-use App\Console\Commands\SendWhatsappSuspendedReminders;
 use App\Console\Commands\SyncContainerStats;
 use App\Console\Commands\SyncCpeConnectedHosts;
 use App\Console\Commands\SyncCpeDeviceStatus;
 use App\Console\Commands\SyncCpeSignalHistory;
 use App\Console\Commands\VpnCheckNodeHealth;
 use App\Console\Commands\VpnSyncRouteFragments;
+use App\Console\Commands\WhatsappAutoSendDispatch;
 use App\Console\Commands\WhatsappCheckSessionHealth;
 use App\Console\Commands\WhatsappPruneIncomingMedia;
 use App\Console\Commands\WhatsappReconcileIncomingMedia;
@@ -30,26 +27,26 @@ Artisan::command('inspire', function () {
 Schedule::command(GenerateDueInvoices::class)->daily();
 Schedule::command(MarkOverdueInvoices::class)->daily();
 
-// v0.4.0 WhatsApp Gateway — picked up by the same boss-scheduler loop.
-// SendWhatsappDueReminders self-gates against the admin-configurable
-// daily_schedule_times (whatsapp_gateway_settings), so it's scheduled every
-// minute rather than at a fixed cron time.
-Schedule::command(SendWhatsappDueReminders::class)->everyMinute();
-Schedule::command(SendWhatsappSuspendedReminders::class)->dailyAt('08:00');
+// v0.28.3 (T3, A3 Opsi 1) — ORKESTRATOR kirim otomatis pelanggan: titik
+// terjadwal TUNGGAL yang menggantikan empat jalur lama (due/suspend/sweep/
+// process-deferred). Kumpulkan semua jalur, urutkan prioritas K13, lewatkan
+// satu per satu ke gerbang. everyMinute → kandidat dikumpulkan KAPAN SAJA di
+// dalam jendela T2 (08:00–20:00), sekali/hari lewat dedup (daily_schedule_times
+// TIDAK lagi dipakai untuk jalur pelanggan). withoutOverlapping mencegah dua
+// tick menumpuk (satu boss-scheduler → onOneServer tidak diperlukan).
+//
+// Keempat command lama (whatsapp:send-due-reminders, whatsapp:send-suspended-
+// reminders, invoices:send-pdf-automatically, whatsapp:process-deferred-
+// registered) SENGAJA TIDAK lagi dijadwalkan — tetap ada sebagai perintah
+// MANUAL (debug) dengan body-nya sendiri; dedup lintas-jalur (log + decisions)
+// mencegah kiriman ganda bila dijalankan manual berbarengan orkestrator.
+Schedule::command(WhatsappAutoSendDispatch::class)->everyMinute()->withoutOverlapping();
 Schedule::command(WhatsappCheckSessionHealth::class)->hourly();
 
-// v0.13.5.3.1 — Kirim PDF Invoice OTOMATIS. Sweep self-gate: jam WIB
-// [08:00,20:00), saklar ganda per tenant (auto-send AND customer-notify AND
-// BUKAN Mode Uji), cap harian per sesi. ->withoutOverlapping() mencegah dua
-// run paralel (dedup tetap dari log yang tersisip sinkron). everyFifteenMinutes
-// — margin lebar di bawah kuota + pacing worker (bukan hook sinkron saat
-// invoice terbit, hindari burst tengah malam GenerateDueInvoices).
-Schedule::command(SendInvoicePdfAutomatically::class)->everyFifteenMinutes()->withoutOverlapping();
-
-// v0.28.2 (T2) — CustomerAutoSendGate. Proses penundaan notifikasi
-// customer_registered (evaluasi ulang gerbang penuh tiap menit, K11) + prune
-// jejak keputusan gerbang > 30 hari. withoutOverlapping supaya tidak dobel.
-Schedule::command(ProcessDeferredCustomerRegistered::class)->everyMinute()->withoutOverlapping();
+// v0.28.3 (T3) — jalur kirim PDF invoice OTOMATIS (sweep) + penundaan
+// customer_registered kini dikonsumsi oleh ORKESTRATOR di atas
+// (WhatsappAutoSendDispatch), bukan command terjadwal terpisah. Tersisa hanya
+// prune jejak keputusan gerbang (> 30 hari).
 Schedule::command(PruneCustomerAutoSendDecisions::class)->dailyAt('03:40');
 
 // v0.13.6 — TERIMA media masuk. Reconcile menutup webhook incoming-message

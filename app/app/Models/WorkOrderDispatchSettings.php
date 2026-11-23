@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Whatsapp\DueReminderDays;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -67,6 +68,10 @@ class WorkOrderDispatchSettings extends Model
         'invoice_pdf_auto_send_enabled',
         'invoice_pdf_auto_send_enabled_at',
         'invoice_pdf_auto_send_from',
+        // v0.28.3 (T3, A5) — himpunan HARI pengingat jatuh tempo (H-0..H-7),
+        // default [5, 0]. Dikonsumsi CustomerAutoSendOrchestrator (jalur
+        // terjadwal). Validasi/sanitasi: App\Support\Whatsapp\DueReminderDays.
+        'due_reminder_days',
         // v0.28.2 (T2) — rename dari invoice_pdf_auto_send_daily_cap: plafon
         // GABUNGAN semua jalur otomatis per tenant (K2).
         'customer_auto_send_daily_cap',
@@ -87,6 +92,7 @@ class WorkOrderDispatchSettings extends Model
             'invoice_pdf_auto_send_enabled' => 'boolean',
             'invoice_pdf_auto_send_enabled_at' => 'datetime',
             'invoice_pdf_auto_send_from' => 'date',
+            'due_reminder_days' => 'array',
             'customer_auto_send_daily_cap' => 'integer',
             'customer_auto_send_breaker_threshold' => 'integer',
             'ztp_on_activation_enabled' => 'boolean',
@@ -133,6 +139,8 @@ class WorkOrderDispatchSettings extends Model
                 'invoice_pdf_auto_send_enabled' => false,
                 'invoice_pdf_auto_send_enabled_at' => null,
                 'invoice_pdf_auto_send_from' => null,
+                // v0.28.3 (T3, A5) — default [5, 0] = perilaku lama (H-5 & H-0).
+                'due_reminder_days' => DueReminderDays::DEFAULT,
                 // v0.28.2 (T2) — plafon GABUNGAN default 80; jendela 08:00–20:00;
                 // ambang pemutus 10. Default TIDAK menyalakan kirim apa pun.
                 'customer_auto_send_daily_cap' => 80,

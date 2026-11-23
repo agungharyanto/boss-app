@@ -6,6 +6,7 @@ use App\Enums\CustomerAutoSendResult;
 use App\Enums\CustomerStatus;
 use App\Enums\InvoiceStatus;
 use App\Enums\WhatsappEventType;
+use App\Enums\WhatsappMessageStatus;
 use App\Enums\WhatsappSessionStatus;
 use App\Jobs\SendWhatsappMessageJob;
 use App\Models\Customer;
@@ -451,5 +452,105 @@ class CustomerAutoSendOrchestratorTest extends TestCase
         $this->assertSame(4, CustomerAutoSendDecisionLog::count());
         $this->assertSame(0, $this->autoLogCount($tenant->id));
         Queue::assertNothingPushed();
+    }
+
+    // ── Kolektor invoice: saklar terpisah + semantik sweep lama (item 3) ─────
+
+    /**
+     * (3a) Kolektor invoice (sweep) di-gate `invoice_pdf_auto_send_enabled`,
+     * TERPISAH dari `customer_auto_notify_enabled`. Dengan auto_notify ON + Mode
+     * Uji OFF + invoice sweep-eligible: saklar OFF → NOL kirim; saklar ON → kirim.
+     * Membuktikan saklar invoice-lah yang menggerbang, bukan auto_notify.
+     * (Orkestrator CustomerAutoSendOrchestrator.php: gate di dispatchTenant,
+     * baris `$autoNotify && $settings->invoice_pdf_auto_send_enabled`.)
+     */
+    public function test_invoice_sweep_gated_by_its_own_switch_separate_from_auto_notify(): void
+    {
+        // auto_notify ON, Mode Uji OFF, sweep OFF. due_reminder_days default [5,0].
+        $tenant = $this->tenantReady([
+            'invoice_pdf_auto_send_enabled' => false,
+            'invoice_pdf_auto_send_enabled_at' => now()->subDay(),
+        ]);
+        $c = $this->customer($tenant);
+        // due_date jauh (10 hari) → HANYA kandidat sweep, bukan due reminder.
+        $invoice = $this->pendingInvoice($tenant, $c, now()->copy()->addDays(10)->toDateString(), now()->subHours(2));
+
+        $this->tick();
+
+        // Saklar sweep OFF → kolektor tidak jalan → nol kirim, nol baris keputusan.
+        $this->assertSame(0, WhatsappMessageLog::withoutGlobalScopes()->where('invoice_id', $invoice->id)->count());
+        $this->assertSame(0, CustomerAutoSendDecisionLog::where('path', WhatsappEventType::InvoiceIssued->value)->count());
+        $this->assertSame(0, $this->autoLogCount($tenant->id));
+
+        // Nyalakan HANYA saklar sweep (auto_notify tetap ON sejak awal) → kirim.
+        WorkOrderDispatchSettings::forTenant($tenant->id)->update(['invoice_pdf_auto_send_enabled' => true]);
+        $this->tick();
+
+        $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()
+            ->where('invoice_id', $invoice->id)
+            ->where('event_type', WhatsappEventType::InvoiceIssued->value)
+            ->count());
+    }
+
+    /**
+     * (3b) Semantik lama sweep dipertahankan: batas bawah = enabled_at (atau
+     * `invoice_pdf_auto_send_from`), `generated_at >= batas bawah`. Invoice
+     * backlog (terbit SEBELUM saklar menyala) TIDAK ikut tersapu.
+     */
+    public function test_invoice_sweep_lower_bound_excludes_backlog_before_enabled_at(): void
+    {
+        $enabledAt = Carbon::create(2026, 11, 23, 6, 0, 0, 'Asia/Jakarta');
+        $tenant = $this->tenantReady([
+            'invoice_pdf_auto_send_enabled' => true,
+            'invoice_pdf_auto_send_enabled_at' => $enabledAt,
+            'invoice_pdf_auto_send_from' => null,
+        ]);
+
+        $cBacklog = $this->customer($tenant);
+        $iBacklog = $this->pendingInvoice($tenant, $cBacklog, now()->copy()->addDays(10)->toDateString(), $enabledAt->copy()->subHour());  // sebelum batas bawah
+        $cNew = $this->customer($tenant);
+        $iNew = $this->pendingInvoice($tenant, $cNew, now()->copy()->addDays(10)->toDateString(), $enabledAt->copy()->addHour());          // setelah batas bawah
+
+        $this->tick();
+
+        $this->assertSame(0, WhatsappMessageLog::withoutGlobalScopes()->where('invoice_id', $iBacklog->id)->count());
+        $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()->where('invoice_id', $iNew->id)->where('event_type', WhatsappEventType::InvoiceIssued->value)->count());
+    }
+
+    /**
+     * (3c) Dedup sweep lama dipertahankan: SUDAH ada log invoice_issued NON-UJI
+     * → dilewati; log UJI (is_test=true) TIDAK men-dedup → tetap tersapu.
+     */
+    public function test_invoice_sweep_dedup_counts_non_test_log_only(): void
+    {
+        $tenant = $this->tenantReady(['invoice_pdf_auto_send_enabled_at' => now()->subDay()]);
+
+        $cAlready = $this->customer($tenant);
+        $iAlready = $this->pendingInvoice($tenant, $cAlready, now()->copy()->addDays(10)->toDateString());
+        $this->sentInvoiceLog($tenant->id, $iAlready, isTest: false); // log NON-UJI → dedup
+
+        $cTestOnly = $this->customer($tenant);
+        $iTestOnly = $this->pendingInvoice($tenant, $cTestOnly, now()->copy()->addDays(10)->toDateString());
+        $this->sentInvoiceLog($tenant->id, $iTestOnly, isTest: true); // log UJI → TIDAK dedup
+
+        $this->tick();
+
+        // iAlready: tidak ada log NON-UJI baru (tetap 1, yang pre-seed).
+        $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()
+            ->where('invoice_id', $iAlready->id)->where('event_type', WhatsappEventType::InvoiceIssued->value)->where('is_test', false)->count());
+        // iTestOnly: log uji lama tidak men-dedup → kini ada 1 log NON-UJI baru.
+        $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()
+            ->where('invoice_id', $iTestOnly->id)->where('event_type', WhatsappEventType::InvoiceIssued->value)->where('is_test', false)->count());
+    }
+
+    private function sentInvoiceLog(int $tenantId, Invoice $invoice, bool $isTest): WhatsappMessageLog
+    {
+        return WhatsappMessageLog::create([
+            'tenant_id' => $tenantId, 'reseller_id' => null,
+            'customer_id' => $invoice->customer_id, 'invoice_id' => $invoice->id,
+            'phone_number' => '6281234567890', 'event_type' => WhatsappEventType::InvoiceIssued,
+            'is_test' => $isTest, 'rendered_content' => 'x',
+            'status' => WhatsappMessageStatus::Sent, 'queued_at' => now(),
+        ]);
     }
 }

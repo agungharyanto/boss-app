@@ -7,6 +7,7 @@ use App\Exceptions\WhatsappAttachmentException;
 use App\Models\WhatsappGatewaySettings;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappSession;
+use App\Services\Whatsapp\CustomerAutoSendGate;
 use App\Support\Whatsapp\WhatsappAttachment;
 use App\Support\WhatsappHmac;
 use Illuminate\Bus\Queueable;
@@ -66,6 +67,8 @@ class SendWhatsappMessageJob implements ShouldQueue
 
             if ($response->successful()) {
                 $log->update(['status' => WhatsappMessageStatus::Sent, 'sent_at' => now()]);
+                // v0.28.2 — reset pemutus kirim otomatis (jalur otomatis saja).
+                app(CustomerAutoSendGate::class)->recordOutcome($log, true);
 
                 return;
             }
@@ -78,6 +81,8 @@ class SendWhatsappMessageJob implements ShouldQueue
                 'status' => WhatsappMessageStatus::Failed,
                 'failed_reason' => $e->getMessage(),
             ]);
+            // v0.28.2 — kegagalan permanen dihitung ke pemutus (jalur otomatis).
+            app(CustomerAutoSendGate::class)->recordOutcome($log, false);
         } catch (Throwable $e) {
             $this->recordFailure($log, $e->getMessage());
         }
@@ -96,6 +101,8 @@ class SendWhatsappMessageJob implements ShouldQueue
                 'status' => WhatsappMessageStatus::Failed,
                 'failed_reason' => $exception?->getMessage() ?? 'Unknown failure',
             ]);
+            // v0.28.2 — hitung ke pemutus (jalur otomatis).
+            app(CustomerAutoSendGate::class)->recordOutcome($log, false);
         }
     }
 
@@ -175,6 +182,11 @@ class SendWhatsappMessageJob implements ShouldQueue
             'status' => $isFinalAttempt ? WhatsappMessageStatus::Failed : WhatsappMessageStatus::Queued,
             'failed_reason' => $reason,
         ]);
+
+        if ($isFinalAttempt) {
+            // v0.28.2 — hanya kegagalan FINAL dihitung ke pemutus (jalur otomatis).
+            app(CustomerAutoSendGate::class)->recordOutcome($log, false);
+        }
 
         if (! $isFinalAttempt) {
             $delaySeconds = match ($this->attempts()) {

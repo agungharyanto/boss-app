@@ -3,6 +3,8 @@
 use App\Console\Commands\DispatchWorkOrders;
 use App\Console\Commands\GenerateDueInvoices;
 use App\Console\Commands\MarkOverdueInvoices;
+use App\Console\Commands\ProcessDeferredCustomerRegistered;
+use App\Console\Commands\PruneCustomerAutoSendDecisions;
 use App\Console\Commands\ReconcileCpeDevices;
 use App\Console\Commands\SendInvoicePdfAutomatically;
 use App\Console\Commands\SendWhatsappDueReminders;
@@ -43,6 +45,12 @@ Schedule::command(WhatsappCheckSessionHealth::class)->hourly();
 // — margin lebar di bawah kuota + pacing worker (bukan hook sinkron saat
 // invoice terbit, hindari burst tengah malam GenerateDueInvoices).
 Schedule::command(SendInvoicePdfAutomatically::class)->everyFifteenMinutes()->withoutOverlapping();
+
+// v0.28.2 (T2) — CustomerAutoSendGate. Proses penundaan notifikasi
+// customer_registered (evaluasi ulang gerbang penuh tiap menit, K11) + prune
+// jejak keputusan gerbang > 30 hari. withoutOverlapping supaya tidak dobel.
+Schedule::command(ProcessDeferredCustomerRegistered::class)->everyMinute()->withoutOverlapping();
+Schedule::command(PruneCustomerAutoSendDecisions::class)->dailyAt('03:40');
 
 // v0.13.6 — TERIMA media masuk. Reconcile menutup webhook incoming-message
 // yang hilang (fire-and-forget) dari sidecar di volume gateway; withoutOverlapping

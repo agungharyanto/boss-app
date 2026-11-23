@@ -78,7 +78,7 @@ class SendInvoicePdfAutomaticallyTest extends TestCase
             'invoice_pdf_auto_send_enabled' => true,
             'invoice_pdf_auto_send_enabled_at' => now()->subDay(),
             'invoice_pdf_auto_send_from' => null,
-            'invoice_pdf_auto_send_daily_cap' => 80,
+            'customer_auto_send_daily_cap' => 80,
         ], $overrides));
 
         $this->template($tenant->id);
@@ -302,7 +302,7 @@ class SendInvoicePdfAutomaticallyTest extends TestCase
 
     public function test_daily_cap_limits_queue_and_leaves_rest(): void
     {
-        $tenant = $this->tenantWithAutoSend(['invoice_pdf_auto_send_daily_cap' => 3]);
+        $tenant = $this->tenantWithAutoSend(['customer_auto_send_daily_cap' => 3]);
         for ($i = 0; $i < 5; $i++) {
             $this->eligibleInvoice($tenant->id, generatedAt: now()->subHours(5 - $i));
         }
@@ -319,7 +319,7 @@ class SendInvoicePdfAutomaticallyTest extends TestCase
 
     public function test_test_logs_do_not_count_toward_cap(): void
     {
-        $tenant = $this->tenantWithAutoSend(['invoice_pdf_auto_send_daily_cap' => 1]);
+        $tenant = $this->tenantWithAutoSend(['customer_auto_send_daily_cap' => 1]);
         // Satu log UJI hari ini (sesi direct) — TIDAK mengurangi kuota.
         WhatsappMessageLog::withoutGlobalScopes()->create([
             'tenant_id' => $tenant->id,
@@ -433,7 +433,7 @@ class SendInvoicePdfAutomaticallyTest extends TestCase
             'invoice_pdf_test_mode_enabled' => false,
             'invoice_pdf_auto_send_enabled' => true,
             'invoice_pdf_auto_send_enabled_at' => now()->subDay(),
-            'invoice_pdf_auto_send_daily_cap' => 80,
+            'customer_auto_send_daily_cap' => 80,
         ]);
         $this->template($tenant->id);
         $this->connectedSession($tenant->id, status: WhatsappSessionStatus::LoggedOut);
@@ -472,7 +472,7 @@ class SendInvoicePdfAutomaticallyTest extends TestCase
             'invoice_pdf_test_mode_enabled' => false,
             'invoice_pdf_auto_send_enabled' => true,
             'invoice_pdf_auto_send_enabled_at' => now()->subDay(),
-            'invoice_pdf_auto_send_daily_cap' => 80,
+            'customer_auto_send_daily_cap' => 80,
         ]);
         $this->template($tenant->id, active: false);
         $this->connectedSession($tenant->id);

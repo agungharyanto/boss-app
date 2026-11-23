@@ -222,7 +222,7 @@ class WorkOrderDispatchSettings extends Component
         $settings->update([
             'invoice_pdf_auto_send_enabled' => $this->invoicePdfAutoSendEnabled,
             'invoice_pdf_auto_send_from' => $this->invoicePdfAutoSendFrom ?: null,
-            'invoice_pdf_auto_send_daily_cap' => $this->invoicePdfAutoSendDailyCap,
+            'customer_auto_send_daily_cap' => $this->invoicePdfAutoSendDailyCap,
             // enabled_at diisi saat OFF->ON; dibiarkan saat OFF atau tetap ON.
             'invoice_pdf_auto_send_enabled_at' => $turningOn
                 ? now()
@@ -506,7 +506,7 @@ class WorkOrderDispatchSettings extends Component
         $this->invoicePdfTestRecipient = $settings->invoice_pdf_test_recipient;
         $this->invoicePdfAutoSendEnabled = (bool) $settings->invoice_pdf_auto_send_enabled;
         $this->invoicePdfAutoSendFrom = $settings->invoice_pdf_auto_send_from?->format('Y-m-d');
-        $this->invoicePdfAutoSendDailyCap = (int) ($settings->invoice_pdf_auto_send_daily_cap ?? 80);
+        $this->invoicePdfAutoSendDailyCap = (int) ($settings->customer_auto_send_daily_cap ?? 80);
         $this->ztpOnActivationEnabled = (bool) $settings->ztp_on_activation_enabled;
     }
 

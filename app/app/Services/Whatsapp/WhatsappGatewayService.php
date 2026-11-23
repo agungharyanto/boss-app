@@ -11,10 +11,10 @@ use App\Models\Invoice;
 use App\Models\Referrer;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappSession;
-use App\Models\WorkOrderDispatchSettings;
 use App\Services\Billing\PaymentInstructionsService;
 use App\Services\Company\CompanyProfileService;
 use App\Services\Payment\PaymentService;
+use App\Support\Whatsapp\CustomerAutoSendDecision;
 use App\Support\Whatsapp\InvoiceSendContext;
 use App\Support\Whatsapp\WhatsappAttachment;
 use App\Support\WhatsappPhone;
@@ -32,6 +32,7 @@ class WhatsappGatewayService
 
     public function __construct(
         private readonly WhatsappTemplateService $templateService,
+        private readonly CustomerAutoSendGate $gate,
     ) {}
 
     /**
@@ -57,46 +58,55 @@ class WhatsappGatewayService
         ?WhatsappAttachment $attachment = null,
         ?InvoiceSendContext $context = null,
     ): ?WhatsappMessageLog {
-        // v0.13.5.1.2 — saklar per-tenant "Notifikasi Otomatis ke Pelanggan".
-        // TITIK PENEGAKAN: event pelanggan OTOMATIS (invoice_due_reminder,
-        // payment_received, customer_registered, customer_suspended_reminder)
-        // melewati method ini TANPA $context → guard di sini menghentikan
-        // semuanya tanpa menyentuh kelompok (B) (referrer OTP, teknisi/WO,
-        // staff, grup, balasan 2-arah) yang pakai buildAndQueueForRecipient/
-        // ForReferrer/ForGroup. $context != null = kirim MANUAL admin
-        // (InvoicePdfSendService) → sengaja MELEWATI saklar. Baca read-only
-        // (tanpa membuat baris): tak ada baris settings => dianggap ON.
-        if ($context === null) {
-            // v0.28.1 (T1) — opt-out per-pelanggan: lapisan DI ATAS saklar
-            // tenant. Pelanggan yang opt-out TIDAK menerima notifikasi
-            // OTOMATIS apa pun (invoice_issued/invoice_due_reminder/
-            // customer_suspended_reminder/customer_registered). Kirim MANUAL
-            // (context != null) TIDAK sampai ke sini. Lewati tanpa membuat
-            // WhatsappMessageLog / dispatch job.
-            if ($customer->auto_notify_opt_out) {
-                Log::info('WhatsappGatewayService: dilewati — pelanggan opt-out notifikasi otomatis', [
-                    'event' => $eventType->value,
-                    'customer' => $customer->id,
-                    'tenant' => $customer->tenant_id,
-                ]);
-
-                return null;
-            }
-
-            $settings = WorkOrderDispatchSettings::query()
-                ->where('tenant_id', $customer->tenant_id)
-                ->first();
-
-            if ($settings !== null && ! $settings->customer_auto_notify_enabled) {
-                Log::info('WhatsappGatewayService: dilewati — saklar notifikasi pelanggan mati', [
-                    'event' => $eventType->value,
-                    'tenant' => $customer->tenant_id,
-                ]);
-
-                return null;
-            }
+        // Jalur MANUAL (context != null) — SATU-SATUNYA bypass gerbang
+        // (InvoicePdfSendService). Perilaku tak berubah: boleh ganti penerima
+        // (Mode Uji), prefiks caption, is_test, catat pelaku. Dijaga
+        // WhatsappManualBypassArchitectureTest.
+        if ($context !== null) {
+            return $this->doCreateAndDispatch($eventType, $customer, $invoice, $attachment, $context);
         }
 
+        // Jalur OTOMATIS — lewat CustomerAutoSendGate (v0.28.2, titik otoritatif
+        // tunggal). Kembalikan HANYA log (kompatibel pemanggil lama yang cuma
+        // butuh ?log, mis. RegistrationService); pemakai yang perlu alasan
+        // (sweep/reminder) memanggil buildAndQueueGated().
+        return $this->buildAndQueueGated($eventType, $customer, $invoice, $attachment)->log;
+    }
+
+    /**
+     * v0.28.2 (T2) — jalur OTOMATIS dengan HASIL BERALASAN. Satu-satunya cara
+     * jalur otomatis mengantre, selalu lewat gerbang. `$fromDeferral` dipakai
+     * command whatsapp:process-deferred-registered saat mengevaluasi ulang
+     * deferral customer_registered (jangan catat Deferred berulang).
+     */
+    public function buildAndQueueGated(
+        WhatsappEventType $eventType,
+        Customer $customer,
+        ?Invoice $invoice = null,
+        ?WhatsappAttachment $attachment = null,
+        bool $fromDeferral = false,
+    ): CustomerAutoSendDecision {
+        return $this->gate->process(
+            $eventType,
+            $customer,
+            $invoice,
+            fn (): ?WhatsappMessageLog => $this->doCreateAndDispatch($eventType, $customer, $invoice, $attachment, null),
+            $fromDeferral,
+        );
+    }
+
+    /**
+     * Tail "jalur pelanggan": resolve template + render + log + dispatch.
+     * Dipanggil langsung (manual) atau sebagai closure "antre sungguhan" oleh
+     * gerbang (otomatis). Return null = template nonaktif/belum ada.
+     */
+    private function doCreateAndDispatch(
+        WhatsappEventType $eventType,
+        Customer $customer,
+        ?Invoice $invoice,
+        ?WhatsappAttachment $attachment,
+        ?InvoiceSendContext $context,
+    ): ?WhatsappMessageLog {
         $template = $this->templateService->resolve($eventType, $customer->tenant_id, $customer->reseller_id);
 
         if ($template === null) {
@@ -108,9 +118,8 @@ class WhatsappGatewayService
         $variables = $this->buildVariables($eventType, $customer, $invoice);
         $rendered = ($context?->captionPrefix ?? '').$this->templateService->render($template->content, $variables);
 
-        // Mode Uji (v0.13.5.3) — penerima DIGANTI ke nomor uji; pelanggan asli
-        // TIDAK menerima apa pun. Default (tanpa context / tanpa override) =
-        // nomor pelanggan asli.
+        // Mode Uji (v0.13.5.3) — penerima DIGANTI ke nomor uji (hanya jalur
+        // manual yang mengisi context); default = nomor pelanggan asli.
         $recipientRaw = $context?->recipientOverride ?? $customer->phone_number;
 
         $log = WhatsappMessageLog::create([

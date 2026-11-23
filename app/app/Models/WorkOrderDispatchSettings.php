@@ -67,7 +67,13 @@ class WorkOrderDispatchSettings extends Model
         'invoice_pdf_auto_send_enabled',
         'invoice_pdf_auto_send_enabled_at',
         'invoice_pdf_auto_send_from',
-        'invoice_pdf_auto_send_daily_cap',
+        // v0.28.2 (T2) — rename dari invoice_pdf_auto_send_daily_cap: plafon
+        // GABUNGAN semua jalur otomatis per tenant (K2).
+        'customer_auto_send_daily_cap',
+        // v0.28.2 (T2) — jendela jam + ambang pemutus per tenant.
+        'customer_auto_send_window_start',
+        'customer_auto_send_window_end',
+        'customer_auto_send_breaker_threshold',
         // v0.13.4.2.3 — "Pemicu OMCI/ZTP saat Aktivasi" per tenant (default OFF).
         'ztp_on_activation_enabled',
     ];
@@ -81,7 +87,8 @@ class WorkOrderDispatchSettings extends Model
             'invoice_pdf_auto_send_enabled' => 'boolean',
             'invoice_pdf_auto_send_enabled_at' => 'datetime',
             'invoice_pdf_auto_send_from' => 'date',
-            'invoice_pdf_auto_send_daily_cap' => 'integer',
+            'customer_auto_send_daily_cap' => 'integer',
+            'customer_auto_send_breaker_threshold' => 'integer',
             'ztp_on_activation_enabled' => 'boolean',
         ];
     }
@@ -126,7 +133,12 @@ class WorkOrderDispatchSettings extends Model
                 'invoice_pdf_auto_send_enabled' => false,
                 'invoice_pdf_auto_send_enabled_at' => null,
                 'invoice_pdf_auto_send_from' => null,
-                'invoice_pdf_auto_send_daily_cap' => 80,
+                // v0.28.2 (T2) — plafon GABUNGAN default 80; jendela 08:00–20:00;
+                // ambang pemutus 10. Default TIDAK menyalakan kirim apa pun.
+                'customer_auto_send_daily_cap' => 80,
+                'customer_auto_send_window_start' => '08:00',
+                'customer_auto_send_window_end' => '20:00',
+                'customer_auto_send_breaker_threshold' => 10,
                 // v0.13.4.2.3 — pemicu OMCI/ZTP saat aktivasi default MATI
                 // (perilaku aman: tidak menulis ke OLT). Dinyalakan lewat UI.
                 'ztp_on_activation_enabled' => false,

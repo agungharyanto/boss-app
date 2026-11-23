@@ -91,6 +91,11 @@ class WhatsappGatewayService
             $customer,
             $invoice,
             fn (): ?WhatsappMessageLog => $this->doCreateAndDispatch($eventType, $customer, $invoice, $attachment, null),
+            // Predikat template-aktif (pra-rilis item 2) — dicek gerbang SEBELUM
+            // Mode Uji. Resolve ringan (query ter-index); doCreateAndDispatch
+            // me-resolve ulang saat benar-benar antre (jalur non-uji) — biaya
+            // query kedua dapat diabaikan pada volume everyMinute ini.
+            fn (): bool => $this->templateService->resolve($eventType, $customer->tenant_id, $customer->reseller_id) !== null,
             $fromDeferral,
         );
     }

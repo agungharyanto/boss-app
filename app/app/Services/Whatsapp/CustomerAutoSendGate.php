@@ -29,10 +29,13 @@ use Closure;
  *  4. SessionDown (sesi WA ≠ Connected).
  *  5. OutsideWindow (di luar jendela jam).
  *  6. CapReached (plafon harian GABUNGAN per tenant).
- *  7. Mode Uji: invoice_issued → SkippedTestMode (berhenti); due/suspend/
+ *  7. SkippedTemplateInactive (template nonaktif) — dicek SEBELUM Mode Uji
+ *     (pra-rilis item 2) supaya dry-run TIDAK mencatat Simulated untuk event
+ *     yang templatenya nonaktif.
+ *  8. Mode Uji: invoice_issued → SkippedTestMode (berhenti); due/suspend/
  *     registered → Simulated (tidak kirim, dicatat).
- *  8. Queue (template resolve + log + dispatch via closure); template nonaktif
- *     → SkippedTemplateInactive.
+ *  9. Queue (template resolve + log + dispatch via closure); template nonaktif
+ *     saat race → SkippedTemplateInactive (jaring pengaman).
  *
  * customer_registered: hasil transien (breaker/sesi/jendela/cap) → DEFERRED
  * (tabel customer_auto_send_deferrals, dievaluasi ulang tiap menit oleh
@@ -65,12 +68,15 @@ class CustomerAutoSendGate
     /**
      * @param  Closure(): ?WhatsappMessageLog  $queueAction  menjalankan pembuatan
      *                                                       log + dispatch (tail buildAndQueue); null = template nonaktif.
+     * @param  Closure(): bool  $templateActive  true bila template event ini
+     *                                           ter-resolve aktif (dicek sebelum Mode Uji, pra-rilis item 2).
      */
     public function process(
         WhatsappEventType $event,
         Customer $customer,
         ?Invoice $invoice,
         Closure $queueAction,
+        Closure $templateActive,
         bool $fromDeferral = false,
     ): CustomerAutoSendDecision {
         $tenantId = (int) $customer->tenant_id;
@@ -108,7 +114,15 @@ class CustomerAutoSendGate
             return $this->transient($event, $tenantId, $customer, $invoice, CustomerAutoSendResult::CapReached, $fromDeferral);
         }
 
-        // 7. Mode Uji.
+        // 7. Template NONAKTIF — dicek SEBELUM Mode Uji (pra-rilis item 2): kalau
+        // template event ini tidak aktif, dry-run tidak boleh mencatat Simulated.
+        // Catat SkippedTemplateInactive (deduped per-kandidat). Langkah #9
+        // (queueAction null) tetap jaring pengaman untuk race deaktivasi.
+        if (! $templateActive()) {
+            return $this->recordAndDecide($tenantId, $path, $customer, $invoice, CustomerAutoSendResult::SkippedTemplateInactive);
+        }
+
+        // 8. Mode Uji.
         if ($settings !== null && $settings->invoice_pdf_test_mode_enabled) {
             if ($event === WhatsappEventType::InvoiceIssued) {
                 return $this->recordOncePerDayAndDecide($tenantId, $path, CustomerAutoSendResult::SkippedTestMode);
@@ -125,7 +139,8 @@ class CustomerAutoSendGate
             return new CustomerAutoSendDecision(CustomerAutoSendResult::Simulated);
         }
 
-        // 8. Antre sungguhan.
+        // 9. Antre sungguhan (template di-resolve ulang di closure; null saat
+        // race deaktivasi tetap → SkippedTemplateInactive).
         $log = $queueAction();
         if ($log === null) {
             return $this->recordAndDecide($tenantId, $path, $customer, $invoice, CustomerAutoSendResult::SkippedTemplateInactive);

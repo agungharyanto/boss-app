@@ -16,6 +16,7 @@ enum CustomerAutoSendResult: string
     case SkippedTestMode = 'skipped_test_mode';           // invoice_issued saat Mode Uji = berhenti total (K9a)
     case Simulated = 'simulated';                         // Mode Uji: due/suspend/registered dicatat "akan dikirim" (K9)
     case Deferred = 'deferred';                           // customer_registered ditunda (K11)
+    case Expired = 'expired';                             // deferral customer_registered kadaluwarsa > 48 jam (v0.28.3, dicatat)
     case OutsideWindow = 'outside_window';                // di luar jendela jam (K3)
     case SessionDown = 'session_down';                    // sesi WA tidak Connected (K12)
     case BreakerOpen = 'breaker_open';                    // N kegagalan beruntun (K12)

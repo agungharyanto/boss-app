@@ -128,6 +128,29 @@ class CustomerAutoSendGateTest extends TestCase
         $this->assertSame(3, CustomerAutoSendDecisionLog::where('result', 'simulated')->count());
     }
 
+    /**
+     * Pra-rilis item 2: cek template SEBELUM Mode Uji. Template due NONAKTIF +
+     * Mode Uji ON → SkippedTemplateInactive, BUKAN Simulated (dry-run tak boleh
+     * mencatat "akan dikirim" untuk event yang templatenya mati).
+     */
+    public function test_mode_uji_with_inactive_template_is_skipped_template_inactive_not_simulated(): void
+    {
+        $tenant = $this->tenantReady(['invoice_pdf_test_mode_enabled' => true]);
+        WhatsappMessageTemplate::where('tenant_id', $tenant->id)
+            ->where('event_type', WhatsappEventType::InvoiceDueReminder->value)
+            ->update(['is_active' => false]);
+        $customer = $this->customer($tenant);
+        $invoice = $this->pendingInvoice($tenant, $customer);
+
+        $decision = $this->gateway()->buildAndQueueGated(WhatsappEventType::InvoiceDueReminder, $customer, $invoice);
+
+        $this->assertSame(CustomerAutoSendResult::SkippedTemplateInactive, $decision->result);
+        $this->assertSame(0, CustomerAutoSendDecisionLog::where('result', 'simulated')->count());
+        $this->assertSame(1, CustomerAutoSendDecisionLog::where('result', 'skipped_template_inactive')->count());
+        $this->assertSame(0, WhatsappMessageLog::withoutGlobalScopes()->count());
+        Queue::assertNothingPushed();
+    }
+
     public function test_mode_uji_invoice_issued_is_skipped_test_mode_not_simulated(): void
     {
         $tenant = $this->tenantReady(['invoice_pdf_test_mode_enabled' => true]);

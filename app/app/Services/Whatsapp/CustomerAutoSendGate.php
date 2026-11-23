@@ -336,6 +336,30 @@ class CustomerAutoSendGate
             ->update(['status' => $status, 'processed_at' => now()]);
     }
 
+    /**
+     * v0.28.3 (T3) — dipanggil CustomerAutoSendOrchestrator saat deferral
+     * registrasi 'pending' sudah menunggu > 48 jam tanpa pernah terkirim.
+     * Tandai 'expired' (baris TIDAK dihapus — jejak) + catat SATU baris
+     * keputusan (CustomerAutoSendResult::Expired). Decision-writing tetap di
+     * gerbang supaya orkestrator tak menduplikasi logika pencatatan.
+     */
+    public function expireDeferral(CustomerAutoSendDeferral $deferral): void
+    {
+        $deferral->update([
+            'status' => CustomerAutoSendDeferral::STATUS_EXPIRED,
+            'processed_at' => now(),
+        ]);
+
+        $this->record(
+            (int) $deferral->tenant_id,
+            WhatsappEventType::CustomerRegistered->value,
+            $deferral->customer,
+            null,
+            CustomerAutoSendResult::Expired,
+            meta: ['reason' => 'deferral_expired_48h'],
+        );
+    }
+
     // ── Pencatatan keputusan ─────────────────────────────────────────────
 
     private function recordAndDecide(int $tenantId, string $path, Customer $customer, ?Invoice $invoice, CustomerAutoSendResult $result): CustomerAutoSendDecision

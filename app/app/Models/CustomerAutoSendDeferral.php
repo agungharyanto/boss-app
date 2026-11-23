@@ -22,6 +22,9 @@ class CustomerAutoSendDeferral extends Model
 
     public const STATUS_CANCELLED = 'cancelled';
 
+    /** v0.28.3 (T3) — deferral menunggu > 48 jam tanpa pernah terkirim. */
+    public const STATUS_EXPIRED = 'expired';
+
     protected $fillable = [
         'tenant_id',
         'customer_id',

@@ -45,15 +45,20 @@ class WhatsappManualBypassArchitectureTest extends TestCase
 
     public function test_automatic_callers_do_not_pass_a_send_context(): void
     {
-        // Pemanggil OTOMATIS buildAndQueue() (4 event pelanggan + command).
+        // Pemanggil OTOMATIS buildAndQueue()/buildAndQueueGated() (event
+        // pelanggan + command). SEMUA wajib tanpa InvoiceSendContext.
         $automaticCallers = [
             'app/Services/InvoiceService.php',          // payment_received
-            'app/Services/RegistrationService.php',     // customer_registered
+            'app/Services/RegistrationService.php',     // customer_registered (via deferral, v0.28.3)
             'app/Console/Commands/SendWhatsappDueReminders.php',
             'app/Console/Commands/SendWhatsappSuspendedReminders.php',
             // v0.13.5.3.1 — sweep kirim PDF otomatis: jalur OTOMATIS, WAJIB
             // tanpa InvoiceSendContext (tetap ber-guard customer_auto_notify).
             'app/Console/Commands/SendInvoicePdfAutomatically.php',
+            // v0.28.3 (T3) — orkestrator + titik terjadwal tunggal: jalur
+            // OTOMATIS lewat buildAndQueueGated, tak pernah pakai context.
+            'app/Services/Whatsapp/CustomerAutoSendOrchestrator.php',
+            'app/Console/Commands/WhatsappAutoSendDispatch.php',
         ];
 
         foreach ($automaticCallers as $relative) {

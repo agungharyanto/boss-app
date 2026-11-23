@@ -43,7 +43,7 @@ class WorkOrderDispatchSettingsInvoiceAutoSendTest extends TestCase
         $settings = WorkOrderDispatchSettings::forTenant($tenant->id)->fresh();
         $this->assertTrue($settings->invoice_pdf_auto_send_enabled);
         $this->assertSame('2026-11-01', $settings->invoice_pdf_auto_send_from->format('Y-m-d'));
-        $this->assertSame(50, $settings->invoice_pdf_auto_send_daily_cap);
+        $this->assertSame(50, $settings->customer_auto_send_daily_cap);
         $this->assertNotNull($settings->invoice_pdf_auto_send_enabled_at);
     }
 
@@ -121,7 +121,7 @@ class WorkOrderDispatchSettingsInvoiceAutoSendTest extends TestCase
         $tenantB = Tenant::factory()->create();
         WorkOrderDispatchSettings::forTenant($tenantB->id)->update([
             'invoice_pdf_auto_send_enabled' => true,
-            'invoice_pdf_auto_send_daily_cap' => 25,
+            'customer_auto_send_daily_cap' => 25,
         ]);
 
         Livewire::actingAs($this->admin($tenantA))

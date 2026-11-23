@@ -381,6 +381,9 @@ class WhatsappSessionService
             }
         }
 
+        // v0.28.2 (T2) — deteksi TRANSISI ke Connected untuk auto-lanjut pemutus.
+        $wasConnected = $session->status === WhatsappSessionStatus::Connected;
+
         $updates = ['status' => $status];
 
         if ($phoneNumber !== null) {
@@ -415,6 +418,12 @@ class WhatsappSessionService
 
         try {
             $session->update($updates);
+
+            // v0.28.2 (T2) — sesi BARU transisi ke Connected → lanjut otomatis
+            // pemutus kirim otomatis (tutup pemutus + reset counter).
+            if ($status === WhatsappSessionStatus::Connected && ! $wasConnected) {
+                app(CustomerAutoSendGate::class)->onSessionConnected((int) $session->tenant_id, $session->reseller_id);
+            }
         } catch (QueryException $e) {
             // Race condition safety net — SELECT check di atas ("adakah
             // duplikat AKTIF sekarang") lolos tidak menemukan apa pun,

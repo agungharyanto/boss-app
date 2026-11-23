@@ -9632,6 +9632,28 @@ break ini — lihat catatan T2 di ROADMAP). Jejak `customer_notification_opt_out
 menolak update & delete** (lebih ketat dari `company_bank_account_logs`) — pembersihan data uji HANYA lewat
 `DB::table()->delete()`/cascade DB langsung (bukan Eloquent `->delete()`, yang akan throw).
 
+**v0.28.2 (T2 CustomerAutoSendGate) — gerbang kirim OTOMATIS pelanggan bersama, DI ATAS lapisan opt-out.**
+`App\Services\Whatsapp\CustomerAutoSendGate` dipanggil dari titik TUNGGAL `WhatsappGatewayService::buildAndQueue()`
+(jalur `context === null`) → **SEMUA jalur otomatis pelanggan** (`invoice_issued` sweep, `invoice_due_reminder`
+H-5/H-0, `customer_suspended_reminder`, `customer_registered`) lewat gerbang ini; kirim MANUAL (`InvoiceSendContext`)
+TIDAK. Gerbang mengembalikan enum **`App\Enums\CustomerAutoSendResult`** beralasan (bukan `null` telanjang —
+menutup ambiguitas T1): `Queued`/`SkippedAutoNotifyOff`/`SkippedOptOut`/`SkippedTemplateInactive`/`SkippedTestMode`/
+`Simulated`/`Deferred`/`OutsideWindow`/`SessionDown`/`BreakerOpen`/`CapReached`. Gotcha penting:
+- **`Simulated` (Mode Uji untuk due/suspend/registered) TIDAK membuat `WhatsappMessageLog`** — ia menulis baris
+  `customer_auto_send_decisions` saja. Karena command pengingat dulu dedup lewat keberadaan `WhatsappMessageLog`,
+  **dedup pengingat sekarang JUGA memeriksa `customer_auto_send_decisions`** supaya satu pelanggan tidak
+  disimulasikan berulang per run. (`invoice_issued` saat Mode Uji = `SkippedTestMode`, berhenti total — bukan
+  simulasi.)
+- **`auto_notify` ON + Mode Uji ON = dry-run AMAN** untuk due/suspend/registered: gerbang menghasilkan `Simulated`
+  (tercatat "akan dikirim", NOL pesan/job/HTTP). Jadi menyalakan saklar pelanggan sambil Mode Uji ON tidak mengirim
+  apa pun ke pelanggan nyata.
+- **Pemutus (breaker N=10) HANYA menghitung kirim OTOMATIS pelanggan.** Kegagalan kirim MANUAL, kiriman GRUP,
+  OTP referrer, dan baris `Simulated`/`SkippedTestMode` (Mode Uji) **tidak menaikkan counter** (`CustomerAutoSendBreaker`)
+  — lihat test `test(v0.28.2): kegagalan manual/grup/OTP/uji tidak menaikkan counter pemutus`.
+- **Data uji jalur otomatis dibuat TANPA `RegistrationService`** (yang akan mengantre `customer_registered` WA nyata
+  di luar gerbang): buat `Customer` langsung, `Subscription` berstatus `Cancelled` (tak ikut `GenerateDueInvoices`),
+  `Invoice` via Eloquent langsung. Ini pola uji yang sama dengan sprint WA/invoice lain di file ini.
+
 ## PDF Invoice server-side (v0.13.5.2 — SELESAI, merged `develop`→`main`, tag `v0.13.5.2`)
 
 **Render invoice jadi PDF server-side via dompdf (`barryvdh/laravel-dompdf ^3.1`) — untuk DIUNDUH/DILIHAT

@@ -7,6 +7,7 @@ use App\Enums\WhatsappEventType;
 use App\Models\Customer;
 use App\Models\WhatsappMessageLog;
 use App\Models\WorkOrderDispatchSettings;
+use App\Services\Whatsapp\CustomerAutoSendGate;
 use App\Services\Whatsapp\WhatsappGatewayService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -24,7 +25,7 @@ class SendWhatsappSuspendedReminders extends Command
 
     protected $description = 'Kirim pengingat WhatsApp harian untuk pelanggan berstatus suspend';
 
-    public function handle(WhatsappGatewayService $service): int
+    public function handle(WhatsappGatewayService $service, CustomerAutoSendGate $gate): int
     {
         // v0.13.5.1.2 — early-exit per tenant: lewati tenant yang saklar
         // "Notifikasi Otomatis ke Pelanggan"-nya OFF SEBELUM mengiterasi
@@ -48,18 +49,31 @@ class SendWhatsappSuspendedReminders extends Command
         $sent = 0;
 
         foreach ($customers as $customer) {
+            // Dedup: terkirim NYATA hari ini ATAU ter-SIMULASI hari ini (Mode
+            // Uji — aturan tambahan 1).
             $alreadySentToday = WhatsappMessageLog::withoutGlobalScopes()
                 ->where('customer_id', $customer->id)
                 ->where('event_type', WhatsappEventType::CustomerSuspendedReminder->value)
                 ->whereDate('created_at', now()->toDateString())
                 ->exists();
 
-            if ($alreadySentToday) {
+            if ($alreadySentToday
+                || $gate->simulatedTodayExists((int) $customer->tenant_id, WhatsappEventType::CustomerSuspendedReminder->value, $customer, null)) {
                 continue;
             }
 
-            $service->buildAndQueue(WhatsappEventType::CustomerSuspendedReminder, $customer);
-            $sent++;
+            $decision = $service->buildAndQueueGated(WhatsappEventType::CustomerSuspendedReminder, $customer);
+
+            if ($decision->queued()) {
+                $sent++;
+
+                continue;
+            }
+
+            if ($decision->isRunStop()) {
+                break;
+            }
+            // SkippedOptOut/Simulated/SkippedTemplateInactive → lanjut pelanggan berikutnya.
         }
 
         $this->info("Selesai. {$sent} pengingat suspend diantrikan dari {$customers->count()} pelanggan berstatus suspend.");

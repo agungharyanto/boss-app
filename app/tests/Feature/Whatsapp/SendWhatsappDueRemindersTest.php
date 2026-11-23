@@ -3,6 +3,7 @@
 namespace Tests\Feature\Whatsapp;
 
 use App\Enums\WhatsappEventType;
+use App\Enums\WhatsappSessionStatus;
 use App\Jobs\SendWhatsappMessageJob;
 use App\Models\Customer;
 use App\Models\Invoice;
@@ -11,9 +12,11 @@ use App\Models\User;
 use App\Models\WhatsappGatewaySettings;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
+use App\Models\WhatsappSession;
 use App\Services\InvoiceService;
 use App\Services\SubscriptionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Bus;
 use Tests\TestCase;
 
@@ -25,10 +28,18 @@ class SendWhatsappDueRemindersTest extends TestCase
     {
         parent::setUp();
 
-        // Guarantee the command's daily_schedule_times gate matches "now",
-        // regardless of what wall-clock time the test suite happens to run
-        // at.
+        // v0.28.2 — gerbang menuntut dalam jendela jam; kunci waktu di 09:00 WIB
+        // (deterministik, tak bergantung jam CI).
+        Carbon::setTestNow(Carbon::create(2026, 11, 21, 9, 0, 0, 'Asia/Jakarta'));
+
+        // Guarantee the command's daily_schedule_times gate matches "now".
         WhatsappGatewaySettings::current()->update(['daily_schedule_times' => [now()->format('H:i')]]);
+    }
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
     }
 
     private function invoiceDueOn(string $dueDate): Invoice
@@ -41,6 +52,13 @@ class SendWhatsappDueRemindersTest extends TestCase
             'tenant_id' => $tenant->id,
             'reseller_id' => null,
             'event_type' => WhatsappEventType::InvoiceDueReminder,
+        ]);
+
+        // v0.28.2 — gerbang menuntut sesi tujuan Connected.
+        WhatsappSession::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'status' => WhatsappSessionStatus::Connected,
         ]);
 
         $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);

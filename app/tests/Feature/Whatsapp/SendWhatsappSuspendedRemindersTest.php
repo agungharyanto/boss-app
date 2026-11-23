@@ -4,18 +4,34 @@ namespace Tests\Feature\Whatsapp;
 
 use App\Enums\CustomerStatus;
 use App\Enums\WhatsappEventType;
+use App\Enums\WhatsappSessionStatus;
 use App\Jobs\SendWhatsappMessageJob;
 use App\Models\Customer;
 use App\Models\Tenant;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
+use App\Models\WhatsappSession;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Bus;
 use Tests\TestCase;
 
 class SendWhatsappSuspendedRemindersTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // v0.28.2 — gerbang menuntut dalam jendela jam (09:00 WIB).
+        Carbon::setTestNow(Carbon::create(2026, 11, 21, 9, 0, 0, 'Asia/Jakarta'));
+    }
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
+    }
 
     private function suspendedCustomer(): Customer
     {
@@ -25,6 +41,13 @@ class SendWhatsappSuspendedRemindersTest extends TestCase
             'tenant_id' => $tenant->id,
             'reseller_id' => null,
             'event_type' => WhatsappEventType::CustomerSuspendedReminder,
+        ]);
+
+        // v0.28.2 — gerbang menuntut sesi tujuan Connected.
+        WhatsappSession::factory()->create([
+            'tenant_id' => $tenant->id,
+            'reseller_id' => null,
+            'status' => WhatsappSessionStatus::Connected,
         ]);
 
         return Customer::factory()->create([
@@ -72,10 +95,12 @@ class SendWhatsappSuspendedRemindersTest extends TestCase
 
         $customer = $this->suspendedCustomer();
 
-        $this->travelTo(now()->startOfDay());
+        // v0.28.2 — waktu WIB eksplisit DALAM jendela (startOfDay=00:00 kini di
+        // luar jendela gerbang). Hari 1 lalu hari 2, keduanya 09:00 WIB.
+        $this->travelTo(Carbon::create(2026, 11, 21, 9, 0, 0, 'Asia/Jakarta'));
         $this->artisan('whatsapp:send-suspended-reminders')->assertSuccessful();
 
-        $this->travelTo(now()->addDay());
+        $this->travelTo(Carbon::create(2026, 11, 22, 9, 0, 0, 'Asia/Jakarta'));
         $this->artisan('whatsapp:send-suspended-reminders')->assertSuccessful();
 
         $this->assertSame(

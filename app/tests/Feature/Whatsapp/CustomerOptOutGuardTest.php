@@ -8,8 +8,10 @@ use App\Console\Commands\SendWhatsappSuspendedReminders;
 use App\Enums\CustomerStatus;
 use App\Enums\InvoiceStatus;
 use App\Enums\WhatsappEventType;
+use App\Enums\WhatsappSessionStatus;
 use App\Jobs\SendWhatsappMessageJob;
 use App\Models\Customer;
+use App\Models\CustomerAutoSendDecisionLog;
 use App\Models\Invoice;
 use App\Models\Subscription;
 use App\Models\Tenant;
@@ -17,6 +19,7 @@ use App\Models\User;
 use App\Models\WhatsappGatewaySettings;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
+use App\Models\WhatsappSession;
 use App\Models\WorkOrderDispatchSettings;
 use App\Services\RegistrationService;
 use App\Services\Whatsapp\WhatsappGatewayService;
@@ -36,6 +39,12 @@ use Tests\TestCase;
 class CustomerOptOutGuardTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
+    }
 
     private function template(int $tenantId, WhatsappEventType $event): void
     {
@@ -67,7 +76,10 @@ class CustomerOptOutGuardTest extends TestCase
         $this->assertSame(0, WhatsappMessageLog::withoutGlobalScopes()->count());
         Queue::assertNothingPushed();
 
-        // Bukti opt-out-lah penyebabnya: matikan opt-out → terkirim.
+        // Bukti opt-out-lah penyebabnya: matikan opt-out → terkirim. v0.28.2 —
+        // gerbang menuntut sesi Connected + dalam jendela jam.
+        Carbon::setTestNow(Carbon::create(2026, 11, 21, 9, 0, 0, 'Asia/Jakarta'));
+        WhatsappSession::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null, 'status' => WhatsappSessionStatus::Connected]);
         $customer->update(['auto_notify_opt_out' => false]);
         $result = app(WhatsappGatewayService::class)->buildAndQueue(WhatsappEventType::CustomerRegistered, $customer);
 
@@ -178,8 +190,10 @@ class CustomerOptOutGuardTest extends TestCase
             'phone_number' => '6281234567892',
         ]);
 
-        // NOL kirim apa pun.
+        // NOL kirim apa pun — DAN nol baris keputusan gerbang (B6 v0.28.2:
+        // saklar default OFF → SkippedAutoNotifyOff tidak dicatat).
         $this->assertSame(0, WhatsappMessageLog::withoutGlobalScopes()->count());
+        $this->assertSame(0, CustomerAutoSendDecisionLog::count());
         Queue::assertNothingPushed();
         Http::assertNothingSent();
 

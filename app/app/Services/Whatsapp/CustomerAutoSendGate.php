@@ -308,13 +308,27 @@ class CustomerAutoSendGate
 
     public function simulatedTodayExists(int $tenantId, string $path, Customer $customer, ?Invoice $invoice): bool
     {
+        return $this->recordedCandidateTodayExists($tenantId, $path, CustomerAutoSendResult::Simulated, $customer, $invoice);
+    }
+
+    /**
+     * v0.28.3 pra-rilis (item 1) — dedup PER-KANDIDAT per hari (WIB): sudah ada
+     * baris keputusan (tenant, path, result, invoice/customer, hari ini)?
+     * Orkestrator jalan everyMinute dan bisa mengumpulkan ulang kandidat yang
+     * SAMA tiap tick bila tidak ada log/Simulated yang menandai "sudah
+     * ditangani" (mis. template nonaktif) — tanpa dedup ini SkippedTemplateInactive/
+     * SkippedOptOut/Expired membanjiri tabel keputusan. Kunci dedup: invoice_id
+     * bila ada, selain itu customer_id (jalur suspend/registrasi tanpa invoice).
+     */
+    private function recordedCandidateTodayExists(int $tenantId, string $path, CustomerAutoSendResult $result, ?Customer $customer, ?Invoice $invoice): bool
+    {
         return CustomerAutoSendDecisionLog::query()
             ->where('tenant_id', $tenantId)
             ->where('path', $path)
-            ->where('result', CustomerAutoSendResult::Simulated->value)
+            ->where('result', $result->value)
             ->whereDate('created_at', $this->wibToday())
             ->when($invoice !== null, fn ($q) => $q->where('invoice_id', $invoice->id))
-            ->when($invoice === null, fn ($q) => $q->where('customer_id', $customer->id))
+            ->when($invoice === null && $customer !== null, fn ($q) => $q->where('customer_id', $customer->id))
             ->exists();
     }
 
@@ -350,21 +364,32 @@ class CustomerAutoSendGate
             'processed_at' => now(),
         ]);
 
-        $this->record(
-            (int) $deferral->tenant_id,
-            WhatsappEventType::CustomerRegistered->value,
-            $deferral->customer,
-            null,
-            CustomerAutoSendResult::Expired,
-            meta: ['reason' => 'deferral_expired_48h'],
-        );
+        // Dedup PER-KANDIDAT per hari (belt-and-suspenders): status deferral kini
+        // EXPIRED → tidak terkumpul ulang, tapi guard tetap konsisten dengan
+        // SkippedOptOut/SkippedTemplateInactive.
+        $tenantId = (int) $deferral->tenant_id;
+        if (! $this->recordedCandidateTodayExists($tenantId, WhatsappEventType::CustomerRegistered->value, CustomerAutoSendResult::Expired, $deferral->customer, null)) {
+            $this->record(
+                $tenantId,
+                WhatsappEventType::CustomerRegistered->value,
+                $deferral->customer,
+                null,
+                CustomerAutoSendResult::Expired,
+                meta: ['reason' => 'deferral_expired_48h'],
+            );
+        }
     }
 
     // ── Pencatatan keputusan ─────────────────────────────────────────────
 
     private function recordAndDecide(int $tenantId, string $path, Customer $customer, ?Invoice $invoice, CustomerAutoSendResult $result): CustomerAutoSendDecision
     {
-        $this->record($tenantId, $path, $customer, $invoice, $result);
+        // Dedup PER-KANDIDAT per hari (SkippedOptOut / SkippedTemplateInactive) —
+        // lihat recordedCandidateTodayExists(): cegah banjir baris dari tick
+        // everyMinute orkestrator.
+        if (! $this->recordedCandidateTodayExists($tenantId, $path, $result, $customer, $invoice)) {
+            $this->record($tenantId, $path, $customer, $invoice, $result);
+        }
 
         return new CustomerAutoSendDecision($result);
     }

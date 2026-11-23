@@ -387,4 +387,69 @@ class CustomerAutoSendOrchestratorTest extends TestCase
         $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()->where('invoice_id', $iDue->id)->where('event_type', WhatsappEventType::InvoiceDueReminder->value)->count());
         $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()->where('customer_id', $cSusp->id)->where('event_type', WhatsappEventType::CustomerSuspendedReminder->value)->count());
     }
+
+    // ── Anti-banjir baris keputusan (pra-rilis item 1): 30 tick berturut ─────
+
+    /**
+     * (a) Template suspend NONAKTIF + Mode Uji OFF: kandidat suspend dikumpulkan
+     * ulang tiap tick (tak ada log/Simulated penanda "sudah ditangani"), tapi
+     * SkippedTemplateInactive dicatat MAKSIMAL 1 baris per kandidat per hari WIB.
+     */
+    public function test_thirty_ticks_with_inactive_suspend_template_record_one_skipped_template_inactive(): void
+    {
+        $tenant = $this->tenantReady(['invoice_pdf_auto_send_enabled' => false]);
+        WhatsappMessageTemplate::where('tenant_id', $tenant->id)
+            ->where('event_type', WhatsappEventType::CustomerSuspendedReminder->value)
+            ->update(['is_active' => false]);
+        $cSusp = $this->customer($tenant, ['status' => CustomerStatus::Suspend]);
+
+        $base = Carbon::create(2026, 11, 23, 9, 0, 0, 'Asia/Jakarta');
+        for ($i = 0; $i < 30; $i++) {
+            Carbon::setTestNow($base->copy()->addMinutes($i)); // everyMinute, tetap dalam jendela + hari WIB sama
+            $this->tick();
+        }
+
+        $this->assertSame(
+            1,
+            CustomerAutoSendDecisionLog::where('path', WhatsappEventType::CustomerSuspendedReminder->value)
+                ->where('result', CustomerAutoSendResult::SkippedTemplateInactive->value)
+                ->where('customer_id', $cSusp->id)
+                ->count(),
+        );
+        $this->assertSame(1, CustomerAutoSendDecisionLog::where('result', CustomerAutoSendResult::SkippedTemplateInactive->value)->count());
+        $this->assertSame(0, $this->autoLogCount($tenant->id));
+        Queue::assertNothingPushed();
+    }
+
+    /**
+     * (b) auto_send ON + Mode Uji ON: due/suspend/registrasi → Simulated (3
+     * baris, satu per kandidat), invoice sweep → SkippedTestMode (1 baris per
+     * jalur/hari). 30 tick tidak menambah baris apa pun.
+     */
+    public function test_thirty_ticks_under_mode_uji_record_at_most_one_row_per_candidate(): void
+    {
+        $tenant = $this->tenantReady(['invoice_pdf_test_mode_enabled' => true, 'invoice_pdf_test_recipient' => '6287884374939']);
+        $cDue = $this->customer($tenant);
+        $this->pendingInvoice($tenant, $cDue, now()->toDateString());                 // H-0 due
+        $this->customer($tenant, ['status' => CustomerStatus::Suspend]);              // suspend
+        $cSweep = $this->customer($tenant);
+        $this->pendingInvoice($tenant, $cSweep, now()->copy()->addDays(10)->toDateString()); // sweep (due_date jauh)
+        $cReg = $this->customer($tenant);
+        $this->pendingDeferral($tenant, $cReg);                                       // registrasi
+
+        $base = Carbon::create(2026, 11, 23, 9, 0, 0, 'Asia/Jakarta');
+        for ($i = 0; $i < 30; $i++) {
+            Carbon::setTestNow($base->copy()->addMinutes($i));
+            $this->tick();
+        }
+
+        // due + suspend + registrasi = 3 Simulated (satu per kandidat).
+        $this->assertSame(3, CustomerAutoSendDecisionLog::where('result', CustomerAutoSendResult::Simulated->value)->count());
+        // invoice sweep = 1 SkippedTestMode (per jalur/hari).
+        $this->assertSame(1, CustomerAutoSendDecisionLog::where('result', CustomerAutoSendResult::SkippedTestMode->value)->count());
+        // Total hanya 4 baris walau 30 tick — tidak ada banjir.
+        $this->assertSame(4, CustomerAutoSendDecisionLog::count());
+        $this->assertSame(0, $this->autoLogCount($tenant->id));
+        Queue::assertNothingPushed();
+    }
 }

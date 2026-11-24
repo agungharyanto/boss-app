@@ -58,6 +58,23 @@ class SendWhatsappMessageJob implements ShouldQueue
             return;
         }
 
+        // v0.28.4 (SEBAR-BATCH, A5/D4) — job otomatis pelanggan kini ber-delay
+        // batch, jadi syaratnya bisa berubah antara di-queue dan dieksekusi.
+        // Cek ulang di gerbang; bila batal → tandai Cancelled + alasan, TIDAK
+        // kirim, TIDAK recordOutcome (batal ≠ gagal kirim). HANYA untuk log
+        // otomatis pelanggan (pola recordOutcome T2) — manual/OTP/grup lewat.
+        if ($this->isAutomaticCustomerLog($log)) {
+            $reason = app(CustomerAutoSendGate::class)->recheckBeforeSend($log);
+            if ($reason !== null) {
+                $log->update([
+                    'status' => WhatsappMessageStatus::Cancelled,
+                    'failed_reason' => "dibatalkan saat recheck: {$reason->value}",
+                ]);
+
+                return;
+            }
+        }
+
         $this->applyRateLimitDelay();
 
         $log->increment('attempts');
@@ -104,6 +121,19 @@ class SendWhatsappMessageJob implements ShouldQueue
             // v0.28.2 — hitung ke pemutus (jalur otomatis).
             app(CustomerAutoSendGate::class)->recordOutcome($log, false);
         }
+    }
+
+    /**
+     * v0.28.4 — log KIRIM OTOMATIS pelanggan (pola identik
+     * CustomerAutoSendGate::recordOutcome): event ∈ autoEvents + bukan kirim
+     * manual (sent_by_user_id null) + bukan baris uji. Hanya log inilah yang
+     * di-recheck D4 & boleh ber-delay batch; manual/OTP/grup tak tersentuh.
+     */
+    private function isAutomaticCustomerLog(WhatsappMessageLog $log): bool
+    {
+        return in_array($log->event_type->value, CustomerAutoSendGate::autoEvents(), true)
+            && $log->sent_by_user_id === null
+            && ! $log->is_test;
     }
 
     private function sendToGateway(WhatsappHmac $hmac, WhatsappMessageLog $log)

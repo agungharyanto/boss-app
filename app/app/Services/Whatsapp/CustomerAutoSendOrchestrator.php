@@ -6,6 +6,7 @@ use App\Enums\CustomerAutoSendResult;
 use App\Enums\CustomerStatus;
 use App\Enums\InvoiceStatus;
 use App\Enums\WhatsappEventType;
+use App\Enums\WhatsappMessageStatus;
 use App\Models\Customer;
 use App\Models\CustomerAutoSendDeferral;
 use App\Models\Invoice;
@@ -16,7 +17,9 @@ use App\Support\Whatsapp\AutoSendCandidate;
 use App\Support\Whatsapp\DueReminderDays;
 use App\Support\Whatsapp\WhatsappAttachment;
 use App\Support\WhatsappPhone;
+use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -73,6 +76,21 @@ class CustomerAutoSendOrchestrator
 
     public const DEFERRAL_EXPIRY_HOURS = 48;
 
+    /**
+     * v0.28.4 (SEBAR-BATCH, A6) — flag jeda orkestrator (Cache). Saat ON, tick
+     * LANGSUNG keluar dari pengumpulan kandidat (hanya reaper A3 yang tetap
+     * jalan) — dipakai command uji whatsapp:auto-send-batch-test agar
+     * orkestrator tak mengumpulkan kandidat NYATA selama Mode Uji dimatikan
+     * sementara. TTL pendek = pengaman: flag tak bisa macet selamanya walau
+     * command crash sebelum melepasnya (finally tetap melepas lebih dulu).
+     */
+    public const PAUSE_CACHE_KEY = 'whatsapp:auto_send_dispatch_paused';
+
+    public const PAUSE_TTL_MINUTES = 25;
+
+    /** Pembersih A3: jendela berakhir + N menit → log queued hari ini dibatalkan. */
+    public const STUCK_GRACE_MINUTES = 15;
+
     public function __construct(
         private readonly WhatsappGatewayService $gateway,
         private readonly CustomerAutoSendGate $gate,
@@ -101,12 +119,72 @@ class CustomerAutoSendOrchestrator
             ->unique()
             ->values();
 
+        $paused = $this->isPaused();
+
         $total = 0;
         foreach ($tenantIds as $tenantId) {
-            $total += $this->dispatchTenant(WorkOrderDispatchSettings::forTenant($tenantId), $paths);
+            $settings = WorkOrderDispatchSettings::forTenant($tenantId);
+
+            // Pembersih A3 — SELALU jalan (termasuk di luar jendela & saat flag
+            // jeda ON): satu-satunya bagian tick yang tetap aktif saat paused.
+            $this->cleanupStuckLogs($settings);
+
+            // Flag jeda (uji A6): JANGAN kumpulkan kandidat nyata.
+            if ($paused) {
+                continue;
+            }
+
+            $total += $this->dispatchTenant($settings, $paths);
         }
 
         return $total;
+    }
+
+    public function isPaused(): bool
+    {
+        return (bool) Cache::get(self::PAUSE_CACHE_KEY, false);
+    }
+
+    /**
+     * v0.28.4 (SEBAR-BATCH, A3) — batalkan log KIRIM OTOMATIS pelanggan yang
+     * masih `queued` padahal tak mungkin terkirim lagi hari ini: baik dari hari
+     * SEBELUMNYA, maupun sisa hari ini setelah jendela berakhir + STUCK_GRACE.
+     * Status → Cancelled + alasan; TIDAK menaikkan pemutus (batal ≠ gagal). Log
+     * MANUAL (sent_by_user_id) / OTP / grup (event di luar autoEvents) / uji
+     * TIDAK tersentuh. Return jumlah baris dibatalkan.
+     */
+    public function cleanupStuckLogs(WorkOrderDispatchSettings $settings): int
+    {
+        $tenantId = (int) $settings->tenant_id;
+
+        // "Lewat jendela?" dihitung di WIB (jam jendela selalu WIB). Batas hari
+        // ("hari sebelumnya") pakai startOfDay zona APP agar cocok dengan cara
+        // queued_at disimpan/dibaca (hindari ketidakcocokan wall-clock lintas-tz).
+        $nowWib = CarbonImmutable::now(CustomerAutoSendGate::TIMEZONE);
+        $startOfToday = CarbonImmutable::now()->startOfDay();
+
+        $end = $settings->customer_auto_send_window_end ?? CustomerAutoSendGate::DEFAULT_WINDOW_END;
+        [$h, $m] = array_map('intval', explode(':', $end));
+        $pastTodayWindow = $nowWib->greaterThan($nowWib->setTime($h, $m, 0)->addMinutes(self::STUCK_GRACE_MINUTES));
+
+        return WhatsappMessageLog::withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->where('status', WhatsappMessageStatus::Queued->value)
+            ->whereIn('event_type', CustomerAutoSendGate::autoEvents())
+            ->whereNull('sent_by_user_id')
+            ->where('is_test', false)
+            ->where(function ($q) use ($startOfToday, $pastTodayWindow) {
+                // Hari sebelumnya → selalu basi.
+                $q->where('queued_at', '<', $startOfToday);
+                // Sisa hari ini → basi hanya bila jendela sudah lewat + grace.
+                if ($pastTodayWindow) {
+                    $q->orWhere('queued_at', '>=', $startOfToday);
+                }
+            })
+            ->update([
+                'status' => WhatsappMessageStatus::Cancelled->value,
+                'failed_reason' => 'kedaluwarsa: tidak terkirim dalam jendela',
+            ]);
     }
 
     /**
@@ -435,6 +513,7 @@ class CustomerAutoSendOrchestrator
     private function reminderAlreadyHandledToday(WhatsappEventType $event, Customer $customer, ?Invoice $invoice): bool
     {
         $sentToday = WhatsappMessageLog::withoutGlobalScopes()
+            ->effective() // v0.28.4 — log Cancelled tak dihitung "sudah ditangani" (D5).
             ->where('event_type', $event->value)
             ->when($invoice !== null, fn ($q) => $q->where('invoice_id', $invoice->id))
             ->when($invoice === null, fn ($q) => $q->where('customer_id', $customer->id))
@@ -451,6 +530,7 @@ class CustomerAutoSendOrchestrator
     private function invoiceAlreadySentNonTest(Invoice $invoice): bool
     {
         return WhatsappMessageLog::withoutGlobalScopes()
+            ->effective() // v0.28.4 — log Cancelled tak dihitung "sudah dikirim" (D5).
             ->where('invoice_id', $invoice->id)
             ->where('event_type', WhatsappEventType::InvoiceIssued->value)
             ->where('is_test', false)

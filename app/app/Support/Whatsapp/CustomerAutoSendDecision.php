@@ -14,6 +14,10 @@ final class CustomerAutoSendDecision
     public function __construct(
         public readonly CustomerAutoSendResult $result,
         public readonly ?WhatsappMessageLog $log = null,
+        // v0.28.4 (SEBAR-BATCH) — delay batch (detik) yang disuntik saat
+        // dispatch, hanya untuk Queued. Dipakai command uji mencetak jeda per
+        // pesan; null untuk hasil non-Queued.
+        public readonly ?int $delaySeconds = null,
     ) {}
 
     public function queued(): bool

@@ -74,6 +74,7 @@ class SendWhatsappDueReminders extends Command
             // ini (Mode Uji, v0.28.2 — Simulated tidak membuat WhatsappMessageLog,
             // jadi harus cek baris keputusan Simulated juga — aturan tambahan 1).
             $alreadySentToday = WhatsappMessageLog::withoutGlobalScopes()
+                ->effective() // v0.28.4 — log Cancelled tak dihitung "sudah dikirim".
                 ->where('invoice_id', $invoice->id)
                 ->where('event_type', WhatsappEventType::InvoiceDueReminder->value)
                 ->whereDate('created_at', now()->toDateString())

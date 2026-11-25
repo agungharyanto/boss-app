@@ -22,6 +22,7 @@ use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
 use App\Models\WhatsappSession;
 use App\Models\WorkOrderDispatchSettings;
+use App\Services\Billing\InvoicePdfService;
 use App\Services\Whatsapp\CustomerAutoSendGate;
 use App\Services\Whatsapp\CustomerAutoSendOrchestrator;
 use App\Services\Whatsapp\WhatsappGatewayService;
@@ -404,6 +405,63 @@ class CustomerAutoSendBatchTest extends TestCase
         $this->artisan('whatsapp:auto-send-batch-test', ['--customer' => [$cust->id], '--confirm' => true])
             ->assertFailed();
         Queue::assertNothingPushed();
+    }
+
+    public function test_batch_test_command_creates_distinct_periods_and_queues(): void
+    {
+        // v0.28.4 (cacat #1) — kelima invoice TEST harus berperiode BERBEDA
+        // supaya unique (subscription_id, period_start, period_end) tak dilanggar;
+        // dan OPSI (a) — command tak menunggu "sent", hanya meng-queue lalu cetak.
+        Queue::fake();
+        $tenant = $this->tenantReady(['invoice_pdf_test_recipient' => '6287884374939']);
+        // Prasyarat: template due/suspend/registered NONAKTIF.
+        WhatsappMessageTemplate::where('tenant_id', $tenant->id)
+            ->whereIn('event_type', [
+                WhatsappEventType::InvoiceDueReminder->value,
+                WhatsappEventType::CustomerSuspendedReminder->value,
+                WhatsappEventType::CustomerRegistered->value,
+            ])->update(['is_active' => false]);
+        $cust = $this->customer($tenant, ['name' => 'TEST T4', 'phone_number' => '6287884374939']);
+
+        // Stub PDF: hindari render dompdf nyata di test — attachment tak dibaca
+        // sampai job jalan (yang di-fake), jadi store() cukup no-op.
+        $this->app->bind(InvoicePdfService::class, fn () => new class extends InvoicePdfService
+        {
+            public function __construct() {}
+
+            public function store(Invoice $invoice): string
+            {
+                return 'invoice-pdfs/'.$invoice->tenant_id.'/'.$invoice->id.'.pdf';
+            }
+        });
+
+        $this->artisan('whatsapp:auto-send-batch-test', [
+            '--customer' => [$cust->id],
+            '--confirm' => true,
+            '--count' => 5,
+            '--batch-size' => 3,
+            '--pause-min' => 1,
+            '--pause-max' => 2,
+        ])->assertSuccessful();
+
+        // 5 invoice TEST dengan periode (start,end) BERBEDA — tak ada unique violation.
+        $invoices = Invoice::withoutGlobalScopes()->where('customer_id', $cust->id)->get();
+        $this->assertCount(5, $invoices);
+        $periods = $invoices->map(fn ($inv) => $inv->period_start.'|'.$inv->period_end)->unique();
+        $this->assertCount(5, $periods, 'Periode tiap invoice TEST harus unik (cacat #1).');
+
+        // 5 log Queued, semua ke nomor uji, event invoice_issued.
+        $logs = WhatsappMessageLog::withoutGlobalScopes()->where('customer_id', $cust->id)->get();
+        $this->assertCount(5, $logs);
+        $this->assertTrue($logs->every(fn ($l) => $l->status === WhatsappMessageStatus::Queued));
+        $this->assertTrue($logs->every(fn ($l) => $l->phone_number === '6287884374939'));
+        $this->assertTrue($logs->every(fn ($l) => $l->event_type === WhatsappEventType::InvoiceIssued));
+        Queue::assertPushed(SendWhatsappMessageJob::class, 5);
+
+        // Saklar dipulihkan oleh finally.
+        $settings = WorkOrderDispatchSettings::forTenant($tenant->id)->refresh();
+        $this->assertTrue((bool) $settings->invoice_pdf_test_mode_enabled === false);
+        $this->assertTrue((bool) $settings->customer_auto_notify_enabled === true);
     }
 
     public function test_batch_test_command_rejects_when_auto_send_enabled(): void

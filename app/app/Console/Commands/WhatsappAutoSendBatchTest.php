@@ -10,6 +10,7 @@ use App\Models\Invoice;
 use App\Models\Subscription;
 use App\Models\WhatsappGatewaySettings;
 use App\Models\WhatsappMessageTemplate;
+use App\Models\WhatsappSession;
 use App\Models\WorkOrderDispatchSettings;
 use App\Services\Billing\InvoicePdfService;
 use App\Services\Whatsapp\CustomerAutoSendGate;
@@ -19,6 +20,7 @@ use App\Support\Whatsapp\WhatsappAttachment;
 use App\Support\WhatsappPhone;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Redis;
 
 /**
  * v0.28.4 (SEBAR-BATCH, A6) — uji LIVE jeda-batch TANPA risiko ke pelanggan
@@ -35,10 +37,18 @@ use Illuminate\Support\Facades\Cache;
  * Selama uji (try/finally JAMIN pulih walau exception): flag jeda orkestrator
  * ON (orkestrator tak kumpulkan kandidat NYATA), batch_size/pause kecil, Mode
  * Uji OFF, auto_notify ON. Lalu queue invoice_issued TEST lewat gerbang yang
- * SAMA (kursor + delay) dan cetak delay per pesan.
+ * SAMA (kursor + delay).
+ *
+ * OPSI (a) — command TIDAK menunggu "sent". Setelah antre, ia membaca skor
+ * (available_at, epoch) tiap job yang BENAR-BENAR ada di Redis delayed set
+ * queue whatsapp-{session_key} dan mencetak tabel (log id, NOMOR INVOICE,
+ * delay terhitung, available_at). Lalu `finally` memulihkan saklar — termasuk
+ * auto_notify kembali OFF. Job ter-delay akan DIBATALKAN oleh recheck (D4)
+ * saat jatuh tempo (saklar sudah OFF lagi): itu perilaku yang DIHARAPKAN dan
+ * ikut dibuktikan terpisah dengan menunggu status log jadi 'cancelled'.
  *
  * TEST invoice/subscription yang dibuat SENGAJA dibiarkan (job async masih
- * butuh file PDF-nya untuk kirim) — id dicetak untuk dibersihkan terpisah.
+ * butuh file PDF-nya) — id dicetak untuk dibersihkan terpisah.
  */
 class WhatsappAutoSendBatchTest extends Command
 {
@@ -183,6 +193,7 @@ class WhatsappAutoSendBatchTest extends Command
             $this->info("Uji jeda-batch: batch_size={$batchSize}, pause={$pauseMin}-{$pauseMax} mnt, {$count} invoice/pelanggan → nomor {$testRecipient}.");
 
             $n = 0;
+            $queued = [];
             foreach ($customers as $customer) {
                 $sub = $this->makeTestSubscription($customer);
                 $createdSubscriptionIds[] = $sub->id;
@@ -208,18 +219,44 @@ class WhatsappAutoSendBatchTest extends Command
                     );
 
                     $n++;
-                    $delay = $decision->delaySeconds;
-                    $this->line(sprintf(
-                        '  #%d %s → %s%s',
-                        $n,
-                        $invoice->invoice_number,
-                        $decision->result->value,
-                        $delay !== null ? " (delay {$delay}s ≈ ".round($delay / 60, 1).' mnt)' : '',
-                    ));
+                    $queued[] = [
+                        'n' => $n,
+                        'invoice' => $invoice->invoice_number,
+                        'logId' => $decision->log?->id,
+                        'result' => $decision->result->value,
+                        'delay' => $decision->delaySeconds,
+                        'sessionKey' => WhatsappSession::sessionKeyFor($customer->reseller_id),
+                    ];
                 }
             }
 
-            $this->info("Selesai meng-queue {$n} pesan. Pesan #1..{$batchSize} delay≈0; batch berikutnya ter-delay satu pause.");
+            $this->info("Selesai meng-queue {$n} pesan. Membaca available_at dari Redis delayed set (opsi a — command tak menunggu 'sent').");
+
+            // ── OPSI (a): buktikan ->delay() batch mendarat di Redis ────────────
+            $avail = $this->readRedisDelayedAvailableAt(array_column($queued, 'sessionKey'));
+            $base = null;
+            foreach ($queued as $q) {
+                if ($q['logId'] !== null && isset($avail[$q['logId']])) {
+                    $base = $base === null ? $avail[$q['logId']] : min($base, $avail[$q['logId']]);
+                }
+            }
+            $rows = [];
+            foreach ($queued as $q) {
+                $a = ($q['logId'] !== null) ? ($avail[$q['logId']] ?? null) : null;
+                $rows[] = [
+                    $q['n'],
+                    $q['invoice'],
+                    $q['logId'] ?? '-',
+                    $q['result'],
+                    $q['delay'] ?? '-',
+                    $a !== null ? $a : 'tidak di delayed set (due/migrasi)',
+                    ($a !== null && $base !== null) ? ('+'.($a - $base).'s dari #1') : '-',
+                ];
+            }
+            $this->table(
+                ['#', 'NOMOR INVOICE', 'log id', 'result', 'delay(s)', 'available_at (epoch)', 'offset'],
+                $rows,
+            );
         } finally {
             // JAMIN pulih walau exception di atas.
             $gw->update([
@@ -259,14 +296,20 @@ class WhatsappAutoSendBatchTest extends Command
     {
         $num = 'INV/TEST-BATCH/'.now()->format('ymdHis')."/{$customer->id}/{$i}";
 
+        // v0.28.4 (cacat #1 fix) — tiap invoice TEST memakai periode BERBEDA
+        // (bulan ke-belakang per $i) supaya kombinasi (subscription_id,
+        // period_start, period_end) unik — unique constraint
+        // invoices_subscription_id_period_start_period_end_unique tak dilanggar.
+        $period = now()->subMonths($i - 1);
+
         return Invoice::create([
             'tenant_id' => $customer->tenant_id,
             'customer_id' => $customer->id,
             'subscription_id' => $sub->id,
             'reseller_id' => $customer->reseller_id,
             'invoice_number' => $num,
-            'period_start' => now()->startOfMonth()->toDateString(),
-            'period_end' => now()->endOfMonth()->toDateString(),
+            'period_start' => $period->copy()->startOfMonth()->toDateString(),
+            'period_end' => $period->copy()->endOfMonth()->toDateString(),
             'due_date' => now()->toDateString(),
             'status' => InvoiceStatus::Pending->value,
             'subtotal' => 10000,
@@ -274,5 +317,53 @@ class WhatsappAutoSendBatchTest extends Command
             'grand_total' => 10000,
             'generated_at' => now(),
         ]);
+    }
+
+    /**
+     * OPSI (a) — baca skor (available_at, epoch) tiap job yang BENAR-BENAR ada
+     * di Redis delayed set queue whatsapp-{sessionKey}, dipetakan per logId.
+     * Membuktikan ->delay() batch mendarat di Redis tanpa menunggu "sent".
+     *
+     * Catatan: job delay(0) mendarat dengan skor ≈ now dan bisa SEGERA dimigrasi
+     * worker ke ready list; bila logId-nya tak ada di delayed set, itu konsisten
+     * dengan delay≈0 (sudah jatuh tempo), bukan kegagalan.
+     *
+     * @param  array<int,string>  $sessionKeys
+     * @return array<int,int> logId => available_at (unix epoch)
+     */
+    private function readRedisDelayedAvailableAt(array $sessionKeys): array
+    {
+        $map = [];
+        try {
+            $conn = Redis::connection(config('queue.connections.redis.connection'));
+        } catch (\Throwable $e) {
+            $this->warn("  gagal konek Redis: {$e->getMessage()}");
+
+            return $map;
+        }
+
+        foreach (array_values(array_unique($sessionKeys)) as $key) {
+            $zkey = 'queues:whatsapp-'.$key.':delayed';
+            try {
+                // phpredis: ['withscores' => true] → [payload(member) => score].
+                $members = $conn->zrangebyscore($zkey, '-inf', '+inf', ['withscores' => true]);
+            } catch (\Throwable $e) {
+                $this->warn("  gagal baca Redis {$zkey}: {$e->getMessage()}");
+
+                continue;
+            }
+
+            foreach ((array) $members as $payload => $score) {
+                $decoded = json_decode((string) $payload, true);
+                $command = $decoded['data']['command'] ?? '';
+                // SendWhatsappMessageJob punya properti `public readonly int $logId`
+                // → serialized sebagai `logId";i:<id>;`.
+                if (is_string($command) && preg_match('/logId";i:(\d+)/', $command, $m)) {
+                    $map[(int) $m[1]] = (int) $score;
+                }
+            }
+        }
+
+        return $map;
     }
 }

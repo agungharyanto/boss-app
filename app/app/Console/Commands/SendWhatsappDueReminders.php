@@ -2,113 +2,30 @@
 
 namespace App\Console\Commands;
 
-use App\Enums\InvoiceStatus;
-use App\Enums\WhatsappEventType;
-use App\Models\Invoice;
-use App\Models\WhatsappGatewaySettings;
-use App\Models\WhatsappMessageLog;
-use App\Models\WorkOrderDispatchSettings;
-use App\Services\Whatsapp\CustomerAutoSendGate;
-use App\Services\Whatsapp\WhatsappGatewayService;
+use App\Services\Whatsapp\CustomerAutoSendOrchestrator;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
 
 /**
- * Scheduled ->everyMinute() (see routes/console.php) but only actually does
- * work when the current time matches one of the admin-configurable
- * daily_schedule_times entries — the schedule itself lives in
- * whatsapp_gateway_settings, not a static cron expression, so the command
- * has to poll and self-gate rather than being scheduled at a fixed time.
+ * v0.28.6 (penutupan cluster v0.28.0) — PEMBUNGKUS TIPIS. Menjalankan jalur
+ * DUE (pengingat jatuh tempo) lewat CustomerAutoSendOrchestrator + GERBANG yang
+ * sama. Manual-only: titik terjadwal tunggal tetap whatsapp:auto-send-dispatch
+ * (routes/console.php tidak berubah). Seluruh query/dedup/isScheduledNow lama
+ * dihapus — kini di orkestrator (collectDue + due_reminder_days) & gerbang.
  */
 class SendWhatsappDueReminders extends Command
 {
-    protected $signature = 'whatsapp:send-due-reminders';
+    protected $signature = 'whatsapp:send-due-reminders {--dry-run : Hitung kandidat yang akan dicoba ke gerbang, JANGAN antre/kirim}';
 
-    protected $description = 'Kirim pengingat WhatsApp H-5 dan H-0 untuk invoice yang belum dibayar (sesuai jadwal daily_schedule_times)';
+    protected $description = 'Pengingat jatuh tempo (jalur DUE) lewat orkestrator kirim otomatis pelanggan.';
 
-    public function handle(WhatsappGatewayService $service, CustomerAutoSendGate $gate): int
+    public function handle(CustomerAutoSendOrchestrator $orchestrator): int
     {
-        if (! $this->isScheduledNow()) {
-            return self::SUCCESS;
-        }
+        $dryRun = (bool) $this->option('dry-run');
+        $n = $orchestrator->runPath(CustomerAutoSendOrchestrator::PATH_DUE, $dryRun);
 
-        // v0.13.5.1.2 — early-exit per tenant: lewati tenant yang saklar
-        // "Notifikasi Otomatis ke Pelanggan"-nya OFF SEBELUM mengiterasi
-        // invoice (hemat query + tak ada banjir log tiap menit). Guard
-        // otoritatif tetap di WhatsappGatewayService::buildAndQueue();
-        // ini optimasi + log ringkas (maks 1 baris per run, cuma saat run
-        // berada dalam jendela kirim).
-        $disabledTenantIds = WorkOrderDispatchSettings::query()
-            ->where('customer_auto_notify_enabled', false)
-            ->pluck('tenant_id')
-            ->all();
-
-        if ($disabledTenantIds !== []) {
-            Log::info('SendWhatsappDueReminders: lewati tenant dengan saklar notifikasi pelanggan mati', [
-                'tenants' => $disabledTenantIds,
-            ]);
-        }
-
-        // status=Pending only (not Overdue) is what makes "no reminder past
-        // H-0" true almost by construction: MarkOverdueInvoices only flips
-        // an invoice to Overdue the day AFTER due_date passes, so a
-        // Pending invoice can only be due today or in the future here.
-        $invoices = Invoice::withoutGlobalScopes()
-            ->where('status', InvoiceStatus::Pending->value)
-            ->where(function ($query) {
-                $query->whereDate('due_date', now()->toDateString())
-                    ->orWhereDate('due_date', now()->copy()->addDays(5)->toDateString());
-            })
-            ->when($disabledTenantIds !== [], fn ($query) => $query->whereNotIn('tenant_id', $disabledTenantIds))
-            ->with(['customer', 'subscription'])
-            ->get();
-
-        $sent = 0;
-
-        foreach ($invoices as $invoice) {
-            if ($invoice->customer === null) {
-                continue;
-            }
-
-            // Dedup: sudah terkirim NYATA hari ini ATAU sudah ter-SIMULASI hari
-            // ini (Mode Uji, v0.28.2 — Simulated tidak membuat WhatsappMessageLog,
-            // jadi harus cek baris keputusan Simulated juga — aturan tambahan 1).
-            $alreadySentToday = WhatsappMessageLog::withoutGlobalScopes()
-                ->effective() // v0.28.4 — log Cancelled tak dihitung "sudah dikirim".
-                ->where('invoice_id', $invoice->id)
-                ->where('event_type', WhatsappEventType::InvoiceDueReminder->value)
-                ->whereDate('created_at', now()->toDateString())
-                ->exists();
-
-            if ($alreadySentToday
-                || $gate->simulatedTodayExists((int) $invoice->tenant_id, WhatsappEventType::InvoiceDueReminder->value, $invoice->customer, $invoice)) {
-                continue;
-            }
-
-            $decision = $service->buildAndQueueGated(WhatsappEventType::InvoiceDueReminder, $invoice->customer, $invoice);
-
-            if ($decision->queued()) {
-                $sent++;
-
-                continue;
-            }
-
-            // Hasil run-stop (sesi/pemutus/plafon/jendela) → hentikan run.
-            if ($decision->isRunStop()) {
-                break;
-            }
-            // SkippedOptOut/Simulated/SkippedTemplateInactive → lanjut invoice berikutnya.
-        }
-
-        $this->info("Selesai. {$sent} pengingat due-date diantrikan dari {$invoices->count()} invoice yang cocok.");
+        $label = $dryRun ? '[dry-run] akan diantre' : 'diantrikan';
+        $this->info("Selesai. {$n} pengingat jatuh tempo {$label}.");
 
         return self::SUCCESS;
-    }
-
-    private function isScheduledNow(): bool
-    {
-        $times = WhatsappGatewaySettings::current()->daily_schedule_times ?? ['08:00', '20:00'];
-
-        return in_array(now()->format('H:i'), $times, true);
     }
 }

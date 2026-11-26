@@ -3,7 +3,50 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
-## v0.28.4 — SEBAR-BATCH kirim otomatis pelanggan (cabang `v0.28.4-sebar-batch`, BELUM merge/tag)
+## v0.28.6 — Penutupan cluster v0.28.0 (Gerbang Kirim Otomatis Pelanggan)
+
+Menutup cluster v0.28.0. **Unifikasi logika:** keempat command lama (`whatsapp:send-due-reminders`,
+`whatsapp:send-suspended-reminders`, `invoices:send-pdf-automatically`,
+`whatsapp:process-deferred-registered`) kini PEMBUNGKUS TIPIS yang memanggil
+`CustomerAutoSendOrchestrator::runPath($path, $dryRun)` — lewat GERBANG yang sama. Semua query/dedup/
+`isScheduledNow`/limit duplikat di command DIHAPUS (satu sumber kebenaran: orkestrator + gerbang).
+
+- `CustomerAutoSendOrchestrator::runPath(string $path, bool $dryRun = false)` baru (validasi path →
+  `dispatchAllTenants([$path], $dryRun)`); parameter `$dryRun` DITHREAD ke `dispatchAllTenants`/
+  `dispatchTenant`/`dispatchCandidates` — ADITIF, default `false` = perilaku lama byte-identik (dibuktikan
+  test). Dry-run = hitung kandidat yang AKAN dicoba ke gerbang (registrasi yang akan kedaluwarsa tidak
+  dihitung), tanpa mutasi/kirim: lewati pembersih A3 + flag jeda + gate jendela.
+- Titik terjadwal TUNGGAL `whatsapp:auto-send-dispatch` (everyMinute) TIDAK berubah; `routes/console.php`
+  TIDAK berubah; perilaku orkestrator yang sudah ada TIDAK berubah.
+- `--dry-run` dipertahankan + diseragamkan ke keempat command (preview); opsi `--limit` lama
+  ProcessDeferred dibuang (pekerjaan kini dibatasi plafon gabungan di gerbang, bukan limit per-run kasar).
+  `SendInvoicePdfAutomatically::lastRunCacheKey`/`TIMEZONE` lama dihapus (mati sejak UI v0.28.5).
+- Test command lama disesuaikan ke perilaku terpadu (helper membuat baris `work_order_dispatch_settings`
+  agar tenant dienumerasi orkestrator; test "outside daily_schedule_times" diganti "manual command abaikan
+  daily_schedule_times" — gate `isScheduledNow` lama memang dihapus).
+- Regresi penuh (lingkungan setia via `docker compose run boss-app`, menjangkau `radius_db`, volume
+  `vpn_pki`, tz Jakarta): **2845 test / 8822 asersi, 0 gagal, 0 error** (10 PHPUnit deprecation non-gagal).
+  Satu bug cluster NYATA ditemukan+diperbaiki: `StaffService` meng-`new WhatsappGatewayService(1 arg)`
+  padahal gerbang v0.28.2 menambah dep ke-2 → `ArgumentCountError` (laten) → `app(WhatsappGatewayService::class)`.
+- Docs: ROADMAP cluster v0.28.0 → Closed; CLAUDE.md "v0.28.0 Cluster Closure" (arsitektur gerbang →
+  orkestrator → batch → recheck + tabel/command/tab UI + urutan go-live + regresi penuh + catatan migrasi
+  server). Pint seluruh file PHP cluster bersih.
+
+## v0.28.5 — UI tab "Kirim Otomatis" di WA Gateway
+
+Tab baru "Kirim Otomatis" di `/whatsapp-gateway` (admin-only, per tenant) memindahkan kartu pengaturan
+kirim otomatis pelanggan dari `/settings/work-order-dispatch` (halaman lama tetap untuk timing WO/ZTP/grup
++ info-line). Isi: saklar Notifikasi Otomatis + Mode Uji + nomor uji + Kirim Invoice Otomatis (+ mulai
+tanggal); jadwal hari pengingat H-0..H-7 (min 1, peringatan H-7); plafon harian + jendela jam (awal<akhir)
++ ambang pemutus; status pemutus + tombol "Lanjutkan" (mesin sama `whatsapp:auto-send-resume`); jeda batch
+read-only + tautan Rate Limit; indikator hari ini (ter-antre/plafon, keputusan per hasil, deferral pending,
+slot kursor, 20 keputusan terakhir). Modal konfirmasi untuk 3 aksi menambah-paparan (nyalakan Notif
+Otomatis, matikan Mode Uji, nyalakan Kirim Invoice). Logika di `CustomerAutoSendSettingsService`; jejak
+APPEND-ONLY per-field `customer_auto_send_setting_logs` (10 terakhir di tab). Akses sefamili halaman
+(`whatsapp_gateway.view`/`.manage`). Perilaku gerbang/orkestrator/batch tidak berubah. Verifikasi UI Agung
+2026-11-26. Merged `develop`→`main`, tag `v0.28.5`.
+
+## v0.28.4 — SEBAR-BATCH kirim otomatis pelanggan (merged `develop`→`main`, tag `v0.28.4`, terverifikasi live 2026-11-25)
 
 Jeda batch untuk kirim WhatsApp OTOMATIS pelanggan (4 jalur: sweep `invoice_issued`,
 `invoice_due_reminder` H-5/H-0, `customer_suspended_reminder`, `customer_registered`) supaya ribuan

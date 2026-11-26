@@ -13,7 +13,6 @@ use App\Models\Technician;
 use App\Models\User;
 use App\Models\WorkOrder;
 use App\Services\Whatsapp\WhatsappGatewayService;
-use App\Services\Whatsapp\WhatsappTemplateService;
 use App\Support\WhatsappPhone;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -62,7 +61,11 @@ class StaffService
         private ?WhatsappGatewayService $whatsappGateway = null,
     ) {
         $this->referrerService ??= new ReferrerService;
-        $this->whatsappGateway ??= new WhatsappGatewayService(new WhatsappTemplateService);
+        // v0.28.6 — resolve via container: WhatsappGatewayService kini butuh 2
+        // dependency (WhatsappTemplateService + CustomerAutoSendGate, sejak
+        // gerbang v0.28.2). `new WhatsappGatewayService(new WhatsappTemplateService)`
+        // lama = 1 arg → ArgumentCountError saat `new StaffService()` tanpa inject.
+        $this->whatsappGateway ??= app(WhatsappGatewayService::class);
     }
 
     /**

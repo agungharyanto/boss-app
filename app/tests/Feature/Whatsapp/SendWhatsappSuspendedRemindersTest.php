@@ -11,6 +11,7 @@ use App\Models\Tenant;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
 use App\Models\WhatsappSession;
+use App\Models\WorkOrderDispatchSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Bus;
@@ -49,6 +50,11 @@ class SendWhatsappSuspendedRemindersTest extends TestCase
             'reseller_id' => null,
             'status' => WhatsappSessionStatus::Connected,
         ]);
+
+        // v0.28.6 — command kini pembungkus orkestrator, yang meng-enumerasi
+        // tenant dari baris work_order_dispatch_settings (default aman: saklar
+        // ON, jendela 08:00–20:00). Tanpa baris ini tenant tak dilirik.
+        WorkOrderDispatchSettings::forTenant($tenant->id);
 
         return Customer::factory()->create([
             'tenant_id' => $tenant->id,

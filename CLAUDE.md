@@ -10559,3 +10559,103 @@ dibakukan jadi aturan keras:
   nyata) + batch_size/pause kecil + Mode Uji OFF + auto_notify ON; SEMUA dipulihkan di `finally` (termasuk
   bila exception). Pesan nyata HANYA ke nomor uji. TEST invoice/subscription yang dibuat dibiarkan (job
   async masih butuh file PDF-nya) — id dicetak untuk dibersihkan terpisah SETELAH job terkirim.
+
+## v0.28.0 Cluster Closure — Gerbang Kirim Otomatis Pelanggan (penutupan v0.28.6, 2026-11-26)
+
+Cluster v0.28.0 DITUTUP. Penutupan dilabeli **v0.28.6** (konvensi cluster v0.13.7/v0.23.9: act docs +
+unifikasi + regresi penuh + merge `develop`→`main`; tag penutupan `v0.28.6` dibuat karena cluster v0.28
+belum punya tag berlabel "penutupan" — berbeda dari v0.13/v0.23 yang penutupannya tak di-tag).
+
+**Arsitektur kirim otomatis pelanggan (alur lengkap, satu sumber kebenaran):**
+
+1. **Orkestrator** `App\Services\Whatsapp\CustomerAutoSendOrchestrator` — titik terjadwal TUNGGAL
+   `whatsapp:auto-send-dispatch` (`routes/console.php`, `->everyMinute()->withoutOverlapping()`). Per
+   tenant (dalam jendela jam): kumpulkan kandidat 4 jalur (`collectDue`/`collectSuspend`/`collectInvoice`/
+   `collectRegistration`), urutkan PRIORITAS K13 (H-0 → H-x lead-day → suspend 100 → invoice 200 →
+   registrasi 300), lewatkan satu-satu ke gerbang. `dispatchAllTenants($paths, $dryRun)` /
+   `dispatchTenant(...)` / `runPath($path, $dryRun)` — `$paths`/`$dryRun` aditif. **4 command lama kini
+   PEMBUNGKUS TIPIS `runPath` (v0.28.6)**: `whatsapp:send-due-reminders` (DUE), `-suspended-reminders`
+   (SUSPEND), `invoices:send-pdf-automatically` (INVOICE), `whatsapp:process-deferred-registered`
+   (REGISTRATION) — manual-only, semua `--dry-run`; TIDAK dijadwalkan (orkestrator yang terjadwal).
+2. **Gerbang** `App\Services\Whatsapp\CustomerAutoSendGate` — SATU-SATUNYA penegak, dipanggil dari titik
+   tunggal `WhatsappGatewayService::buildAndQueue()` (jalur `context === null`) via `buildAndQueueGated`.
+   Urutan cek → enum beralasan `App\Enums\CustomerAutoSendResult` (Queued/SkippedAutoNotifyOff/SkippedOptOut/
+   SkippedTemplateInactive/SkippedTestMode/Simulated/Deferred/Expired/OutsideWindow/SessionDown/BreakerOpen/
+   CapReached). Opt-out pelanggan (T1) → saklar tenant `customer_auto_notify_enabled` → template →
+   **Mode Uji** (invoice_issued = SkippedTestMode berhenti total; due/suspend/registrasi = Simulated
+   dry-run aman) → sesi Connected → jendela jam → plafon GABUNGAN → pemutus. Kirim MANUAL
+   (`InvoiceSendContext`) MELEWATI gerbang (sadar admin). Pemutus hanya menghitung kegagalan kirim OTOMATIS
+   pelanggan.
+3. **Batch** `App\Services\Whatsapp\CustomerAutoSendBatchPlanner` (v0.28.4) — jeda ANTAR-batch via
+   `->delay()` saat dispatch (kursor `customer_auto_send_cursors` per tenant+sesi; slot lewat jendela tak
+   di-queue). Hanya 4 jalur otomatis; manual/OTP/grup selalu delay 0.
+4. **Recheck D4** `CustomerAutoSendGate::recheckBeforeSend()` di `SendWhatsappMessageJob` — sebelum kirim,
+   cek ulang gerbang; syarat berubah → status `WhatsappMessageStatus::Cancelled` ('Batal'), tak kirim, tak
+   naikkan pemutus. `WhatsappMessageLog::scopeEffective()` mengecualikan Cancelled dari plafon+dedup.
+   Pembersih A3 `cleanupStuckLogs` membatalkan log `queued` basi.
+
+**Tabel:** `customer_notification_opt_out_logs` (T1, append-only), `customer_auto_send_decisions` (T2,
+jejak keputusan, prune `whatsapp:prune-auto-send-decisions` dailyAt 03:40 >30 hari), `customer_auto_send_deferrals`
+(T2, registrasi tertunda), `customer_auto_send_breakers` (T2, pemutus per tenant+sesi),
+`customer_auto_send_cursors` (T4-batch), `customer_auto_send_setting_logs` (UI v0.28.5, audit per-field
+append-only). Kolom per-tenant di `work_order_dispatch_settings`: `customer_auto_notify_enabled`,
+`invoice_pdf_test_mode_enabled`/`_recipient`, `invoice_pdf_auto_send_enabled`/`_from`/`_enabled_at`,
+`due_reminder_days`, `customer_auto_send_daily_cap`, `customer_auto_send_window_start`/`_end`,
+`customer_auto_send_breaker_threshold`, `customers.auto_notify_opt_out`.
+
+**Command:** terjadwal → `whatsapp:auto-send-dispatch` (everyMinute), `whatsapp:prune-auto-send-decisions`
+(03:40). Manual → 4 pembungkus di atas (semua `--dry-run`), `whatsapp:auto-send-resume {tenant}` (tutup
+pemutus; mesin sama tombol "Lanjutkan"), `whatsapp:auto-send-batch-test` (uji berpagar TEST-only).
+
+**UI:** tab "Kirim Otomatis" di `/whatsapp-gateway` (v0.28.5, admin, per tenant) — satu-satunya tempat
+admin menyetel semua di atas; logika di `CustomerAutoSendSettingsService` (Livewire hanya memanggil).
+
+### Urutan menyalakan notifikasi pelanggan saat GO-LIVE (WAJIB, dari tab "Kirim Otomatis")
+
+1. **Template aktif sesuai niat** — pastikan template `invoice_due_reminder`/`payment_received`/
+   `customer_registered`/`customer_suspended_reminder`/`invoice_issued` yang mau dipakai berstatus aktif
+   (Template Pesan); yang tak dipakai biarkan nonaktif.
+2. **Dry-run**: **Notifikasi Otomatis ON + Mode Uji ON**. Biarkan minimal 1 hari; cek tab indikator ada
+   keputusan **Simulated** (dan NOL kirim nyata ke pelanggan). Ini membuktikan pipa jalan tanpa menyentuh
+   pelanggan.
+3. **Matikan pengingat/tagihan di MixRadius** untuk segmen pelanggan terkait (hindari pesan/tagihan ganda
+   — overlap MixRadius↔BOSS tak bisa dihitung dari `boss_db`).
+4. **Mode Uji OFF** pada **hari sepi** (JAUHI tanggal 1 — `GenerateDueInvoices` menerbitkan ratusan invoice
+   `billing_cycle_day=1` → burst). Mulai pelan.
+5. **Kirim Invoice Otomatis ON** TERAKHIR. Naikkan **plafon harian bertahap** lewat tab (mis. 20 → 40 → 80)
+   sambil memantau indikator + log; jangan langsung besar.
+
+Mematikan selalu tanpa hambatan; menyalakan Notif Otomatis / mematikan Mode Uji / menyalakan Kirim Invoice
+Otomatis diminta konfirmasi modal (menambah paparan ke pelanggan nyata).
+
+### Catatan migrasi server (berlaku selama transisi)
+
+Server tunggal (`45.123.142.242` / `boss.bajastu.id`) **sedang disiapkan untuk pindah ke server baru
+(Oracle Cloud, IP BERBEDA)** — lihat "Catatan infra server (2026-11-26)" di awal file ini (host Proxmox
+sempat kehabisan disk 2026-11-26, Postgres pulih via crash recovery). Saat pindah, tinjau semua nilai
+ter-pin yang menyebut IP lama + perbarui DNS/`APP_URL`/TLS. Target go-live awal 2027; **data keuangan akan
+di-RESET sebelum go-live** — sampai itu, saklar kirim otomatis pelanggan tenant 1 dibiarkan baseline
+(auto_notify OFF, auto_send OFF, Mode Uji ON).
+
+### Regresi penuh penutupan (metode menjangkau radius_db)
+
+**Metode (MENJANGKAU `radius_db`, lingkungan setia ke container utama):** `docker compose run --rm --no-deps
+--user www-data --entrypoint php boss-app -d memory_limit=512M vendor/bin/phpunit --do-not-cache-result`,
+dengan code worktree di-mount ke `/var/www/html` (+ `vendor`/`.env`/`public/build` utama). Pakai `docker
+compose run` (BUKAN `docker run` lepas) supaya mewarisi `env_file` root `.env` (APP_TIMEZONE Asia/Jakarta,
+APP_LOCALE id, `RADIUS_DB_*`→`freeradius-db`), `boss-app_boss-network`, DAN semua named-volume service
+(termasuk `vpn_pki` yang di-bootstrap openvpn). `tests/bootstrap.php` menjaga `boss_db` tetap sqlite
+in-memory; test penulis-radius (RadcheckWriter/RadiusSessionHistory) me-remap `radius` ke sqlite sendiri;
+test pembaca (CustomerShow/CpeDialup) hanya SELECT read-only ke `radius_db` nyata — nol tulis ke radius_db /
+fixture `085166445368`. **`memory_limit=512M` WAJIB via `vendor/bin/phpunit` LANGSUNG** — `php artisan test
+-d ...` tak mewariskan `-d` ke subprocess phpunit (fatal 128M di test PDF/dompdf). **Hasil: 2845 test /
+8822 asersi, 0 gagal, 0 error** (~25 mnt, 10 PHPUnit deprecation notice non-gagal). **Satu bug cluster NYATA
+ditemukan+diperbaiki** lewat regresi penuh ini: `StaffService` fallback meng-`new WhatsappGatewayService(1
+arg)` padahal gerbang v0.28.2 menambah dep ke-2 `CustomerAutoSendGate` → `ArgumentCountError` (laten, hanya
+terpicu `new StaffService()` tanpa inject; satu-satunya call-site manual) → diperbaiki ke
+`app(WhatsappGatewayService::class)`. **Catatan metode throwaway:** regresi via `docker run` lepas (tanpa
+volume `vpn_pki` / tanpa `env_file`) memunculkan 4 kegagalan SEMU — 2 `VpnMultiNodePoolTest` ("PKI belum
+di-bootstrap", TERBUKTI identik di `main@e1422a5` pra-cluster → lingkungan, bukan cluster), 1 InvoicePdf
+(`docker --env-file` mempertahankan kutip `INVOICE_COMPANY_NAME`), 1 indikator/sidebar (APP_TIMEZONE/LOCALE
+hilang) — semua lenyap di lingkungan setia; test indikator juga di-pin waktunya agar deterministik.
+Pint seluruh file PHP cluster bersih.

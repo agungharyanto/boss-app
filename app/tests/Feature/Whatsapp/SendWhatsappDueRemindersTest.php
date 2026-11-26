@@ -13,6 +13,7 @@ use App\Models\WhatsappGatewaySettings;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
 use App\Models\WhatsappSession;
+use App\Models\WorkOrderDispatchSettings;
 use App\Services\InvoiceService;
 use App\Services\SubscriptionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -60,6 +61,11 @@ class SendWhatsappDueRemindersTest extends TestCase
             'reseller_id' => null,
             'status' => WhatsappSessionStatus::Connected,
         ]);
+
+        // v0.28.6 — command kini pembungkus orkestrator (enumerasi tenant dari
+        // work_order_dispatch_settings; default saklar ON, jendela 08:00–20:00,
+        // due_reminder_days [5,0]).
+        WorkOrderDispatchSettings::forTenant($tenant->id);
 
         $customer = Customer::factory()->create(['tenant_id' => $tenant->id, 'reseller_id' => null]);
         $subscription = app(SubscriptionService::class)->create($customer, [
@@ -139,8 +145,14 @@ class SendWhatsappDueRemindersTest extends TestCase
         ]);
     }
 
-    public function test_command_does_nothing_outside_the_configured_schedule_times(): void
+    public function test_manual_command_ignores_daily_schedule_times_and_still_queues(): void
     {
+        // v0.28.6 — command kini pembungkus orkestrator manual-only; gate
+        // isScheduledNow (daily_schedule_times) LAMA dihapus. Jalur pelanggan
+        // dijadwalkan lewat whatsapp:auto-send-dispatch (everyMinute), bukan
+        // daily_schedule_times. Jadi menjalankan command secara manual TETAP
+        // mengantre walau daily_schedule_times tak cocok jam sekarang — asal
+        // dalam jendela jam (09:00 WIB, default 08:00–20:00).
         Bus::fake();
 
         WhatsappGatewaySettings::current()->update(['daily_schedule_times' => ['03:33']]);
@@ -149,6 +161,9 @@ class SendWhatsappDueRemindersTest extends TestCase
 
         $this->artisan('whatsapp:send-due-reminders')->assertSuccessful();
 
-        $this->assertDatabaseMissing('whatsapp_message_logs', ['invoice_id' => $invoice->id]);
+        $this->assertDatabaseHas('whatsapp_message_logs', [
+            'invoice_id' => $invoice->id,
+            'event_type' => WhatsappEventType::InvoiceDueReminder->value,
+        ]);
     }
 }

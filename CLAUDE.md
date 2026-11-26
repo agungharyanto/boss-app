@@ -31,6 +31,18 @@ Other docs: `docs/API.md` (endpoint reference — update it whenever `routes/api
 | ACS         | GenieACS — starts v0.7.0               |
 | Monitoring  | LibreNMS — starts v0.8.0               |
 
+## Catatan infra server (2026-11-26, governance note sementara — hapus setelah migrasi tuntas)
+
+**Server dev/produksi tunggal (`45.123.142.242` / `boss.bajastu.id`) sempat MATI 2026-11-26 karena disk
+host Proxmox PENUH** (bukan disk VM sendiri — host hypervisor yang menampung VM ini kehabisan ruang,
+mematikan/menggantung VM). **PostgreSQL pulih sendiri via crash recovery** (WAL replay) setelah ruang host
+dibebaskan dan VM hidup lagi — tidak ada korupsi data permanen yang teramati. **Migrasi ke server baru
+(Oracle Cloud, IP BERBEDA) sedang disiapkan** — begitu pindah, nilai yang ter-pin di seluruh file ini yang
+menyebut `45.123.142.242` perlu ditinjau ulang (DNS `boss.bajastu.id`, `APP_URL`, sertifikat TLS Let's
+Encrypt, DNS `genieacs.bajastu.id`, serta IP publik yang disebut di script/firewall/NAS). IP internal
+`boss-network` (`172.28.x`) tidak terpengaruh pindah host. Sampai migrasi tuntas, perlakukan ruang disk
+host sebagai sumber daya rapuh — pg_dump besar/cache PDF/log yang menumpuk bisa memicu ulang kondisi ini.
+
 ## Current status
 
 v0.1.0-foundation is merged and tagged (`v0.1.0`, on `main`/`develop`). v0.2.0-customer-crm was fully

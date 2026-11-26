@@ -82,6 +82,20 @@ class WhatsappMessageLog extends Model
         return $query->whereIn('event_type', array_column(WhatsappEventType::cases(), 'value'));
     }
 
+    /**
+     * v0.28.4 (SEBAR-BATCH) — baris yang masih "berlaku" untuk hitung plafon &
+     * dedup: SEMUA status KECUALI Cancelled. Satu sumber kebenaran (A2) dipakai
+     * CustomerAutoSendGate::queuedToday(), CustomerAutoSendOrchestrator
+     * (reminderAlreadyHandledToday / invoiceAlreadySentNonTest), dan ketiga
+     * command lama. Failed TETAP dihitung (perilaku T2 — upaya kirim yang gagal
+     * tetap mengonsumsi plafon). Cancelled = sengaja tak dikirim (D5) → tak
+     * dihitung, sehingga kandidatnya di-collect ulang orkestrator.
+     */
+    public function scopeEffective(Builder $query): Builder
+    {
+        return $query->where('status', '!=', WhatsappMessageStatus::Cancelled->value);
+    }
+
     public function reseller(): BelongsTo
     {
         return $this->belongsTo(Reseller::class);

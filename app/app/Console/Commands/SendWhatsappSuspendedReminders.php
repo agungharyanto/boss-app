@@ -52,6 +52,7 @@ class SendWhatsappSuspendedReminders extends Command
             // Dedup: terkirim NYATA hari ini ATAU ter-SIMULASI hari ini (Mode
             // Uji — aturan tambahan 1).
             $alreadySentToday = WhatsappMessageLog::withoutGlobalScopes()
+                ->effective() // v0.28.4 — log Cancelled tak dihitung "sudah dikirim".
                 ->where('customer_id', $customer->id)
                 ->where('event_type', WhatsappEventType::CustomerSuspendedReminder->value)
                 ->whereDate('created_at', now()->toDateString())

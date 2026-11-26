@@ -90,7 +90,7 @@ class WhatsappGatewayService
             $eventType,
             $customer,
             $invoice,
-            fn (): ?WhatsappMessageLog => $this->doCreateAndDispatch($eventType, $customer, $invoice, $attachment, null),
+            fn (int $delaySeconds): ?WhatsappMessageLog => $this->doCreateAndDispatch($eventType, $customer, $invoice, $attachment, null, $delaySeconds),
             // Predikat template-aktif (pra-rilis item 2) — dicek gerbang SEBELUM
             // Mode Uji. Resolve ringan (query ter-index); doCreateAndDispatch
             // me-resolve ulang saat benar-benar antre (jalur non-uji) — biaya
@@ -111,6 +111,7 @@ class WhatsappGatewayService
         ?Invoice $invoice,
         ?WhatsappAttachment $attachment,
         ?InvoiceSendContext $context,
+        int $delaySeconds = 0,
     ): ?WhatsappMessageLog {
         $template = $this->templateService->resolve($eventType, $customer->tenant_id, $customer->reseller_id);
 
@@ -145,7 +146,13 @@ class WhatsappGatewayService
 
         $sessionKey = WhatsappSession::sessionKeyFor($customer->reseller_id);
 
-        SendWhatsappMessageJob::dispatch($log->id)->onQueue('whatsapp-'.$sessionKey);
+        // v0.28.4 (SEBAR-BATCH, D1) — jeda batch disuntik di SINI lewat ->delay()
+        // saat dispatch (jalur OTOMATIS saja: $context null + delay dari gerbang/
+        // planner). Jalur MANUAL (context != null) selalu delaySeconds=0 →
+        // tak pernah di-delay batch (K14). delay(0) = segera, perilaku lama.
+        SendWhatsappMessageJob::dispatch($log->id)
+            ->onQueue('whatsapp-'.$sessionKey)
+            ->delay($delaySeconds);
 
         return $log;
     }

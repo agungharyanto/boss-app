@@ -20,9 +20,11 @@ use App\Models\WhatsappMessageTemplate;
 use App\Models\WhatsappSession;
 use App\Models\WorkOrderDispatchSettings;
 use App\Services\Billing\InvoicePdfService;
+use App\Services\Whatsapp\CustomerAutoSendOrchestrator;
 use App\Support\Whatsapp\DueReminderDays;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -541,6 +543,50 @@ class CustomerAutoSendOrchestratorTest extends TestCase
         // iTestOnly: log uji lama tidak men-dedup → kini ada 1 log NON-UJI baru.
         $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()
             ->where('invoice_id', $iTestOnly->id)->where('event_type', WhatsappEventType::InvoiceIssued->value)->where('is_test', false)->count());
+    }
+
+    // ── Flag jeda orkestrator (A6) — TTL wajib ───────────────────────────
+
+    /**
+     * v0.28.4 pra-rilis (item 3) — flag jeda di-set DENGAN TTL
+     * (PAUSE_TTL_MINUTES, 25 mnt > batas uji 20 mnt): saat ON orkestrator tak
+     * mengumpulkan kandidat NYATA; begitu TTL lewat flag kedaluwarsa SENDIRI
+     * (pengaman bila command uji mati paksa sebelum finally melepasnya) dan tick
+     * berikutnya kembali mengantre. Array cache (driver test) menghormati
+     * Carbon::setTestNow untuk kedaluwarsa (currentTime pakai Carbon::now).
+     */
+    public function test_pause_flag_with_ttl_halts_then_auto_expires_and_resumes(): void
+    {
+        $tenant = $this->tenantReady();
+        $c = $this->customer($tenant);
+        $invoice = $this->pendingInvoice($tenant, $c, now()->toDateString()); // H-0 due
+
+        // Flag ON dengan TTL produksi (mekanisme IDENTIK command uji).
+        Cache::put(
+            CustomerAutoSendOrchestrator::PAUSE_CACHE_KEY,
+            true,
+            now()->addMinutes(CustomerAutoSendOrchestrator::PAUSE_TTL_MINUTES),
+        );
+        $this->assertTrue(app(CustomerAutoSendOrchestrator::class)->isPaused());
+
+        // Tick saat jeda: NOL kandidat nyata terkumpul (hanya reaper A3 jalan).
+        $this->tick();
+        $this->assertSame(0, $this->autoLogCount($tenant->id));
+        $this->assertSame(0, CustomerAutoSendDecisionLog::count());
+        Queue::assertNothingPushed();
+
+        // Lewati TTL (26 mnt > 25) — masih dalam jendela (09:26 WIB). Flag
+        // kedaluwarsa SENDIRI tanpa Cache::forget.
+        Carbon::setTestNow(now()->addMinutes(CustomerAutoSendOrchestrator::PAUSE_TTL_MINUTES + 1));
+        $this->assertNull(Cache::get(CustomerAutoSendOrchestrator::PAUSE_CACHE_KEY));
+        $this->assertFalse(app(CustomerAutoSendOrchestrator::class)->isPaused());
+
+        // Tick berikutnya: orkestrator jalan lagi → H-0 ter-queue.
+        $this->tick();
+        $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()
+            ->where('invoice_id', $invoice->id)
+            ->where('event_type', WhatsappEventType::InvoiceDueReminder->value)
+            ->count());
     }
 
     private function sentInvoiceLog(int $tenantId, Invoice $invoice, bool $isTest): WhatsappMessageLog

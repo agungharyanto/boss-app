@@ -164,6 +164,7 @@ class SendInvoicePdfAutomatically extends Command
     private function alreadySentNonTest(Invoice $invoice): bool
     {
         return WhatsappMessageLog::withoutGlobalScopes()
+            ->effective() // v0.28.4 — log Cancelled tak dihitung "sudah dikirim".
             ->where('invoice_id', $invoice->id)
             ->where('event_type', WhatsappEventType::InvoiceIssued->value)
             ->where('is_test', false)

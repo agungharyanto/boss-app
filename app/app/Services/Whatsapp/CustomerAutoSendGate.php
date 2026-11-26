@@ -54,6 +54,16 @@ class CustomerAutoSendGate
 
     public const DEFAULT_BREAKER_THRESHOLD = 10;
 
+    /**
+     * v0.28.4 (SEBAR-BATCH) — planner jeda-batch (slot ->delay) + resolver
+     * template (dipakai recheckBeforeSend dari job). WhatsappTemplateService
+     * sekelas-namespace, tak ada siklus (ia tak bergantung gerbang/gateway).
+     */
+    public function __construct(
+        private readonly CustomerAutoSendBatchPlanner $batchPlanner,
+        private readonly WhatsappTemplateService $templateService,
+    ) {}
+
     /** @return list<string> event jalur otomatis pelanggan (ikut cap gabungan). */
     public static function autoEvents(): array
     {
@@ -66,8 +76,9 @@ class CustomerAutoSendGate
     }
 
     /**
-     * @param  Closure(): ?WhatsappMessageLog  $queueAction  menjalankan pembuatan
-     *                                                       log + dispatch (tail buildAndQueue); null = template nonaktif.
+     * @param  Closure(int): ?WhatsappMessageLog  $queueAction  menjalankan pembuatan
+     *                                                          log + dispatch (tail buildAndQueue) dengan delay batch (detik);
+     *                                                          null = template nonaktif.
      * @param  Closure(): bool  $templateActive  true bila template event ini
      *                                           ter-resolve aktif (dicek sebelum Mode Uji, pra-rilis item 2).
      */
@@ -139,9 +150,21 @@ class CustomerAutoSendGate
             return new CustomerAutoSendDecision(CustomerAutoSendResult::Simulated);
         }
 
-        // 9. Antre sungguhan (template di-resolve ulang di closure; null saat
-        // race deaktivasi tetap → SkippedTemplateInactive).
-        $log = $queueAction();
+        // 8.5 (v0.28.4 SEBAR-BATCH) — cadangkan slot jeda-batch. HANYA di jalur
+        // antre-sungguhan (setelah semua skip + Mode Uji) → slot dikonsumsi
+        // hanya untuk kirim NYATA. Slot melewati akhir jendela (D3) → perlakukan
+        // seperti OutsideWindow (slot monoton naik → kandidat berikut pasti juga
+        // lewat; kursor TIDAK berubah). customer_registered → DEFERRED via
+        // transient(); jalur lain → recordOncePerDay + orkestrator tick-stop.
+        $slot = $this->batchPlanner->reserveSlot($tenantId, $resellerId, $settings ?? WorkOrderDispatchSettings::forTenant($tenantId));
+        if ($slot === null) {
+            return $this->transient($event, $tenantId, $customer, $invoice, CustomerAutoSendResult::OutsideWindow, $fromDeferral);
+        }
+        $delaySeconds = max(0, $slot->getTimestamp() - now()->getTimestamp());
+
+        // 9. Antre sungguhan dengan delay batch (template di-resolve ulang di
+        // closure; null saat race deaktivasi tetap → SkippedTemplateInactive).
+        $log = $queueAction($delaySeconds);
         if ($log === null) {
             return $this->recordAndDecide($tenantId, $path, $customer, $invoice, CustomerAutoSendResult::SkippedTemplateInactive);
         }
@@ -151,7 +174,7 @@ class CustomerAutoSendGate
         }
 
         // Queued tidak dicatat ke decisions (sudah ada di whatsapp_message_logs).
-        return new CustomerAutoSendDecision(CustomerAutoSendResult::Queued, $log);
+        return new CustomerAutoSendDecision(CustomerAutoSendResult::Queued, $log, $delaySeconds);
     }
 
     /**
@@ -178,6 +201,70 @@ class CustomerAutoSendGate
         }
 
         return $this->recordOncePerDayAndDecide($tenantId, $event->value, $reason);
+    }
+
+    /**
+     * v0.28.4 (SEBAR-BATCH, A5/D4) — dipanggil SendWhatsappMessageJob TEPAT
+     * sebelum kirim, HANYA untuk log otomatis pelanggan (autoEvents +
+     * sent_by_user_id null + !is_test). Karena job otomatis kini ber-delay
+     * batch, syaratnya bisa berubah antara di-queue dan dieksekusi; cek ulang
+     * di sini. Return null = masih boleh kirim; selain itu alasan gagal +
+     * SATU baris keputusan (dedup per-kandidat per hari — SkippedAutoNotifyOff
+     * tetap tak dicatat, konsisten T2). Pemanggil menandai log Cancelled dan
+     * TIDAK memanggil recordOutcome (batal ≠ gagal kirim → tak menaikkan
+     * pemutus). Plafon SENGAJA tidak dicek ulang (sudah terhitung saat queue;
+     * mengeceknya lagi bisa membatalkan pesan sah hanya karena antrean penuh —
+     * di luar maksud D4).
+     */
+    public function recheckBeforeSend(WhatsappMessageLog $log): ?CustomerAutoSendResult
+    {
+        $tenantId = (int) $log->tenant_id;
+        $resellerId = $log->reseller_id;
+        $event = $log->event_type;
+        $path = $event->value;
+
+        $settings = WorkOrderDispatchSettings::query()->where('tenant_id', $tenantId)->first();
+        $customer = Customer::withoutGlobalScopes()->find($log->customer_id);
+        $invoice = $log->invoice_id !== null ? Invoice::withoutGlobalScopes()->find($log->invoice_id) : null;
+
+        // Pelanggan terhapus setelah di-queue — batalkan, tanpa baris keputusan
+        // per-kandidat (tak ada customer/invoice bermakna untuk dedup).
+        if ($customer === null) {
+            return CustomerAutoSendResult::SkippedTemplateInactive;
+        }
+
+        if ($settings !== null && ! $settings->customer_auto_notify_enabled) {
+            return $this->recordRecheck($tenantId, $path, $customer, $invoice, CustomerAutoSendResult::SkippedAutoNotifyOff);
+        }
+        if ($settings !== null && $settings->invoice_pdf_test_mode_enabled) {
+            return $this->recordRecheck($tenantId, $path, $customer, $invoice, CustomerAutoSendResult::SkippedTestMode);
+        }
+        if ($customer->auto_notify_opt_out) {
+            return $this->recordRecheck($tenantId, $path, $customer, $invoice, CustomerAutoSendResult::SkippedOptOut);
+        }
+        if ($this->templateService->resolve($event, $tenantId, $resellerId) === null) {
+            return $this->recordRecheck($tenantId, $path, $customer, $invoice, CustomerAutoSendResult::SkippedTemplateInactive);
+        }
+        if ($this->breakerOpen($tenantId, $resellerId)) {
+            return $this->recordRecheck($tenantId, $path, $customer, $invoice, CustomerAutoSendResult::BreakerOpen);
+        }
+        if (! $this->sessionConnected($tenantId, $resellerId)) {
+            return $this->recordRecheck($tenantId, $path, $customer, $invoice, CustomerAutoSendResult::SessionDown);
+        }
+        if (! $this->withinWindow($settings)) {
+            return $this->recordRecheck($tenantId, $path, $customer, $invoice, CustomerAutoSendResult::OutsideWindow);
+        }
+
+        return null;
+    }
+
+    private function recordRecheck(int $tenantId, string $path, Customer $customer, ?Invoice $invoice, CustomerAutoSendResult $result): CustomerAutoSendResult
+    {
+        if (! $this->recordedCandidateTodayExists($tenantId, $path, $result, $customer, $invoice)) {
+            $this->record($tenantId, $path, $customer, $invoice, $result);
+        }
+
+        return $result;
     }
 
     // ── Pemutus (breaker) ────────────────────────────────────────────────
@@ -313,6 +400,7 @@ class CustomerAutoSendGate
     public function queuedToday(int $tenantId): int
     {
         return WhatsappMessageLog::withoutGlobalScopes()
+            ->effective() // v0.28.4 — kecualikan Cancelled (D5); Failed tetap dihitung.
             ->where('tenant_id', $tenantId)
             ->whereIn('event_type', self::autoEvents())
             ->whereNull('sent_by_user_id')

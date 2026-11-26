@@ -606,56 +606,18 @@ class WorkOrderDispatchSettingsLivewireTest extends TestCase
         ]);
     }
 
-    // ── v0.13.5.1.2 — saklar Notifikasi Otomatis ke Pelanggan ────────────
+    // v0.28.5 — saklar Notifikasi Otomatis / Mode Uji / Kirim Invoice Otomatis
+    // PINDAH ke tab "Kirim Otomatis" (WhatsappGatewayIndex). Uji lokasi baru di
+    // tests/Feature/Whatsapp/WhatsappGatewayAutoSendTabTest.php. Halaman ini
+    // tetap menampilkan info-line + timing/ZTP/grup/routing (diuji di atas).
 
-    public function test_customer_auto_notify_defaults_enabled_in_ui(): void
+    public function test_moved_customer_auto_send_cards_are_gone_and_info_line_points_to_new_tab(): void
     {
         $tenant = Tenant::factory()->create();
 
         Livewire::actingAs($this->admin($tenant))
             ->test(WorkOrderDispatchSettings::class)
-            ->assertSet('customerAutoNotifyEnabled', true);
-    }
-
-    public function test_toggle_off_and_save_persists_with_flash(): void
-    {
-        $tenant = Tenant::factory()->create();
-
-        Livewire::actingAs($this->admin($tenant))
-            ->test(WorkOrderDispatchSettings::class)
-            ->set('customerAutoNotifyEnabled', false)
-            ->call('saveCustomerAutoNotify')
-            ->assertSet('customerAutoNotifyEnabled', false)
-            ->assertSee('notifikasi otomatis ke pelanggan disimpan');
-
-        $this->assertFalse(
-            (bool) WorkOrderDispatchSettingsModel::forTenant($tenant->id)->customer_auto_notify_enabled
-        );
-    }
-
-    public function test_save_requires_work_orders_manage_permission(): void
-    {
-        // Halaman (dan karenanya saklar + saveCustomerAutoNotify) digerbang
-        // `work_orders.manage`; user tanpa permission ditolak di mount.
-        $tenant = Tenant::factory()->create();
-        $user = User::factory()->create(['tenant_id' => $tenant->id]);
-        $user->assignRole('customer_service');
-
-        Livewire::actingAs($user)->test(WorkOrderDispatchSettings::class)->assertForbidden();
-    }
-
-    public function test_saklar_tenant_isolation(): void
-    {
-        $tenantA = Tenant::factory()->create();
-        $tenantB = Tenant::factory()->create();
-
-        Livewire::actingAs($this->admin($tenantA))
-            ->test(WorkOrderDispatchSettings::class)
-            ->set('customerAutoNotifyEnabled', false)
-            ->call('saveCustomerAutoNotify');
-
-        $this->assertFalse((bool) WorkOrderDispatchSettingsModel::forTenant($tenantA->id)->customer_auto_notify_enabled);
-        // Tenant B tidak terpengaruh — tetap default ON.
-        $this->assertTrue((bool) WorkOrderDispatchSettingsModel::forTenant($tenantB->id)->customer_auto_notify_enabled);
+            ->assertDontSee('Kirim notifikasi otomatis ke pelanggan')
+            ->assertSee('WA Gateway → Kirim Otomatis');
     }
 }

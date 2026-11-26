@@ -23,6 +23,28 @@ enum CustomerAutoSendResult: string
     case CapReached = 'cap_reached';                      // plafon harian gabungan (K2/K10)
 
     /**
+     * v0.28.5 — label tampilan (indikator tab "Kirim Otomatis"). Display-only,
+     * tidak mengubah perilaku gerbang.
+     */
+    public function label(): string
+    {
+        return match ($this) {
+            self::Queued => 'Diantre',
+            self::SkippedAutoNotifyOff => 'Saklar pelanggan OFF',
+            self::SkippedOptOut => 'Opt-out pelanggan',
+            self::SkippedTemplateInactive => 'Template nonaktif',
+            self::SkippedTestMode => 'Mode Uji (berhenti)',
+            self::Simulated => 'Simulasi (Mode Uji)',
+            self::Deferred => 'Ditunda (registrasi)',
+            self::Expired => 'Deferral kedaluwarsa',
+            self::OutsideWindow => 'Di luar jendela jam',
+            self::SessionDown => 'Sesi WA putus',
+            self::BreakerOpen => 'Pemutus terbuka',
+            self::CapReached => 'Plafon tercapai',
+        };
+    }
+
+    /**
      * Hasil level-RUN: jalur terjadwal (sweep/reminder) menghentikan seluruh
      * run saat menemui ini (bukan hanya melewati satu pelanggan).
      */

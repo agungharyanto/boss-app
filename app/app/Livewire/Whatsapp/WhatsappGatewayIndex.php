@@ -9,10 +9,14 @@ use App\Models\WhatsappIncomingMessage;
 use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappMessageTemplate;
 use App\Models\WhatsappSession;
+use App\Models\WorkOrderDispatchSettings;
+use App\Services\Whatsapp\CustomerAutoSendSettingsService;
 use App\Services\Whatsapp\WhatsappGatewayService;
 use App\Services\Whatsapp\WhatsappSessionService;
 use App\Services\Whatsapp\WhatsappTemplateService;
 use App\Support\ResellerContext;
+use App\Support\Whatsapp\DueReminderDays;
+use App\Support\WhatsappPhone;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -107,6 +111,39 @@ class WhatsappGatewayIndex extends Component
      */
     public ?int $resellerId = null;
 
+    // ── Tab "Kirim Otomatis" (v0.28.5) — per tenant, admin-only ──────────
+    // Kartu (a) saklar pelanggan + Mode Uji + kirim invoice otomatis.
+    public bool $autoNotifyEnabled = true;
+
+    public bool $testModeEnabled = false;
+
+    public ?string $testRecipient = null;
+
+    public bool $invoiceAutoSendEnabled = false;
+
+    public ?string $invoiceAutoSendFrom = null;
+
+    // Kartu (b) jadwal hari pengingat jatuh tempo (H-0..H-7); array string.
+    /** @var array<int, string> */
+    public array $reminderDays = [];
+
+    // Kartu (c) kontrol volume.
+    public int $dailyCap = 80;
+
+    public string $windowStart = '08:00';
+
+    public string $windowEnd = '20:00';
+
+    public int $breakerThreshold = 10;
+
+    /**
+     * Modal konfirmasi aksi berisiko (menambah paparan ke pelanggan nyata):
+     * 'auto_notify' (nyalakan), 'test_mode_off' (matikan Mode Uji),
+     * 'invoice_auto_send' (nyalakan). null = tidak ada modal. Mematikan saklar
+     * kirim / menyalakan Mode Uji TIDAK pakai modal.
+     */
+    public ?string $confirmAction = null;
+
     public function mount(): void
     {
         $this->authorize('viewAny', WhatsappSession::class);
@@ -117,6 +154,7 @@ class WhatsappGatewayIndex extends Component
         if ($this->isAdmin()) {
             $this->tab = 'overview';
             $this->loadSettingsIntoForm();
+            $this->loadAutoSendIntoForm();
         }
     }
 
@@ -319,6 +357,202 @@ class WhatsappGatewayIndex extends Component
         $this->dailyScheduleTimesRaw = implode(',', $settings->daily_schedule_times ?? ['08:00', '20:00']);
     }
 
+    // ── Tab "Kirim Otomatis" (v0.28.5) — aksi; logika di service ─────────
+
+    private function loadAutoSendIntoForm(): void
+    {
+        $s = WorkOrderDispatchSettings::forTenant(auth()->user()->tenant_id);
+
+        $this->autoNotifyEnabled = (bool) $s->customer_auto_notify_enabled;
+        $this->testModeEnabled = (bool) $s->invoice_pdf_test_mode_enabled;
+        $this->testRecipient = $s->invoice_pdf_test_recipient;
+        $this->invoiceAutoSendEnabled = (bool) $s->invoice_pdf_auto_send_enabled;
+        $this->invoiceAutoSendFrom = $s->invoice_pdf_auto_send_from?->format('Y-m-d');
+        $this->reminderDays = array_map('strval', DueReminderDays::sanitize($s->due_reminder_days));
+        $this->dailyCap = (int) ($s->customer_auto_send_daily_cap ?? 80);
+        $this->windowStart = substr((string) ($s->customer_auto_send_window_start ?? '08:00'), 0, 5);
+        $this->windowEnd = substr((string) ($s->customer_auto_send_window_end ?? '20:00'), 0, 5);
+        $this->breakerThreshold = (int) ($s->customer_auto_send_breaker_threshold ?? 10);
+    }
+
+    /** Kartu (a) — Notifikasi Otomatis ke Pelanggan (modal saat MENYALAKAN). */
+    public function requestSaveAutoNotify(CustomerAutoSendSettingsService $service): void
+    {
+        $this->authorize('whatsapp_gateway.manage');
+
+        $stored = (bool) $service->settings(auth()->user()->tenant_id)->customer_auto_notify_enabled;
+        if ($this->autoNotifyEnabled && ! $stored) {
+            $this->confirmAction = 'auto_notify';
+
+            return;
+        }
+
+        $this->doSaveAutoNotify($service);
+    }
+
+    private function doSaveAutoNotify(CustomerAutoSendSettingsService $service): void
+    {
+        $this->authorize('whatsapp_gateway.manage');
+
+        $service->saveCustomerAutoNotify(auth()->user()->tenant_id, $this->autoNotifyEnabled, auth()->id());
+        $this->confirmAction = null;
+        $this->loadAutoSendIntoForm();
+        session()->flash('status', 'Pengaturan notifikasi otomatis ke pelanggan disimpan.');
+    }
+
+    /** Kartu (a) — Mode Uji (modal saat MEMATIKAN = go-live). */
+    public function requestSaveTestMode(CustomerAutoSendSettingsService $service): void
+    {
+        $this->authorize('whatsapp_gateway.manage');
+
+        // Menyalakan Mode Uji wajib nomor uji valid (tidak ada modal — ini lebih aman).
+        if ($this->testModeEnabled) {
+            $normalized = WhatsappPhone::normalize($this->testRecipient);
+            if (strlen($normalized) < 10 || ! str_starts_with($normalized, '62')) {
+                $this->addError('testRecipient', 'Mode Uji aktif wajib nomor uji yang valid (mis. 6287884374939).');
+
+                return;
+            }
+        }
+
+        $stored = (bool) $service->settings(auth()->user()->tenant_id)->invoice_pdf_test_mode_enabled;
+        if (! $this->testModeEnabled && $stored) {
+            $this->confirmAction = 'test_mode_off';
+
+            return;
+        }
+
+        $this->doSaveTestMode($service);
+    }
+
+    private function doSaveTestMode(CustomerAutoSendSettingsService $service): void
+    {
+        $this->authorize('whatsapp_gateway.manage');
+
+        $normalized = WhatsappPhone::normalize($this->testRecipient);
+        $service->saveTestMode(
+            auth()->user()->tenant_id,
+            $this->testModeEnabled,
+            $normalized === '' ? null : $normalized,
+            auth()->id(),
+        );
+        $this->confirmAction = null;
+        $this->loadAutoSendIntoForm();
+        session()->flash('status', 'Pengaturan Mode Uji Kirim Invoice disimpan.');
+    }
+
+    /** Kartu (a) — Kirim Invoice Otomatis (modal saat MENYALAKAN). */
+    public function requestSaveInvoiceAutoSend(CustomerAutoSendSettingsService $service): void
+    {
+        $this->authorize('whatsapp_gateway.manage');
+
+        $this->validate(
+            ['invoiceAutoSendFrom' => ['nullable', 'date']],
+            [],
+            ['invoiceAutoSendFrom' => 'tanggal mulai'],
+        );
+
+        $stored = (bool) $service->settings(auth()->user()->tenant_id)->invoice_pdf_auto_send_enabled;
+        if ($this->invoiceAutoSendEnabled && ! $stored) {
+            $this->confirmAction = 'invoice_auto_send';
+
+            return;
+        }
+
+        $this->doSaveInvoiceAutoSend($service);
+    }
+
+    private function doSaveInvoiceAutoSend(CustomerAutoSendSettingsService $service): void
+    {
+        $this->authorize('whatsapp_gateway.manage');
+
+        $service->saveInvoiceAutoSend(
+            auth()->user()->tenant_id,
+            $this->invoiceAutoSendEnabled,
+            $this->invoiceAutoSendFrom ?: null,
+            auth()->id(),
+        );
+        $this->confirmAction = null;
+        $this->loadAutoSendIntoForm();
+        session()->flash('status', 'Pengaturan Kirim Invoice Otomatis disimpan.');
+    }
+
+    public function confirmPending(CustomerAutoSendSettingsService $service): void
+    {
+        match ($this->confirmAction) {
+            'auto_notify' => $this->doSaveAutoNotify($service),
+            'test_mode_off' => $this->doSaveTestMode($service),
+            'invoice_auto_send' => $this->doSaveInvoiceAutoSend($service),
+            default => $this->cancelConfirm(),
+        };
+    }
+
+    public function cancelConfirm(): void
+    {
+        $this->confirmAction = null;
+    }
+
+    /** Kartu (b) — jadwal hari pengingat jatuh tempo (H-0..H-7), minimal 1. */
+    public function saveReminderDays(CustomerAutoSendSettingsService $service): void
+    {
+        $this->authorize('whatsapp_gateway.manage');
+
+        $this->validate([
+            'reminderDays' => ['array', 'min:1'],
+            'reminderDays.*' => ['integer', 'min:'.DueReminderDays::MIN, 'max:'.DueReminderDays::MAX],
+        ], [
+            'reminderDays.min' => 'Pilih minimal 1 hari pengingat.',
+            'reminderDays.required' => 'Pilih minimal 1 hari pengingat.',
+        ], ['reminderDays' => 'hari pengingat']);
+
+        $days = DueReminderDays::sanitize(array_map('intval', $this->reminderDays));
+        $service->saveReminderDays(auth()->user()->tenant_id, $days, auth()->id());
+
+        $this->loadAutoSendIntoForm();
+        session()->flash('status', 'Jadwal hari pengingat disimpan.');
+    }
+
+    /** Kartu (c) — plafon harian, jendela jam, ambang pemutus. */
+    public function saveVolumeControls(CustomerAutoSendSettingsService $service): void
+    {
+        $this->authorize('whatsapp_gateway.manage');
+
+        $this->validate([
+            'dailyCap' => ['required', 'integer', 'min:1', 'max:1000'],
+            'windowStart' => ['required', 'date_format:H:i'],
+            'windowEnd' => ['required', 'date_format:H:i', 'after:windowStart'],
+            'breakerThreshold' => ['required', 'integer', 'min:1', 'max:100'],
+        ], [
+            'windowEnd.after' => 'Jam akhir harus lebih besar dari jam awal.',
+        ], [
+            'dailyCap' => 'plafon harian',
+            'windowStart' => 'jam awal',
+            'windowEnd' => 'jam akhir',
+            'breakerThreshold' => 'ambang pemutus',
+        ]);
+
+        $service->saveVolumeControls(
+            auth()->user()->tenant_id,
+            $this->dailyCap,
+            $this->windowStart,
+            $this->windowEnd,
+            $this->breakerThreshold,
+            auth()->id(),
+        );
+
+        $this->loadAutoSendIntoForm();
+        session()->flash('status', 'Kontrol volume (plafon/jendela/pemutus) disimpan.');
+    }
+
+    /** Kartu (d) — tutup pemutus (mesin sama whatsapp:auto-send-resume). */
+    public function resumeBreaker(CustomerAutoSendSettingsService $service): void
+    {
+        $this->authorize('whatsapp_gateway.manage');
+
+        $resumed = $service->resumeAll(auth()->user()->tenant_id, auth()->id());
+        session()->flash('status', "Pemutus dilanjutkan untuk {$resumed} sesi.");
+    }
+
     public function render()
     {
         $isAdmin = $this->isAdmin();
@@ -417,6 +651,26 @@ class WhatsappGatewayIndex extends Component
             $resellersById->put($this->resellerId, Reseller::find($this->resellerId));
         }
 
+        // Tab "Kirim Otomatis" (v0.28.5) — admin-only, per tenant. Data
+        // indikator/jejak/pemutus dari service (logika read-only di service).
+        $autoSend = null;
+        if ($isAdmin) {
+            $service = app(CustomerAutoSendSettingsService::class);
+            $tenantId = auth()->user()->tenant_id;
+            $autoSend = [
+                'indicators' => $service->indicators($tenantId),
+                'decisions' => $service->recentDecisions($tenantId, 20),
+                'breaker' => $service->breakerStatus($tenantId),
+                'audit' => $service->recentAuditLogs($tenantId, 10),
+                'result_labels' => CustomerAutoSendSettingsService::resultLabels(),
+                'batch' => [
+                    'size' => (int) WhatsappGatewaySettingsModel::current()->rate_limit_batch_size,
+                    'pause_min' => (int) WhatsappGatewaySettingsModel::current()->rate_limit_batch_pause_min_minutes,
+                    'pause_max' => (int) WhatsappGatewaySettingsModel::current()->rate_limit_batch_pause_max_minutes,
+                ],
+            ];
+        }
+
         return view('livewire.whatsapp.whatsapp-gateway-index', [
             'isAdmin' => $isAdmin,
             'mySession' => $mySession,
@@ -428,6 +682,7 @@ class WhatsappGatewayIndex extends Component
             'canSeeIncoming' => $canSeeIncoming,
             'incomingMessages' => $incomingMessages,
             'resellersById' => $resellersById,
+            'autoSend' => $autoSend,
         ]);
     }
 }

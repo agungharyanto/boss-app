@@ -202,6 +202,7 @@
                 <option value="sent">Terkirim</option>
                 <option value="failed">Gagal</option>
                 <option value="delivered">Diterima</option>
+                <option value="cancelled">Batal</option>
             </select>
             @if ($isAdmin)
                 <select wire:model.live="resellerFilter" class="rounded-md border-gray-300 text-sm">
@@ -238,8 +239,9 @@
                                     </span>
                                 @endif
                             </td>
-                            <td class="py-2 pr-4 {{ $log->status->value === 'failed' ? 'text-red-600' : ($log->status->value === 'sent' ? 'text-green-600' : 'text-gray-500') }}">
+                            <td class="py-2 pr-4 {{ $log->status->value === 'failed' ? 'text-red-600' : ($log->status->value === 'sent' ? 'text-green-600' : ($log->status->value === 'cancelled' ? 'text-amber-600' : 'text-gray-500')) }}">
                                 {{ $log->status->label() }}
+                                {{-- v0.28.4 — alasan tampil untuk failed DAN cancelled (keduanya isi failed_reason). --}}
                                 @if ($log->failed_reason)
                                     <span class="block text-xs text-gray-400">{{ Str::limit($log->failed_reason, 60) }}</span>
                                 @endif

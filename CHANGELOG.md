@@ -3,6 +3,47 @@
 Format bebas mengikuti sprint di `docs/ROADMAP.md`. Setiap versi dicatat saat
 tag dibuat (RULE BOSS-013).
 
+## v0.28.4 — SEBAR-BATCH kirim otomatis pelanggan (cabang `v0.28.4-sebar-batch`, BELUM merge/tag)
+
+Jeda batch untuk kirim WhatsApp OTOMATIS pelanggan (4 jalur: sweep `invoice_issued`,
+`invoice_due_reminder` H-5/H-0, `customer_suspended_reminder`, `customer_registered`) supaya ribuan
+pesan tidak diantre serentak menjelang go-live. Memakai kolom global `whatsapp_gateway_settings.rate_limit_batch_*`
+(batch_size 20, pause 5–10 mnt) yang sudah ada (K14). Manual/OTP/grup teknisi TIDAK tersentuh.
+
+- **Status baru `WhatsappMessageStatus::Cancelled` ('Batal')** — kirim otomatis yang SENGAJA tidak jadi
+  dikirim (recheck D4 / pembersih A3). Tanpa migrasi (kolom `status` = string + enum-cast). Scope baru
+  `WhatsappMessageLog::scopeEffective()` (kecualikan Cancelled) dipakai `queuedToday()` (plafon),
+  `reminderAlreadyHandledToday()`/`invoiceAlreadySentNonTest()` (dedup orkestrator), dan 3 command lama —
+  jadi log Cancelled TIDAK dihitung plafon & TIDAK dihitung "sudah dikirim" → kandidat di-collect ulang
+  (D5). `Failed` tetap dihitung plafon (perilaku T2). Opsi filter "Batal" + alasan di UI Pesan Keluar.
+- **Jeda batch via `->delay()` saat dispatch (D1)** — tabel baru `customer_auto_send_cursors`
+  (tenant+session_key unik, `next_slot_at`, `batch_count`) + `CustomerAutoSendBatchPlanner::reserveSlot()`
+  (DB::transaction + lockForUpdate): kursor BERTAHAN lintas tick everyMinute (D2); slot melewati akhir
+  jendela → tidak di-queue, diperlakukan OutsideWindow (D3). Jeda ANTAR-batch = `->delay()`; jarak DALAM
+  batch tetap ke sleep 5–10 dtk worker (langkah slot intra = `rate_limit_delay_max` dtk, A4). Gerbang
+  memanggil `reserveSlot` HANYA pada jalur antre-sungguhan (slot dikonsumsi hanya untuk kirim nyata).
+  Delay disuntik di `doCreateAndDispatch` — jalur MANUAL (`InvoiceSendContext`) selalu delay 0 → tak pernah
+  di-delay batch (K14).
+- **Recheck D4 (`CustomerAutoSendGate::recheckBeforeSend`)** — dipanggil `SendWhatsappMessageJob` setelah
+  guard status, sebelum kirim, HANYA untuk log otomatis pelanggan (pola `autoEvents` + `sent_by_user_id`
+  null + `!is_test`). Syarat berubah sejak di-queue (auto_notify OFF / Mode Uji ON / opt-out / template
+  nonaktif / pemutus / sesi / jendela) → status `Cancelled` + alasan, TIDAK kirim, TIDAK
+  `recordOutcome(false)` (batal ≠ gagal → pemutus tak naik), satu baris keputusan (dedup per hari).
+- **Pembersih A3 (`CustomerAutoSendOrchestrator::cleanupStuckLogs`)** — log otomatis pelanggan masih
+  `queued` setelah jendela berakhir + 15 mnt, ATAU dari hari sebelumnya → `Cancelled` ("kedaluwarsa: tidak
+  terkirim dalam jendela"); manual/OTP/grup/uji tak tersentuh; tak naikkan pemutus. Selalu jalan di tick
+  (termasuk di luar jendela & saat flag jeda). Flag jeda Cache `whatsapp:auto_send_dispatch_paused`
+  (TTL 25 mnt) — saat ON, tick hanya jalankan pembersih, tidak mengumpulkan kandidat (A6).
+- **Migrasi** `customer_auto_send_cursors` + memperbarui index unik parsial `wa_logs_invoice_issued_nontest_unique`
+  agar mengecualikan `status = 'cancelled'` (invoice yang batal bisa di-queue ulang — D5).
+- **Command berpagar `whatsapp:auto-send-batch-test`** (dibangun, DIJALANKAN NANTI atas perintah terpisah):
+  `--confirm` wajib; setiap `--customer` wajib `name LIKE 'TEST%'` DAN `normalize(phone) === penerima uji
+  tenant`; prasyarat keras (template due/suspend/registered nonaktif, auto_send OFF, sesi Connected, dalam
+  jendela); try/finally memulihkan batch/pause + Mode Uji + auto_notify + flag jeda; cetak delay per pesan.
+- Test `CustomerAutoSendBatchTest` (19) hijau; `tests/Feature/Whatsapp`+`Console` 264 hijau (gerbang/
+  orkestrator/opt-out/bypass manual/sweep tetap hijau); Pint clean. (Kegagalan `CustomerShow*` di throwaway
+  = koneksi `radius` tak tersedia — keterbatasan harness terdokumentasi, identik di `develop`.)
+
 ## v0.12.0 — PPPoE Provisioning, Technician API & Template Konfig CPE (merged `develop`→`main`, tagged `v0.12.0`)
 
 **Penutup cluster v0.12.x — 7 sub-versi (v0.12.1-v0.12.7), 3 komponen utama.** Provisioning kredensial

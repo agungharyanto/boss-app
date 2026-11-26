@@ -2,17 +2,16 @@
 
 namespace App\Console\Commands;
 
-use App\Models\CustomerAutoSendBreaker;
 use App\Models\Tenant;
-use App\Services\Whatsapp\CustomerAutoSendGate;
+use App\Services\Whatsapp\CustomerAutoSendSettingsService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Log;
 
 /**
  * v0.28.2 (T2) — lanjut MANUAL kirim otomatis (tutup pemutus) untuk sebuah
- * tenant. Dipakai sebelum ada tombol "Lanjutkan" di UI (T4). Mencatat
- * siapa/kapan (CLAUDE.md: artisan dijalankan sebagai www-data; `--by=` opsional
- * untuk id user pelaku).
+ * tenant. Mesin resume-nya kini di CustomerAutoSendSettingsService::resumeAll()
+ * (v0.28.5) — command DAN tombol "Lanjutkan" di tab Kirim Otomatis memakai
+ * mesin yang SAMA. `--by=` opsional untuk id user pelaku (CLAUDE.md: artisan
+ * dijalankan sebagai www-data).
  */
 class WhatsappAutoSendResume extends Command
 {
@@ -20,7 +19,7 @@ class WhatsappAutoSendResume extends Command
 
     protected $description = 'Lanjutkan kirim otomatis (tutup pemutus) untuk semua sesi sebuah tenant (v0.28.2).';
 
-    public function handle(CustomerAutoSendGate $gate): int
+    public function handle(CustomerAutoSendSettingsService $service): int
     {
         $tenantId = (int) $this->argument('tenant');
         if (Tenant::query()->whereKey($tenantId)->doesntExist()) {
@@ -31,24 +30,7 @@ class WhatsappAutoSendResume extends Command
 
         $userId = $this->option('by') !== null ? (int) $this->option('by') : null;
 
-        $breakers = CustomerAutoSendBreaker::query()->where('tenant_id', $tenantId)->get();
-        $resumed = 0;
-
-        foreach ($breakers as $breaker) {
-            if (! $breaker->is_open && $breaker->consecutive_failures === 0) {
-                continue;
-            }
-
-            $resellerId = $breaker->session_key === 'direct' ? null : (int) $breaker->session_key;
-            $gate->resume($tenantId, $resellerId, $userId);
-            $resumed++;
-        }
-
-        Log::info('whatsapp:auto-send-resume dijalankan', [
-            'tenant_id' => $tenantId,
-            'by_user_id' => $userId,
-            'sesi_dilanjutkan' => $resumed,
-        ]);
+        $resumed = $service->resumeAll($tenantId, $userId);
 
         $this->info("Pemutus dilanjutkan untuk {$resumed} sesi (tenant {$tenantId}).");
 

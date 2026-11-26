@@ -15,6 +15,7 @@
     <div class="flex gap-2 border-b border-gray-200 mb-6">
         @if ($isAdmin)
             <button wire:click="setTab('overview')" class="px-3 py-2 text-sm font-medium {{ $tab === 'overview' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Overview Sesi</button>
+            <button wire:click="setTab('kirim-otomatis')" class="px-3 py-2 text-sm font-medium {{ $tab === 'kirim-otomatis' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Kirim Otomatis</button>
         @else
             <button wire:click="setTab('konfigurasi')" class="px-3 py-2 text-sm font-medium {{ $tab === 'konfigurasi' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Konfigurasi</button>
         @endif
@@ -30,6 +31,11 @@
             <button wire:click="setTab('settings')" class="px-3 py-2 text-sm font-medium {{ $tab === 'settings' ? 'border-b-2 border-primary text-primary' : 'text-gray-500' }}">Rate Limit</button>
         @endif
     </div>
+
+    {{-- KIRIM OTOMATIS (admin, per tenant) — v0.28.5 --}}
+    @if ($isAdmin && $tab === 'kirim-otomatis' && $autoSend !== null)
+        @include('livewire.whatsapp.partials.kirim-otomatis-tab', ['autoSend' => $autoSend])
+    @endif
 
     {{-- KONFIGURASI (reseller) --}}
     @if (! $isAdmin && $tab === 'konfigurasi')

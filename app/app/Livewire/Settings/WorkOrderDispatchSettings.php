@@ -2,19 +2,14 @@
 
 namespace App\Livewire\Settings;
 
-use App\Console\Commands\SendInvoicePdfAutomatically;
-use App\Enums\WhatsappEventType;
 use App\Enums\WhatsappSessionStatus;
 use App\Models\WhatsappGroupRoute;
-use App\Models\WhatsappMessageLog;
 use App\Models\WhatsappNotificationGroup;
 use App\Models\WhatsappSession;
 use App\Models\WorkOrderDispatchSettings as WorkOrderDispatchSettingsModel;
 use App\Services\Whatsapp\WhatsappSessionService;
 use App\Support\Whatsapp\WhatsappGroupCategory;
-use App\Support\WhatsappPhone;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -51,40 +46,15 @@ class WorkOrderDispatchSettings extends Component
     public int $commandIntervalMinutes = 15;
 
     /**
-     * v0.13.5.1.2 — saklar per-tenant "Notifikasi Otomatis ke Pelanggan"
-     * (4 event: invoice_due_reminder/payment_received/customer_registered/
-     * customer_suspended_reminder). TIDAK memengaruhi OTP referrer, notifikasi
-     * teknisi/WO, grup WO, atau balasan 2-arah. Default ON.
-     */
-    public bool $customerAutoNotifyEnabled = true;
-
-    /**
      * v0.13.4.2.3 — "Pemicu OMCI/ZTP saat Aktivasi" per tenant (default OFF).
      * ON = aktivasi work order men-dispatch ProvisionOnuViaZtp (MENULIS ke OLT
      * untuk jalur yang didukung; jalur WAN OMCI/ZTE tetap digerbangi env).
+     *
+     * v0.28.5 — saklar Notifikasi Otomatis / Mode Uji / Kirim Invoice Otomatis
+     * PINDAH ke WA Gateway → tab "Kirim Otomatis" (WhatsappGatewayIndex).
+     * Halaman ini tetap untuk timing dispatch/reminder WO, ZTP, dan grup WA.
      */
     public bool $ztpOnActivationEnabled = false;
-
-    /**
-     * v0.13.5.3 — "Mode Uji Kirim Invoice" per tenant. Bila AKTIF, kirim PDF
-     * invoice (manual) dialihkan ke nomor uji — pelanggan nyata TIDAK
-     * menerima apa pun. Default MATI.
-     */
-    public bool $invoicePdfTestModeEnabled = false;
-
-    public ?string $invoicePdfTestRecipient = null;
-
-    /**
-     * v0.13.5.3.1 — saklar KEDUA "Kirim PDF Invoice Otomatis" per tenant.
-     * Harus lolos BERSAMA `customerAutoNotifyEnabled` DAN Mode Uji OFF. Default
-     * MATI. `invoicePdfAutoSendFrom` ('Y-m-d'|null) = "Mulai dari tanggal"
-     * (override batas bawah); kosong = enabled_at. Cap 1..200.
-     */
-    public bool $invoicePdfAutoSendEnabled = false;
-
-    public ?string $invoicePdfAutoSendFrom = null;
-
-    public int $invoicePdfAutoSendDailyCap = 80;
 
     /** Form "Tambah Grup". */
     public ?string $newGroupJid = null;
@@ -137,22 +107,6 @@ class WorkOrderDispatchSettings extends Component
     }
 
     /**
-     * v0.13.5.1.2 — simpan saklar "Notifikasi Otomatis ke Pelanggan"
-     * (per-tenant). Tombol "Simpan" terpisah dari timing dispatch di atas.
-     */
-    public function saveCustomerAutoNotify(): void
-    {
-        $this->authorize('work_orders.manage');
-
-        $settings = WorkOrderDispatchSettingsModel::forTenant($this->tenantId());
-        $settings->update(['customer_auto_notify_enabled' => $this->customerAutoNotifyEnabled]);
-
-        $this->refreshFromSettings($settings->fresh());
-
-        session()->flash('status', 'Pengaturan notifikasi otomatis ke pelanggan disimpan.');
-    }
-
-    /**
      * v0.13.4.2.3 — simpan saklar "Pemicu OMCI/ZTP saat Aktivasi" (per-tenant).
      * ON = aktivasi work order akan men-dispatch job provisioning ONU yang
      * MENULIS ke OLT. Default OFF.
@@ -167,71 +121,6 @@ class WorkOrderDispatchSettings extends Component
         $this->refreshFromSettings($settings->fresh());
 
         session()->flash('status', 'Pengaturan pemicu OMCI/ZTP saat aktivasi disimpan.');
-    }
-
-    /**
-     * v0.13.5.3 — simpan "Mode Uji Kirim Invoice" (toggle + nomor uji).
-     * Nomor dinormalisasi ke 62...; Mode Uji aktif tanpa nomor valid ditolak.
-     */
-    public function saveInvoicePdfTestMode(): void
-    {
-        $this->authorize('work_orders.manage');
-
-        $normalized = WhatsappPhone::normalize($this->invoicePdfTestRecipient);
-
-        if ($this->invoicePdfTestModeEnabled && (strlen($normalized) < 10 || ! str_starts_with($normalized, '62'))) {
-            $this->addError('invoicePdfTestRecipient', 'Mode Uji aktif wajib nomor uji yang valid (mis. 6287884374939).');
-
-            return;
-        }
-
-        $settings = WorkOrderDispatchSettingsModel::forTenant($this->tenantId());
-        $settings->update([
-            'invoice_pdf_test_mode_enabled' => $this->invoicePdfTestModeEnabled,
-            'invoice_pdf_test_recipient' => $normalized === '' ? null : $normalized,
-        ]);
-
-        $this->refreshFromSettings($settings->fresh());
-
-        session()->flash('status', 'Pengaturan Mode Uji Kirim Invoice disimpan.');
-    }
-
-    /**
-     * v0.13.5.3.1 — simpan saklar "Kirim PDF Invoice Otomatis" (toggle +
-     * Mulai dari tanggal + batas harian). Saat transisi OFF->ON, set
-     * `invoice_pdf_auto_send_enabled_at` = sekarang (batas bawah "hanya
-     * invoice baru"); biarkan nilainya saat OFF.
-     */
-    public function saveInvoicePdfAutoSend(): void
-    {
-        $this->authorize('work_orders.manage');
-
-        $this->validate([
-            'invoicePdfAutoSendDailyCap' => ['required', 'integer', 'min:1', 'max:200'],
-            'invoicePdfAutoSendFrom' => ['nullable', 'date'],
-        ], [], [
-            'invoicePdfAutoSendDailyCap' => 'batas harian',
-            'invoicePdfAutoSendFrom' => 'tanggal mulai',
-        ]);
-
-        $settings = WorkOrderDispatchSettingsModel::forTenant($this->tenantId());
-
-        $wasEnabled = (bool) $settings->invoice_pdf_auto_send_enabled;
-        $turningOn = $this->invoicePdfAutoSendEnabled && ! $wasEnabled;
-
-        $settings->update([
-            'invoice_pdf_auto_send_enabled' => $this->invoicePdfAutoSendEnabled,
-            'invoice_pdf_auto_send_from' => $this->invoicePdfAutoSendFrom ?: null,
-            'customer_auto_send_daily_cap' => $this->invoicePdfAutoSendDailyCap,
-            // enabled_at diisi saat OFF->ON; dibiarkan saat OFF atau tetap ON.
-            'invoice_pdf_auto_send_enabled_at' => $turningOn
-                ? now()
-                : $settings->invoice_pdf_auto_send_enabled_at,
-        ]);
-
-        $this->refreshFromSettings($settings->fresh());
-
-        session()->flash('status', 'Pengaturan Kirim PDF Invoice Otomatis disimpan.');
     }
 
     // ── Daftar Grup Notifikasi ─────────────────────────────────────────
@@ -491,8 +380,6 @@ class WorkOrderDispatchSettings extends Component
             'botGroupNamesByJid' => collect($this->sessionConnected ? $this->groupOptions() : [])
                 ->pluck('name', 'jid')
                 ->all(),
-            // v0.13.5.3.1 — indikator sweep kirim otomatis.
-            'autoSend' => $this->autoSendIndicator(),
         ]);
     }
 
@@ -501,56 +388,7 @@ class WorkOrderDispatchSettings extends Component
         $this->dispatchOffsetHours = intdiv($settings->dispatch_offset_minutes, 60);
         $this->reminderTime = $settings->reminder_time;
         $this->commandIntervalMinutes = $settings->command_interval_minutes;
-        $this->customerAutoNotifyEnabled = (bool) $settings->customer_auto_notify_enabled;
-        $this->invoicePdfTestModeEnabled = (bool) $settings->invoice_pdf_test_mode_enabled;
-        $this->invoicePdfTestRecipient = $settings->invoice_pdf_test_recipient;
-        $this->invoicePdfAutoSendEnabled = (bool) $settings->invoice_pdf_auto_send_enabled;
-        $this->invoicePdfAutoSendFrom = $settings->invoice_pdf_auto_send_from?->format('Y-m-d');
-        $this->invoicePdfAutoSendDailyCap = (int) ($settings->customer_auto_send_daily_cap ?? 80);
         $this->ztpOnActivationEnabled = (bool) $settings->ztp_on_activation_enabled;
-    }
-
-    /**
-     * Indikator untuk kartu "Kirim PDF Invoice Otomatis": terkirim hari ini
-     * (sesi direct) dari cap, kapan terakhir sweep jalan (dari cache, bukan
-     * log WA), dan status efektif (Aktif / Berhenti: Mode Uji ON / Berhenti:
-     * saklar pelanggan OFF / Mati).
-     *
-     * @return array{sent_today:int, cap:int, last_run:?string, status:string}
-     */
-    private function autoSendIndicator(): array
-    {
-        $tenantId = $this->tenantId();
-
-        $sentToday = WhatsappMessageLog::withoutGlobalScopes()
-            ->where('tenant_id', $tenantId)
-            ->whereNull('reseller_id')
-            ->where('event_type', WhatsappEventType::InvoiceIssued->value)
-            ->where('is_test', false)
-            ->whereDate('created_at', now()->toDateString())
-            ->count();
-
-        $lastRunIso = Cache::get(SendInvoicePdfAutomatically::lastRunCacheKey($tenantId));
-        $lastRun = $lastRunIso
-            ? Carbon::parse($lastRunIso)->translatedFormat('d M Y H:i')
-            : null;
-
-        if (! $this->invoicePdfAutoSendEnabled) {
-            $status = 'Mati';
-        } elseif ($this->invoicePdfTestModeEnabled) {
-            $status = 'Berhenti: Mode Uji ON';
-        } elseif (! $this->customerAutoNotifyEnabled) {
-            $status = 'Berhenti: saklar pelanggan OFF';
-        } else {
-            $status = 'Aktif';
-        }
-
-        return [
-            'sent_today' => $sentToday,
-            'cap' => $this->invoicePdfAutoSendDailyCap,
-            'last_run' => $lastRun,
-            'status' => $status,
-        ];
     }
 
     private function tenantId(): int

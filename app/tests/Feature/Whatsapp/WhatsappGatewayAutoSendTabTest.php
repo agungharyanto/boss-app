@@ -14,6 +14,7 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Models\WorkOrderDispatchSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
@@ -353,6 +354,12 @@ class WhatsappGatewayAutoSendTabTest extends TestCase
 
     public function test_indicators_count_from_test_data(): void
     {
+        // Pin waktu ke tengah hari WIB (auto-reset Laravel): indikator memakai
+        // whereDate('created_at', wibToday()); tanpa pin, saat berjalan dekat
+        // batas tanggal UTC↔WIB dan app-tz bukan Jakarta, created_at vs wibToday
+        // bisa beda hari → hitungan 0. Tengah hari WIB membuat keduanya sehari.
+        $this->travelTo(Carbon::create(2026, 11, 26, 12, 0, 0, 'Asia/Jakarta'));
+
         $tenant = Tenant::factory()->create();
         WorkOrderDispatchSettings::forTenant($tenant->id);
 

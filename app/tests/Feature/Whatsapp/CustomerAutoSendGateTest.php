@@ -412,7 +412,7 @@ class CustomerAutoSendGateTest extends TestCase
 
         WhatsappGatewaySettings::current()->update(['daily_schedule_times' => [now()->format('H:i')]]);
         $this->artisan(SendWhatsappDueReminders::class)
-            ->expectsOutputToContain('1 pengingat due-date diantrikan')
+            ->expectsOutputToContain('1 pengingat jatuh tempo diantrikan')
             ->assertSuccessful();
 
         $this->assertSame(1, WhatsappMessageLog::withoutGlobalScopes()->where('event_type', WhatsappEventType::InvoiceDueReminder->value)->count());

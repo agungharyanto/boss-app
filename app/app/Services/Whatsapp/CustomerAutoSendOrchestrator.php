@@ -106,7 +106,7 @@ class CustomerAutoSendOrchestrator
      *
      * @param  list<string>  $paths
      */
-    public function dispatchAllTenants(array $paths = self::ALL_PATHS): int
+    public function dispatchAllTenants(array $paths = self::ALL_PATHS, bool $dryRun = false): int
     {
         $tenantIds = WorkOrderDispatchSettings::query()->pluck('tenant_id')
             ->merge(
@@ -125,19 +125,42 @@ class CustomerAutoSendOrchestrator
         foreach ($tenantIds as $tenantId) {
             $settings = WorkOrderDispatchSettings::forTenant($tenantId);
 
-            // Pembersih A3 — SELALU jalan (termasuk di luar jendela & saat flag
-            // jeda ON): satu-satunya bagian tick yang tetap aktif saat paused.
-            $this->cleanupStuckLogs($settings);
+            // Dry-run (preview manual, v0.28.6): JANGAN mutasi apa pun — lewati
+            // pembersih A3 (ia meng-update log) dan abaikan flag jeda. Selain
+            // dry-run, perilaku persis sama seperti sebelumnya.
+            if (! $dryRun) {
+                // Pembersih A3 — SELALU jalan (termasuk di luar jendela & saat
+                // flag jeda ON): satu-satunya bagian tick yang tetap aktif saat
+                // paused.
+                $this->cleanupStuckLogs($settings);
 
-            // Flag jeda (uji A6): JANGAN kumpulkan kandidat nyata.
-            if ($paused) {
-                continue;
+                // Flag jeda (uji A6): JANGAN kumpulkan kandidat nyata.
+                if ($paused) {
+                    continue;
+                }
             }
 
-            $total += $this->dispatchTenant($settings, $paths);
+            $total += $this->dispatchTenant($settings, $paths, $dryRun);
         }
 
         return $total;
+    }
+
+    /**
+     * v0.28.6 (penutupan cluster) — jalankan SATU jalur untuk semua tenant
+     * lewat orkestrator + GERBANG yang sama. Dipakai keempat command pembungkus
+     * tipis (whatsapp:send-due-reminders / -suspended-reminders /
+     * invoices:send-pdf-automatically / whatsapp:process-deferred-registered)
+     * agar tak ada lagi query/dedup duplikat di command. $dryRun = hitung
+     * kandidat yang AKAN dicoba ke gerbang, tanpa mutasi/kirim.
+     */
+    public function runPath(string $path, bool $dryRun = false): int
+    {
+        if (! in_array($path, self::ALL_PATHS, true)) {
+            throw new \InvalidArgumentException("Jalur kirim otomatis tidak dikenal: {$path}");
+        }
+
+        return $this->dispatchAllTenants([$path], $dryRun);
     }
 
     public function isPaused(): bool
@@ -201,12 +224,13 @@ class CustomerAutoSendOrchestrator
      *
      * @param  list<string>  $paths
      */
-    public function dispatchTenant(WorkOrderDispatchSettings $settings, array $paths = self::ALL_PATHS): int
+    public function dispatchTenant(WorkOrderDispatchSettings $settings, array $paths = self::ALL_PATHS, bool $dryRun = false): int
     {
         // Pra-cek jendela SENYAP: di luar jendela, NOL pekerjaan (kandidat +
         // deferral menunggu tick dalam jendela; kadaluwarsa deferral juga
-        // dievaluasi hanya saat tick dalam jendela).
-        if (! $this->gate->withinWindow($settings)) {
+        // dievaluasi hanya saat tick dalam jendela). Dry-run (preview manual,
+        // v0.28.6) BOLEH kapan saja — lewati gate jendela.
+        if (! $dryRun && ! $this->gate->withinWindow($settings)) {
             return 0;
         }
 
@@ -234,6 +258,16 @@ class CustomerAutoSendOrchestrator
             $candidates,
             fn (AutoSendCandidate $a, AutoSendCandidate $b) => [$a->priority, $a->tieBreak] <=> [$b->priority, $b->tieBreak],
         );
+
+        // Dry-run: hitung kandidat yang AKAN dicoba ke gerbang (registrasi yang
+        // akan kedaluwarsa tidak dihitung sebagai "akan dikirim"), tanpa
+        // memanggil gerbang / membangun lampiran / menyentuh apa pun.
+        if ($dryRun) {
+            return count(array_filter(
+                $candidates,
+                fn (AutoSendCandidate $c) => $c->deferral === null || ! $this->isExpired($c->deferral),
+            ));
+        }
 
         return $this->dispatchCandidates($candidates, (bool) $settings->invoice_pdf_test_mode_enabled);
     }
